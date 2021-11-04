@@ -1,0 +1,1089 @@
+#include "lucid_renderer.h"
+
+#include "scene.h"
+#include "shading.h"
+#include <fwk/gfx/camera.h>
+#include <fwk/gfx/draw_call.h>
+#include <fwk/gfx/gl_buffer.h>
+#include <fwk/gfx/gl_format.h>
+#include <fwk/gfx/gl_framebuffer.h>
+#include <fwk/gfx/gl_program.h>
+#include <fwk/gfx/gl_shader.h>
+#include <fwk/gfx/gl_texture.h>
+#include <fwk/gfx/gl_vertex_array.h>
+#include <fwk/gfx/image.h>
+#include <fwk/gfx/opengl.h>
+#include <fwk/gfx/render_list.h>
+#include <fwk/gfx/shader_debug.h>
+#include <fwk/gfx/shader_defs.h>
+#include <fwk/hash_set.h>
+#include <fwk/io/file_system.h>
+#include <fwk/math/ray.h>
+
+// TODO: opisać różnego rodzaju definicje/nazwy używane w kodzie
+
+// TODO: dużo specyficznych przypadków do obsłużenia:
+// - clipping: może zaimplementować dodatkowe passy do obsługi clipowanych trójkątów ?
+//   chyba nie ma sensu; chodzi tylko o to, żeby trójkąty które powinny być przycięte nas nie kosztowały
+//   jeśli możemy je usunąć inaczej to nie ma problemu
+// - overlappowanie się ścianek
+//   ich jest generalnie mało więc na wydajność to raczej nie wpłynie, a
+// - filtrowanie bardzo cienkich trójkątów które mieszczą się pomiędzy środkami pikseli
+// - lepszy load balancing w rasteryzerze; małe trójkąty mogą być szczególnie kosztowne:
+//   wystarczy zahaczenie o 1 piksel, żeby wszystkie wątki w warpie go rozpaatrywały
+
+// TODO: system do automatycznego assignowania buforów
+// TODO: program mógłby zarządzać różnymi wersjami programu (z włączonymi/wyłączonymi różnymi flagami)
+//       różne wersje by się kompilowały on demand?
+
+// TODO: ssao, msaa support?
+// TODO: lots of options for optimization...
+// TODO: still slow on integrated GPU; complex logic, atomic operations, etc. should be avoided
+// TODO: sometimes when resizing only trans renderer's result is visible
+//
+// - pick such parameters for buffer sizes so that different counters will fit in shared memory
+// - pick such local_size's that they will map properly on typical hardware (32/64 or 16 threads?)
+// - there are definitely load balancing issues in many places, fix them
+// - different versions of sort & raster shaders for different number of triangles in tile?
+
+// Main idea: order of triangles in most of neighbouring pixels is very similar if not the same.
+// Because of that it makes no sense to perform the sorting only at the pixel level. It's better
+// to pre-sort at tile-level.
+
+/* Random notes:
+
+  Średnie ilości trójkątów zależnie od wielkości kafla (stare dane, bez dobrego cullingu):
+  Im większy kafel, tym więcej trójkątów musimy przetważać per pixel; To zwiększa czas
+  sortowania i dodatkowo wydajne rozdzielanie trójkątów między piksele jest trudne
+   Wielkość kafla:   instancje w sumie:   per-pixel w kaflu:
+   32x32 (40x33)            420K               318
+   16x16 (80x66)            566K               107
+    8x8 (160x132)           886K               41
+    4x4:(320x258)           1670K              20
+    2x2:(639x515)           3738K              11
+   1x1:(1278x1030)           10M               8
+
+  Ilość operacji sortowania (z grubsza); Jak mamy duże listy, to sortujemy bitonic-sortem
+  (N * log^2N); małe listy powinno się dać szybciej: N * logN (TODO: do zweryfikowania)
+                           N * logN^2          N * logN
+      1x1:   1278 * 1030 * 72    = 94M |   * 24   = 31.5M
+      2x2:   639 * 515   * 131   = 43M |   * 38   = 12.5M
+      4x4:   320 * 258   * 373   = 30M |   * 86   = 7M
+      16x16: 80 * 66     * 5000  = 25M |   * 721  = 4M
+	  32x32  40 * 33     * 22000 = 29M |   * 2643 = 3.5M
+
+	  Czyli jest jakiś sweet spot wielkości kafla (zależny od widoku) jeśli minimalizujemy
+	  ilość operacji sortowania.
+
+  Tile counts per resolution:
+                      16x16     32x32    64x64      128x128
+  1280 * 720  * 1x:    3600      920      240          60
+  1920 * 1080 * 1x:    8160     2040      510         135
+  1280 * 720  * 4x:   14400     3680      920         240
+  1920 * 1080 * 4x:   32640     8160     2040         405
+
+  Triangle distributions on different scenes (pairs of values: 1x1 (single), >1x1 (multi))
+                   64x64 max   |  64x64 avg  |   8x8 max   |   8x8 avg
+  hairball (3M): 221000, 81000 | 20500, 7700 | 5570, 35700 |   83, 1163
+  gallery  (1M):  48900,  3150 |  3220,  400 | 1540,  1150 |   35,   56
+  dragon (800K):  21600,  1756 |  5260,  670 | 1080,   540 |   64,  107
+*/
+
+PVertexArray makeRectVao() {
+	float3 rect_verts[] = {float3(0, 1, 0), float3(0, 0, 0), float3(1, 1, 0), float3(1, 0, 0)};
+	return RenderList::makeVao(rect_verts, {});
+}
+
+void drawRect(PVertexArray rect_vao) { rect_vao->draw(PrimitiveType::triangle_strip, 4, 0); }
+
+void setupView(const IRect &viewport, PFramebuffer fbo) {
+	if(fbo)
+		DASSERT(fbo->size().x >= viewport.width() && fbo->size().y >= viewport.height());
+	glViewport(viewport.x(), viewport.y(), viewport.width(), viewport.height());
+	if(fbo)
+		fbo->bind();
+	else
+		GlFramebuffer::unbind();
+}
+
+LucidRenderer::LucidRenderer() = default;
+FWK_MOVABLE_CLASS_IMPL(LucidRenderer)
+
+Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
+	m_opts = opts;
+	m_size = view_size;
+	m_bin_counts = (view_size + int2(bin_size - 1)) / bin_size;
+	int bin_counts = m_bin_counts.x * m_bin_counts.y;
+	int tile_counts = bin_counts * tiles_per_bin;
+
+	// TODO: this takes a lot of memory
+	// TODO: what should we do when quads won't fit?
+	// TODO: better estimate needed
+	uint max_bin_quads = max_quads * 2;
+	uint max_tile_tris = max_quads * 6;
+	uint max_block_tris = max_quads * 6; // TODO: that's a lot...
+
+	m_quad_indices.emplace(BufferType::shader_storage, max_quads * 4 * sizeof(u32));
+	m_quad_aabbs.emplace(BufferType::shader_storage, max_quads * sizeof(u32));
+	m_tri_aabbs.emplace(BufferType::shader_storage, max_quads * sizeof(int4));
+
+	uint bin_counters_size = (bin_counts * 3 + 256) * sizeof(u32);
+	uint tile_counters_size = (bin_counts * 16 * 4 + 256) * sizeof(u32);
+	m_bin_counters.emplace(BufferType::shader_storage, bin_counters_size);
+	m_tile_counters.emplace(BufferType::shader_storage, tile_counters_size);
+
+	m_block_counts.emplace(BufferType::shader_storage, tile_counts * 16 * sizeof(u32));
+	m_block_offsets.emplace(BufferType::shader_storage, tile_counts * 16 * sizeof(u32));
+
+	m_bin_quads.emplace(BufferType::shader_storage, max_bin_quads * sizeof(u32));
+	m_tile_tris.emplace(BufferType::shader_storage, max_tile_tris * sizeof(u32));
+	m_block_tris.emplace(BufferType::shader_storage, max_block_tris * sizeof(u32));
+	m_block_tri_keys.emplace(BufferType::shader_storage, max_block_tris * sizeof(u32));
+	m_scratch.emplace(BufferType::shader_storage,
+					  65536 * 128 * sizeof(u32)); // TODO: control size
+
+	if(m_opts & (Opt::check_bins | Opt::check_tiles | Opt::check_raster | Opt::debug_masks))
+		m_errors.emplace(BufferType::shader_storage, 1024 * 1024 * 4, BufferUsage::dynamic_read);
+
+	m_raster_image.emplace(GlFormat::r32ui, view_size, 1);
+	m_raster_image->setFiltering(TextureFilterOpt::nearest);
+
+	ShaderDefs defs;
+	defs["VIEWPORT_SIZE_X"] = view_size.x;
+	defs["VIEWPORT_SIZE_Y"] = view_size.y;
+	defs["BIN_COUNT"] = bin_counts;
+	defs["BIN_COUNT_X"] = m_bin_counts.x;
+	defs["BIN_COUNT_Y"] = m_bin_counts.y;
+	defs["BIN_SIZE"] = bin_size;
+	defs["TILE_SIZE"] = tile_size;
+	defs["BLOCK_SIZE"] = block_size;
+	defs["BIN_SHIFT"] = log2(bin_size);
+	defs["TILE_SHIFT"] = log2(tile_size);
+	defs["BLOCK_SHIFT"] = log2(block_size);
+	defs["MAX_LSIZE"] = gl_info->max_compute_work_group_size.x;
+	defs["XTILES_PER_BIN"] = bin_size / tile_size;
+	defs["TILES_PER_BIN"] = tiles_per_bin;
+	defs["BLOCKS_PER_TILE"] = blocks_per_tile;
+	defs["BLOCKS_PER_BIN"] = blocks_per_bin;
+
+	init_counters_program = EX_PASS(Program::makeCompute("init_counters", defs));
+	setup_program = EX_PASS(Program::makeCompute("setup", defs));
+	bin_estimator_program = EX_PASS(Program::makeCompute(
+		"bin_estimator", defs, mask(m_opts & Opt::check_bins, ProgramOpt::debug)));
+	bin_dispatcher_program = EX_PASS(Program::makeCompute(
+		"bin_dispatcher", defs, mask(m_opts & Opt::check_bins, ProgramOpt::debug)));
+	tile_dispatcher_program = EX_PASS(Program::makeCompute(
+		"tile_dispatcher", defs, mask(m_opts & Opt::check_tiles, ProgramOpt::debug)));
+	final_raster_program = EX_PASS(Program::makeCompute("final_raster", defs));
+	mask_raster_program = EX_PASS(Program::makeCompute(
+		"mask_raster", defs, mask(m_opts & Opt::debug_masks, ProgramOpt::debug)));
+	sort_program = EX_PASS(Program::makeCompute(
+		"mask_sort", defs, mask(m_opts & Opt::debug_masks, ProgramOpt::debug)));
+	dummy_program = EX_PASS(Program::makeCompute("dummy", defs));
+
+	compose_program = EX_PASS(Program::make("compose", "", {"in_pos"}));
+	m_rect_vao = makeRectVao();
+
+	return {};
+}
+
+void LucidRenderer::render(const Context &ctx) {
+	PERF_GPU_SCOPE();
+	testGlError("LucidRenderer::render init");
+
+	m_bin_counters->invalidate();
+	m_tile_counters->invalidate();
+
+	m_view_proj_matrix = ctx.camera.matrix();
+	initCounters(ctx);
+	uploadInstances(ctx);
+	setupQuads(ctx);
+
+	computeBins(ctx);
+	if(m_opts & Opt::check_bins)
+		checkBins();
+
+	computeTiles(ctx);
+	if(m_opts & Opt::check_tiles)
+		checkTiles();
+
+	if(false)
+		dummyIterateBins(ctx);
+
+	rasterizeMasks(ctx);
+	if(m_opts & Opt::debug_masks)
+		debugMasks(false);
+	sortMasks(ctx);
+	if(m_opts & Opt::debug_masks)
+		debugMasks(true);
+	if(m_opts & Opt::check_masks)
+		checkMasks();
+
+	rasterizeFinal(ctx);
+
+	if(m_opts & Opt::check_raster)
+		checkRaster();
+
+	// TODO: is this needed?
+	glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_SHADER_STORAGE_BARRIER_BIT);
+
+	// todo: we can modify fb directly? probably not :(
+	compose(ctx);
+	testGlError("LucidRenderer::render finish");
+
+	PERF_COUNT(m_num_instances, "num_instances");
+	PERF_COUNT(m_num_quads, "num_quads");
+	PERF_COUNT(m_num_verts, "num_vertices");
+}
+
+void LucidRenderer::initCounters(const Context &ctx) {
+	PERF_GPU_SCOPE();
+
+	// TODO: num_verts should be computed on gpu (only those vertices which are actually used
+	// should be transformed)
+	auto vbuffers = ctx.vao->buffers();
+	DASSERT(vbuffers.size() == 4);
+	int num_verts = vbuffers[0]->size() / sizeof(float3);
+
+	m_bin_counters->bindIndex(0);
+	m_tile_counters->bindIndex(1);
+	init_counters_program.use();
+	init_counters_program["num_verts"] = num_verts;
+	if(m_opts & Opt::check_bins)
+		shaderDebugUseBuffer(m_errors);
+	glDispatchCompute(1, 1, 1);
+	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+}
+
+void LucidRenderer::uploadInstances(const Context &ctx) {
+	PERF_GPU_SCOPE();
+
+	vector<InstanceData> instances;
+	instances.reserve(16 * 1024);
+
+	vector<IColor> mat_colors = transform(
+		ctx.materials, [](auto &mat) { return IColor(FColor(mat.diffuse, mat.opacity)); });
+
+	m_num_quads = 0;
+	for(auto &dc : ctx.dcs) {
+		int num_quads = dc.num_quads;
+		if(m_num_quads + num_quads > max_quads)
+			num_quads = max_quads - m_num_quads;
+		if(num_quads == 0)
+			break;
+
+		InstanceData out;
+		out.index_offset = dc.quad_offset * 4;
+		out.vertex_offset = 0;
+		out.num_quads = num_quads;
+		out.flags = (uint(dc.opts.bits) & 0xffff);
+		out.color = mat_colors[dc.material_id];
+		out.temp = 0;
+		out.uv_rect_pos = dc.uv_rect.min();
+		out.uv_rect_size = dc.uv_rect.size();
+		m_num_quads += dc.num_quads;
+
+		if(num_quads <= max_instance_quads) {
+			instances.emplace_back(out);
+		} else {
+			for(int i = 0; i < num_quads; i += max_instance_quads) {
+				out.index_offset = dc.quad_offset * 4 + i * 4;
+				out.num_quads = min(max_instance_quads, num_quads - i);
+				instances.emplace_back(out);
+			}
+		}
+	}
+
+	m_instance_data.emplace(BufferType::shader_storage, instances);
+	m_num_instances = instances.size();
+}
+
+void LucidRenderer::setupQuads(const Context &ctx) {
+	// TODO: co robić z trójkątami, które są na tyle małe, że wogóle ich nie widać nawet w pełnej rozdziałce?
+	// TODO: backface-culling ?
+
+	PERF_GPU_SCOPE();
+	ctx.quads_ib->bindIndexAs(0, BufferType::shader_storage);
+	m_instance_data->bindIndex(1);
+	auto vbuffers = ctx.vao->buffers();
+	DASSERT(vbuffers.size() == 4);
+	vbuffers[0]->bindIndexAs(2, BufferType::shader_storage);
+
+	m_bin_counters->bindIndex(3);
+	m_quad_indices->bindIndex(4);
+	m_quad_aabbs->bindIndex(5);
+	m_tri_aabbs->bindIndex(6);
+
+	auto &program = setup_program;
+	program["enable_backface_culling"] = ctx.config.backface_culling ? 1 : 0;
+	program["num_instances"] = m_num_instances;
+	program["view_proj_matrix"] = m_view_proj_matrix;
+	program.setFrustum(ctx.camera);
+	program.use();
+
+	glDispatchCompute((m_num_instances + 15) / 16, 1, 1);
+	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+}
+
+void LucidRenderer::computeBins(const Context &ctx) {
+	PERF_GPU_SCOPE();
+
+	// TODO: Why adding more on intel causes problems?
+	// TODO: properly get number of compute units (use opencl?)
+	// https://tinyurl.com/o7s9ph3
+	int max_dispatches = gl_info->vendor == GlVendor::intel ? 32 : 128;
+
+	m_quad_aabbs->bindIndex(0);
+	m_bin_counters->bindIndex(1);
+	m_tile_counters->bindIndex(2);
+	m_bin_quads->bindIndex(3);
+
+	bin_estimator_program.use();
+	if(m_opts & Opt::check_bins)
+		shaderDebugUseBuffer(m_errors);
+
+	PERF_CHILD_SCOPE("estimator phase 1");
+	bin_estimator_program["phase"] = 1u;
+	glDispatchCompute(max_dispatches, 1, 1);
+	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+
+	PERF_SIBLING_SCOPE("estimator phase 2");
+	bin_estimator_program["phase"] = 2u;
+	glDispatchCompute(1, 1, 1);
+	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+
+	bin_dispatcher_program.use();
+	if(m_opts & Opt::check_bins)
+		shaderDebugUseBuffer(m_errors);
+
+	PERF_SIBLING_SCOPE("bin dispatching phase");
+	// Why adding more slows everything down?
+	// TODO: how to optimize this ?
+	// 1ms for now for dragon...
+	glDispatchCompute(max_dispatches, 1, 1);
+	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+}
+
+void LucidRenderer::computeTiles(const Context &ctx) {
+	PERF_GPU_SCOPE();
+
+	// TODO: Why adding more on intel causes problems?
+	// TODO: properly get number of compute units (use opencl?)
+	// https://tinyurl.com/o7s9ph3
+	int max_dispatches = gl_info->vendor == GlVendor::intel ? 32 : 128;
+
+	m_bin_counters->bindIndex(1);
+	m_tile_counters->bindIndex(2);
+	m_bin_quads->bindIndex(3);
+	m_tile_tris->bindIndex(4);
+	auto vbuffers = ctx.vao->buffers();
+	DASSERT(vbuffers.size() == 4);
+	vbuffers[0]->bindIndexAs(5, BufferType::shader_storage);
+	m_quad_indices->bindIndex(6);
+	m_tri_aabbs->bindIndex(7);
+
+	tile_dispatcher_program.use();
+	tile_dispatcher_program.setFrustum(ctx.camera);
+	if(m_opts & Opt::check_tiles)
+		shaderDebugUseBuffer(m_errors);
+	glDispatchCompute(max_dispatches, 1, 1);
+	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+}
+
+void LucidRenderer::checkBins() {
+	vector<int> bin_quad_counts, bin_quad_offsets, bin_quad_offsets2;
+	int num_binned_quads, num_input_quads, num_estimated_quads;
+	int bin_counts = m_bin_counts.x * m_bin_counts.y;
+
+	{
+		auto vals = m_bin_counters->map<int>(AccessMode::read_only);
+		num_binned_quads = vals[0];
+		num_input_quads = vals[1];
+		num_estimated_quads = vals[2];
+		vals = vals.subSpan(32);
+		bin_quad_counts = vals.subSpan(bin_counts * 0, bin_counts * 1);
+		bin_quad_offsets = vals.subSpan(bin_counts * 1, bin_counts * 2);
+		bin_quad_offsets2 = vals.subSpan(bin_counts * 2, bin_counts * 3);
+		m_bin_counters->unmap();
+	}
+
+	int max_width = 40, max_height = 60;
+	if(auto dim = consoleDimensions()) {
+		max_width = (dim->x - 1) / 6;
+		max_height = dim->y * 3 / 4;
+	}
+
+	print("Quads: input:% estimated:% binned:%\n", num_input_quads, num_estimated_quads,
+		  num_binned_quads);
+	print("\nEstimated quad counts: %\n", num_estimated_quads);
+	for(int y = 0; y < min(max_height, m_bin_counts.y); y++) {
+		for(int x = 0; x < min(max_width, m_bin_counts.x); x++) {
+			int count = bin_quad_counts[x + y * m_bin_counts.x];
+			printf("%5d ", count);
+		}
+		printf("\n");
+	}
+
+	print("\nActual quad counts: %\n", num_binned_quads);
+	for(int y = 0; y < min(max_height, m_bin_counts.y); y++) {
+		for(int x = 0; x < min(max_width, m_bin_counts.x); x++) {
+			int idx = x + y * m_bin_counts.x;
+			int count = bin_quad_offsets2[idx] - bin_quad_offsets[idx];
+			printf("%5d ", count);
+		}
+		printf("\n");
+	}
+
+	int cur_offset = 0, num_errors = 0;
+	for(int y = 0; y < m_bin_counts.y; y++) {
+		for(int x = 0; x < m_bin_counts.x; x++) {
+			int idx = x + y * m_bin_counts.x;
+			if(cur_offset != bin_quad_offsets[idx] && num_errors++ < 1)
+				print("Invalid offset at (%, %): % (should be: %)\n", x, y, bin_quad_offsets[idx],
+					  cur_offset);
+			if(bin_quad_counts[idx] != bin_quad_offsets2[idx] - bin_quad_offsets[idx] &&
+			   num_errors++ < 1)
+				print("Quad count & estimate does not match at (%, %)\n", x, y);
+			cur_offset += bin_quad_counts[idx];
+		}
+	}
+}
+
+void LucidRenderer::checkTiles() {
+	int bin_counts = m_bin_counts.x * m_bin_counts.y;
+	vector<int> tile_quad_counts;
+	{
+		auto vals = m_tile_counters->map<int>(AccessMode::read_only);
+		vals = vals.subSpan(32);
+		tile_quad_counts = vals.subSpan(0, bin_counts * tiles_per_bin);
+		m_tile_counters->unmap();
+	}
+
+	print("Per-tile quad count histogram:\n");
+	vector<pair<int, int>> histogram(32);
+	pair<int, int> sum = {0, 0};
+
+	for(int value : tile_quad_counts) {
+		int i = value == 0 ? 0 : value <= 16 ? 1 : int(log2(value - 1)) - 2;
+		if(histogram.inRange(i)) {
+			histogram[i].first++;
+			histogram[i].second += value;
+		}
+	}
+
+	for(auto &elem : histogram) {
+		sum.first += elem.first;
+		sum.second += elem.second;
+	}
+
+	for(int i : intRange(histogram)) {
+		if(!histogram[i].first)
+			continue;
+		int level = i == 0 ? 0 : i == 1 ? 16 : 32 << (i - 2);
+		printf("%s %8d: ", i == 0 ? "  " : "<=", level);
+		printf("%5d tiles (%5.2f %%); ", histogram[i].first,
+			   double(histogram[i].first) / sum.first * 100.0);
+		printf("%7d quads total (%5.2f %%)\n", histogram[i].second,
+			   double(histogram[i].second) / sum.second * 100.0);
+	}
+	printf("\n");
+}
+
+void LucidRenderer::dummyIterateBins(const Context &ctx) {
+	PERF_GPU_SCOPE();
+
+	m_bin_counters->bindIndex(0);
+	m_tile_counters->bindIndex(1);
+	dummy_program.use();
+	glDispatchCompute(512, 1, 1);
+	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+}
+
+void LucidRenderer::rasterizeMasks(const Context &ctx) {
+	PERF_GPU_SCOPE();
+
+	m_tri_aabbs->bindIndex(2);
+	auto vbuffers = ctx.vao->buffers();
+	DASSERT(vbuffers.size() == 4);
+	vbuffers[0]->bindIndexAs(3, BufferType::shader_storage);
+	m_quad_indices->bindIndex(4);
+	m_bin_counters->bindIndex(5);
+	m_tile_counters->bindIndex(6);
+	m_block_counts->bindIndex(7);
+	m_block_offsets->bindIndex(8);
+	m_tile_tris->bindIndex(9);
+	m_block_tris->bindIndex(10);
+	m_block_tri_keys->bindIndex(11);
+	m_scratch->bindIndex(12);
+
+	mask_raster_program.use();
+	mask_raster_program.setFrustum(ctx.camera);
+	mask_raster_program.setViewport(ctx.camera, m_size);
+	mask_raster_program["mask_centroids[0]"] = computeCentroids4x4();
+
+	if(m_opts & Opt::debug_masks)
+		shaderDebugUseBuffer(m_errors);
+
+	// TODO: lepiej by było, jakby było to bardziej zintegrowane z GlProgramem
+	// - dispatch też mógłby być funkcją debuggera);
+	// - Inny debugger dla compute i inny dla pozostałych shaderów
+	// - możliwość przekazywania konkretnych wartości (np. 4 różne wartości?)
+	// - jakaś klasa do prostej introspekcji linii kodu programu
+	glDispatchCompute(128, 1, 1);
+	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+}
+
+void LucidRenderer::sortMasks(const Context &ctx) {
+	PERF_GPU_SCOPE();
+
+	m_tile_counters->bindIndex(0);
+	m_block_counts->bindIndex(1);
+	m_block_tris->bindIndex(2);
+	m_block_tri_keys->bindIndex(3);
+	sort_program.use();
+
+	if(m_opts & Opt::debug_masks)
+		shaderDebugUseBuffer(m_errors);
+
+	// TODO: spawn workgroups only to saturate SMs
+	glDispatchCompute(128, 1, 1);
+	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+}
+
+void LucidRenderer::debugMasks(bool sort_phase) {
+	auto source_ranges = (sort_phase ? sort_program : mask_raster_program).sourceRanges();
+	auto records = shaderDebugRecords(m_errors, {256, 1, 1}, {128, 1, 1}, 256, source_ranges);
+	if(records) {
+		makeSorted(records);
+		print("mask_% shader debug messages reported:\n", sort_phase ? "sort" : "raster");
+		for(auto &record : records)
+			print("%\n", record);
+	}
+}
+
+struct LucidRenderer::BinBlockStats {
+	double avg_max_pixel_depth = 0, avg_min_pixel_depth = 0, avg_tris_per_block = 0;
+	int max_pixel_depth = 0, max_tris_per_block = 0, max_blocktris_per_tile = 0;
+	int num_nonempty_blocks = 0, num_pixels = 0, unique_tris_sum = 0;
+	int num_blocktris = 0;
+
+	bool empty() const { return num_blocktris == 0; }
+	void computeAverages() {
+		if(num_nonempty_blocks) {
+			avg_min_pixel_depth /= num_nonempty_blocks;
+			avg_max_pixel_depth /= num_nonempty_blocks;
+			avg_tris_per_block /= num_nonempty_blocks;
+		}
+	}
+
+	static BinBlockStats sum(CSpan<BinBlockStats> stats) {
+		BinBlockStats out;
+		for(auto elem : stats) {
+			if(elem.empty())
+				continue;
+#define ACCUM(var) out.var += elem.var;
+#define ACCUM_MAX(var) out.var = max(out.var, elem.var);
+			ACCUM(avg_max_pixel_depth);
+			ACCUM(avg_min_pixel_depth);
+			ACCUM(avg_tris_per_block);
+			ACCUM_MAX(max_pixel_depth);
+			ACCUM_MAX(max_tris_per_block);
+			ACCUM_MAX(max_blocktris_per_tile);
+			ACCUM(num_nonempty_blocks);
+			ACCUM(num_pixels);
+			ACCUM(unique_tris_sum);
+			ACCUM(num_blocktris);
+#undef ACCUM_MAX
+#undef ACCUM
+		}
+		return out;
+	}
+};
+
+auto LucidRenderer::computeBlockStats(int bin_id, CSpan<u32> block_instances,
+									  CSpan<u32> block_counts, CSpan<u32> block_offsets) const
+	-> BinBlockStats {
+	BinBlockStats stats;
+
+	for(int block_id = 0; block_id < blocks_per_bin; block_id++)
+		stats.num_blocktris += block_counts[bin_id * blocks_per_bin + block_id];
+	if(stats.num_blocktris == 0)
+		return stats;
+
+	vector<int> unique_tris_map(65536, -1);
+
+	for(int tile_id = 0; tile_id < tiles_per_bin; tile_id++) {
+		int tindex = bin_id * 16 + tile_id;
+		int num_blocktris = 0;
+
+		for(int block_id = 0; block_id < blocks_per_tile; block_id++) {
+			int bindex = bin_id * blocks_per_bin + tile_id * blocks_per_tile + block_id;
+			int offset = block_offsets[bindex];
+			int count = block_counts[bindex];
+			if(count == 0)
+				continue;
+
+			int pixel_stacks[16];
+			fill(pixel_stacks, 0);
+
+			for(int i = 0; i < count; i++) {
+				u32 value = block_instances[offset + i];
+				for(int j = 0; j < 16; j++)
+					if(value & (1 << j))
+						pixel_stacks[j]++;
+
+				auto &unique = unique_tris_map[value >> 16];
+				if(unique != tindex) {
+					unique = tindex;
+					stats.unique_tris_sum++;
+				}
+			}
+
+			int max_depth = 0, min_depth = pixel_stacks[0];
+			for(auto val : pixel_stacks) {
+				max_depth = max(max_depth, val);
+				min_depth = min(min_depth, val);
+				stats.num_pixels += val;
+			}
+			stats.avg_max_pixel_depth += max_depth;
+			stats.avg_min_pixel_depth += min_depth;
+			stats.max_pixel_depth = max(stats.max_pixel_depth, max_depth);
+			stats.avg_tris_per_block += count;
+			stats.max_tris_per_block = max(stats.max_tris_per_block, count);
+			num_blocktris += count;
+			stats.num_nonempty_blocks++;
+		}
+		stats.max_blocktris_per_tile = max(stats.max_blocktris_per_tile, num_blocktris);
+	}
+
+	return stats;
+}
+
+void LucidRenderer::checkMasks() {
+	PERF_SCOPE();
+
+	constexpr bool check_offsets = false;
+
+	vector<u32> block_counts, block_offsets, block_instances, tile_counters;
+	int bin_count = m_bin_counts.x * m_bin_counts.y;
+	int num_block_tris = 0;
+
+	{
+		PERF_GPU_SCOPE("download gpu data");
+		tile_counters = m_tile_counters->download<u32>();
+		num_block_tris = tile_counters[9];
+		block_counts = m_block_counts->download<u32>();
+		block_offsets = m_block_offsets->download<u32>();
+		// TODO: why does it take 100ms to download m_block_tris?
+		block_instances = m_block_tris->download<u32>(num_block_tris);
+	}
+
+	if(check_offsets) {
+		vector<int> offset_coverage(num_block_tris, 0);
+		for(int bin_id = 0; bin_id < bin_count; bin_id++)
+			for(int block_id = 0; block_id < blocks_per_bin; block_id++) {
+				int offset = block_offsets[bin_id * blocks_per_bin + block_id];
+				int count = block_counts[bin_id * blocks_per_bin + block_id];
+				if(offset + count > num_block_tris) {
+					print("Offset out of bounds: % > %\n", offset + count, num_block_tris);
+					return;
+				}
+
+				for(int i = 0; i < count; i++)
+					offset_coverage[offset + i]++;
+			}
+		if(anyOf(offset_coverage, [](int v) { return v > 1; })) {
+			print("Overlapping offsets detected\n");
+			return;
+		}
+	}
+
+	vector<BinBlockStats> bin_stats(bin_count);
+#pragma omp parallel for
+	for(int bin_id = 0; bin_id < bin_count; bin_id++)
+		bin_stats[bin_id] = computeBlockStats(bin_id, block_instances, block_counts, block_offsets);
+	auto stats = BinBlockStats::sum(bin_stats);
+	stats.computeAverages();
+
+	print("Mask rasterization statistics: ------------------------------------\n");
+	print("\nTotal tri-blocks: %\n", num_block_tris);
+	if(stats.num_blocktris != num_block_tris)
+		print("Invalid number of summed block tris: %\n", stats.num_blocktris);
+	print("Block-tris / unique tris per tile ratio: %\n",
+		  double(num_block_tris) / stats.unique_tris_sum);
+	print("Total pixels rasterized: %\n", stats.num_pixels);
+	print("\nStats for non-empty blocks:\n");
+	printf("    Max pixel depth: %d\n", stats.max_pixel_depth);
+	printf("Avg min pixel depth: %.2f\n", stats.avg_min_pixel_depth);
+	printf("Avg max pixel depth: %.2f\n\n", stats.avg_max_pixel_depth);
+	printf("      Max tris per block: %8d\n", stats.max_tris_per_block);
+	printf(" Max block-tris per tile: %8d\n", stats.max_blocktris_per_tile);
+	printf("      Avg tris per block: %8.2f\n", stats.avg_tris_per_block);
+	printf("Avg pixels per tri-block: %8.2f\n", double(stats.num_pixels) / num_block_tris);
+	print("\nBlock-tris per bin:\n");
+
+	int max_width = 40, max_height = 60;
+	if(auto dim = consoleDimensions()) {
+		max_width = (dim->x - 1) / 6;
+		max_height = dim->y * 3 / 4;
+	}
+
+	for(int y = 0; y < min(max_height, m_bin_counts.y); y++) {
+		for(int x = 0; x < min(max_width, m_bin_counts.x); x++) {
+			int bin_id = x + y * m_bin_counts.x;
+			int count = 0;
+			for(int block_id = 0; block_id < blocks_per_bin; block_id++)
+				count += block_counts[bin_id * blocks_per_bin + block_id];
+			printf("%6d ", count);
+		}
+		printf("\n");
+	}
+	print("\n");
+}
+
+Image LucidRenderer::masksSnapshot() {
+	auto block_counts = m_block_counts->download<u32>();
+	auto block_offsets = m_block_offsets->download<u32>();
+	auto tile_counters = m_tile_counters->download<u32>();
+
+	int num_block_tris = tile_counters[9];
+	int bin_count = m_bin_counts.x * m_bin_counts.y;
+
+	Image image(m_bin_counts * bin_size, ColorId::black);
+	auto block_instances = m_block_tris->download<u32>(num_block_tris);
+	for(int bin_id = 0; bin_id < bin_count; bin_id++) {
+		int2 bin_pos = int2(bin_id % m_bin_counts.x, bin_id / m_bin_counts.x) * bin_size;
+
+		for(int tile_id = 0; tile_id < tiles_per_bin; tile_id++) {
+			int2 tile_pos = bin_pos + int2(tile_id % 4, tile_id / 4) * tile_size;
+
+			for(int block_id = 0; block_id < blocks_per_tile; block_id++) {
+				int2 block_pos = tile_pos + int2(block_id % 4, block_id / 4) * block_size;
+				int bindex = bin_id * blocks_per_bin + tile_id * blocks_per_tile + block_id;
+				auto offset = block_offsets[bindex];
+				int count = block_counts[bindex];
+
+				for(int i = 0; i < count; i++) {
+					u32 value = block_instances[offset + i];
+					for(int y = 0; y < 4; y++)
+						for(int x = 0; x < 4; x++)
+							if(value & (1 << (x + y * 4))) {
+								int2 pixel_pos = block_pos + int2(x, y);
+								auto &pixel =
+									image({pixel_pos.x, image.height() - 1 - pixel_pos.y});
+								pixel.r = min(255, pixel.r + 64);
+								pixel.g = min(255, pixel.g + 8);
+								pixel.b = min(255, pixel.b + 1);
+							}
+				}
+			}
+		}
+	}
+
+	return image;
+}
+
+void LucidRenderer::rasterizeFinal(const Context &ctx) {
+	PERF_GPU_SCOPE();
+
+	m_instance_data->bindIndex(0);
+	m_quad_indices->bindIndex(1);
+	auto vbuffers = ctx.vao->buffers();
+	DASSERT(vbuffers.size() == 4);
+	vbuffers[0]->bindIndexAs(2, BufferType::shader_storage);
+	if(auto tex_vb = vbuffers[2])
+		tex_vb->bindIndexAs(3, BufferType::shader_storage);
+	if(auto col_vb = vbuffers[1])
+		col_vb->bindIndexAs(4, BufferType::shader_storage);
+	if(auto nrm_vb = vbuffers[3])
+		nrm_vb->bindIndexAs(5, BufferType::shader_storage);
+
+	m_bin_counters->bindIndex(6);
+	m_tile_counters->bindIndex(7);
+	m_block_counts->bindIndex(8);
+	m_block_offsets->bindIndex(9);
+
+	m_tile_tris->bindIndex(10);
+	m_block_tris->bindIndex(11);
+
+	m_raster_image->bindImage(0, AccessMode::write_only);
+	final_raster_program.use();
+
+	GlTexture::bind({ctx.opaque_tex, ctx.trans_tex});
+	//GlTexture::bind({ctx.depth_buffer, ctx.shadows.map});
+
+	final_raster_program["fog_multiplier"] = 0.3f / ctx.camera.params().ortho_scale;
+
+	ctx.lighting.setUniforms(final_raster_program.glProgram());
+	final_raster_program.setFrustum(ctx.camera);
+	final_raster_program.setViewport(ctx.camera, m_size);
+	final_raster_program.setShadows(ctx.shadows.matrix, ctx.shadows.enable);
+
+	if(m_opts & Opt::check_raster)
+		shaderDebugUseBuffer(m_errors);
+	ctx.lighting.setUniforms(final_raster_program.glProgram());
+
+	// TODO: lepiej by było, jakby było to bardziej zintegrowane z GlProgramem
+	// - dispatch też mógłby być funkcją debuggera);
+	// - Inny debugger dla compute i inny dla pozostałych shaderów
+	// - możliwość przekazywania konkretnych wartości (np. 4 różne wartości?)
+	// - jakaś klasa do prostej introspekcji linii kodu programu
+	glDispatchCompute(128, 1, 1);
+	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+}
+
+void LucidRenderer::checkRaster() {
+	PERF_GPU_SCOPE();
+
+	// TODO: double/triple buffering to avoid stall
+	int bin_counts = m_bin_counts.x * m_bin_counts.y;
+	auto bin_counters = m_bin_counters->download<u32>();
+	auto tile_counters = m_tile_counters->download<u32>(32 + bin_counts * tiles_per_bin);
+	m_bin_counters->invalidate();
+	m_tile_counters->invalidate();
+
+	int num_pixels = m_size.x * m_size.y;
+	int num_tiles =
+		((m_size.x + tile_size - 1) / tile_size) * ((m_size.y + tile_size - 1) / tile_size);
+	int num_blocks =
+		((m_size.x + block_size - 1) / block_size) * ((m_size.y + block_size - 1) / block_size);
+
+	int num_input_quads = bin_counters[1];
+	int num_invalid_pixels = tile_counters[10];
+	int num_invalid_blocks = tile_counters[11];
+	int num_invalid_tiles = tile_counters[12];
+
+	int tile_tris_estimate = tile_counters[8];
+	int num_block_tris = tile_counters[9];
+	int num_block_rows = tile_counters[14];
+
+	int num_tile_tris = 0, num_nonempty_tiles = 0, num_nonempty_bins = 0;
+	int max_quads_per_bin = 0, num_bin_quads = 0;
+	for(int b = 0; b < bin_counts; b++) {
+		bool empty = true;
+		for(int t = 0; t < 16; t++) {
+			int count = tile_counters[32 + b * tiles_per_bin + t];
+			num_tile_tris += count;
+			if(count) {
+				num_nonempty_tiles++;
+				empty = false;
+			}
+		}
+		if(!empty)
+			num_nonempty_bins++;
+		int bin_quads = bin_counters[32 + b];
+		max_quads_per_bin = max(max_quads_per_bin, bin_quads);
+		num_bin_quads += bin_quads;
+	}
+
+	int num_rejected[4];
+	for(int i = 0; i < 4; i++)
+		num_rejected[i] = bin_counters[4 + i];
+	num_rejected[0] += num_rejected[1] + num_rejected[2] + num_rejected[3];
+
+	print("Rasterization statistics: -----------------------------------------\n");
+	printf("  Input quads: %8d     Rejected quads: %6d (%.2f %%)\n", num_input_quads,
+		   num_rejected[0], double(num_rejected[0]) / num_input_quads * 100.0);
+	printf(" Rejections: backface:%d, frustum:%d, between-samples:%d\n\n", num_rejected[1],
+		   num_rejected[2], num_rejected[3]);
+	printf(" Bin-quads: %8d       Tile-tris: %8d\n", num_bin_quads, num_tile_tris);
+	printf("           Tile-tris with no samples: %8d\n", tile_counters[13]);
+	printf("Block-rows: %8d      Block-tris: %8d\n\n", num_block_rows, num_block_tris);
+
+	printf("      Avg quads per non-empty bin: %7.2f\n", double(num_bin_quads) / num_nonempty_bins);
+	printf("      Avg tris per non-empty tile: %7.2f\n",
+		   double(num_tile_tris) / num_nonempty_tiles);
+	printf("Avg block-rows per non-empty tile: %7.2f\n",
+		   double(num_block_rows) / num_nonempty_tiles);
+	printf("Avg block-tris per non-empty tile: %7.2f\n\n",
+		   double(num_block_tris) / num_nonempty_tiles);
+	printf("           Max quads/bin: %8d\n", max_quads_per_bin);
+	printf("           Max tris/tile: %8d\n", tile_counters[16]);
+	printf("     Max block-rows/tile: %8d\n", tile_counters[17]);
+	printf("          Max tris/block: %8d\n\n", tile_counters[15]);
+
+	printf("Invalid pixels: %d (%.3f %%)\n", num_invalid_pixels,
+		   float(num_invalid_pixels) / num_pixels * 100.0);
+	printf("Invalid blocks: %d (%.3f %%)\n", num_invalid_blocks,
+		   float(num_invalid_blocks) / num_blocks * 100.0);
+	printf(" Invalid tiles: %d (%.3f %%)\n", num_invalid_tiles,
+		   float(num_invalid_tiles) / num_tiles * 100.0);
+	print("\n");
+}
+
+// Final stage: blits transparent pixels onto main framebuffer
+void LucidRenderer::compose(const Context &ctx) {
+	PERF_GPU_SCOPE();
+
+	DASSERT(!ctx.out_fbo || ctx.out_fbo->size() == m_size);
+	glDrawBuffer(GL_BACK);
+	setupView(IRect(m_size), ctx.out_fbo);
+	glEnable(GL_BLEND);
+	glDisable(GL_DEPTH_TEST);
+	glDisable(GL_CULL_FACE);
+	glDepthMask(0);
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	GlTexture::bind({m_raster_image});
+	compose_program.setFullscreenRect();
+	compose_program.use();
+	drawRect(m_rect_vao);
+	glDisable(GL_BLEND);
+}
+
+vector<int> generateRangeHistogram(CSpan<float2> ranges, int res) {
+	vector<int> counts(res, 0);
+	for(auto &range : ranges) {
+		int begin = int(range[0] * res), end = int(range[1] * res) + 1;
+		if(counts.inRange(begin))
+			counts[begin]++;
+		if(counts.inRange(end))
+			counts[end]--;
+	}
+	int counter = 0;
+	for(auto &val : counts) {
+		int next = counter + val;
+		val = counter + val;
+		counter = next;
+	}
+	return counts;
+}
+
+vector<int> generateMinHistogram(CSpan<float2> ranges, int res) {
+	vector<int> counts(res, 0);
+	for(auto &range : ranges) {
+		int begin = int(range[0] * res);
+		if(counts.inRange(begin))
+			counts[begin]++;
+	}
+	return counts;
+}
+
+void LucidRenderer::printHistograms() const {
+	vector<IRect> quads;
+	{
+		auto quad_aabbs = m_quad_aabbs->download<u32>(m_num_quads);
+		auto tri_aabbs = m_tri_aabbs->download<int4>(m_num_quads);
+		quads.resize(m_num_quads);
+		for(int i : intRange(quads)) {
+			if(quad_aabbs[i] == ~0u)
+				continue;
+			auto enc = tri_aabbs[i];
+			int2 min0(u32(enc[0]) & 0xffff, u32(enc[0]) >> 16);
+			int2 max0(u32(enc[1]) & 0xffff, u32(enc[1]) >> 16);
+			int2 min1(u32(enc[2]) & 0xffff, u32(enc[2]) >> 16);
+			int2 max1(u32(enc[3]) & 0xffff, u32(enc[3]) >> 16);
+
+			max0 = vmax(max0, min0);
+			max1 = vmax(max1, min1);
+			quads[i] = {vmin(min0, min1), vmax(max0, max1)};
+		}
+	}
+
+	constexpr int max_dim = 16;
+	auto get_quad = [&](IRect &out, int idx, int shift) {
+		auto &quad = quads[idx];
+		if(quad.max() == quad.min())
+			return false;
+		int gsx = quad.x() >> shift, gsy = quad.y() >> shift;
+		int gex = quad.ex() >> shift, gey = quad.ey() >> shift;
+		out = {gsx, gsy, gex, gey};
+		return true;
+	};
+
+	int num_active_quads = 0;
+	for(int i = 0; i < m_num_quads; i++) {
+		IRect rect;
+		if(get_quad(rect, i, 0))
+			num_active_quads++;
+	}
+
+	print("Active quads: %\nAll quads: % (% rejected)\n", num_active_quads, m_num_quads,
+		  m_num_quads - num_active_quads);
+	print("Quad size distribution:\n");
+	for(int gsize = 128; gsize >= 4; gsize /= 2) {
+		int counts[max_dim * max_dim] = {
+			0,
+		};
+		int shift = log2(gsize);
+
+		for(int i = 0; i < m_num_quads; i++) {
+			IRect rect;
+			if(!get_quad(rect, i, shift))
+				continue;
+			int gw = min(rect.width(), max_dim - 1);
+			int gh = min(rect.height(), max_dim - 1);
+			counts[gw + gh * max_dim]++;
+		}
+
+		int max_x = 0, max_y = 0;
+		for(int y = 0; y < max_dim; y++)
+			for(int x = 0; x < max_dim; x++)
+				if(counts[x + y * max_dim]) {
+					max_x = max(max_x, x);
+					max_y = max(max_y, y);
+				}
+
+		printf("[%4d]: ", gsize);
+		for(int x = 0; x <= max_x; x++)
+			printf("   X=%02d ", x + 1);
+		printf("\n");
+		for(int y = 0; y <= max_y; y++) {
+			printf("  Y=%02d  ", y + 1);
+			for(int x = 0; x <= max_x; x++)
+				printf("%7d ", counts[x + y * max_dim]);
+			printf("\n");
+		}
+		printf("\n");
+	}
+
+	print("Avg / Max quads per tile (empty tiles are ignored):\n");
+	print("Single: 1x1 (fitting into group)\nMulti: > 1x1 (not fitting into group)\n");
+
+	for(int gsize = 128; gsize >= 4; gsize /= 2) {
+		int2 num_groups = (m_size + int2(gsize - 1)) / gsize;
+		int shift = log2(gsize);
+
+		vector<int> multi_counts(num_groups.x * num_groups.y, 0);
+		vector<int> single_counts(multi_counts.size(), 0);
+
+		for(int i = 0; i < m_num_quads; i++) {
+			IRect rect;
+			if(!get_quad(rect, i, shift))
+				continue;
+			auto &dst = rect.width() == 0 && rect.height() == 0 ? single_counts : multi_counts;
+			for(int y = rect.y(); y <= rect.ey(); y++)
+				for(int x = rect.x(); x <= rect.ex(); x++)
+					dst[x + y * num_groups.x]++;
+		}
+
+		int num_not_empty = 0;
+		for(int i : intRange(multi_counts))
+			if(multi_counts[i] || single_counts[i])
+				num_not_empty++;
+
+		int smax = 0, ssum = 0, mmax = 0, msum = 0;
+		for(auto &gval : multi_counts) {
+			mmax = max(mmax, gval);
+			msum += gval;
+		}
+		for(auto &gval : single_counts) {
+			smax = max(smax, gval);
+			ssum += gval;
+		}
+		printf("[%4d]:\n  max: single:%d multi:%d\n", gsize, smax, mmax);
+		printf("  avg: single:%d multi:%d \n", int(double(ssum) / num_not_empty),
+			   int(double(msum) / num_not_empty));
+	}
+}
+
+array<uint, 256> LucidRenderer::computeCentroids4x4() {
+	array<uint, 256> out;
+	for(uint mask = 0; mask < 256; mask++) {
+		uint x0123 = 1 * countBits(mask & 0x11) + 3 * countBits(mask & 0x22) +
+					 5 * countBits(mask & 0x44) + 7 * countBits(mask & 0x88);
+		uint y01 = 1 * countBits(mask & 0xf) + 3 * countBits(mask & 0xf0);
+		uint y23 = 5 * countBits(mask & 0xf) + 7 * countBits(mask & 0xf0);
+		out[mask] = x0123 | (y01 << 8) | (y23 << 16);
+	}
+	return out;
+}

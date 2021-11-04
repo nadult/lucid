@@ -1,0 +1,11 @@
+build/*
+/scenes
+/lucid
+/lucid_config.xml
+/*.cap
+/*.data
+/*.exe
+/*.html
+/*.js
+/*.tga
+/*.wasm

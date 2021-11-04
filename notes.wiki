@@ -1,0 +1,530 @@
+ 
+ *Skupiamy się na wydajnym renderingu przezroczystości; Chcemy szybko zamknąć ten temat*
+ 
+*Stats 29.10*: total  setup  bins  tiles  raster_masks  sort_masks  final_raster
+	 #boxes: 6334   25     54    136    487           1693        3513
+	  bunny: 1989   48     48    96     388           487         720
+ conference: 4497   94     95    251    693           1012        1788
+	 dragon: 3474   309    134   217    638           737         910
+	gallery: 7913   345    156   376    1326          2056        3321
+   hairball: 25548  989    587   2589   11105         3834        5440
+ powerplant: 31435  3873   1625  1774   10661         4854        8049
+ san-miguel: 27837  2033   641   967    3821          5614        13651
+  scrubPine: 2831   16     35    106    308           470         1501
+	 sponza: 14820  167    167   358    1122          3221        9211
+	 teapot: 2018   29     46    81     307           459         901
+  white_oak: 11641  53     59    193    684           2705        7568
+
+*Stats 02.11*: total  setup  bins  tiles  raster_masks  sort_masks  final_raster
+	 #boxes: 5879   27     53    134    481           1751        3283
+	  bunny: 1882   52     50    100    385           498         655
+ conference: 4077   103    101   266    734           1148        1497
+	 dragon: 3026   330    129   260    611           740         789
+	gallery: 7564   365    152   424    1350          2127        2805
+   hairball: 23023  1095   582   2423   9895          3839        4522
+ powerplant: 31773  3595   1599  2390   10908         4862        6764
+ san-miguel: 25494  2106   631   1289   3801          5613        11555
+	 sponza: 13280  173    177   358    1101          3194        8074
+	 teapot: 1857   33     46    80     302           456         815
+  white_oak: 10781  56     60    186    671           2734        6923
+
+-----------------------------------------------------------------------------------------
+                          === Problemy z aktualnym systemem ===
+-----------------------------------------------------------------------------------------
+
+* Rendering transparencji wymaga renderowania trójkątów w odpowiedniej kolejności; uniemożliwia
+  to sortowania tróəkątów po materiałach i raczej wymaga stosowania uber-shadera
+
+* Duże straty na wydajności przy rysowaniu sliverów (najlepiej widoczne na hairballu). Wynika
+  to przede wszystkim z tego, że faktyczną rasteryzcję wykonuję dopiero na etapie bloków,
+  wcześniej (na etapie binów i tile-i) używam jedynie AABB.
+
+* Filtrowanie głębokości wymaga skwantyzowania koloru do 8-bitów na komponent. Może to
+  powodować problemy i prawdopodobnie muszę w takiej sytuacji robić za każdym razem konwersję
+  do/z sRGB. Ew. mógłbym przeznaczyć więcej bitów na kolory (10/11) a wartość alpha trzymać
+  razem z głębokością (zmniejszoną do 24 bitów).
+
+* Kafle mogą aktualnie obsłużyć max 64K trójkąty; Na niektórych scenach to za mało (San Miguel)
+  Dodatkowo nie obsługujemy na razie kafli gdzie ilość trójkątów w blokach jest większa niż 2K.
+
+* Główne etapy pipeline-u są cału czas zbyt wolne:
+  - generowanie masek
+  - sortowanie masek
+  - finalna rasteryzacja
+
+* *Podstawowy problem: przechowywanie danych trójkątów w SMEM*
+  Generalnie jeden wątek operuje na 1 trójkącie, a 1 tróəkąt wymaga dużo danych!
+  Jeśli dałoby się obliczenia wykonywać na 16-bitach, to by nie było problemów?
+  Ale raczej się nie da...
+
+
+* *Mam limit na trójkąty per tile: 64K; ale na hairballu jest przekraczany...*
+
+-----------------------------------------------------------------------------------------
+                 === Potencjalne rozwiązania / ulepszenia algorytmu ===
+-----------------------------------------------------------------------------------------
+
+
+* *Bucketowanie trójkątów w tile-ach po ilości rzędów*
+  Najlepiej by było brać pod uwagę wygenerowane maski, ale nie mamy ich na etapie estymacji
+  Na etapie estymacji mamy jedynie wymiary quadów w tile-ach. Możemy zrobić 4 albo 16 bucketów.
+  To powinno poprawić dystrybucję trójkątów na etapie 
+  Problem jest taki, że nie jestem w stanie z wyprzedzeniem wyliczyć ile trójkątów będzie w
+  każdym z bucketów, bo niektóre mogą być zcullowane.
+
+* *Poprawka w tile dispatcher:* tile_counts to tak naprawdę estymaty; Możemy też zapisać gdzieś
+  ile miejsca się marnuje w listach tile-i
+
+* *4x4 może sie okazać zbyt kosztowne* Może zrobić tylko opcję 8x8?
+
+* *Nowy algorytm rasteryzacji finalnej*
+  - alokujemy 64 wątki na kafel; W danym momencie mogą przetwarzać max 64 piksele na raz
+  - wątek jak przetwarza piksel to robi to od początku do końca, ale jak skończy to może
+	przejść do następnego
+  - ładujemy na początek tróəkąty z max 4 bloków do 4 różnych slotów. W momencie w jakim
+	załadowaliśmy już wszystkie trójkąty dla danego bloku i jakieś tróəkąty zostały
+	przetworzone, możemy ładować tróəkąty z kolejnego, jeszcze nie przetwarzanego bloku.
+	W efekcie w danym slocie w danym momencie mogą być tróəkąty z 2 różnych bloków.
+	Dla każdego bloku śledzimy:
+	- ilość całkowicie przetworzonych trójkątów
+	- ilość załadowanych tróəkątów
+	- wskaźnik na najwcześniej załadowany trójkąt; w momencie w jakim trójkąt jest przetworzony
+	  ten wskaźnik się przesuwa do przodu i zwalnia miejsce na tróəkąty dla kolejnego bloku
+  Problem: efektywna implementacja
+
+* *Encodowanie danych trójkąta?*
+  - wektory normalne można zakodować jako 1 liczba 32-bitowa
+    ale z długościami już by było gorzej
+    Czyli teoretycznie wektor możemy zakodować w 64-bitach zamiast w 96?
+    Całkiem dobrze można zakodować normalną w 32 bitach (metoda hemi oct)
+    tri0: 3xf32, edge0: f32+u32, edge1: f32+u32 (7 liczb i tak...)
+
+* *Lepszy load balancing*
+  - W różnych fazach możemy po załadowaniu trójkątów jakoś je pogrupować, żeby zmniejszyć
+    rozbierzność w ramach wątków
+  - W niektórych fazach zmiana ilości wątków w grupie mocno wpływa na wydajność w danej scenie.
+	Dla różnych scen różne wartości sa optymalne. Może dałoby się tak przerobić te algorytmy,
+	żeby się w jakiś sposób same dopasowywały do danych?
+	Np. tile dispatcher mógłby operować na więcej niż jednym binie na raz? Albo alternatywnie
+	moglibyśmy mieć kilka tile-dispatcherów gdzie każdy ma inną ilość wątków w grupie i każdy
+	by odpowiadał za biny o różnych ilościach tróəkątów.
+  
+* *Lepszy sposób zapisania danych warstwowych per-blok*
+  Zamiast bit-masek dla każdego trójkąta moglibyśmy mieć:
+  tablicę 4/6/8 bitowych indeksów + listę trójkątów
+  Na hairballu to mogłoby dać duży zysk, ale  drugiej strony na sponzie nie bardzo...
+
+* *Zamiast masek bitowych zapisujmy zakresy pikseli*
+  - przeliczanie centroid: może da się szybciej
+  - przerobić mask_raster: to chyba wymaga precompute-owanych normalnych...
+
+* *Rendering niektórych binów w blokach 8x8 a nie 4x4*
+  - każdy bin musiałby byc oznaczony jako 4x4 albo 8x8. Na razie chyba po prostu po ilości
+	trójkątów? później jak dodamy specjalny path dla małych trójkątów, to ich ilość może
+	bardziej wpływać na wybranie wersji 4x4 niż 8x8
+  - możliwe też, że jeśli wersja 8x8 będzie dużo szybsza to wogóle zrezygnujemy z 4x4
+ 
+  - nowy tile dispatcher: zaczyna z listą trójkątów w binie i generuje listy dla każdego
+	sub-tile-a (8x8). Każdy sub-tile testujemy trivial rejectem & acceptem.
+  - nowy mask raster: przechodzimy po listach i generujemy maski 8x8
+  - nowy mask sorter: sortujemy każdą grupę niezależnie?
+  - nowy tile_dispatcher: 
+  To by wymagało:
+  - nowa faza tile_dispatchera: od razu byśmy dispatchowali do sub-tile-i 8x8
+  - nowa faza mask_rastera:     
+
+* *Przyspieszenie sortowania*
+  - może nie ma sensu sortować wszystkich bloków w tile-u razem? Lepiej chyba niezależnie?
+  - razem ma sens jeśli liczba t©ójkątów jest naprawdę mała
+  - Wersje sortera:
+    <= 256  tri-bloków / kafel: sortujemy wszystkie razem
+    <= 1024 tri-bloków / kafel: sortujemy wszystkie razem
+	mask_raster od razu może posortować wg. bloków jeśli wszystkie się mieszczą w SMEM
+	jeśli używamy scratcha to zawsze sortujemy każdy blok niezależnie
+  - Alternatywnie te trójkąty moglibyśmy od razu posortować w mask_rasterze. I tak nie używamy
+	w nim SMEMu.
+
+	<=   64 tri / blok
+	<=  256 tri / blok
+	<= 1024 tri / blok
+	>  1024 tri / blok
+	Ale musielibyśmy też mieć bardzo szybką metodę iterowania po binach i ich kaflach
+
+  Jak już zrobimy różne wersje, to można się pokusić o przyspieszenie na NVIDII za pomocą
+  shuffli.
+
+* *Finalny raster: Precompute-owanie danych dla trójkątów w ramach bloków w SMEM*
+  Może dałoby się trzymać więcej danych, jeśli byśmy byli w stanie jakoś
+  cache-ować wierzchołki?
+  
+  Specjalna obsługa tróəkątów które zajmują cały quad 4x4? W przypadku 4x4 jest ciężko, łatwiej
+  by było to zrobić przy 8x8, bo wtedy robimy dla całego warpa.
+  Moglibyśmy zrobić dwa rodzaje binów: w jednych operowalibyśmy na blokach 4x4 a w drugich na
+  sub-tile-ach 8x8. Ale na jakiej podstawie stwierdzić która strategia jest lepsza w danym
+  binie?
+  Tam gdzie mielibyśmy odpowiednio gęstą geometrię byśmy szli 4x4. Bierzemy pod uwagę: ilość
+  trójkątów, średnia wielkość tróəkąta i jego 'sliverowatość'. Ważne jest też czy tróəkąty są
+  'skupione' czy rozrzucone, a właściwie, jak bardzo się przecinają. Ale tego się nie da szybko
+  zmierzyć?
+  
+  Stosunek ilości trisów/blok do unikalnych trisów/tile:
+  Dragon:1.07, SanMiguel:1.8, Sponza:4, Powerpl:2, Teapot:3, Hairball:1.5 Gallery:1.3 Conf:4
+  
+  Czy da się jakoś lepiej ładować tróəkąty? może jakoś zahashować? Ale co w wypadku kolizji?
+  Ładować różne ilości masek, zależnie od tego, ile tróəkątów się mieści w buforze?
+
+  Problem: nawet na Sponzie średnia ilość pikseli w masce to 10/16. Jeśli przyspieszymy 2x
+  poprzez rysowanie wszystkich pikseli w ramach bloku dla danego trójkąta to stracimy prawie
+  całe przyspieszenie przez rysowanie pikseli które są wyłączone.
+  
+  A co można zrobić ze scenami typu hairball? Jeszcze większy podział (2x2)? I przetwarzanie
+  list 2x2 jedna za drugą. W tile-u mielibyśmy ich 64. Możemy przydzielić 32 wątki na kafel?
+  Przy czym, po skończeniu każdego kawałka 2x2 od razu go zapisujemy do pamięci. Dzięki temu
+  nie musimy trzymać w pamięci wszystkich pikseli, ale możemy lepiej zbalansować obliczenia?
+  Grunt, żeby po jednej fazie cieniowania można było się szybko przełączyć na inną grupę 2x2.
+
+
+* *Optymalizacja ładowania danych trójkątów do wczesnej rasteryzacji*
+  - Współrzędne wierzchołków NDC można zapisać z 8-bitową sub-pixelową precyzją w 4 uintach
+	(dla małych trójkątów mniej). To wszystko co potrzebujemy do rasteryzacji za pomocą
+	algorytmu bazującego na liniach.
+  - Do generowania głębokości wystarczy wektor normalny + plane_dist. To można zapisać w 3
+	floatach.
+  Obydwie te rzeczy można by precompute-ować w trans_setup: zapisanie 4 floatów/trójkąt zajmuje
+  ok. 700msec na power plancie, 200msec na san miguel.
+  
+  W końcowej rasteryzacji te dane raczej się nie przydadzą, bo do wyznaczenia współrzędnych
+  barycentrycznych potrzebujemy pełną informację o tróəkącie (minimum 9 liczb). Dałoby się
+  wyliczyć z wierzchołków NDC i płaszczyzny wektory do wyznaczania barycentryków, ale to jest
+  raczej niepotrzebne zawracanie dupy (szybciej będzie po prostu wczytać pozycje wierzchołków).
+
+* *Przetwarzanie małych (max 8x8 pikseli) i dużych trójkątów niezależnie*
+  - Dla małych trójkątów możemy w jednym kroku wyznaczyć maskę, a nie w każdym kaflu w jakim
+	występuje. Moglibyśmy takie t©óəkąty binować wg. ilości zajmowanych rzędów, dzięki temu
+	można by te maski bardzo wydajnie generować.
+  - Dla dużych trójkątów dużo bardziej opłaca się sprawdzanie czy przecinają się z binem czy
+	tile-em. W niektórych scenach wykonywanie takich testów powinno dać duży zysk (hairball).
+	Jeśli wydzielimy małe tróəkąty to strata na pozostałych scenach powinna być bardzo mała (bo
+	głównie dla małych tróəkątów ten test jest mało przydatny).
+  - Problemem może być wyznaczanie wartości głębokości. Jeśli wyznaczę jedną wartość dla całego
+	tróəkąta, to może to generować dużo niepoprawnych pikseli. Może jestem w stanie łatwo
+	zidentyfikować takie problematyczne trójkąty? Po wektorze normalnym? Jeśli tróəkąt jest
+	prawie prostopadły do promienia to będzie powodować problemy...
+
+* *Optymalizacja trans_setup*
+  Powinniśmy generować listę widocznych trójkątów; Setup po wstępnym przetworzeniu tróəkątów
+  zapisuje dane / indeksy do SMEM i w kolejnej fazie kontunuuje przetwarzanie tylko na
+  widocznych trójkątach/quadach.
+  Problem: dane trójkątów nie mają szans zmieścić się w SMEM...
+
+* *Naprawić i przyspieszyć mip-mapping*
+  - z jakiegoś powodu pochodne są inne niż te generowane za pomocą dfdx/dfdy... mimo tego, że
+	wartości UV w konkretnych pikselach są identyczne.
+  - na razie w każdym pikselu efektywnie liczymy 3x zinterpolowane współrzędne UV i liczymy
+	różnicę. Może dałoby się to zrobić jakoś szybciej? Np. wymuszając rendering w grupach 2x2?
+	Coś mi się zdaje że będzie wolniej...
+
+* *Meshlety*
+  Oprócze tego, że zwiększyły by lokalność danych to moglibyśmy dzięki nim zrobić efektywnie
+  precompute-owane dane.
+  W meshletach oprócz wierzchołków i tróəkątów moglibyśmy też mieć krawędzie, które moglibyśmy
+  precompute-ować (dla całego meshleta). Krawędzie byłyby współdzielone między trójkątami więc
+  musielibyśmy wziąć pod uwagę kwestię kierunku.
+
+* *Szybsze obliczanie małych sum prefiksowych*
+
+* *Bug jeśli dwie powierzchnie na siebie prawie nachodzą (jedna backface)*
+  szczególnie widoczne na sponzie
+
+* Lepsze cache-owanie danych wierzchołków w finalnym rasterze? Ale jak to zrobić sensownie...
+
+* Lepsza kolejność danych wejściowych: może to mocno wpływać na wydajność początkowych etapów
+  pipeline-a (setup & binning).
+
+* *Czy bardziej się opłaca rasteryzacja 3D czy 2D?*
+  - w 2D musielibyśmy przechować pozycje wierzchołków i je poprzycinać;
+    ale za to rasteryzacja byłaby prostsza? tak samo jak wyznaczanie bboxa dla trójkątów
+	przyciętych w ramach kafla.
+
+* *Option not to run checks every frame*
+
+-----------------------------------------------------------------------------------------
+                       === Dodatkowe ulepszenia aplikacji ===
+-----------------------------------------------------------------------------------------
+
+* Wymyślić jakąś nazwę dla algorytmu. Np. CBTR ? compute-based transparent rasterization ?
+
+* Zaimplementować MSAA, zobaczyć czy tile-renderer ma przewagę nad hardwarem w tym zakresie.
+
+* Dodać jakąś prostą animaowaną scenę? animowane boxy?
+
+* Dodać możliwość renderingu obiektów nie-przezroczystych normalnie a jedynie przezroczystych
+  za pomocą trans-renderera. To wymaga dodania obsługi czytania z bufora głębokości.
+
+* Dodać weighted-blended OIT, żeby mieć porównanie z faktycznie stosowanym algorytmem?
+
+* Dodać obsługę renderingu dwu-fazowego transparencji (od Wolfire):
+  - materiały bez alphy najpierw, te z alphą potem
+  - opcja: alpha test na 100% najpierw
+  - sposób blendowania: normalny albo addytywny
+    można tej metody użyć też razem z trans rendererem!
+
+* Obsługa kamery orbitującej jest do D; dać możliwość focusowania się na klikniętym elemencie?
+
+* Modyfikacja kawałków shaderów nie powoduje reloadu
+
+* Rendering pół na pól (simple po lewej / trans po prawej).
+
+----------------------------------------------------------------------------------------
+                                    === Tri patche ===
+-----------------------------------------------------------------------------------------
+
+Dałoby się zrobić część meshy na quadach a część na tróəkątach?
+Problemz ogólnym systemem: instancing...: dla każdej instancji muszę
+przekształcić wierzchołki i je gdzieś zapisać, inaczej musiałbym to robić 2 razy:
+- przy wyliczaniu AABB i podczas rasteryzacji (słabe); OK! akceptujemy to!
+
+dobra, powiedzmy ze da się w miarę sensownie przerobić mesh bazujący na tróəkątach na quadowy.
+Co dalej?
+Grupować quady w czwórki ? Tylko takie które współdzielą wierzchołki?
+
+Przy czym grupowanie w czwórki powinno być maksymalnie szybkim algorytmem. 
+To czemu od razu nie robić ray-tracingu ? Może ne wszystko na raz
+
+Ale Do grupowania obiektów mógłbym użyć grida albo BVH czy coś podobnego?
+Musi to być szybkie. Przy czym mi zależy na tym, żeby przyspieszyć etap
+rasteryzacji kafli i bloków. Jak zrobie quady, to pozostałe etapy powinny być wystarczająco
+szybkie.
+
+Grupowanie quadów w czwórki pomoże? Potencjalne problemy:
+- więcej trójkątów do przetworzenia na poziomie tile-a?
+
+
+Podobny algorytm można zrobić do generowania czwórek. Ale tutaj straty na pewno będą większe.
+Co w takich sytuacjach? Czwórki będziemy rozpakowywać na poziomie tile-a?
+
+Tak czy inaczej: najpierw powinniśmy zrobić same quady, jeśli przyspieszą to wtedy pomyślimy od
+rozszerzeniu
+
+Jaka byłaby reprezentacja takiej czwórki?
+- 9 indeksów wierzchołków ?
+- a co zrobić ze ścinkami?
+
+Może coś prostszego: jakoś uporządkować quady? ale jak to zrobić szybko?
+grupujemy jedynie quady które są faktycznie blisko siebie? Ale co będziemy robili z
+nie=pełnymi grupami? Będą nam psuć occupancy!
+
+
+A może dużo większe meshlety ? 256 wierzchołków i 512 trójkątów ?
+
+32 wierzchołki: wystarczy 15 bitów na trójkąt
+
+
+Generacja:
+- ciągłość powierzchni nie jest taka ważna jak lokalność w przestrzeni?
+- np. hairball: nie ma sensu lecieć po włosach, lepiej robić wycinki lokalnej przestrzeni
+
+- do pewnego stopnia na pewno chcemy łapać trójkąty które są ciągłe
+  A może: olać ciągłość, wybierać wierzchołki w pierwszej kolejności?
+
+
+- Niezależnie trzymamy dane indeksów i wierzchołków ?
+- Jakie limity ?
+
+- Czy mogę zapewnić, że paczki wierzchołków/trójkątów będą wypełnione po brzegi?
+- stosunek num_tris/num_verts wacha się od 0.8 do 2.1; Generalnie tróəkątów jest tyle co
+  wierzchołków, a w niektórych meshach nawet 2x tyle
+
+
+- Póżniej mozemy zdecydowac czy dopychamy trojkaty czy wierzcholki
+
+- Na początek robimy to statycznie:
+  - mamy listę instancji, każda instancja ma odnośnik do paczki trójkątów i jej wielkość?
+    najprościej żeby paczki trójkątów miały takie same wielkości
+    Może się okazać, że marnujemy pamięć, bo albo w buforze wierzchołków albo w buf. trójkątów
+	będzie trochę zmarnowanego miejsca;
+	Lepiej marnowac miejsce w buforze tróəkątów?
+
+    - paczki po 64 wierzchołki; Instancja może mieć odnośnik do max 4 paczek (wierzchołki 0-63,
+	  64-127, 128-191, 192-255).
+	- Trójkątów ładujemy od razu 256?
+
+	- Ilośc wierzchołków ustalamy na wartośc stałą a t©óəkątów na zmmienną?
+	  Czy jest sens mieć więcej niż 256 tróəkątów?
+
+	Czy mogę założyć, że w trans_setup będę miał więcej niż 1 meshlet?
+  - Np. jeśli jeden się nie zmieścił to dopycham drugim?
+
+	Wierzchołki:
+	128 * float = 42 * float3 (position, normals, uvs + colors)
+    256 * float = 85 * float3
+
+	Trójkąty:
+	64 * uint  = 85 trójkątów
+    128 * uint = 170 trójkątów
+  - 7 bitów na indeks: 64-bity = 3 trójkąty: 128 * uint = 192 trójkąty
+
+	ChunkMeshInstance {
+		u8 num_tris, num_verts;
+		u16 flags; // has_uvs?, has_normals?, etc.
+	    u32 verts_offset, uvs_offset, normals_offset;
+  	 	u32 tris_offset;
+		// Do tego: bounding boxy, zakresy normalnych (do szybkiego backface-cullingu)
+  	 	// Parametry materiałów; Na razie po prostu jeden materiał na 1 chunk
+	};
+
+	Instancja: ~128 bajtów
+	Tróəkąty:   512 bajtów
+	Pozycje wierzchołków: 1024 bajty 
+	UVki + kolory:        1024 bajty
+	normalne:             1024 bajty
+
+*Co trzeba zrobic?*
+- wygenerować w miarę dobrze upakowane tri patche
+- na razie olewamy bboxy? tak, żeby można było zrobić w miarę sprawiedliwe porównanie z podstawowym renderingiem
+- skopiować TriPatche do pamięci GPU
+- Przerobić tri_setup: dane wierzchołków (co najmniej pozycje) trzymamy w SMEM?
+- Problem: gdzie trzymamy dane przycętych wierzchołków? Normalnie np. UVki wogóle nie są
+  modyfikowane; Wraca dylemat: rastaryzacja 2D czy 3D ?
+  Bez sensu przepisywać cały bufor jeśli zmienił się jeden wierzchołek
+- W headerze trzymamy offset do bufora clipowanych wierzchołków; Najwyższy bit w wierzchołku
+  oznacza, że jest clipnięty i tyle
+- Inna numeracja trójkątów /  wierzchołków: Dla danego t©óəkąta mamy indeks paczki który
+  identyfikuje od razu zestaw wierzchołków? A UVki i normalne?
+
+
+Na początek najprostszy sposób:
+- cała scena ma jeden rodzaj wierzchołka?  Jeśli byłyby różne typy, to w raster musiałbym mieć
+  cache na instancje? Każdy dostęp do trójkąta wymaga odwołania do danych instancji?
+
+  Chyba, że dane wierzchołków różnych typów byśmy trzymali w jednym buforze i po prostu miałyby
+  rózne zakresy?
+
+  Jak tróəkąt jest zapisany na liście w tile-u? 24-bit: indeks instancji + 8-bitów na indeks trójkąta?
+  Na początek tak.
+
+  Tile dispatch zajmuje dużo czasu, czy dałoby się to jakoś przyspieszyć? Przy pierwszym
+  binowaniu możemy operować na instancjach (ew. z mapą bitową trójkątów). Powinno się dać coś
+  przyspieszyć Np. jeśli dałoby się operować na grupkach (2-8) tróəkątów a nie całych tróəkątach
+  to już moglibyśmy mieć duży zysk na tym etapie
+  
+Jak duże powinny być TriPatche? 
+- na tyle duże, żeby wypełnić warp
+- jak duże będą za duże? raczej na pewno będą za duże, żeby założyć, że większość trójkątów
+  wypełnia kafel 16^2
+  
+--- *Cieniowanie* ---
+- musimy przekazywać jakoś wektory normalne; Jak to robić najlepiej ?
+  raczej nie ma sensu pakować wszystkiego do TriangleData. W triangle data zostawiamy indeksy
+  wierzchołków, które są w jednym buforze wierzchołków
+  Jak je indeksować ? 
+
+  informacje jakie musimy mieć:
+  - lista instancji: każda instancja ma indeks mesha, materiał, macierz, etc.
+  - lista wierzchołków wejściowych;
+
+  Problem: dane wierzchołków trzymamy w jednym dużym buforze? Oddzielne bufory na oddzielne
+  atrybuty; każda instancja może mieć offset na globalny bufor wierchołków, normalnych,
+  indeksów trójkątów, etc. ?
+
+  W Trans nie muszę robić nic wyszukanego: mogę użyć alokatora BestFit
+
+
+  - nie robimy żadnego cullingu, tak żeby porównanie było sensowne
+  musimy je jakoś generować dynamicznie:
+
+  Obsługujemy wiele różnego rodzaju draw-calli:
+  - statyczna / dynamiczna geometria
+  - z instancingiem lub bez
+    indeksowanie vertexów w statycznych meshach to raczej nie problem?
+	ale co ze skinned meshami ? każda instancja może też być inaczej przekształcona...
+	Dodatkowo, aby wyznaczyć AABB tróəkątów i Z min/max, muszę mieć dostęp do przekształconych
+	wierzchołków...
+	W compute chyba ciężko będzie to zrobić lepiej niż w geometry shaderze ?
+  - najgorsze, że dostępy do VBuffera mogą być dalekie od ideału. w standarodwym pipelinie mamy
+    pewnie jakiś cache...
+	
+    Pewnie łatwiej by było jakbyśmy mieli TriPatche / meshlety; Tak czy inaczej to jest ew. na potem
+    Czy meshlety działałyby też z instancjami/skinned meshami ? 
+
+    Vertex shader przekształcał by cały meshlet? moglibyśmy też podzielić meshlet na 2 cześci:
+	dane trójkątów i dane wierzchołków; jeśli robiłbym na meshletach, to 
+    Czy jest sens od razu robić meshlety ?
+
+    Czy meshlety mogą mi też pomóc z transparencją? Jeśli miałbym tam informacje o warstwach to
+	mógłoby to uprościć sortowanie? Ale jak konkretnie? per pixel i tak przetwazam poszczegolne
+	trojkaty? a moze po prostu przetwazalbym (i sortował) tri-patche? ok, ale co jeśli tri
+	patche będą się przecinać? w takiej sytuacji lepsze byłoby sortowanie trójkątów...
+	A jak już mam listę tróəkątów, to fakt, że 2 trisy są z tego samego patcha nic mi nie daje?
+
+    Patche na pewno będą musiały być dzielone na nie-overlapujące kawałki do sortowania
+  
+  - Teoretycznie przekazywanie patchy aż do poziomu kafli mocno przyspieszy binowanie, ale na
+	poziomie kafla może to mocno zwiększyć bandwidth? A może nie koniecznie? jeśli dałoby się
+	nie ładować np. od razu całych danych wierzchołków? ale to chyba nie ma sensu?
+  - Bardzo dużo zależy od tego: ile patchy średnio byśmy mieli per bin/tile/block
+
+  - Jeśli np. w prakty tile pokrywał np. 20% lub mniej powierzchni patcha, to byłoby bardzo
+	słabo...
+	
+  - Dodatkowy problem z tripatchami: mozna je tylko renderowac w calosci, czy moze być opcja
+	renderingu zakresu tróəkątów? nie ma problemu z zakresem, będzie to zwykla maska
+	trzeba bedzie troche wysilku wlozyc w przerobienie scen, tak, żeby materialy się cały czas
+	poprawnie mapowaly na trojkąty
+	
+   - to się wydaje proste ale pewnie będzie 1-2 tyg roboty...
+
+  Chyba lepiej najpierw zrobić prostszą metodę tak czy inaczej; CHoćby po to, żeby mozna było
+  faktycznie porównac?
+	
+W tym problemie ważne jest chyba jak najlepsze skompresowanie danych?
+  - *Problem:* to jest bardziej skomplikowane i tak naprawde nie potrzebuje tego do gry; Moze
+	na początek i tak lepiej jest zrobić coś prosztszego?
+	
+	Ale czy da się sensownie zrobić ten renderer z normalnymi vertex & index bufferami ? tzn.
+	lepiej niz geometry shader?
+  - Najważniejsze: jak łączyć dane wierzchołków z trójkątami ?
+
+  Zainstaluj Visual Studio zeby latwiej debugować ?
+ 
+*Potencjalne rozwiązania:*
+1. - TriPatche ? A co z partiklami ?
+2. Jakaś detekcja warstw trójkątów ? To wszystko może być bardziej kosztowne niż zwykłe OIT...
+3. Czy dałoby się szybko wykrywać nie overlapujące warstwy trójkątów dla danego rzutu ?
+  dla zwykłych meshy może dałoby się coś pokombinować, ale co zrobić z partiklami ?
+  albo po prostu z chmurami tróəkątów ?
+  podział na warstwy po głębokości ? każdy trójkąt ma jakiś zakres głębokości (min/max po zrzutowaniu)
+  można tego użyć to pokubełkowania całej geometrii;
+  zostało by nam na koniec tylko sortowanie w ramach warstw.
+  OK, ale warstwy mogą się overlapować; niektóre tróəkąty występowałyby w wielu warstwach ?
+  jeśli warstwy byłyby w ramach binów to może dałoby się sensownie porozdzielać geometrię ?
+  Ale jak dobrze wyznaczyć zakresy warstw? musi to się jakoś pokrywać z faktycznym rozkładem
+  głębokości w trójkątach;
+  Czy podział na warstwy zawsze jest możliwy ? Żeby było bezpiecznie, przy wybieraniu trójkątów
+  muszę zawsze wybrać wszystkie które overlapują po Z; Mogą być takie sceny pewnie gdzie jest
+  tylko jedna warstwa zawierająca wszystkie trójkąty
+  Np. jeśli mamy na scenie duże trójkąty otaczające całą scenę, to jeden taki może 'przykleić'
+  do siebie wszystkie pozostałe...
+
+  *Może takie trójkąty wrzucajmy wiele razy z różnymi zakresami głębokości ?*
+  Ale:
+  - chciałbym minimalizować takie trójkąty
+  - warto byłoby jakoś zwizualizować sobie przecięcia scen o głębokości
+    (histogramy dla różnych binów)
+  Pod problem: jak dobrze wyznaczyć zakres głębokości trójkąta przyciętego do bina?
+    bin może mocno ograniczyć ten zakres...
+    na Hairballu to zmniejsza ilość trójkątów o ok. 2%; Na niektórych scenach może będzie
+	więcej...
+
+  Pod problem: rozkłady trójkątów na osi Z mogą być bardzo nierównomierne... co z tym zrobić?
+  Chyba muszę z grubsza posortować po głębokości w ramach bina ?
+  Ale sortowanie jest kosztowne...
+  Zamiast sortowania binning na 256 kubełków?
+  możemy zrobić symulację ile faz byłoby potrzebne, żeby przetworzyć dany bin
+
+  Zaczynanie renderingu z poziomu bina to często za dużo; W niektórych sytuacjach lepiej jest
+  robić rendering dopiero na poziomie kafli; Można to zrobić na 2 sposoby:
+  - generować listy trójkątów dla poszczególnych kafli tak samo jak dla binów i zapisywać je
+    do pamięci
+  - robić rendering z poziomu bina  i w pętli filtrować t©óəkąty dla kafli; Problem: zakresy
+    głębokości byłyby niedostosowane do konkretnych kafli?

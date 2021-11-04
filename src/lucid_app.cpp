@@ -65,7 +65,7 @@ LucidApp::LucidApp()
 
 LucidApp::~LucidApp() = default;
 
-static string configPath() { return dataPath("../trans_config.xml"); }
+static string configPath() { return dataPath("../lucid_config.xml"); }
 
 void LucidApp::setConfig(const AnyConfig &config) {
 	m_rendering_mode = config.get("rendering_mode", m_rendering_mode);

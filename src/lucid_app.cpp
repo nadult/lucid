@@ -72,6 +72,7 @@ void LucidApp::setConfig(const AnyConfig &config) {
 	m_lucid_opts = config.get("trans_opts", m_lucid_opts);
 	m_wireframe_mode = config.get("wireframe", m_wireframe_mode);
 	m_show_stats = config.get("show_stats", m_show_stats);
+	m_select_stats_tab = config.get("selected_stats_tab", -1);
 	if(auto *scene_name = config.get<string>("scene"))
 		selectSetup(*scene_name);
 	if(m_perf_analyzer)
@@ -105,6 +106,7 @@ void LucidApp::saveConfig() const {
 	out.set("wireframe", m_wireframe_mode);
 	out.set("window_rect", GlDevice::instance().windowRect());
 	out.set("show_stats", m_show_stats);
+	out.set("selected_stats_tab", m_selected_stats_tab);
 
 	if(m_setup_idx != -1)
 		out.set("scene", m_setups[m_setup_idx]->name);
@@ -190,34 +192,80 @@ void LucidApp::updateRenderer() {
 	}
 }
 
-void LucidApp::showStatsMenu(const Scene &scene) {
-	ImGui::Begin("Statistics", &m_show_stats);
-	ImGui::Separator();
-	auto formatSize = [](long long value) {
-		if(value >= 2 * 1024 * 1024)
-			return stdFormat("%.2fM", double(value) / (1024 * 1024));
-		if(value > 2 * 1024)
-			return stdFormat("%.2fK", double(value) / 1024);
-		return toString(value);
+static string formatSize(long long value) {
+	if(value >= 32 * 1000 * 1000)
+		return stdFormat("%.0fM", double(value) / (1000 * 1000));
+	if(value > 32 * 1000)
+		return stdFormat("%.0fK", double(value) / 1000);
+	return toString(value);
+};
+
+void LucidApp::showSceneStats(const Scene &scene) {
+	int num_degenerate_quads = 0;
+	for(auto &mesh : scene.meshes)
+		num_degenerate_quads += mesh.num_degenerate_quads;
+
+	struct Row {
+		string label;
+		string value;
+		string tooltip;
 	};
 
-	double invalid_quads = 0;
-	for(auto &mesh : scene.meshes)
-		invalid_quads += mesh.num_degenerate_quads;
-	invalid_quads /= scene.numQuads();
-	invalid_quads = round(invalid_quads * 10000) * 0.0001;
-
-	menu::text("tris:% vertices:% quads:% (%\\% degenerate)\nMeshes:% Materials:%\n",
-			   formatSize(scene.numTris()), formatSize(scene.numVerts()),
-			   formatSize(scene.numQuads()), invalid_quads * 100, scene.meshes.size(),
-			   scene.materials.size());
-
+	vector<Row> rows;
 	auto bbox = scene.bounding_box;
-	menu::text("BBox: %",
-			   stdFormat("(%.2f, %.2f, %.2f) - (%.2f, %.2f, %.2f)", bbox.min().x, bbox.min().y,
-						 bbox.min().z, bbox.max().x, bbox.max().y, bbox.max().z));
+	rows = {
+		{"mesh instances", toString(scene.meshes.size()), ""},
+		{"triangles", formatSize(scene.numTris()), toString(scene.numTris())},
+		{"vertices", formatSize(scene.numVerts()), toString(scene.numVerts())},
+		{"quads", formatSize(scene.numQuads()), toString(scene.numQuads())},
+		{"degenerate quads",
+		 stdFormat("%d (%.2f %%)", num_degenerate_quads,
+				   double(num_degenerate_quads) / scene.numQuads() * 100.0),
+		 ""},
 
-	menu::text(m_lucid_renderer->getStats());
+		{"bbox min", stdFormat("(%.2f, %.2f, %.2f)", bbox.min().x, bbox.min().y, bbox.min().z), ""},
+		{"bbox max", stdFormat("(%.2f, %.2f, %.2f)", bbox.max().x, bbox.max().y, bbox.max().z),
+		 ""}};
+
+	if(ImGui::BeginTable("scene_stats", 2)) {
+		ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 90);
+		ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthStretch);
+
+		for(auto &row : rows) {
+			ImGui::TableNextRow();
+			ImGui::TableSetColumnIndex(0);
+			ImGui::Text("%s", row.label.c_str());
+			ImGui::TableSetColumnIndex(1);
+			ImGui::Text("%s", row.value.c_str());
+			if(!row.tooltip.empty() && row.tooltip != row.value && ImGui::IsItemHovered())
+				ImGui::SetTooltip("%s", row.tooltip.c_str());
+		}
+		ImGui::EndTable();
+	}
+}
+
+void LucidApp::showRasterStats(const Scene &scene) { menu::text(m_lucid_renderer->getStats()); }
+
+void LucidApp::showStatsMenu(const Scene &scene) {
+	ImGui::Begin("Statistics", &m_show_stats);
+	ImGuiTabBarFlags tab_bar_flags = ImGuiTabBarFlags_None;
+	if(ImGui::BeginTabBar("stats_bar", tab_bar_flags)) {
+		auto flags = m_select_stats_tab == 0 ? ImGuiTabItemFlags_SetSelected : 0;
+		if(ImGui::BeginTabItem("Scene stats", nullptr, flags)) {
+			showSceneStats(scene);
+			m_selected_stats_tab = 0;
+			ImGui::EndTabItem();
+		}
+
+		flags = m_select_stats_tab == 1 ? ImGuiTabItemFlags_SetSelected : 0;
+		if(ImGui::BeginTabItem("Rasterizer stats", nullptr, flags)) {
+			showRasterStats(scene);
+			m_selected_stats_tab = 1;
+			ImGui::EndTabItem();
+		}
+		ImGui::EndTabBar();
+		m_select_stats_tab = -1;
+	}
 	ImGui::End();
 }
 

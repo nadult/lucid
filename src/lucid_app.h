@@ -44,6 +44,8 @@ class LucidApp {
 
   private:
 	void showStatsMenu(const Scene &);
+	void showSceneStats(const Scene &);
+	void showRasterStats(const Scene &);
 
 	Dynamic<Font> m_font;
 	Maybe<float2> m_mouse_pos;
@@ -61,6 +63,7 @@ class LucidApp {
 	bool m_wireframe_mode = false;
 	bool m_test_meshlets = false;
 	bool m_show_stats = false;
+	int m_select_stats_tab = -1, m_selected_stats_tab = 0;
 	RenderingMode m_rendering_mode = RenderingMode::simple;
 
 	IRect m_viewport;

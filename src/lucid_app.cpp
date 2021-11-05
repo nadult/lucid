@@ -327,6 +327,9 @@ void LucidApp::doMenu(Renderer2D &renderer_2d) {
 		if(ImGui::Button("Print size histograms")) {
 			m_lucid_renderer->printHistograms();
 		}
+		if(ImGui::Button("Analyze mask rasterizer"))
+			m_lucid_renderer->analyzeMaskRasterizer();
+
 		if(ImGui::Button("Raster masks snapshot")) {
 			auto image = m_lucid_renderer->masksSnapshot();
 			image.saveTGA(format("%_masks.tga", setup.name)).ignore();

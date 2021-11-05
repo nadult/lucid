@@ -216,8 +216,6 @@ void LucidRenderer::render(const Context &ctx) {
 	sortMasks(ctx);
 	if(m_opts & Opt::debug_masks)
 		debugMasks(true);
-	if(m_opts & Opt::check_masks)
-		checkMasks();
 
 	rasterizeFinal(ctx);
 	copyCounters();
@@ -657,11 +655,7 @@ auto LucidRenderer::computeBlockStats(int bin_id, CSpan<u32> block_instances,
 	return stats;
 }
 
-void LucidRenderer::checkMasks() {
-	PERF_SCOPE();
-
-	constexpr bool check_offsets = false;
-
+void LucidRenderer::analyzeMaskRasterizer() const {
 	vector<u32> block_counts, block_offsets, block_instances, tile_counters;
 	int bin_count = m_bin_counts.x * m_bin_counts.y;
 	int num_block_tris = 0;
@@ -676,24 +670,22 @@ void LucidRenderer::checkMasks() {
 		block_instances = m_block_tris->download<u32>(num_block_tris);
 	}
 
-	if(check_offsets) {
-		vector<int> offset_coverage(num_block_tris, 0);
-		for(int bin_id = 0; bin_id < bin_count; bin_id++)
-			for(int block_id = 0; block_id < blocks_per_bin; block_id++) {
-				int offset = block_offsets[bin_id * blocks_per_bin + block_id];
-				int count = block_counts[bin_id * blocks_per_bin + block_id];
-				if(offset + count > num_block_tris) {
-					print("Offset out of bounds: % > %\n", offset + count, num_block_tris);
-					return;
-				}
-
-				for(int i = 0; i < count; i++)
-					offset_coverage[offset + i]++;
+	vector<int> offset_coverage(num_block_tris, 0);
+	for(int bin_id = 0; bin_id < bin_count; bin_id++)
+		for(int block_id = 0; block_id < blocks_per_bin; block_id++) {
+			int offset = block_offsets[bin_id * blocks_per_bin + block_id];
+			int count = block_counts[bin_id * blocks_per_bin + block_id];
+			if(offset + count > num_block_tris) {
+				print("Offset out of bounds: % > %\n", offset + count, num_block_tris);
+				return;
 			}
-		if(anyOf(offset_coverage, [](int v) { return v > 1; })) {
-			print("Overlapping offsets detected\n");
-			return;
+
+			for(int i = 0; i < count; i++)
+				offset_coverage[offset + i]++;
 		}
+	if(anyOf(offset_coverage, [](int v) { return v > 1; })) {
+		print("Overlapping offsets detected\n");
+		return;
 	}
 
 	vector<BinBlockStats> bin_stats(bin_count);

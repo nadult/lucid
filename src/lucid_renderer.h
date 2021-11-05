@@ -5,7 +5,7 @@
 #include <fwk/gfx/color.h>
 
 // TODO: better handling of phases
-DEFINE_ENUM(LucidRenderOpt, check_bins, check_tiles, debug_masks, check_masks);
+DEFINE_ENUM(LucidRenderOpt, check_bins, check_tiles, debug_masks);
 using LucidRenderOpts = EnumFlags<LucidRenderOpt>;
 
 class LucidRenderer {
@@ -46,6 +46,7 @@ class LucidRenderer {
 	void printHistograms() const;
 	Image masksSnapshot();
 
+	void analyzeMaskRasterizer() const;
 	vector<StatsGroup> getStats() const;
 
   private:

@@ -5,7 +5,7 @@
 #include <fwk/gfx/color.h>
 
 // TODO: better handling of phases
-DEFINE_ENUM(LucidRenderOpt, check_bins, check_tiles, debug_masks, check_masks, check_raster);
+DEFINE_ENUM(LucidRenderOpt, check_bins, check_tiles, debug_masks, check_masks);
 using LucidRenderOpts = EnumFlags<LucidRenderOpt>;
 
 class LucidRenderer {
@@ -46,6 +46,8 @@ class LucidRenderer {
 	void printHistograms() const;
 	Image masksSnapshot();
 
+	string getStats() const;
+
   private:
 	void initCounters(const Context &);
 	void uploadInstances(const Context &);
@@ -70,7 +72,8 @@ class LucidRenderer {
 	void checkTiles();
 	void debugMasks(bool sort_phase);
 	void checkMasks();
-	void checkRaster();
+
+	void copyCounters();
 
 	struct BinBlockStats;
 	BinBlockStats computeBlockStats(int bin_id, CSpan<u32>, CSpan<u32>, CSpan<u32>) const;
@@ -85,11 +88,11 @@ class LucidRenderer {
 
 	PTexture m_raster_image;
 
-	PBuffer m_errors, m_scratch;
+	PBuffer m_errors, m_scratch, m_instance_data;
 	PBuffer m_quad_indices, m_quad_aabbs, m_tri_aabbs;
 	PBuffer m_bin_counters, m_tile_counters, m_block_counts, m_block_offsets;
 	PBuffer m_bin_quads, m_tile_tris, m_block_tris, m_block_tri_keys;
-	PBuffer m_instance_data;
+	array<Pair<PBuffer>, 3> m_old_counters;
 
 	PFramebuffer m_initial_fbo;
 	int2 m_size;

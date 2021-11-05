@@ -142,7 +142,7 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	m_scratch.emplace(BufferType::shader_storage,
 					  65536 * 128 * sizeof(u32)); // TODO: control size
 
-	if(m_opts & (Opt::check_bins | Opt::check_tiles | Opt::check_raster | Opt::debug_masks))
+	if(m_opts & (Opt::check_bins | Opt::check_tiles | Opt::debug_masks))
 		m_errors.emplace(BufferType::shader_storage, 1024 * 1024 * 4, BufferUsage::dynamic_read);
 
 	m_raster_image.emplace(GlFormat::r32ui, view_size, 1);
@@ -220,9 +220,7 @@ void LucidRenderer::render(const Context &ctx) {
 		checkMasks();
 
 	rasterizeFinal(ctx);
-
-	if(m_opts & Opt::check_raster)
-		checkRaster();
+	copyCounters();
 
 	// TODO: is this needed?
 	glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_SHADER_STORAGE_BARRIER_BIT);
@@ -818,9 +816,6 @@ void LucidRenderer::rasterizeFinal(const Context &ctx) {
 	final_raster_program.setFrustum(ctx.camera);
 	final_raster_program.setViewport(ctx.camera, m_size);
 	final_raster_program.setShadows(ctx.shadows.matrix, ctx.shadows.enable);
-
-	if(m_opts & Opt::check_raster)
-		shaderDebugUseBuffer(m_errors);
 	ctx.lighting.setUniforms(final_raster_program.glProgram());
 
 	// TODO: lepiej by było, jakby było to bardziej zintegrowane z GlProgramem
@@ -832,15 +827,50 @@ void LucidRenderer::rasterizeFinal(const Context &ctx) {
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 }
 
-void LucidRenderer::checkRaster() {
+// Final stage: blits transparent pixels onto main framebuffer
+void LucidRenderer::compose(const Context &ctx) {
 	PERF_GPU_SCOPE();
+
+	DASSERT(!ctx.out_fbo || ctx.out_fbo->size() == m_size);
+	glDrawBuffer(GL_BACK);
+	setupView(IRect(m_size), ctx.out_fbo);
+	glEnable(GL_BLEND);
+	glDisable(GL_DEPTH_TEST);
+	glDisable(GL_CULL_FACE);
+	glDepthMask(0);
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	GlTexture::bind({m_raster_image});
+	compose_program.setFullscreenRect();
+	compose_program.use();
+	drawRect(m_rect_vao);
+	glDisable(GL_BLEND);
+}
+
+void LucidRenderer::copyCounters() {
+	auto last = m_old_counters.back();
+	for(int i = m_old_counters.size() - 1; i > 0; i--)
+		m_old_counters[i] = m_old_counters[i - 1];
+	m_old_counters[0] = last;
+
+	if(!m_old_counters[0].first) {
+		m_old_counters[0].first.emplace(BufferType::copy_read, m_bin_counters->size());
+		m_old_counters[0].second.emplace(BufferType::copy_read, m_tile_counters->size());
+	}
+
+	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+	m_bin_counters->copyTo(m_old_counters[0].first, 0, 0, m_old_counters[0].first->size());
+	m_tile_counters->copyTo(m_old_counters[0].second, 0, 0, m_old_counters[0].second->size());
+}
+
+string LucidRenderer::getStats() const {
+	if(!m_old_counters.back().first)
+		return "";
 
 	// TODO: double/triple buffering to avoid stall
 	int bin_counts = m_bin_counts.x * m_bin_counts.y;
-	auto bin_counters = m_bin_counters->download<u32>();
-	auto tile_counters = m_tile_counters->download<u32>(32 + bin_counts * tiles_per_bin);
-	m_bin_counters->invalidate();
-	m_tile_counters->invalidate();
+	auto bin_counters = m_old_counters.back().first->download<u32>();
+	auto tile_counters =
+		m_old_counters.back().second->download<u32>(32 + bin_counts * tiles_per_bin);
 
 	int num_pixels = m_size.x * m_size.y;
 	int num_tiles =
@@ -881,53 +911,37 @@ void LucidRenderer::checkRaster() {
 		num_rejected[i] = bin_counters[4 + i];
 	num_rejected[0] += num_rejected[1] + num_rejected[2] + num_rejected[3];
 
-	print("Rasterization statistics: -----------------------------------------\n");
-	printf("  Input quads: %8d     Rejected quads: %6d (%.2f %%)\n", num_input_quads,
-		   num_rejected[0], double(num_rejected[0]) / num_input_quads * 100.0);
-	printf(" Rejections: backface:%d, frustum:%d, between-samples:%d\n\n", num_rejected[1],
-		   num_rejected[2], num_rejected[3]);
-	printf(" Bin-quads: %8d       Tile-tris: %8d\n", num_bin_quads, num_tile_tris);
-	printf("           Tile-tris with no samples: %8d\n", tile_counters[13]);
-	printf("Block-rows: %8d      Block-tris: %8d\n\n", num_block_rows, num_block_tris);
+	TextFormatter out;
+	out("Rasterization statistics: -----------------------------------------\n");
+	out.stdFormat("  Input quads: %8d     Rejected quads: %6d (%.2f %%)\n", num_input_quads,
+				  num_rejected[0], double(num_rejected[0]) / num_input_quads * 100.0);
+	out.stdFormat(" Rejections: backface:%d, frustum:%d, between-samples:%d\n\n", num_rejected[1],
+				  num_rejected[2], num_rejected[3]);
+	out.stdFormat(" Bin-quads: %8d       Tile-tris: %8d\n", num_bin_quads, num_tile_tris);
+	out.stdFormat("           Tile-tris with no samples: %8d\n", tile_counters[13]);
+	out.stdFormat("Block-rows: %8d      Block-tris: %8d\n\n", num_block_rows, num_block_tris);
 
-	printf("      Avg quads per non-empty bin: %7.2f\n", double(num_bin_quads) / num_nonempty_bins);
-	printf("      Avg tris per non-empty tile: %7.2f\n",
-		   double(num_tile_tris) / num_nonempty_tiles);
-	printf("Avg block-rows per non-empty tile: %7.2f\n",
-		   double(num_block_rows) / num_nonempty_tiles);
-	printf("Avg block-tris per non-empty tile: %7.2f\n\n",
-		   double(num_block_tris) / num_nonempty_tiles);
-	printf("           Max quads/bin: %8d\n", max_quads_per_bin);
-	printf("           Max tris/tile: %8d\n", tile_counters[16]);
-	printf("     Max block-rows/tile: %8d\n", tile_counters[17]);
-	printf("          Max tris/block: %8d\n\n", tile_counters[15]);
+	out.stdFormat("      Avg quads per non-empty bin: %7.2f\n",
+				  double(num_bin_quads) / num_nonempty_bins);
+	out.stdFormat("      Avg tris per non-empty tile: %7.2f\n",
+				  double(num_tile_tris) / num_nonempty_tiles);
+	out.stdFormat("Avg block-rows per non-empty tile: %7.2f\n",
+				  double(num_block_rows) / num_nonempty_tiles);
+	out.stdFormat("Avg block-tris per non-empty tile: %7.2f\n\n",
+				  double(num_block_tris) / num_nonempty_tiles);
+	out.stdFormat("           Max quads/bin: %8d\n", max_quads_per_bin);
+	out.stdFormat("           Max tris/tile: %8d\n", tile_counters[16]);
+	out.stdFormat("     Max block-rows/tile: %8d\n", tile_counters[17]);
+	out.stdFormat("          Max tris/block: %8d\n\n", tile_counters[15]);
 
-	printf("Invalid pixels: %d (%.3f %%)\n", num_invalid_pixels,
-		   float(num_invalid_pixels) / num_pixels * 100.0);
-	printf("Invalid blocks: %d (%.3f %%)\n", num_invalid_blocks,
-		   float(num_invalid_blocks) / num_blocks * 100.0);
-	printf(" Invalid tiles: %d (%.3f %%)\n", num_invalid_tiles,
-		   float(num_invalid_tiles) / num_tiles * 100.0);
-	print("\n");
-}
-
-// Final stage: blits transparent pixels onto main framebuffer
-void LucidRenderer::compose(const Context &ctx) {
-	PERF_GPU_SCOPE();
-
-	DASSERT(!ctx.out_fbo || ctx.out_fbo->size() == m_size);
-	glDrawBuffer(GL_BACK);
-	setupView(IRect(m_size), ctx.out_fbo);
-	glEnable(GL_BLEND);
-	glDisable(GL_DEPTH_TEST);
-	glDisable(GL_CULL_FACE);
-	glDepthMask(0);
-	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-	GlTexture::bind({m_raster_image});
-	compose_program.setFullscreenRect();
-	compose_program.use();
-	drawRect(m_rect_vao);
-	glDisable(GL_BLEND);
+	out.stdFormat("Invalid pixels: %d (%.3f %%)\n", num_invalid_pixels,
+				  float(num_invalid_pixels) / num_pixels * 100.0);
+	out.stdFormat("Invalid blocks: %d (%.3f %%)\n", num_invalid_blocks,
+				  float(num_invalid_blocks) / num_blocks * 100.0);
+	out.stdFormat(" Invalid tiles: %d (%.3f %%)\n", num_invalid_tiles,
+				  float(num_invalid_tiles) / num_tiles * 100.0);
+	out << "\n";
+	return out.text();
 }
 
 vector<int> generateRangeHistogram(CSpan<float2> ranges, int res) {

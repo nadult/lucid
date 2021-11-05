@@ -10,6 +10,7 @@
 class LucidRenderer;
 class SimpleRenderer;
 class SceneSetup;
+struct Scene;
 
 DEFINE_ENUM(RenderingMode, simple, trans, mixed);
 
@@ -30,7 +31,6 @@ class LucidApp {
 	bool updateViewport();
 	void updateRenderer();
 
-	void printSceneStats() const;
 	void doMenu(Renderer2D &renderer_2d);
 	bool handleInput(vector<InputEvent> events, float time_diff);
 	bool tick(float time_diff);
@@ -43,6 +43,8 @@ class LucidApp {
 	void printPerfStats();
 
   private:
+	void printSceneStats(const Scene &);
+
 	Dynamic<Font> m_font;
 	Maybe<float2> m_mouse_pos;
 	ImGuiWrapper m_imgui;
@@ -58,6 +60,7 @@ class LucidApp {
 	LucidRenderOpts m_lucid_opts = none;
 	bool m_wireframe_mode = false;
 	bool m_test_meshlets = false;
+	bool m_show_stats = false;
 	RenderingMode m_rendering_mode = RenderingMode::simple;
 
 	IRect m_viewport;

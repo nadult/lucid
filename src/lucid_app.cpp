@@ -71,6 +71,7 @@ void LucidApp::setConfig(const AnyConfig &config) {
 	m_rendering_mode = config.get("rendering_mode", m_rendering_mode);
 	m_lucid_opts = config.get("trans_opts", m_lucid_opts);
 	m_wireframe_mode = config.get("wireframe", m_wireframe_mode);
+	m_show_stats = config.get("show_stats", m_show_stats);
 	if(auto *scene_name = config.get<string>("scene"))
 		selectSetup(*scene_name);
 	if(m_perf_analyzer)
@@ -101,6 +102,7 @@ void LucidApp::saveConfig() const {
 	out.set("trans_opts", m_lucid_opts);
 	out.set("wireframe", m_wireframe_mode);
 	out.set("window_rect", GlDevice::instance().windowRect());
+	out.set("show_stats", m_show_stats);
 
 	if(m_setup_idx != -1)
 		out.set("scene", m_setups[m_setup_idx]->name);
@@ -185,12 +187,8 @@ void LucidApp::updateRenderer() {
 	}
 }
 
-void LucidApp::printSceneStats() const {
-	if(!m_setups[m_setup_idx])
-		return;
-	auto &scene = *m_setups[m_setup_idx]->scene;
+void LucidApp::printSceneStats(const Scene &scene) {
 	ImGui::Separator();
-
 	auto formatSize = [](long long value) {
 		if(value >= 2 * 1024 * 1024)
 			return stdFormat("%.2fM", double(value) / (1024 * 1024));
@@ -215,10 +213,11 @@ void LucidApp::printSceneStats() const {
 			   stdFormat("(%.2f, %.2f, %.2f) - (%.2f, %.2f, %.2f)", bbox.min().x, bbox.min().y,
 						 bbox.min().z, bbox.max().x, bbox.max().y, bbox.max().z));
 
-	if(ImGui::Button("Print materials")) {
-		for(auto &mat : scene.materials)
-			print("%\n", mat.description());
-	}
+	if(!m_show_stats && menu::Button("Show rendering stats"))
+		m_show_stats = true;
+
+	if(m_show_stats && m_rendering_mode != RenderingMode::simple)
+		menu::text(m_lucid_renderer->getStats());
 }
 
 void LucidApp::doMenu(Renderer2D &renderer_2d) {
@@ -230,6 +229,8 @@ void LucidApp::doMenu(Renderer2D &renderer_2d) {
 		selectSetup(setup_idx);
 	auto &setup = *m_setups[m_setup_idx];
 	setup.doMenu();
+
+	auto *scene = setup.scene ? setup.scene.get() : nullptr;
 
 	if(ImGui::Button("Trans-render options", {222, 0}))
 		ImGui::OpenPopup("trans_render_opts");
@@ -266,6 +267,10 @@ void LucidApp::doMenu(Renderer2D &renderer_2d) {
 		ImGui::InputFloat("Square weight", &m_square_weight);
 		if(setup.scene && ImGui::Button("Generate meshlets")) {
 			m_test_meshlets = true;
+		}
+		if(scene && ImGui::Button("Print materials")) {
+			for(auto &mat : scene->materials)
+				print("%\n", mat.description());
 		}
 		ImGui::EndPopup();
 	}
@@ -306,7 +311,8 @@ void LucidApp::doMenu(Renderer2D &renderer_2d) {
 	// TODO: different opacity for different scenes ?
 	ImGui::SliderFloat("Scene opacity", &setup.render_config.scene_opacity, 0.0f, 1.0f);
 	ImGui::ColorEdit3("Scene color", setup.render_config.scene_color.v, 0);
-	printSceneStats();
+	if(scene)
+		printSceneStats(*scene);
 
 	/*
 		if(!m_imgui_demo && ImGui::Button("ImGui demo"))

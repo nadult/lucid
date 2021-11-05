@@ -190,7 +190,8 @@ void LucidApp::updateRenderer() {
 	}
 }
 
-void LucidApp::printSceneStats(const Scene &scene) {
+void LucidApp::showStatsMenu(const Scene &scene) {
+	ImGui::Begin("Statistics", &m_show_stats);
 	ImGui::Separator();
 	auto formatSize = [](long long value) {
 		if(value >= 2 * 1024 * 1024)
@@ -206,7 +207,7 @@ void LucidApp::printSceneStats(const Scene &scene) {
 	invalid_quads /= scene.numQuads();
 	invalid_quads = round(invalid_quads * 10000) * 0.0001;
 
-	menu::text("Tris:%  Vertices:%\nQuads:%  Degenerate:%\\%\nMeshes:% Materials:%\n",
+	menu::text("tris:% vertices:% quads:% (%\\% degenerate)\nMeshes:% Materials:%\n",
 			   formatSize(scene.numTris()), formatSize(scene.numVerts()),
 			   formatSize(scene.numQuads()), invalid_quads * 100, scene.meshes.size(),
 			   scene.materials.size());
@@ -216,15 +217,13 @@ void LucidApp::printSceneStats(const Scene &scene) {
 			   stdFormat("(%.2f, %.2f, %.2f) - (%.2f, %.2f, %.2f)", bbox.min().x, bbox.min().y,
 						 bbox.min().z, bbox.max().x, bbox.max().y, bbox.max().z));
 
-	if(!m_show_stats && menu::Button("Show rendering stats"))
-		m_show_stats = true;
-
-	if(m_show_stats && m_rendering_mode != RenderingMode::simple)
-		menu::text(m_lucid_renderer->getStats());
+	menu::text(m_lucid_renderer->getStats());
+	ImGui::End();
 }
 
 void LucidApp::doMenu(Renderer2D &renderer_2d) {
-	ImGui::Begin("Trans tools");
+	ImGui::SetNextWindowSize({240, 0});
+	ImGui::Begin("Lucid rasterizer tools", nullptr, ImGuiWindowFlags_NoResize);
 
 	auto setup_idx = m_setup_idx;
 	auto names = transform(m_setups, [](auto &setup) { return setup->name.c_str(); });
@@ -235,16 +234,25 @@ void LucidApp::doMenu(Renderer2D &renderer_2d) {
 
 	auto *scene = setup.scene ? setup.scene.get() : nullptr;
 
-	if(ImGui::Button("Trans-render options", {222, 0}))
-		ImGui::OpenPopup("trans_render_opts");
-	if(ImGui::BeginPopup("trans_render_opts")) {
+	if(ImGui::Button("Rasterizer options", {120, 0}))
+		ImGui::OpenPopup("render_opts");
+	ImGui::SameLine();
+	if(ImGui::Button("Statistics", {99, 0})) {
+		ImGui::SetWindowFocus("Statistics");
+		m_show_stats = true;
+	}
+	if(ImGui::Button("Other tools", {120, 0}))
+		ImGui::OpenPopup("other_tools");
+	ImGui::SameLine();
+	if(ImGui::Button("Filtering options", {99, 0}))
+		ImGui::OpenPopup("filter_opts");
+
+	if(ImGui::BeginPopup("render_opts")) {
 		menu::selectFlags(m_lucid_opts);
 		ImGui::EndPopup();
 	}
 
-	if(ImGui::Button("Other options", {222, 0}))
-		ImGui::OpenPopup("other_opts");
-	if(ImGui::BeginPopup("other_opts")) {
+	if(ImGui::BeginPopup("other_tools")) {
 		if(ImGui::Button("Use FPP camera")) {
 			auto new_cam = FppCamera::closest(m_cam_control.currentCamera());
 			m_cam_control.setTarget(new_cam);
@@ -278,8 +286,6 @@ void LucidApp::doMenu(Renderer2D &renderer_2d) {
 		ImGui::EndPopup();
 	}
 
-	if(ImGui::Button("Texture filtering options", {222, 0}))
-		ImGui::OpenPopup("filter_opts");
 	if(ImGui::BeginPopup("filter_opts")) {
 		menu::selectEnum("Magnification filter", m_filtering_params.magnification);
 		menu::selectEnum("Minification filter", m_filtering_params.minification);
@@ -308,22 +314,22 @@ void LucidApp::doMenu(Renderer2D &renderer_2d) {
 
 	menu::selectEnum("Rendering mode", m_rendering_mode);
 	ImGui::Checkbox("Back-face culling", &setup.render_config.backface_culling);
+	ImGui::SameLine();
 	ImGui::Checkbox("Additive blending", &setup.render_config.additive_blending);
 	ImGui::Checkbox("Wireframe mode (only simple rendering)", &m_wireframe_mode);
 
 	// TODO: different opacity for different scenes ?
+	int labels_size[] = {(int)ImGui::CalcTextSize("Scene opacity").x,
+						 (int)ImGui::CalcTextSize("Scene color").x};
+	ImGui::SetNextItemWidth(220 - labels_size[0]);
 	ImGui::SliderFloat("Scene opacity", &setup.render_config.scene_opacity, 0.0f, 1.0f);
+	ImGui::SetNextItemWidth(220 - labels_size[0]);
 	ImGui::ColorEdit3("Scene color", setup.render_config.scene_color.v, 0);
-	if(scene)
-		printSceneStats(*scene);
-
-	/*
-		if(!m_imgui_demo && ImGui::Button("ImGui demo"))
-			m_imgui_demo = true;
-		if(m_imgui_demo)
-			ImGui::ShowDemoWindow(&m_imgui_demo);*/
-
 	ImGui::End();
+
+	if(m_show_stats && scene)
+		showStatsMenu(*scene);
+	//ImGui::ShowDemoWindow();
 }
 
 bool LucidApp::handleInput(vector<InputEvent> events, float time_diff) {

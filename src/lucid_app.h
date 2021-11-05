@@ -43,7 +43,7 @@ class LucidApp {
 	void printPerfStats();
 
   private:
-	void printSceneStats(const Scene &);
+	void showStatsMenu(const Scene &);
 
 	Dynamic<Font> m_font;
 	Maybe<float2> m_mouse_pos;
@@ -88,6 +88,4 @@ class LucidApp {
 	bool m_gather_perf_stats = true;
 	int m_prev_setup_idx = -1;
 	int m_skip_frame_id = 0;
-
-	//bool m_imgui_demo = false;
 };

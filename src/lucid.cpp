@@ -16,6 +16,7 @@ int main(int argc, char **argv) {
 
 	// TODO: xml loading is still messy
 	Maybe<AnyConfig> config = LucidApp::loadConfig();
+	GlDeviceFlags flags = GlDeviceOpt::resizable;
 
 	for(int n = 1; n < argc; n++) {
 		string argument = argv[n];
@@ -23,14 +24,14 @@ int main(int argc, char **argv) {
 			ASSERT(n + 1 < argc && "Invalid nr of arguments");
 			convertScenes(argv[n + 1]);
 			return 0;
+		} else if(argument == "--vsync") {
+			flags |= GlDeviceOpt::vsync;
 		} else {
 			FATAL("Unsupported argument: %s", argument.c_str());
 		}
 	}
 
 	GlDevice gl_device;
-
-	auto flags = GlDeviceOpt::resizable;
 	gl_device.createWindow("Lucid rasterizer", resolution, flags, GlProfile::core, 4.3);
 
 	print("OpenGL info:\n%\n", gl_info->toString());

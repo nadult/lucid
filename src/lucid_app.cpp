@@ -47,7 +47,7 @@ LucidApp::LucidApp()
 	m_cam_control.setTarget(cam);
 	m_cam_control.finishAnim();
 	m_cam_control.o_config.params.depth = {1.0f / 16.0f, 1024.0f};
-	m_cam_control.o_config.rot_filter = [](const InputEvent &ev) {
+	m_cam_control.o_config.rotation_filter = [](const InputEvent &ev) {
 		return ev.mouseButtonPressed(InputButton::right);
 	};
 
@@ -448,7 +448,10 @@ bool LucidApp::mainLoop(GlDevice &device) {
 	clearColor(IColor(0, 30, 30));
 	clearDepth(1.0f);
 
-	float time_diff = 1.0f / 60.0f;
+	auto cur_time = getTime();
+	float time_diff = m_last_time < 0.0 ? 1.0f / 60.0f : (cur_time - m_last_time);
+	m_last_time = cur_time;
+
 	updateRenderer();
 	auto result = tick(time_diff);
 	drawScene();

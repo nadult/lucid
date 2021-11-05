@@ -81,6 +81,7 @@ class LucidApp {
 	void updatePerfStats();
 
 	vector<vector<perf::Frame>> m_stats;
+	double m_last_time = -1.0;
 	bool m_gather_perf_stats = true;
 	int m_prev_setup_idx = -1;
 	int m_skip_frame_id = 0;

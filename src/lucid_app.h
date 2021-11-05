@@ -73,11 +73,6 @@ class LucidApp {
 	float m_square_weight = 0.5f;
 	int m_setup_idx = -1;
 
-	struct StatSample {
-		double min = inf, max = -inf, sum = 0.0;
-		u64 count = 0;
-	};
-
 	struct StatPoint {
 		perf::ExecId exec_id;
 		ZStr short_name;

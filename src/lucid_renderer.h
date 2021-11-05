@@ -46,7 +46,7 @@ class LucidRenderer {
 	void printHistograms() const;
 	Image masksSnapshot();
 
-	string getStats() const;
+	vector<StatsGroup> getStats() const;
 
   private:
 	void initCounters(const Context &);

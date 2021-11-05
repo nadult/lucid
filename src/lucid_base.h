@@ -58,3 +58,15 @@ struct RenderContext {
 	PTexture depth_buffer;
 	ShadowContext shadows;
 };
+
+struct StatsRow {
+	string label;
+	string value;
+	string tooltip = {};
+};
+
+struct StatsGroup {
+	vector<StatsRow> rows;
+	string title;
+	int label_width = 100;
+};

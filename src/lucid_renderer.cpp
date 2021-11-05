@@ -862,9 +862,11 @@ void LucidRenderer::copyCounters() {
 	m_tile_counters->copyTo(m_old_counters[0].second, 0, 0, m_old_counters[0].second->size());
 }
 
-string LucidRenderer::getStats() const {
+vector<StatsGroup> LucidRenderer::getStats() const {
+	vector<StatsGroup> out;
+
 	if(!m_old_counters.back().first)
-		return "";
+		return out;
 
 	// TODO: double/triple buffering to avoid stall
 	int bin_counts = m_bin_counts.x * m_bin_counts.y;
@@ -911,37 +913,53 @@ string LucidRenderer::getStats() const {
 		num_rejected[i] = bin_counters[4 + i];
 	num_rejected[0] += num_rejected[1] + num_rejected[2] + num_rejected[3];
 
-	TextFormatter out;
-	out("Rasterization statistics: -----------------------------------------\n");
-	out.stdFormat("  Input quads: %8d     Rejected quads: %6d (%.2f %%)\n", num_input_quads,
-				  num_rejected[0], double(num_rejected[0]) / num_input_quads * 100.0);
-	out.stdFormat(" Rejections: backface:%d, frustum:%d, between-samples:%d\n\n", num_rejected[1],
-				  num_rejected[2], num_rejected[3]);
-	out.stdFormat(" Bin-quads: %8d       Tile-tris: %8d\n", num_bin_quads, num_tile_tris);
-	out.stdFormat("           Tile-tris with no samples: %8d\n", tile_counters[13]);
-	out.stdFormat("Block-rows: %8d      Block-tris: %8d\n\n", num_block_rows, num_block_tris);
+	auto rejected_info =
+		stdFormat("%d (%.2f %%)", num_rejected[0], double(num_rejected[0]) / num_input_quads * 100);
+	auto rejection_details = format("backface: %\nfrustum: %\nbetween-samples: %", num_rejected[1],
+									num_rejected[2], num_rejected[3]);
 
-	out.stdFormat("      Avg quads per non-empty bin: %7.2f\n",
-				  double(num_bin_quads) / num_nonempty_bins);
-	out.stdFormat("      Avg tris per non-empty tile: %7.2f\n",
-				  double(num_tile_tris) / num_nonempty_tiles);
-	out.stdFormat("Avg block-rows per non-empty tile: %7.2f\n",
-				  double(num_block_rows) / num_nonempty_tiles);
-	out.stdFormat("Avg block-tris per non-empty tile: %7.2f\n\n",
-				  double(num_block_tris) / num_nonempty_tiles);
-	out.stdFormat("           Max quads/bin: %8d\n", max_quads_per_bin);
-	out.stdFormat("           Max tris/tile: %8d\n", tile_counters[16]);
-	out.stdFormat("     Max block-rows/tile: %8d\n", tile_counters[17]);
-	out.stdFormat("          Max tris/block: %8d\n\n", tile_counters[15]);
+	vector<StatsRow> basic_rows = {
+		{"input quads", toString(num_input_quads)},
+		{"rejected quads", rejected_info, rejection_details},
+		{"bin-quads", toString(num_bin_quads), "Per-bin quads"},
+		{"tile-tris", toString(num_tile_tris), "Per-tile triangles"},
+		{"empty tile-tris", toString(tile_counters[13]),
+		 "Per-tile triangles which generate no samples"},
+		{"block-rows", toString(num_block_rows), "Block rows generated for each per-tile triangle"},
+		{"block-tris", toString(num_block_tris),
+		 "Per-block triangle instances with at least 1 sample"},
+	};
 
-	out.stdFormat("Invalid pixels: %d (%.3f %%)\n", num_invalid_pixels,
-				  float(num_invalid_pixels) / num_pixels * 100.0);
-	out.stdFormat("Invalid blocks: %d (%.3f %%)\n", num_invalid_blocks,
-				  float(num_invalid_blocks) / num_blocks * 100.0);
-	out.stdFormat(" Invalid tiles: %d (%.3f %%)\n", num_invalid_tiles,
-				  float(num_invalid_tiles) / num_tiles * 100.0);
-	out << "\n";
-	return out.text();
+	vector<StatsRow> avg_rows = {
+		{"quads / non-empty bin", stdFormat("%.2f", double(num_bin_quads) / num_nonempty_bins)},
+		{"tris / non-empty tile", stdFormat("%.2f", double(num_tile_tris) / num_nonempty_tiles)},
+		{"block-rows / non-empty tile",
+		 stdFormat("%.2f", double(num_block_rows) / num_nonempty_tiles)},
+		{"block-tris / non-empty tile",
+		 stdFormat("%.2f", double(num_block_tris) / num_nonempty_tiles)},
+	};
+
+	vector<StatsRow> max_rows = {
+		{"max quads / bin", toString(max_quads_per_bin)},
+		{"max tris / tile", toString(tile_counters[16])},
+		{"max block-rows / tile", toString(tile_counters[17])},
+		{"max tris / block", toString(tile_counters[15])},
+	};
+
+	vector<StatsRow> invalid_rows = {
+		{"invalid pixels", stdFormat("%d (%.3f %%)", num_invalid_pixels,
+									 float(num_invalid_pixels) / num_pixels * 100.0)},
+		{"invalid blocks", stdFormat("%d (%.3f %%)", num_invalid_blocks,
+									 float(num_invalid_blocks) / num_blocks * 100.0)},
+		{"invalid tiles", stdFormat("%d (%.3f %%)", num_invalid_tiles,
+									float(num_invalid_tiles) / num_tiles * 100.0)},
+	};
+
+	out.emplace_back(move(basic_rows), "", 130);
+	out.emplace_back(move(avg_rows), "Averages per non-empty bin/tile", 130);
+	out.emplace_back(move(max_rows), "", 130);
+	out.emplace_back(move(invalid_rows), "", 130);
+	return out;
 }
 
 vector<int> generateRangeHistogram(CSpan<float2> ranges, int res) {

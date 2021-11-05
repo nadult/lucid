@@ -192,43 +192,9 @@ void LucidApp::updateRenderer() {
 	}
 }
 
-static string formatSize(long long value) {
-	if(value >= 32 * 1000 * 1000)
-		return stdFormat("%.0fM", double(value) / (1000 * 1000));
-	if(value > 32 * 1000)
-		return stdFormat("%.0fK", double(value) / 1000);
-	return toString(value);
-};
-
-void LucidApp::showSceneStats(const Scene &scene) {
-	int num_degenerate_quads = 0;
-	for(auto &mesh : scene.meshes)
-		num_degenerate_quads += mesh.num_degenerate_quads;
-
-	struct Row {
-		string label;
-		string value;
-		string tooltip;
-	};
-
-	vector<Row> rows;
-	auto bbox = scene.bounding_box;
-	rows = {
-		{"mesh instances", toString(scene.meshes.size()), ""},
-		{"triangles", formatSize(scene.numTris()), toString(scene.numTris())},
-		{"vertices", formatSize(scene.numVerts()), toString(scene.numVerts())},
-		{"quads", formatSize(scene.numQuads()), toString(scene.numQuads())},
-		{"degenerate quads",
-		 stdFormat("%d (%.2f %%)", num_degenerate_quads,
-				   double(num_degenerate_quads) / scene.numQuads() * 100.0),
-		 ""},
-
-		{"bbox min", stdFormat("(%.2f, %.2f, %.2f)", bbox.min().x, bbox.min().y, bbox.min().z), ""},
-		{"bbox max", stdFormat("(%.2f, %.2f, %.2f)", bbox.max().x, bbox.max().y, bbox.max().z),
-		 ""}};
-
-	if(ImGui::BeginTable("scene_stats", 2)) {
-		ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 90);
+static void showStatsRows(CSpan<StatsRow> rows, ZStr title, int label_width) {
+	if(ImGui::BeginTable(title.c_str(), 2, ImGuiTableFlags_RowBg)) {
+		ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, label_width);
 		ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthStretch);
 
 		for(auto &row : rows) {
@@ -244,7 +210,49 @@ void LucidApp::showSceneStats(const Scene &scene) {
 	}
 }
 
-void LucidApp::showRasterStats(const Scene &scene) { menu::text(m_lucid_renderer->getStats()); }
+static string formatSize(long long value) {
+	if(value >= 32 * 1000 * 1000)
+		return stdFormat("%.0fM", double(value) / (1000 * 1000));
+	if(value > 32 * 1000)
+		return stdFormat("%.0fK", double(value) / 1000);
+	return toString(value);
+};
+
+void LucidApp::showSceneStats(const Scene &scene) {
+	int num_degenerate_quads = 0;
+	for(auto &mesh : scene.meshes)
+		num_degenerate_quads += mesh.num_degenerate_quads;
+	auto bbox = scene.bounding_box;
+
+	vector<StatsRow> rows;
+	rows = {
+		{"mesh instances", toString(scene.meshes.size()), ""},
+		{"triangles", formatSize(scene.numTris()), toString(scene.numTris())},
+		{"vertices", formatSize(scene.numVerts()), toString(scene.numVerts())},
+		{"quads", formatSize(scene.numQuads()), toString(scene.numQuads())},
+		{"degenerate quads",
+		 stdFormat("%d (%.2f %%)", num_degenerate_quads,
+				   double(num_degenerate_quads) / scene.numQuads() * 100.0),
+		 ""},
+
+		{"bbox min", stdFormat("(%.2f, %.2f, %.2f)", bbox.min().x, bbox.min().y, bbox.min().z), ""},
+		{"bbox max", stdFormat("(%.2f, %.2f, %.2f)", bbox.max().x, bbox.max().y, bbox.max().z),
+		 ""}};
+
+	showStatsRows(rows, "scene_stats", 90);
+}
+
+void LucidApp::showRasterStats(const Scene &scene) {
+	auto groups = m_lucid_renderer->getStats();
+	for(int i : intRange(groups)) {
+		auto &group = groups[i];
+		if(!group.title.empty())
+			ImGui::Text("%s", group.title.c_str());
+		showStatsRows(group.rows, format("_group%", i), group.label_width);
+		if(i + 1 < groups.size())
+			ImGui::Separator();
+	}
+}
 
 void LucidApp::showStatsMenu(const Scene &scene) {
 	ImGui::Begin("Statistics", &m_show_stats);

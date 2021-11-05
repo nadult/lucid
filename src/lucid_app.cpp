@@ -77,6 +77,8 @@ void LucidApp::setConfig(const AnyConfig &config) {
 	if(m_perf_analyzer)
 		if(auto *sub = config.subConfig("perf_analyzer"))
 			m_perf_analyzer->setConfig(*sub);
+	if(auto *sub = config.subConfig("imgui"))
+		m_imgui.setConfig(*sub);
 	m_cam_control.load(config);
 }
 
@@ -108,6 +110,7 @@ void LucidApp::saveConfig() const {
 		out.set("scene", m_setups[m_setup_idx]->name);
 	if(m_perf_analyzer)
 		out.set("perf_analyzer", m_perf_analyzer->config());
+	out.set("imgui", m_imgui.config());
 	m_cam_control.save(out);
 
 	XmlDocument doc;

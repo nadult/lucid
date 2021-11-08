@@ -1,5 +1,6 @@
 #include "program.h"
 
+#include <fwk/gfx/camera.h>
 #include <fwk/gfx/gl_program.h>
 #include <fwk/gfx/gl_shader.h>
 #include <fwk/gfx/opengl.h>
@@ -18,6 +19,23 @@ static array<Ray3F, 4> frustumRays(Matrix4 matrix) {
 			 *cfrustum[FrustumPlaneId::left].isect(cfrustum[FrustumPlaneId::up]),
 			 *cfrustum[FrustumPlaneId::up].isect(cfrustum[FrustumPlaneId::right]),
 			 *cfrustum[FrustumPlaneId::right].isect(cfrustum[FrustumPlaneId::down])}};
+}
+
+FrustumRays::FrustumRays(const Camera &camera) {
+	auto params = camera.params();
+	auto iview = inverseOrZero(camera.viewMatrix());
+	auto rays = frustumRays(camera.projectionMatrix());
+
+	for(int n : intRange(dirs)) {
+		origins[n] = rays[n].origin();
+		dirs[n] = rays[n].dir();
+		origins[n] = mulPoint(iview, origins[n]);
+		dirs[n] = mulNormal(iview, dirs[n]);
+	}
+	origin0 = origins[0];
+	dir0 = dirs[0];
+	dirx = (dirs[3] - dirs[0]) * (1.0f / params.viewport.width());
+	diry = (dirs[1] - dirs[0]) * (1.0f / params.viewport.height());
 }
 
 // SHADER IMPROVEMENTS TODO:
@@ -124,23 +142,15 @@ void Program::setShadows(Matrix4 matrix, bool is_enabled) {
 void Program::setFrustum(const Camera &camera) {
 	// Computing coords of world-space frustum corner rays
 	auto rays = frustumRays(camera.projectionMatrix());
-	float3 origs[4], dirs[4];
-	auto params = camera.params();
-	auto iview = inverseOrZero(camera.viewMatrix());
+	FrustumRays frays(camera);
+	m_ref["frustum.ws_origin[0]"] = frays.origins;
+	m_ref["frustum.ws_dir[0]"] = frays.dirs;
+	m_ref["frustum.ws_shared_origin"] = frays.origin0;
+	m_ref["frustum.ws_dir0"] = frays.dir0;
+	m_ref["frustum.ws_dirx"] = frays.dirx;
+	m_ref["frustum.ws_diry"] = frays.diry;
 
-	for(int n : intRange(rays)) {
-		origs[n] = rays[n].origin();
-		dirs[n] = rays[n].dir();
-		origs[n] = mulPoint(iview, origs[n]);
-		dirs[n] = mulNormal(iview, dirs[n]);
-	}
-	m_ref["frustum.ws_origin[0]"] = origs;
-	m_ref["frustum.ws_dir[0]"] = dirs;
-	m_ref["frustum.ws_shared_origin"] = origs[0];
-	m_ref["frustum.ws_dir0"] = dirs[0];
-	m_ref["frustum.ws_dirx"] = (dirs[3] - dirs[0]) * (1.0f / params.viewport.width());
-	m_ref["frustum.ws_diry"] = (dirs[1] - dirs[0]) * (1.0f / params.viewport.height());
-
+	// TODO: is the rest needed?
 	float3 corner_dir[4];
 	for(int n = 0; n < 4; n++) {
 		corner_dir[n] = rays[n].at(camera.params().depth.max);

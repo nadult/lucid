@@ -578,10 +578,13 @@ bool LucidApp::mainLoop(GlDevice &device) {
 	draw2D();
 	doMenu();
 
-	if(m_selected_block && m_lucid_renderer && m_rendering_mode != RenderingMode::simple)
-		m_block_info = m_lucid_renderer->introspectBlock(*m_selected_block);
-	else
+	if(m_selected_block && m_lucid_renderer && m_rendering_mode != RenderingMode::simple &&
+	   m_setup_idx != -1) {
+		auto &verts = m_setups[m_setup_idx]->scene->positions;
+		m_block_info = m_lucid_renderer->introspectBlock(verts, *m_selected_block);
+	} else {
 		m_block_info = none;
+	}
 
 	{
 		PERF_GPU_SCOPE("ImGuiWrapper::drawFrame");

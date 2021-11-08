@@ -198,6 +198,8 @@ void LucidRenderer::render(const Context &ctx) {
 	m_tile_counters->invalidate();
 
 	m_view_proj_matrix = ctx.camera.matrix();
+	m_frustum_rays = ctx.camera;
+
 	initCounters(ctx);
 	uploadInstances(ctx);
 	setupQuads(ctx);
@@ -734,12 +736,12 @@ void LucidRenderer::analyzeMaskRasterizer() const {
 	print("\n");
 }
 
-RasterBlockInfo LucidRenderer::introspectBlock(int2 block_pos) const {
+RasterBlockInfo LucidRenderer::introspectBlock(CSpan<float3> verts, int2 full_block_pos) const {
 	RasterBlockInfo out;
 	PERF_GPU_SCOPE();
-	int2 tile_pos = block_pos / 4;
+	int2 tile_pos = full_block_pos / 4;
 	int2 bin_pos = tile_pos / 4;
-	block_pos -= tile_pos * 4;
+	int2 block_pos = full_block_pos - tile_pos * 4;
 	tile_pos -= bin_pos * 4;
 	out.bin_pos = bin_pos;
 	out.tile_pos = tile_pos;
@@ -751,31 +753,90 @@ RasterBlockInfo LucidRenderer::introspectBlock(int2 block_pos) const {
 	int bin_count = m_bin_counts.x * m_bin_counts.y;
 
 	vector<u32> tile_tri_indices, block_tri_masks;
+	vector<array<int, 3>> tile_tri_verts;
+	vector<Triangle3F> tile_tris;
 
-	{
-		out.num_block_tris = m_block_counts->map<u32>(AccessMode::read_only)[block_id];
-		m_block_counts->unmap();
-		int block_tri_offset = m_block_offsets->map<u32>(AccessMode::read_only)[block_id];
-		m_block_offsets->unmap();
-		auto tile_counters = m_tile_counters->map<u32>(AccessMode::read_only);
-		out.num_tile_tris = tile_counters[32 + tile_id];
-		int tile_tri_offset = tile_counters[32 + bin_count * tiles_per_bin + tile_id];
-		m_tile_counters->unmap();
+	out.num_block_tris = m_block_counts->map<u32>(AccessMode::read_only)[block_id];
+	m_block_counts->unmap();
+	int block_tri_offset = m_block_offsets->map<u32>(AccessMode::read_only)[block_id];
+	m_block_offsets->unmap();
+	auto tile_counters = m_tile_counters->map<u32>(AccessMode::read_only);
+	out.num_tile_tris = tile_counters[32 + tile_id];
+	int tile_tri_offset = tile_counters[32 + bin_count * tiles_per_bin + tile_id];
+	m_tile_counters->unmap();
 
-		if(out.num_tile_tris)
-			tile_tri_indices = m_tile_tris->download<u32>(out.num_tile_tris, tile_tri_offset);
-		if(out.num_block_tris)
-			block_tri_masks = m_block_tris->download<u32>(out.num_block_tris, block_tri_offset);
+	if(out.num_tile_tris)
+		tile_tri_indices = m_tile_tris->download<u32>(out.num_tile_tris, tile_tri_offset);
+	if(out.num_block_tris)
+		block_tri_masks = m_block_tris->download<u32>(out.num_block_tris, block_tri_offset);
+
+	auto quad_indices = m_quad_indices->map<u32>(AccessMode::read_only);
+	tile_tri_verts.reserve(tile_tri_indices.size());
+	for(auto idx : tile_tri_indices) {
+		bool second_tri = idx & 0x80000000;
+		idx &= 0xffffff;
+		auto &inds = tile_tri_verts.emplace_back((int)quad_indices[idx * 4 + 0],
+												 (int)quad_indices[idx * 4 + (second_tri ? 2 : 1)],
+												 (int)quad_indices[idx * 4 + (second_tri ? 3 : 2)]);
+		tile_tris.emplace_back(verts[inds[0] & 0x3ffffff], verts[inds[1] & 0x3ffffff],
+							   verts[inds[2] & 0x3ffffff]);
+	}
+	m_quad_indices->unmap();
+
+	tile_tris.reserve(tile_tri_verts.size());
+	vector<Pair<float>> mask_depths;
+
+	for(int i : intRange(block_tri_masks)) {
+		u32 mask = block_tri_masks[i] & 0xffff;
+		u32 local_idx = (block_tri_masks[i] >> 16) & 0x7fff;
+		auto &tri = tile_tris[local_idx];
+		float depth_min = inf, depth_max = -inf;
+		Plane3F plane(tri);
+
+		for(int j = 0; j < 16; j++) {
+			if((mask & (1 << j)) == 0)
+				continue;
+			int2 pos = full_block_pos * 4 + int2(j % 4, j / 4);
+			float3 ray_origin = m_frustum_rays.origin0;
+			float3 ray_dir = normalize(m_frustum_rays.dir0 + m_frustum_rays.dirx * float(pos.x) +
+									   m_frustum_rays.diry * float(pos.y));
+
+			auto isect = Ray3F(ray_origin, ray_dir).isectParam(plane);
+			if(isect.isPoint()) {
+				depth_min = min(depth_min, isect.asPoint());
+				depth_max = max(depth_max, isect.asPoint());
+			}
+		}
+		mask_depths.emplace_back(depth_min, depth_max);
+	}
+
+	// 1: overlaps, 2: is overlapped
+	vector<bool> mask_overlaps(mask_depths.size(), false);
+	for(int i : intRange(mask_depths)) {
+		for(int j = i + 1; j < mask_depths.size(); j++)
+			if(mask_depths[j].first > mask_depths[i].second)
+				mask_overlaps[i] = mask_overlaps[j] = true;
+		for(int j = i - 1; j >= 0; j--)
+			if(mask_depths[j].second < mask_depths[i].first)
+				mask_overlaps[i] = mask_overlaps[j] = true;
 	}
 
 	if(block_tri_masks) {
-		print("Masks:\n");
-		int max_row_size = 12;
+		print("Triangle masks for given block:\n");
+		for(int i : intRange(block_tri_masks)) {
+			printf("%4d: %c %f - %f", i, mask_overlaps[i] ? 'X' : ' ', mask_depths[i].first,
+				   mask_depths[i].second);
+			uint local_idx = (block_tri_masks[i] >> 16) & 0x7fff;
+			print("%\n", tile_tris[local_idx]);
+		}
+		int max_row_size = 16;
 		for(int i = 0; i < block_tri_masks.size(); i += max_row_size) {
+			printf("\n");
 			int row_size = min(block_tri_masks.size() - i, max_row_size);
 			for(int j = 0; j < row_size; j++) {
 				uint local_idx = (block_tri_masks[i + j] >> 16) & 0x7fff;
 				uint tri_idx = tile_tri_indices[local_idx];
+				printf(" %4d  ", i + j);
 				//printf("%c%6d ", tri_idx & 0x80000000 ? '*' : ' ', tri_idx & 0xffffff);
 			}
 			printf("\n");

@@ -52,7 +52,7 @@ class LucidRenderer {
 	Image masksSnapshot();
 
 	void analyzeMaskRasterizer() const;
-	RasterBlockInfo introspectBlock(int2) const;
+	RasterBlockInfo introspectBlock(CSpan<float3> verts, int2) const;
 	vector<StatsGroup> getStats() const;
 
   private:
@@ -104,6 +104,7 @@ class LucidRenderer {
 	int m_num_instances = 0, m_num_quads = 0, m_num_verts = 0;
 	int2 m_bin_counts;
 
+	FrustumRays m_frustum_rays;
 	Matrix4 m_view_proj_matrix;
 	PVertexArray m_rect_vao;
 };

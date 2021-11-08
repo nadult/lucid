@@ -38,6 +38,17 @@ struct SceneDrawCall {
 	DrawCallOpts opts = none;
 };
 
+struct FrustumRays {
+	FrustumRays() = default;
+	FrustumRays(const Camera &);
+
+	array<float3, 4> origins;
+	array<float3, 4> dirs;
+
+	float3 dir0, origin0;
+	float3 dirx, diry;
+};
+
 // TODO: cleanup in structures
 struct SceneMaterial;
 struct SceneDrawCall;

@@ -169,7 +169,7 @@ void LucidApp::updateRenderer() {
 	if(updateViewport())
 		do_update = true;
 
-	for(auto entry : findFiles(dataPath("trans"))) {
+	for(auto entry : findFiles(dataPath("shaders"))) {
 		if(entry.path.fileExtension() == "shader") {
 			auto time = lastModificationTime(entry.path);
 			auto &ref = m_shader_times[entry.path];
@@ -509,7 +509,7 @@ void LucidApp::drawScene() {
 		for(auto &dc : ctx.dcs)
 			dc.opts &= ~DrawCallOpt::is_opaque;
 
-	if(m_rendering_mode != RenderingMode::trans)
+	if(m_rendering_mode != RenderingMode::lucid)
 		m_simple_renderer->render(ctx, m_wireframe_mode);
 	if(m_rendering_mode != RenderingMode::simple)
 		m_lucid_renderer->render(ctx);

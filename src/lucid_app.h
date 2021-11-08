@@ -12,7 +12,7 @@ class SimpleRenderer;
 class SceneSetup;
 struct Scene;
 
-DEFINE_ENUM(RenderingMode, simple, trans, mixed);
+DEFINE_ENUM(RenderingMode, simple, lucid, mixed);
 
 class LucidApp {
   public:

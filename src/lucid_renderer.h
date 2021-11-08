@@ -72,8 +72,6 @@ class LucidRenderer {
 	void checkBins();
 	void checkTiles();
 	void debugMasks(bool sort_phase);
-	void checkMasks();
-
 	void copyCounters();
 
 	struct BinBlockStats;

@@ -733,36 +733,71 @@ void LucidRenderer::analyzeMaskRasterizer() const {
 
 RasterBlockInfo LucidRenderer::introspectBlock(int2 block_pos) const {
 	RasterBlockInfo out;
-	PERF_SCOPE();
+	PERF_GPU_SCOPE();
 	int2 tile_pos = block_pos / 4;
 	int2 bin_pos = tile_pos / 4;
 	block_pos -= tile_pos * 4;
 	tile_pos -= bin_pos * 4;
+	out.bin_pos = bin_pos;
+	out.tile_pos = tile_pos;
+	out.block_pos = block_pos;
+
 	int bin_id = bin_pos.x + bin_pos.y * m_bin_counts.x;
 	int tile_id = bin_id * tiles_per_bin + tile_pos.x + tile_pos.y * (bin_size / tile_size);
 	int block_id = tile_id * blocks_per_tile + block_pos.x + block_pos.y * (tile_size / block_size);
 	int bin_count = m_bin_counts.x * m_bin_counts.y;
 
-	uint block_tri_count = 0, block_tri_offset = 0;
-	uint tile_tri_count = 0, tile_tri_offset = 0;
+	vector<u32> tile_tri_indices, block_tri_masks;
 
 	{
-		PERF_GPU_SCOPE("download gpu data");
-		block_tri_count = m_block_counts->map<u32>(AccessMode::read_only)[block_id];
+		out.num_block_tris = m_block_counts->map<u32>(AccessMode::read_only)[block_id];
 		m_block_counts->unmap();
-		block_tri_offset = m_block_offsets->map<u32>(AccessMode::read_only)[block_id];
+		int block_tri_offset = m_block_offsets->map<u32>(AccessMode::read_only)[block_id];
 		m_block_offsets->unmap();
 		auto tile_counters = m_tile_counters->map<u32>(AccessMode::read_only);
-		tile_tri_count = tile_counters[32 + tile_id];
-		tile_tri_offset = tile_counters[32 + bin_count * tiles_per_bin + tile_id];
+		out.num_tile_tris = tile_counters[32 + tile_id];
+		int tile_tri_offset = tile_counters[32 + bin_count * tiles_per_bin + tile_id];
 		m_tile_counters->unmap();
+
+		if(out.num_tile_tris) {
+			auto tile_tris = m_tile_tris->map<u32>(AccessMode::read_only);
+			tile_tri_indices =
+				tile_tris.subSpan(tile_tri_offset, tile_tri_offset + out.num_tile_tris);
+			m_tile_tris->unmap();
+		}
+		if(out.num_block_tris) {
+			auto block_tris = m_block_tris->map<u32>(AccessMode::read_only);
+			block_tri_masks =
+				block_tris.subSpan(block_tri_offset, block_tri_offset + out.num_block_tris);
+			m_block_tris->unmap();
+		}
 	}
 
-	out.bin_pos = bin_pos;
-	out.tile_pos = tile_pos;
-	out.block_pos = block_pos;
-	out.num_tile_tris = tile_tri_count;
-	out.num_block_tris = block_tri_count;
+	if(block_tri_masks) {
+		print("Masks:\n");
+		int max_row_size = 6;
+		for(int i = 0; i < block_tri_masks.size(); i += max_row_size) {
+			int row_size = min(block_tri_masks.size() - i, max_row_size);
+			for(int j = 0; j < row_size; j++) {
+				uint local_idx = (block_tri_masks[i + j] >> 16) & 0x7fff;
+				uint tri_idx = tile_tri_indices[local_idx];
+				//printf("%c%6d ", tri_idx & 0x80000000 ? '*' : ' ', tri_idx & 0xffffff);
+			}
+			printf("\n");
+			for(int iy = 0; iy < 4; iy++) {
+				for(int j = 0; j < row_size; j++) {
+					u32 mask = block_tri_masks[i + j];
+					int y = 3 - iy;
+					printf(" ");
+					for(int x = 0; x < 4; x++)
+						printf("%c", mask & (1 << (x + y * 4)) ? 'X' : '.');
+					printf(j + 1 == row_size ? "\n" : "  ");
+				}
+			}
+		}
+		print("\n");
+	}
+
 	return out;
 }
 

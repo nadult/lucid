@@ -731,6 +731,41 @@ void LucidRenderer::analyzeMaskRasterizer() const {
 	print("\n");
 }
 
+RasterBlockInfo LucidRenderer::introspectBlock(int2 block_pos) const {
+	RasterBlockInfo out;
+	PERF_SCOPE();
+	int2 tile_pos = block_pos / 4;
+	int2 bin_pos = tile_pos / 4;
+	block_pos -= tile_pos * 4;
+	tile_pos -= bin_pos * 4;
+	int bin_id = bin_pos.x + bin_pos.y * m_bin_counts.x;
+	int tile_id = bin_id * tiles_per_bin + tile_pos.x + tile_pos.y * (bin_size / tile_size);
+	int block_id = tile_id * blocks_per_tile + block_pos.x + block_pos.y * (tile_size / block_size);
+	int bin_count = m_bin_counts.x * m_bin_counts.y;
+
+	uint block_tri_count = 0, block_tri_offset = 0;
+	uint tile_tri_count = 0, tile_tri_offset = 0;
+
+	{
+		PERF_GPU_SCOPE("download gpu data");
+		block_tri_count = m_block_counts->map<u32>(AccessMode::read_only)[block_id];
+		m_block_counts->unmap();
+		block_tri_offset = m_block_offsets->map<u32>(AccessMode::read_only)[block_id];
+		m_block_offsets->unmap();
+		auto tile_counters = m_tile_counters->map<u32>(AccessMode::read_only);
+		tile_tri_count = tile_counters[32 + tile_id];
+		tile_tri_offset = tile_counters[32 + bin_count * tiles_per_bin + tile_id];
+		m_tile_counters->unmap();
+	}
+
+	out.bin_pos = bin_pos;
+	out.tile_pos = tile_pos;
+	out.block_pos = block_pos;
+	out.num_tile_tris = tile_tri_count;
+	out.num_block_tris = block_tri_count;
+	return out;
+}
+
 Image LucidRenderer::masksSnapshot() {
 	auto block_counts = m_block_counts->download<u32>();
 	auto block_offsets = m_block_offsets->download<u32>();
@@ -915,7 +950,9 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 		{"rejected quads", rejected_info, rejection_details},
 		{"bin-quads", toString(num_bin_quads), "Per-bin quads"},
 		{"tile-tris", toString(num_tile_tris), "Per-tile triangles"},
-		{"empty tile-tris", toString(tile_counters[13]),
+		{"empty tile-tris",
+		 stdFormat("%d (%.2f %%)", tile_counters[13],
+				   double(tile_counters[13]) / num_tile_tris * 100.0),
 		 "Per-tile triangles which generate no samples"},
 		{"block-rows", toString(num_block_rows), "Block rows generated for each per-tile triangle"},
 		{"block-tris", toString(num_block_tris),

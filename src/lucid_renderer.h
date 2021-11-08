@@ -8,6 +8,11 @@
 DEFINE_ENUM(LucidRenderOpt, check_bins, check_tiles, debug_masks);
 using LucidRenderOpts = EnumFlags<LucidRenderOpt>;
 
+struct RasterBlockInfo {
+	int2 bin_pos, tile_pos, block_pos;
+	int num_block_tris = 0, num_tile_tris = 0;
+};
+
 class LucidRenderer {
   public:
 	using Opt = LucidRenderOpt;
@@ -47,6 +52,7 @@ class LucidRenderer {
 	Image masksSnapshot();
 
 	void analyzeMaskRasterizer() const;
+	RasterBlockInfo introspectBlock(int2) const;
 	vector<StatsGroup> getStats() const;
 
   private:

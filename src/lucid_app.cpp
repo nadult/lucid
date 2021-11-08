@@ -277,7 +277,7 @@ void LucidApp::showStatsMenu(const Scene &scene) {
 	ImGui::End();
 }
 
-void LucidApp::doMenu(Renderer2D &renderer_2d) {
+void LucidApp::doMenu() {
 	ImGui::SetNextWindowSize({240, 0});
 	ImGui::Begin("Lucid rasterizer tools", nullptr, ImGuiWindowFlags_NoResize);
 
@@ -384,6 +384,17 @@ void LucidApp::doMenu(Renderer2D &renderer_2d) {
 	ImGui::SliderFloat("Scene opacity", &setup.render_config.scene_opacity, 0.0f, 1.0f);
 	ImGui::SetNextItemWidth(220 - labels_size[0]);
 	ImGui::ColorEdit3("Scene color", setup.render_config.scene_color.v, 0);
+
+	if(m_is_picking_block) {
+		menu::text("Picking block: %", m_selected_block);
+		if(m_block_info)
+			menu::text("bin:% tile:% block:%\ntris/block:% tris/tile:%\n", m_block_info->bin_pos,
+					   m_block_info->tile_pos, m_block_info->block_pos,
+					   m_block_info->num_block_tris, m_block_info->num_tile_tris);
+	} else if(ImGui::Button("Introspect raster block")) {
+		m_is_picking_block = true;
+	}
+
 	ImGui::End();
 
 	if(m_show_stats && scene)
@@ -412,7 +423,14 @@ bool LucidApp::handleInput(vector<InputEvent> events, float time_diff) {
 
 		if(event.isMouseOverEvent())
 			m_mouse_pos = (float2)event.mousePos();
+
 		if(event.mouseButtonDown(InputButton::left) && m_setup_idx != -1) {
+			if(m_is_picking_block) {
+				m_is_picking_block = false;
+				m_selected_block = none;
+				continue;
+			}
+
 			auto pos = float2(event.mousePos());
 			auto seg = m_cam_control.currentCamera().screenRay(pos);
 
@@ -425,6 +443,16 @@ bool LucidApp::handleInput(vector<InputEvent> events, float time_diff) {
 			//DUMP(m_picked_pos);
 		}
 	}
+
+	if(m_is_picking_block && m_mouse_pos) {
+		int2 pos = int2(*m_mouse_pos);
+		pos.y = m_viewport.height() - pos.y;
+		if(m_viewport.contains(pos))
+			m_selected_block = pos / LucidRenderer::block_size;
+		else
+			m_selected_block = none;
+	}
+
 	return true;
 }
 
@@ -515,6 +543,24 @@ void LucidApp::drawScene() {
 		m_lucid_renderer->render(ctx);
 }
 
+void LucidApp::draw2D() {
+	Renderer2D renderer_2d(m_viewport, Orient2D::y_up);
+	if(m_selected_block) {
+		int bsize = LucidRenderer::block_size;
+		int tsize = LucidRenderer::tile_size;
+		int bisize = LucidRenderer::bin_size;
+
+		int2 offset = *m_selected_block;
+		IRect block_rect = IRect(0, 0, bsize + 1, bsize + 1) + offset * bsize;
+		IRect tile_rect = IRect(0, 0, tsize + 1, tsize + 1) + offset / (tsize / bsize) * tsize;
+		IRect bin_rect = IRect(0, 0, bisize + 1, bisize + 1) + offset / (bisize / bsize) * bisize;
+		renderer_2d.addRect(bin_rect, ColorId::brown);
+		renderer_2d.addRect(tile_rect, ColorId::purple);
+		renderer_2d.addRect(block_rect, ColorId::magneta);
+	}
+	renderer_2d.render();
+}
+
 bool LucidApp::mainLoop(GlDevice &device) {
 	perf::nextFrame();
 	perf::Manager::instance()->getNewFrames();
@@ -529,10 +575,13 @@ bool LucidApp::mainLoop(GlDevice &device) {
 	updateRenderer();
 	auto result = tick(time_diff);
 	drawScene();
+	draw2D();
+	doMenu();
 
-	Renderer2D renderer_2d(m_viewport, Orient2D::y_down);
-	doMenu(renderer_2d);
-	renderer_2d.render();
+	if(m_selected_block && m_lucid_renderer && m_rendering_mode != RenderingMode::simple)
+		m_block_info = m_lucid_renderer->introspectBlock(*m_selected_block);
+	else
+		m_block_info = none;
 
 	{
 		PERF_GPU_SCOPE("ImGuiWrapper::drawFrame");

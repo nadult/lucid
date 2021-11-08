@@ -11,6 +11,7 @@ class LucidRenderer;
 class SimpleRenderer;
 class SceneSetup;
 struct Scene;
+struct RasterBlockInfo;
 
 DEFINE_ENUM(RenderingMode, simple, lucid, mixed);
 
@@ -31,11 +32,12 @@ class LucidApp {
 	bool updateViewport();
 	void updateRenderer();
 
-	void doMenu(Renderer2D &renderer_2d);
+	void doMenu();
 	bool handleInput(vector<InputEvent> events, float time_diff);
 	bool tick(float time_diff);
 
 	void drawScene();
+	void draw2D();
 
 	bool mainLoop(GlDevice &device);
 	static bool mainLoop(GlDevice &device, void *this_ptr);
@@ -72,6 +74,10 @@ class LucidApp {
 	TextureFilteringParams m_filtering_params;
 	float m_square_weight = 0.5f;
 	int m_setup_idx = -1;
+
+	bool m_is_picking_block = false;
+	Maybe<int2> m_selected_block;
+	Maybe<RasterBlockInfo> m_block_info;
 
 	struct StatPoint {
 		perf::ExecId exec_id;

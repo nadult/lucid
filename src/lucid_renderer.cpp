@@ -119,9 +119,10 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	// TODO: this takes a lot of memory
 	// TODO: what should we do when quads won't fit?
 	// TODO: better estimate needed
-	uint max_bin_quads = max_quads * 2;
-	uint max_tile_tris = max_quads * 6;
-	uint max_block_tris = max_quads * 6; // TODO: that's a lot...
+	// TODO: properly handle situations when limits were reached
+	uint max_bin_quads = max_quads * 3 / 2;
+	uint max_tile_tris = max_quads * 3 / 2;
+	uint max_block_tris = max_quads * 3 / 2;
 
 	m_quad_indices.emplace(BufferType::shader_storage, max_quads * 4 * sizeof(u32));
 	m_quad_aabbs.emplace(BufferType::shader_storage, max_quads * sizeof(u32));
@@ -136,8 +137,10 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	m_block_offsets.emplace(BufferType::shader_storage, tile_counts * 16 * sizeof(u32));
 
 	m_bin_quads.emplace(BufferType::shader_storage, max_bin_quads * sizeof(u32));
-	m_tile_tris.emplace(BufferType::shader_storage, max_tile_tris * sizeof(u32));
-	m_block_tris.emplace(BufferType::shader_storage, max_block_tris * sizeof(u32));
+	m_tile_tris.emplace(BufferType::shader_storage, max_tile_tris * sizeof(u32),
+						BufferUsage::dynamic_read);
+	m_block_tris.emplace(BufferType::shader_storage, max_block_tris * sizeof(u32),
+						 BufferUsage::dynamic_read);
 	m_block_tri_keys.emplace(BufferType::shader_storage, max_block_tris * sizeof(u32));
 	m_scratch.emplace(BufferType::shader_storage,
 					  65536 * 128 * sizeof(u32)); // TODO: control size
@@ -759,23 +762,15 @@ RasterBlockInfo LucidRenderer::introspectBlock(int2 block_pos) const {
 		int tile_tri_offset = tile_counters[32 + bin_count * tiles_per_bin + tile_id];
 		m_tile_counters->unmap();
 
-		if(out.num_tile_tris) {
-			auto tile_tris = m_tile_tris->map<u32>(AccessMode::read_only);
-			tile_tri_indices =
-				tile_tris.subSpan(tile_tri_offset, tile_tri_offset + out.num_tile_tris);
-			m_tile_tris->unmap();
-		}
-		if(out.num_block_tris) {
-			auto block_tris = m_block_tris->map<u32>(AccessMode::read_only);
-			block_tri_masks =
-				block_tris.subSpan(block_tri_offset, block_tri_offset + out.num_block_tris);
-			m_block_tris->unmap();
-		}
+		if(out.num_tile_tris)
+			tile_tri_indices = m_tile_tris->download<u32>(out.num_tile_tris, tile_tri_offset);
+		if(out.num_block_tris)
+			block_tri_masks = m_block_tris->download<u32>(out.num_block_tris, block_tri_offset);
 	}
 
 	if(block_tri_masks) {
 		print("Masks:\n");
-		int max_row_size = 6;
+		int max_row_size = 12;
 		for(int i = 0; i < block_tri_masks.size(); i += max_row_size) {
 			int row_size = min(block_tri_masks.size() - i, max_row_size);
 			for(int j = 0; j < row_size; j++) {

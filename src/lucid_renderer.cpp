@@ -20,6 +20,9 @@
 #include <fwk/io/file_system.h>
 #include <fwk/math/ray.h>
 
+#include <fwk/gfx/investigate.h>
+#include <fwk/gfx/visualizer3.h>
+
 // TODO: opisać różnego rodzaju definicje/nazwy używane w kodzie
 
 // TODO: dużo specyficznych przypadków do obsłużenia:
@@ -860,8 +863,8 @@ RasterBlockInfo LucidRenderer::introspectBlock(CSpan<float3> verts, int2 full_bl
 	return out;
 }
 
-RasterBlockInfo LucidRenderer::introspectBlock8x8(CSpan<float3> verts,
-												  int2 full_block8x8_pos) const {
+RasterBlockInfo LucidRenderer::introspectBlock8x8(CSpan<float3> verts, int2 full_block8x8_pos,
+												  bool visualize) const {
 	RasterBlockInfo out;
 	PERF_GPU_SCOPE();
 	int2 tile_pos = full_block8x8_pos / 2;
@@ -1113,6 +1116,27 @@ RasterBlockInfo LucidRenderer::introspectBlock8x8(CSpan<float3> verts,
 				printf(j + 1 == row_size ? "\n" : "  ");
 			}
 		}
+	}
+
+	if(visualize) {
+		auto vis_func = [&](Visualizer3 &vis, double2) -> string {
+			vector<bool> marked(tile_tris.size(), false);
+			for(auto &mask : masks8x8) {
+				int id = mask.tri_id & 0x7fff;
+				marked[id] = true;
+				auto &tri = tile_tris[id];
+				vis(tri);
+				vis(tri.flipped());
+			}
+			for(int i : intRange(tile_tris)) {
+				if(marked[i])
+					continue;
+				vis(tile_tris[i], ColorId::yellow);
+				vis(tile_tris[i].flipped(), ColorId::yellow);
+			}
+			return "";
+		};
+		investigate(vis_func, none, InvestigatorOpt::exit_with_space);
 	}
 
 	return out;

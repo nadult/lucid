@@ -53,6 +53,7 @@ class LucidRenderer {
 
 	void analyzeMaskRasterizer() const;
 	RasterBlockInfo introspectBlock(CSpan<float3> verts, int2) const;
+	RasterBlockInfo introspectBlock8x8(CSpan<float3> verts, int2) const;
 	vector<StatsGroup> getStats() const;
 
   private:

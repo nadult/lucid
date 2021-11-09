@@ -386,7 +386,7 @@ void LucidApp::doMenu() {
 	ImGui::ColorEdit3("Scene color", setup.render_config.scene_color.v, 0);
 
 	if(m_is_picking_block) {
-		menu::text("Picking block: %", m_selected_block);
+		menu::text("Picking block: %", m_selected_block8x8);
 		if(m_block_info)
 			menu::text("bin:% tile:% block:%\ntris/block:% tris/tile:%\n", m_block_info->bin_pos,
 					   m_block_info->tile_pos, m_block_info->block_pos,
@@ -427,7 +427,7 @@ bool LucidApp::handleInput(vector<InputEvent> events, float time_diff) {
 		if(event.mouseButtonDown(InputButton::left) && m_setup_idx != -1) {
 			if(m_is_picking_block) {
 				m_is_picking_block = false;
-				m_selected_block = none;
+				m_selected_block8x8 = none;
 				continue;
 			}
 
@@ -448,9 +448,9 @@ bool LucidApp::handleInput(vector<InputEvent> events, float time_diff) {
 		int2 pos = int2(*m_mouse_pos);
 		pos.y = m_viewport.height() - pos.y;
 		if(m_viewport.contains(pos))
-			m_selected_block = pos / LucidRenderer::block_size;
+			m_selected_block8x8 = pos / 8;
 		else
-			m_selected_block = none;
+			m_selected_block8x8 = none;
 	}
 
 	return true;
@@ -545,12 +545,12 @@ void LucidApp::drawScene() {
 
 void LucidApp::draw2D() {
 	Renderer2D renderer_2d(m_viewport, Orient2D::y_up);
-	if(m_selected_block) {
-		int bsize = LucidRenderer::block_size;
+	if(m_selected_block8x8) {
+		int bsize = 8;
 		int tsize = LucidRenderer::tile_size;
 		int bisize = LucidRenderer::bin_size;
 
-		int2 offset = *m_selected_block;
+		int2 offset = *m_selected_block8x8;
 		IRect block_rect = IRect(0, 0, bsize + 1, bsize + 1) + offset * bsize;
 		IRect tile_rect = IRect(0, 0, tsize + 1, tsize + 1) + offset / (tsize / bsize) * tsize;
 		IRect bin_rect = IRect(0, 0, bisize + 1, bisize + 1) + offset / (bisize / bsize) * bisize;
@@ -578,10 +578,10 @@ bool LucidApp::mainLoop(GlDevice &device) {
 	draw2D();
 	doMenu();
 
-	if(m_selected_block && m_lucid_renderer && m_rendering_mode != RenderingMode::simple &&
+	if(m_selected_block8x8 && m_lucid_renderer && m_rendering_mode != RenderingMode::simple &&
 	   m_setup_idx != -1) {
 		auto &verts = m_setups[m_setup_idx]->scene->positions;
-		m_block_info = m_lucid_renderer->introspectBlock(verts, *m_selected_block);
+		m_block_info = m_lucid_renderer->introspectBlock8x8(verts, *m_selected_block8x8);
 	} else {
 		m_block_info = none;
 	}

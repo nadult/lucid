@@ -736,6 +736,7 @@ void LucidRenderer::analyzeMaskRasterizer() const {
 	print("\n");
 }
 
+// TODO: cleanup introspection code
 RasterBlockInfo LucidRenderer::introspectBlock(CSpan<float3> verts, int2 full_block_pos) const {
 	RasterBlockInfo out;
 	PERF_GPU_SCOPE();
@@ -785,6 +786,8 @@ RasterBlockInfo LucidRenderer::introspectBlock(CSpan<float3> verts, int2 full_bl
 
 	tile_tris.reserve(tile_tri_verts.size());
 	vector<Pair<float>> mask_depths;
+
+	// Note: it makes no sense without merging non-overlapping masks into layers
 
 	for(int i : intRange(block_tri_masks)) {
 		u32 mask = block_tri_masks[i] & 0xffff;
@@ -853,6 +856,159 @@ RasterBlockInfo LucidRenderer::introspectBlock(CSpan<float3> verts, int2 full_bl
 		}
 		print("\n");
 	}
+
+	return out;
+}
+
+RasterBlockInfo LucidRenderer::introspectBlock8x8(CSpan<float3> verts,
+												  int2 full_block8x8_pos) const {
+	RasterBlockInfo out;
+	PERF_GPU_SCOPE();
+	int2 tile_pos = full_block8x8_pos / 2;
+	int2 bin_pos = tile_pos / 4;
+	int2 block8x8_pos = full_block8x8_pos - tile_pos * 2;
+	tile_pos -= bin_pos * 4;
+	out.bin_pos = bin_pos;
+	out.tile_pos = tile_pos;
+	out.block_pos = block8x8_pos;
+
+	int bin_id = bin_pos.x + bin_pos.y * m_bin_counts.x;
+	int tile_id = bin_id * tiles_per_bin + tile_pos.x + tile_pos.y * (bin_size / tile_size);
+	int block_ids[4];
+	for(int i = 0; i < 4; i++) {
+		int2 bpos = int2(block8x8_pos.x * 2 + i % 2, block8x8_pos.y * 2 + i / 2);
+		block_ids[i] = tile_id * blocks_per_tile + bpos.x + bpos.y * (tile_size / block_size);
+	}
+	int bin_count = m_bin_counts.x * m_bin_counts.y;
+	int block_tri_counts[4], block_tri_offsets[4];
+
+	vector<u32> tile_tri_indices, block_tri_masks[4];
+	vector<Triangle3F> tile_tris;
+	vector<int> tile_tri_instances;
+	vector<array<uint, 3>> tile_tri_verts;
+
+	{
+		auto block_counts = m_block_counts->map<u32>(AccessMode::read_only);
+		auto block_offsets = m_block_offsets->map<u32>(AccessMode::read_only);
+		out.num_block_tris = 0;
+		for(int i = 0; i < 4; i++) {
+			block_tri_counts[i] = block_counts[block_ids[i]];
+			block_tri_offsets[i] = block_offsets[block_ids[i]];
+			out.num_block_tris += block_tri_counts[i];
+		}
+		m_block_counts->unmap();
+		m_block_offsets->unmap();
+		auto tile_counters = m_tile_counters->map<u32>(AccessMode::read_only);
+		out.num_tile_tris = tile_counters[32 + tile_id];
+		int tile_tri_offset = tile_counters[32 + bin_count * tiles_per_bin + tile_id];
+		m_tile_counters->unmap();
+
+		if(out.num_tile_tris)
+			tile_tri_indices = m_tile_tris->download<u32>(out.num_tile_tris, tile_tri_offset);
+		if(out.num_block_tris) {
+			auto block_tris = m_block_tris->map<u32>(AccessMode::read_only);
+			for(int i = 0; i < 4; i++)
+				if(block_tri_counts[i])
+					block_tri_masks[i] = block_tris.subSpan(
+						block_tri_offsets[i], block_tri_offsets[i] + block_tri_counts[i]);
+			m_block_tris->unmap();
+		}
+	}
+
+	auto quad_indices = m_quad_indices->map<u32>(AccessMode::read_only);
+	tile_tris.reserve(tile_tri_indices.size());
+	for(auto idx : tile_tri_indices) {
+		bool second_tri = idx & 0x80000000;
+		idx &= 0xffffff;
+		u32 v0 = quad_indices[idx * 4 + 0], v1 = quad_indices[idx * 4 + 1];
+		u32 v2 = quad_indices[idx * 4 + 2], v3 = quad_indices[idx * 4 + 3];
+		uint instance_id = (v0 >> 26) | ((v1 >> 20) & 0xfc0) | ((v2 >> 14) & 0x3f000);
+		v0 &= 0x3ffffff, v1 &= 0x3ffffff, v2 &= 0x3ffffff, v3 &= 0x3ffffff;
+		tile_tri_verts.emplace_back(v0, second_tri ? v2 : v1, second_tri ? v3 : v2);
+		tile_tris.emplace_back(verts[v0], verts[second_tri ? v2 : v1], verts[second_tri ? v3 : v2]);
+		tile_tri_instances.emplace_back((int)instance_id);
+	}
+	m_quad_indices->unmap();
+
+	struct Mask8x8 {
+		u64 bits;
+		int tri_id;
+	};
+
+	vector<Mask8x8> masks8x8;
+	{
+		vector<int> tri_ids;
+		for(auto &masks : block_tri_masks)
+			for(auto mask : masks) {
+				int tri_id = mask >> 16;
+				if(!isOneOf(tri_id, tri_ids))
+					tri_ids.emplace_back(tri_id);
+			}
+
+		for(auto tri_id : tri_ids) {
+			u64 mask8x8 = 0;
+			for(int i = 0; i < 4; i++) {
+				int bx = i % 2, by = i / 2;
+				u32 cur_mask = 0;
+				for(auto mask : block_tri_masks[i])
+					if((mask >> 16) == tri_id) {
+						cur_mask = mask;
+						break;
+					}
+
+				if(cur_mask)
+					for(int y = 0; y < 4; y++) {
+						uint row_bits = (cur_mask >> (y * 4)) & 0xf;
+						mask8x8 |= u64(row_bits) << (bx * 4 + y * 8 + by * 32);
+					}
+			}
+			masks8x8.emplace_back(mask8x8, tri_id);
+		}
+	}
+
+	// TODO: We're assuming that backface culling is enabled?
+	if(!masks8x8)
+		return out;
+
+	struct MergedMask8x8 {
+		vector<int> tri_ids;
+		array<u8, 64> bits;
+	};
+
+	auto are_compatible_tris = [&](int id0, int id1) -> bool {
+		id0 &= 0x7fff, id1 &= 0x7fff;
+		if(tile_tri_instances[id0] != tile_tri_instances[id1])
+			return false;
+		auto &verts0 = tile_tri_verts[id0];
+		auto &verts1 = tile_tri_verts[id1];
+		for(int i = 0; i < 3; i++) {
+			auto v0 = verts0[i], v1 = verts0[i == 2 ? 0 : i + 1];
+			if(isOneOf(v0, verts1) && isOneOf(v1, verts1))
+				return true;
+		}
+		return false;
+	};
+
+	print("Triangle masks for given 8x8 block:\n");
+	int max_row_size = 8;
+	for(int i = 0; i < masks8x8.size(); i += max_row_size) {
+		printf("\n");
+		int row_size = min(masks8x8.size() - i, max_row_size);
+		for(int j = 0; j < row_size; j++)
+			printf(" %8d  ", i + j);
+		printf("\n");
+		for(int iy = 0; iy < 8; iy++) {
+			for(int j = 0; j < row_size; j++) {
+				u64 mask = masks8x8[i + j].bits;
+				int y = 7 - iy;
+				printf(" ");
+				for(int x = 0; x < 8; x++)
+					printf("%c", mask & (1ull << (x + y * 8)) ? 'X' : '.');
+				printf(j + 1 == row_size ? "\n" : "  ");
+			}
+		}
+	}
+	print("\n");
 
 	return out;
 }

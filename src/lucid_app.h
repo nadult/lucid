@@ -76,7 +76,7 @@ class LucidApp {
 	int m_setup_idx = -1;
 
 	bool m_is_picking_block = false;
-	Maybe<int2> m_selected_block;
+	Maybe<int2> m_selected_block8x8;
 	Maybe<RasterBlockInfo> m_block_info;
 
 	struct StatPoint {

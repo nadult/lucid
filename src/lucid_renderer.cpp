@@ -972,27 +972,67 @@ RasterBlockInfo LucidRenderer::introspectBlock8x8(CSpan<float3> verts,
 
 	struct MergedMask8x8 {
 		vector<int> tri_ids;
-		array<u8, 64> bits;
+		array<u8, 64> indices;
+		u64 bits;
 	};
 
+	// TODO: what about continous surfaces which are missing some tris in between
+	// (because they are in between samples for example?)
+	// They should be merged too. We should merge as much as possible!
+
+	float max_dist = 0.5f;
 	auto are_compatible_tris = [&](int id0, int id1) -> bool {
+		return true;
 		id0 &= 0x7fff, id1 &= 0x7fff;
 		if(tile_tri_instances[id0] != tile_tri_instances[id1])
 			return false;
-		auto &verts0 = tile_tri_verts[id0];
-		auto &verts1 = tile_tri_verts[id1];
-		for(int i = 0; i < 3; i++) {
-			auto v0 = verts0[i], v1 = verts0[i == 2 ? 0 : i + 1];
-			if(isOneOf(v0, verts1) && isOneOf(v1, verts1))
-				return true;
-		}
-		return false;
+		auto aabb0 = enclose(tile_tris[id0]);
+		auto aabb1 = enclose(tile_tris[id1]);
+		return aabb0.distance(aabb1) <= max_dist;
 	};
+
+	vector<MergedMask8x8> mmasks;
+	vector<int> instances;
+
+	for(auto &mask : masks8x8) {
+		int mmask_idx = -1;
+		instances.emplace_back(tile_tri_instances[mask.tri_id & 0x7fff]);
+
+		for(int i : intRange(mmasks))
+			if((mmasks[i].bits & mask.bits) == 0) {
+				bool compatible = true;
+				for(auto tid : mmasks[i].tri_ids)
+					if(!are_compatible_tris(mask.tri_id, tid)) {
+						compatible = false;
+						break;
+					}
+				if(compatible) {
+					mmask_idx = i;
+					break;
+				}
+			}
+		if(mmask_idx == -1) {
+			MergedMask8x8 new_mask;
+			new_mask.bits = 0;
+			fill(new_mask.indices, 255);
+			mmask_idx = mmasks.size();
+			mmasks.emplace_back(new_mask);
+		}
+
+		auto &mmask = mmasks[mmask_idx];
+		mmask.bits |= mask.bits;
+		uint index = mmask.tri_ids.size();
+		mmask.tri_ids.emplace_back(mask.tri_id);
+		for(int i : intRange(64))
+			if(mask.bits & (1ull << i))
+				mmask.indices[i] = index;
+	}
+	makeSortedUnique(instances);
+	DUMP(instances);
 
 	print("Triangle masks for given 8x8 block:\n");
 	int max_row_size = 8;
 	for(int i = 0; i < masks8x8.size(); i += max_row_size) {
-		printf("\n");
 		int row_size = min(masks8x8.size() - i, max_row_size);
 		for(int j = 0; j < row_size; j++)
 			printf(" %8d  ", i + j);
@@ -1009,6 +1049,31 @@ RasterBlockInfo LucidRenderer::introspectBlock8x8(CSpan<float3> verts,
 		}
 	}
 	print("\n");
+
+	print("Merged masks:\n");
+	max_row_size = 4;
+	for(int i = 0; i < mmasks.size(); i += max_row_size) {
+		printf("\n");
+		int row_size = min(mmasks.size() - i, max_row_size);
+		for(int j = 0; j < row_size; j++)
+			printf("        %4d:%4d          ", i + j, (int)mmasks[i + j].tri_ids.size());
+		printf("\n");
+		for(int iy = 0; iy < 8; iy++) {
+			for(int j = 0; j < row_size; j++) {
+				auto &mmask = mmasks[i + j];
+				int y = 7 - iy;
+				printf(" ");
+				for(int x = 0; x < 8; x++) {
+					int index = x + y * 8;
+					if(mmask.indices[index] != 255)
+						printf("%2d ", mmask.indices[index]);
+					else
+						printf(" . ");
+				}
+				printf(j + 1 == row_size ? "\n" : "  ");
+			}
+		}
+	}
 
 	return out;
 }

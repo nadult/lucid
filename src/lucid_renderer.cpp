@@ -933,6 +933,7 @@ RasterBlockInfo LucidRenderer::introspectBlock8x8(CSpan<float3> verts,
 	struct Mask8x8 {
 		u64 bits;
 		int tri_id;
+		Pair<float> depth = {0, 0};
 	};
 
 	vector<Mask8x8> masks8x8;
@@ -970,9 +971,36 @@ RasterBlockInfo LucidRenderer::introspectBlock8x8(CSpan<float3> verts,
 	if(!masks8x8)
 		return out;
 
+	// Note: it makes no sense without merging non-overlapping masks into layers
+	for(auto &mask : masks8x8) {
+		auto &tri = tile_tris[mask.tri_id & 0x7fff];
+		float depth_min = inf, depth_max = -inf;
+		Plane3F plane(tri);
+
+		for(int j = 0; j < 64; j++) {
+			if((mask.bits & (1ull << j)) == 0)
+				continue;
+			int2 pos = full_block8x8_pos * 8 + int2(j % 8, j / 8);
+			float3 ray_origin = m_frustum_rays.origin0;
+			float3 ray_dir = normalize(m_frustum_rays.dir0 + m_frustum_rays.dirx * float(pos.x) +
+									   m_frustum_rays.diry * float(pos.y));
+
+			auto isect = Ray3F(ray_origin, ray_dir).isectParam(plane);
+			if(isect.isPoint()) {
+				depth_min = min(depth_min, isect.asPoint());
+				depth_max = max(depth_max, isect.asPoint());
+			}
+		}
+		mask.depth = {depth_min, depth_max};
+	}
+
+	std::sort(begin(masks8x8), end(masks8x8),
+			  [](const Mask8x8 &a, const Mask8x8 &b) { return a.depth.first < b.depth.first; });
+
 	struct MergedMask8x8 {
 		vector<int> tri_ids;
 		array<u8, 64> indices;
+		Pair<float> depth = {inf, -inf};
 		u64 bits;
 	};
 
@@ -984,8 +1012,8 @@ RasterBlockInfo LucidRenderer::introspectBlock8x8(CSpan<float3> verts,
 	auto are_compatible_tris = [&](int id0, int id1) -> bool {
 		return true;
 		id0 &= 0x7fff, id1 &= 0x7fff;
-		if(tile_tri_instances[id0] != tile_tri_instances[id1])
-			return false;
+		//if(tile_tri_instances[id0] != tile_tri_instances[id1])
+		//	return false;
 		auto aabb0 = enclose(tile_tris[id0]);
 		auto aabb1 = enclose(tile_tris[id1]);
 		return aabb0.distance(aabb1) <= max_dist;
@@ -994,12 +1022,15 @@ RasterBlockInfo LucidRenderer::introspectBlock8x8(CSpan<float3> verts,
 	vector<MergedMask8x8> mmasks;
 	vector<int> instances;
 
+	constexpr int max_merged_tris = 15;
+
+	// We have to make sure that depth ranges don't get too mixed up...
 	for(auto &mask : masks8x8) {
 		int mmask_idx = -1;
 		instances.emplace_back(tile_tri_instances[mask.tri_id & 0x7fff]);
 
 		for(int i : intRange(mmasks))
-			if((mmasks[i].bits & mask.bits) == 0) {
+			if((mmasks[i].bits & mask.bits) == 0 && mmasks[i].tri_ids.size() < max_merged_tris) {
 				bool compatible = true;
 				for(auto tid : mmasks[i].tri_ids)
 					if(!are_compatible_tris(mask.tri_id, tid)) {
@@ -1023,6 +1054,8 @@ RasterBlockInfo LucidRenderer::introspectBlock8x8(CSpan<float3> verts,
 		mmask.bits |= mask.bits;
 		uint index = mmask.tri_ids.size();
 		mmask.tri_ids.emplace_back(mask.tri_id);
+		mmask.depth.first = min(mmask.depth.first, mask.depth.first);
+		mmask.depth.second = max(mmask.depth.second, mask.depth.second);
 		for(int i : intRange(64))
 			if(mask.bits & (1ull << i))
 				mmask.indices[i] = index;
@@ -1035,16 +1068,19 @@ RasterBlockInfo LucidRenderer::introspectBlock8x8(CSpan<float3> verts,
 	for(int i = 0; i < masks8x8.size(); i += max_row_size) {
 		int row_size = min(masks8x8.size() - i, max_row_size);
 		for(int j = 0; j < row_size; j++)
-			printf(" %8d  ", i + j);
+			printf("      %3d      ", i + j);
+		printf("\n");
+		for(int j = 0; j < row_size; j++)
+			printf(" %6.2f:%6.2f ", masks8x8[i + j].depth.first, masks8x8[i + j].depth.second);
 		printf("\n");
 		for(int iy = 0; iy < 8; iy++) {
 			for(int j = 0; j < row_size; j++) {
 				u64 mask = masks8x8[i + j].bits;
 				int y = 7 - iy;
-				printf(" ");
+				printf("    ");
 				for(int x = 0; x < 8; x++)
 					printf("%c", mask & (1ull << (x + y * 8)) ? 'X' : '.');
-				printf(j + 1 == row_size ? "\n" : "  ");
+				printf(j + 1 == row_size ? "\n" : "   ");
 			}
 		}
 	}
@@ -1057,6 +1093,10 @@ RasterBlockInfo LucidRenderer::introspectBlock8x8(CSpan<float3> verts,
 		int row_size = min(mmasks.size() - i, max_row_size);
 		for(int j = 0; j < row_size; j++)
 			printf("        %4d:%4d          ", i + j, (int)mmasks[i + j].tri_ids.size());
+		printf("\n");
+		for(int j = 0; j < row_size; j++)
+			printf("       %6.2f:%6.2f       ", mmasks[i + j].depth.first,
+				   mmasks[i + j].depth.second);
 		printf("\n");
 		for(int iy = 0; iy < 8; iy++) {
 			for(int j = 0; j < row_size; j++) {

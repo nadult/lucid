@@ -20,9 +20,6 @@
 #include <fwk/io/file_system.h>
 #include <fwk/math/ray.h>
 
-#include <fwk/gfx/investigate.h>
-#include <fwk/gfx/visualizer3.h>
-
 // TODO: opisać różnego rodzaju definicje/nazwy używane w kodzie
 
 // TODO: dużo specyficznych przypadków do obsłużenia:
@@ -860,11 +857,18 @@ RasterBlockInfo LucidRenderer::introspectBlock(CSpan<float3> verts, int2 full_bl
 		print("\n");
 	}
 
+	out.tile_tris = move(tile_tris);
+	out.block_tris_map.resize(out.tile_tris.size());
+	for(int i : intRange(block_tri_masks)) {
+		u32 local_idx = (block_tri_masks[i] >> 16) & 0x7fff;
+		out.block_tris_map[local_idx] = true;
+	}
+
 	return out;
 }
 
-RasterBlockInfo LucidRenderer::introspectBlock8x8(CSpan<float3> verts, int2 full_block8x8_pos,
-												  bool visualize) const {
+RasterBlockInfo LucidRenderer::introspectBlock8x8(CSpan<float3> verts,
+												  int2 full_block8x8_pos) const {
 	RasterBlockInfo out;
 	PERF_GPU_SCOPE();
 	int2 tile_pos = full_block8x8_pos / 2;
@@ -931,6 +935,7 @@ RasterBlockInfo LucidRenderer::introspectBlock8x8(CSpan<float3> verts, int2 full
 		tile_tris.emplace_back(verts[v0], verts[second_tri ? v2 : v1], verts[second_tri ? v3 : v2]);
 		tile_tri_instances.emplace_back((int)instance_id);
 	}
+	out.tile_tris = tile_tris;
 	m_quad_indices->unmap();
 
 	struct Mask8x8 {
@@ -1118,25 +1123,10 @@ RasterBlockInfo LucidRenderer::introspectBlock8x8(CSpan<float3> verts, int2 full
 		}
 	}
 
-	if(visualize) {
-		auto vis_func = [&](Visualizer3 &vis, double2) -> string {
-			vector<bool> marked(tile_tris.size(), false);
-			for(auto &mask : masks8x8) {
-				int id = mask.tri_id & 0x7fff;
-				marked[id] = true;
-				auto &tri = tile_tris[id];
-				vis(tri);
-				vis(tri.flipped());
-			}
-			for(int i : intRange(tile_tris)) {
-				if(marked[i])
-					continue;
-				vis(tile_tris[i], ColorId::yellow);
-				vis(tile_tris[i].flipped(), ColorId::yellow);
-			}
-			return "";
-		};
-		investigate(vis_func, none, InvestigatorOpt::exit_with_space);
+	out.block_tris_map.resize(out.tile_tris.size());
+	for(auto &mask : masks8x8) {
+		int id = mask.tri_id & 0x7fff;
+		out.block_tris_map[id] = true;
 	}
 
 	return out;

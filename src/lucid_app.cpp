@@ -30,6 +30,9 @@
 #include <fwk/perf/manager.h>
 #include <fwk/sys/input.h>
 
+#include <fwk/gfx/investigate.h>
+#include <fwk/gfx/visualizer3.h>
+
 // TODO: save imgui settings
 
 string dataPath(string file_name) { return executablePath().parent() / "data" / file_name; }
@@ -386,13 +389,17 @@ void LucidApp::doMenu() {
 	ImGui::ColorEdit3("Scene color", setup.render_config.scene_color.v, 0);
 
 	if(m_is_picking_block) {
-		menu::text("Picking block: %", m_selected_block8x8);
+		menu::text("Picking % block: %", m_is_picking_8x8 ? "8x8" : "4x4", m_selected_block);
 		if(m_block_info)
 			menu::text("bin:% tile:% block:%\ntris/block:% tris/tile:%\n", m_block_info->bin_pos,
 					   m_block_info->tile_pos, m_block_info->block_pos,
 					   m_block_info->num_block_tris, m_block_info->num_tile_tris);
-	} else if(ImGui::Button("Introspect raster block")) {
+	} else if(ImGui::Button("Introspect 8x8 raster block")) {
 		m_is_picking_block = true;
+		m_is_picking_8x8 = true;
+	} else if(ImGui::Button("Introspect 4x4 raster block")) {
+		m_is_picking_block = true;
+		m_is_picking_8x8 = false;
 	}
 
 	ImGui::End();
@@ -447,9 +454,9 @@ bool LucidApp::handleInput(vector<InputEvent> events, float time_diff) {
 		int2 pos = int2(*m_mouse_pos);
 		pos.y = m_viewport.height() - pos.y;
 		if(m_viewport.contains(pos))
-			m_selected_block8x8 = pos / 8;
+			m_selected_block = pos / (m_is_picking_8x8 ? 8 : 4);
 		else
-			m_selected_block8x8 = none;
+			m_selected_block = none;
 	}
 
 	return true;
@@ -544,12 +551,12 @@ void LucidApp::drawScene() {
 
 void LucidApp::draw2D() {
 	Renderer2D renderer_2d(m_viewport, Orient2D::y_up);
-	if(m_selected_block8x8) {
-		int bsize = 8;
+	if(m_selected_block) {
+		int bsize = m_is_picking_8x8 ? 8 : 4;
 		int tsize = LucidRenderer::tile_size;
 		int bisize = LucidRenderer::bin_size;
 
-		int2 offset = *m_selected_block8x8;
+		int2 offset = *m_selected_block;
 		IRect block_rect = IRect(0, 0, bsize + 1, bsize + 1) + offset * bsize;
 		IRect tile_rect = IRect(0, 0, tsize + 1, tsize + 1) + offset / (tsize / bsize) * tsize;
 		IRect bin_rect = IRect(0, 0, bisize + 1, bisize + 1) + offset / (bisize / bsize) * bisize;
@@ -558,6 +565,33 @@ void LucidApp::draw2D() {
 		renderer_2d.addRect(block_rect, ColorId::magneta);
 	}
 	renderer_2d.render();
+}
+
+static void visualizeBlockTris(const RasterBlockInfo &info) {
+	auto vis_func = [&](Visualizer3 &vis, double2) -> string {
+		for(int i : intRange(info.tile_tris)) {
+			if(!info.block_tris_map[i])
+				continue;
+			auto &tri = info.tile_tris[i];
+			vis(tri);
+			vis(tri.flipped());
+			for(auto edge : tri.edges())
+				vis(edge, ColorId::black);
+		}
+
+		for(int i : intRange(info.tile_tris)) {
+			if(info.block_tris_map[i])
+				continue;
+			vis(info.tile_tris[i], ColorId::yellow);
+			vis(info.tile_tris[i].flipped(), ColorId::yellow);
+		}
+
+		TextFormatter fmt;
+		fmt << "Introspecting triangles intersecting current block (white) and tile (yellow)\n";
+		fmt("Tile-tris: %\nBlock-tris: %\n", info.tile_tris.size(), countIf(info.block_tris_map));
+		return fmt.text();
+	};
+	investigate(vis_func, none, InvestigatorOpt::exit_with_space);
 }
 
 bool LucidApp::mainLoop(GlDevice &device) {
@@ -582,15 +616,19 @@ bool LucidApp::mainLoop(GlDevice &device) {
 	}
 	glFlush();
 
-	if(m_selected_block8x8 && m_lucid_renderer && m_rendering_mode != RenderingMode::simple &&
+	if(m_selected_block && m_lucid_renderer && m_rendering_mode != RenderingMode::simple &&
 	   m_setup_idx != -1) {
 		auto &verts = m_setups[m_setup_idx]->scene->positions;
-		m_block_info =
-			m_lucid_renderer->introspectBlock8x8(verts, *m_selected_block8x8, m_is_final_pick);
+		if(m_is_picking_8x8)
+			m_block_info = m_lucid_renderer->introspectBlock8x8(verts, *m_selected_block);
+		else
+			m_block_info = m_lucid_renderer->introspectBlock(verts, *m_selected_block);
 		if(m_is_final_pick) {
+			if(m_block_info->tile_tris)
+				visualizeBlockTris(*m_block_info);
 			m_is_final_pick = false;
 			m_is_picking_block = false;
-			m_selected_block8x8 = none;
+			m_selected_block = none;
 		}
 	} else {
 		m_block_info = none;

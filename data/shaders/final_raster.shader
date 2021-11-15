@@ -137,6 +137,15 @@ shared uint s_masks[BLOCKS_PER_TILE * MAX_MASKS]; // TODO: 16-bit
 shared uint s_vertex_ids[BLOCKS_PER_TILE * MAX_MASKS][3];
 shared uint s_instance_ids[BLOCKS_PER_TILE * MAX_MASKS];
 
+// On scene _ takes ~% time of whole final raster:
+// Bunny:  34%
+// Dragon: 30%
+// Sponza: 75%
+// San Miguel: 65%
+// Hairball: 29%
+// Power plant: 47%
+// White Oak: 75%
+// Teapot: 47%
 void rasterizeTri(const ivec2 pixel_pos, uint tri_idx) {
 	vec2 screen_pos = (vec2(pixel_pos) + vec2(0.5, 0.5)) * vec2(1.0 / float(VIEWPORT_SIZE_X), 1.0 / float(VIEWPORT_SIZE_Y));
 	vec3 ray_dir = frustum.ws_dir0 + frustum.ws_dirx * (pixel_pos.x + 0.5)

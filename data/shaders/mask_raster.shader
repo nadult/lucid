@@ -76,6 +76,19 @@ shared uint s_empty_tri_count;
 shared uvec2 s_buffer[LSIZE * 4];
 shared uint s_buffer_size;
 
+#ifdef VENDOR_NVIDIA
+uvec2 swap(uvec2 x, int mask, uint dir)
+{
+	uvec2 y = shuffleXorNV(x, mask, 32);
+	return (x.x < y.x) == (dir != 0) ? y : x;
+}
+
+uint bfe(uint value, uint boffset) 
+{
+	return (value >> boffset) & 1;
+}
+#endif
+
 void sortBuffer(uint N)
 {
 	// TODO: fix this
@@ -92,26 +105,51 @@ void sortBuffer(uint N)
 	}
 	barrier();
 
-	// to zajmuje OK 36% czasu
-	for(uint k = 2; k <= TN; k = 2 * k) {
-		for(uint j = k >> 1; j > 0; j = j >> 1) {
-			for(uint ti = 0; ti < TN; ti += LSIZE) {
-				uint i = ti + LIX;
-				if(i >= TN)
-					continue;
-				uint ixj = i ^ j;
-				if((ixj) > i) {
-					uvec2 ivalue = s_buffer[i];
-					uvec2 rvalue = s_buffer[ixj];
+#if defined(VENDOR_NVIDIA)
+	// k == 2, j == 1
+	for(uint i = LIX; i < TN; i += LSIZE) {
+		uvec2 value = s_buffer[i];
+		// TODO: where does the glitches come from?
+		// repro: only do first step on powerplant or sanmiguel
+		value = swap(value, 0x01, bfe(LIX, 1) ^ bfe(LIX, 0)); // 2
+		value = swap(value, 0x02, bfe(LIX, 2) ^ bfe(LIX, 1)); // 4
+		value = swap(value, 0x01, bfe(LIX, 2) ^ bfe(LIX, 0));
+		value = swap(value, 0x04, bfe(LIX, 3) ^ bfe(LIX, 2)); // 8
+		value = swap(value, 0x02, bfe(LIX, 3) ^ bfe(LIX, 1));
+		value = swap(value, 0x01, bfe(LIX, 3) ^ bfe(LIX, 0));
+		value = swap(value, 0x08, bfe(LIX, 4) ^ bfe(LIX, 3)); // 16
+		value = swap(value, 0x04, bfe(LIX, 4) ^ bfe(LIX, 2));
+		value = swap(value, 0x02, bfe(LIX, 4) ^ bfe(LIX, 1));
+		value = swap(value, 0x01, bfe(LIX, 4) ^ bfe(LIX, 0));
+		value = swap(value, 0x10, bfe(LIX, 5) ^ bfe(LIX, 4)); // 32
+		value = swap(value, 0x08, bfe(LIX, 5) ^ bfe(LIX, 3));
+		value = swap(value, 0x04, bfe(LIX, 5) ^ bfe(LIX, 2));
+		value = swap(value, 0x02, bfe(LIX, 5) ^ bfe(LIX, 1));
+		value = swap(value, 0x01, bfe(LIX, 5) ^ bfe(LIX, 0));
+		s_buffer[i] = value;
+	}
+	barrier();
+	int start_k = 64;
+#else
+	int start_k = 2;
+#endif
 
-					// TODO: merge branches?
-					if((i & k) == 0 && ivalue.x > rvalue.x) {
-						s_buffer[i] = rvalue;
-						s_buffer[ixj] = ivalue;
-					}
-					if((i & k) != 0 && ivalue.x < rvalue.x) {
-						s_buffer[i] = rvalue;
-						s_buffer[ixj] = ivalue;
+	// na _ to zajmuje _ czasu mask_raster:
+	// powerplant 51% ( 9.38 z 18.46) -> 14.84
+	// hairball   64% (17.23 z 26.84) -> 21.01
+	// miguel     62% ( 6.44 z 10.37) ->  7.94
+	// sponza     64% ( 3.37 z  5.27) ->  3.84
+	// dragon     57% ( 0.97 z  1.68) ->  1.15
+	for(uint k = start_k; k <= TN; k = 2 * k) {
+		for(uint j = k >> 1; j > 0; j = j >> 1) {
+			for(uint i = LIX; i < TN; i += LSIZE) {
+				uint ixj = i ^ j;
+				if(ixj > i) {
+					uvec2 lvalue = s_buffer[i  ];
+					uvec2 rvalue = s_buffer[ixj];
+					if( ((i & k) != 0) == (lvalue.x < rvalue.x) ) {
+						s_buffer[i  ] = rvalue;
+						s_buffer[ixj] = lvalue;
 					}
 				}
 			}
@@ -472,4 +510,9 @@ void main() {
 		atomicAdd(g_tiles.num_processed_block_rows, s_tile_rowtri_count);
 		atomicMax(g_tiles.max_block_rows_per_tile, s_tile_rowtri_count);
 	}
+/*	if(LIX < 32) {
+		uvec2 value1 = uvec2(32 - LIX, LIX / 8);
+		uvec2 value2 = swap(value1, 1, bfe(LIX, 1) ^ bfe(LIX, 0));
+		RECORD(value1.x, value2.x, value1.y, value2.y);
+	}*/
 }

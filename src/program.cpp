@@ -92,8 +92,14 @@ Ex<Program> Program::makeCompute(Str name, string defs, Opts opts) {
 	header << "#version 430\n";
 	header << "#extension GL_ARB_shader_draw_parameters: enable\n";
 	header << "#extension GL_ARB_shader_group_vote : enable\n";
+	if(gl_info->vendor == GlVendor::nvidia) {
+		// TODO: check if shuffle is actually available
+		header << "#extension GL_NV_shader_thread_shuffle : enable\n";
+	}
 	if(gl_info->features & GlFeature::shader_ballot)
 		header << "#extension GL_ARB_shader_ballot : enable\n#define BALLOT_ENABLED\n";
+	if(gl_info->vendor == GlVendor::nvidia)
+		header << "#define VENDOR_NVIDIA\n";
 	if(!defs.empty())
 		header << defs << "\n";
 	header << shaderDebugDefs(opts & ProgramOpt::debug);

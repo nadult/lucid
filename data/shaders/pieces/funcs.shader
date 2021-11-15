@@ -112,6 +112,22 @@ uint encodeRGB8(vec3 col) {
 	return (uint(col.r * 255.0)) | (uint(col.g * 255.0) << 8) | (uint(col.b * 255.0) << 16);
 }
 
+uvec2 encodeCD(vec4 color, float depth) {
+	depth = float(0xffffff) / (1.0 + depth);
+	uint enc_col = (uint(clamp(color.r, 0.0, 1.0) * 2047.0)) |
+				   (uint(clamp(color.g, 0.0, 1.0) * 2047.0) << 11) |
+				   (uint(clamp(color.b, 0.0, 1.0) * 1023.0) << 22);
+	uint enc_depth_alpha = (uint(depth) << 8) | uint(color.a * 255.0);
+	return uvec2(enc_col, enc_depth_alpha);
+}
+
+vec4 decodeCDColor(uvec2 enc) {
+	return vec4(float((enc[0]      ) & 0x7ff) * (1.0 / 2047.0),
+				float((enc[0] >> 11) & 0x7ff) * (1.0 / 2047.0),
+				float((enc[0] >> 22) & 0x3ff) * (1.0 / 1023.0),
+				float(enc[1] & 0xff) * (1.0 / 255.0));
+}
+
 vec3 linearToSRGB(vec3 color) {
 	return vec3(
 		color.r < 0.0031308 ? 12.92 * color.r : 1.055 * pow(color.r, 1.0 / 2.4) - 0.055,

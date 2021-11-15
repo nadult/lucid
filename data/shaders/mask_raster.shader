@@ -190,7 +190,7 @@ void generateTriMasks(uint local_tri_idx, uint row_ranges, int by, vec3 plane_no
 
 		vec3 ray_dir = frustum.ws_dir0 + frustum.ws_dirx * cpoint.x + frustum.ws_diry * cpoint.y;
 		float ray_pos = 1.0 / dot(plane_normal, ray_dir);
-		float depth = (1 << 28) / (1.0 + ray_pos);
+		float depth = (1 << 28) / (1.0 + ray_pos); // 24 bits is enough
 
 		// TODO: count this in smarter way?
 		uint block_id = by * 4 + bx;

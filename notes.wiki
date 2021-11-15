@@ -29,6 +29,170 @@
   white_oak: 10781  56     60    186    671           2734        6923
 
 -----------------------------------------------------------------------------------------
+                             === Nowa finalna rasteryzacja ===
+-----------------------------------------------------------------------------------------
+
+- Odpinamy wątki od pixeli
+- framebuffer trzymamy w SMEM (może być w częściach)
+
+Problem: jak wątki zapisują sample do framebuffera w SMEM, to co robić z kolizjami?
+  atomowo tej operacji nie zrobię, bo jest skomplikowana...
+  DUPA!!!
+  
+  W jakiś sposób pakować więcej wątków per pixel i później serializować wyniki?
+  Dzięki temu będzie można lepiej współdzielić dane tróəkątów, a sam commit do framebuffera
+  powinien być szybki?
+  
+  
+  Jak zrobić szybki commit z dużej liczby wątków do wspólnego Framebuffera?
+  A może z większą liczbą wątków mógłbym łatwiej trzymać wszystkie trójkąty w SMEM?
+  Np. 512 trójkątów od razu? Bloki z małą liczbą tróəkątów bym załatwiał małymi kernelami?
+
+  Musiałbym tylko zapewnić poprawną kolejność! Ale jak to wymusić na tak dużej liczbie wątków?
+  
+  Najpierw wszystkie wątki rasteryzują 4 piksele powiedzmy a potem jest commit po wszystkich w
+  odpowiedniej kolejności.
+  
+  Problem: jeśli są duże różnice w ilości pikseli per trójkąt, to wątków musi być co najmniej
+  kilka razy mniej niż tróəkątów, inaczej niektóre skończą wcześniej i będą czekać.
+  
+  To oznacza, że muszę być w stanie dzielić pojedyncze trójkąty między wątki...
+  
+  W takim razie może trzymajmy trójkąty w SMEM? Jeśli możemy zaalokować więcej wątków, to mamy
+  też więcej miejsca na trójkąty?
+  
+  Ale musielibyśmy być w stanie załadować wszystkie tróəkąty? 512 wątków 384 tróəkąty?
+  Początkowo 256 wątków na blok? 
+  
+  
+  OK ale muszę wykminić jak zrobić commitowanie...
+  
+  Wątek który ma próbkę do zacommitowania musiałby czekać aż wszystkie próbki przed nim w danym
+  pikselu zostały zacommitowane.
+  
+  
+  
+Alternatywny pomysł: mergowanie masek. Do tego jest potrzebne jedynie wyliczenie głębokości.
+- nie potrzebowalibyśmy filtra głębokości na koniec, musielibyśmy tylko wykrywać sytuację gdy
+- głębia jest niepoprawna (dałoby się zrobić atomowo na u64?)
+
+Tworzylibyśmy warstwy bezpośrednio do przetworzenia dla rasteryzera, w takiej sytuacji każda
+warstwa mołgaby mieć inną reprezentację? (reprezentacje musiałyby być takie same w ramach 8x8)
+
+Problem: indeksy trójkątów. Dla każdej warstwy mamy inny zestaw indeksów trójkątów?
+  - offset do indeksów, ilość trójkątów, ilość bitów na indeks w masce.
+Problem: kto ładuje które trójkąty?
+
+Problem: co jeśli mamy 64 trójkąty w masce?
+  - zależnie od ilości tróəkątów rózne strategie? musiałyby być wspólne dla bloku 8x8!
+  - poza tym, co jak mam 4 trójkąty? 28 wątków czeka?
+
+Dobrze by było żebyśmy mogli współdzielić tróəkąty między warstwami. Mielibyśmy dwa strumienie:
+- strumień trójkątów, i strumień warstw.
+W każdym kroku dochodzi trochę nowych trójkątów a trochę wypada.
+Indeksy w warstwie mapują się na tróəkąty z drugiego strumienia.
+
+Jest jakiś limit trójkątów w SMEM. Pewnie więcej niż 48 / 64 wątki nie zmieszczę...
+
+Problem: jak generować takie strumienie?
+
+
+
+Może najlepiej by było jakby wątek który ładuje trójkąta zajmował się też renderingiem jego
+pikseli? SMEM by było użyte do trzymania framebuffera.
+- jeśli mielibyśmy dane posortowane per pixel, podzielone na warstwy i równomiernie rozłożone
+- w paczkach.
+- moglibyśmy trzymać 4 piksele na wątek (głębię + kolor)
+
+To też jest słabo, bo często się zdarza, że cały blok (16 pikseli) jest wypełniony  jednym
+trójkątem. W takiej sytuacji 4 razy bym ładował dany trójkąt. A na jeszcze szerszy kontekst
+mnie nie stać (16 pikseli na wątek).
+
+
+
+Czy da się jakoś zrobić mechanizm synchronizacji sampli z różnich warstw generowanych przez
+różne wątki?
+
+Np. mam grupę 4x4 piksele. Zaalokowałem do niej 8 wątków. 4 wątki pracują na warstwie 0, 4 na
+warstwie 1. 
+Czy na róznych warstwach powinny pracować różne warpy? Warstwa N może być zmergowana dopiero
+jak warstwa N-1 jest zmergowana w całości. Tylko, że wątki zanim zmergują mają trzymać sample w
+rejestrach?
+
+
+To może inaczej:
+- dane tróəkątów w SMEM. po jednym warpie na warstwę. Np. 512 wątków na blok 8x8. Od razu
+  ładujemy wszystkie trójkąty.
+  Generujemy sample (wątek w każdym warpie odpowiedzialny za max 2 piksele?). 
+  Na końcu warpy w kolejności commitują wygenerowane sample do Framebuffera w SMEM.
+  
+  Dzięki temu, triangle setup robimy tylko raz na tróəkąt.
+  Dobrze by było maksymalnie jak się da upakować warstwy.
+  Problem: jak równomiernie rozkładać pracę nad pikselami między wątki?
+
+
+Problem: jak dobrze zrobić algorytm generowania upakowanych warstw?
+- jest to na pewno prostsze niż pełna rasteryzacja
+- na inpucie mamy to co teraz generuje mask_raster, tylko posortowane?
+  może być dużo pustych pikseli, chodzi o to żeby po nich nie iterować
+
+mergowanie hierarchiczne?
+- 
+
+problemem aktualnie jest faza finalna i faza sortowania, na tych etapach raczej podział
+trójkąty na duże/małe/particle nie ma sensu?
+
+
+Jak zrobić warstwy?
+Powiedzmy, że na razie chcemy jedynie przyspieszyć sortowanie i na razie robimy 4x4.
+- w ramach warstwy znowu mamy sytuację gdy trójkąty mogą być duże lub małe; jak by były duże to
+  możemy rozpatrywać same trójkąty
+- mielibyśmy dwie ścieżki? jedna ścieżka dla małych meshletów i druga dla całych trójkątów?
+  przed sortowaniem mergowalibyśmy je w jeden strumień
+  jeden strumień czego?
+  dla zwykłego trójkąta: 16-bit indeks w liście tile-i
+  dla warstwy: indeks meshleta + 16 * 4 bity w każdym pikselu
+    problem: taka reprezentacja w finalnym rasteryzerze jest taka sobie
+
+  jeśli za dużo będę przechowywał per-piksel to może się bardziej opłacać po prostu przechować
+  kolor + głębię (64-bity). Minus jest taki, że nie działa efekt mgły
+  Jeśli za dużo danych przechowuję per trójkąt i mam średnio 1 trójkąt na piksel, to może się
+  to bardziej opłacać...
+
+  Teraz w przypadku masek mam 32-bity na maskę i mały indeks + 32-bity na indeks w tile-u +
+  32-bity na indeks w binie...
+  Choć to jest przypadek krańcowy... średnio tróəkąt ma pewnie z 2-3 piksele...
+
+
+  Może mógłbym utrzymać założenie, że w jednym bloku jest jedna warstwa?
+  jeśli dwie warstwy się ze sobą przecinają, to mógłbym jedną z nich rozbijać na dwie?
+  Ale jak to dobrze robić?
+
+  Obawiam się, że warstwy oparte o meshlety na końcu mi się nie przydadzą: W ramach bloku
+  potrzebuję minimalnej listy tróəkątów które faktycznie występują na danym bloku
+
+  jeśli byłbym w stanie podzielić tróəkąty w ramach tile-a na niezależne segmenty to mógłbym
+  jakoś zawęzić liczbę tróəkątów?
+  
+  Tyle, że indeksy trzymam per- tile a nie per blok. Per blok byłoby więcej?
+ 
+ 
+  Przy rasteryzacji chcę jak najszerszy kontekst? nie koniecznie, bo np. w hairballu max trisów
+  na tile to > 64K...
+
+  Problem z równoległym obliczaniem różnych warstw: nie mam dostępu do wartości piksela pod
+  spodem...
+  
+  Tak naprawdę to ten efekt mgły jest dośc ograniczony, jeśli mam tylko wartość koloru. Może
+  fajnie by było mieć indeks trójkąta np. ?
+
+  Kompromis: 4 wątki na blok (każdy wątek obsługuje inny rząd)?
+- Ale, żeby mieć 4 piksele na wątek, to muszę mieć post-sortowane warstwy!
+
+  Jaka jest najsensowniejsza reprezentacja dla warstwy?
+
+
+-----------------------------------------------------------------------------------------
                           === Problemy z aktualnym systemem ===
 -----------------------------------------------------------------------------------------
 

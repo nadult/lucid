@@ -657,7 +657,7 @@ vector<LucidApp::StatPoint> LucidApp::selectPerfPoints() const {
 		{"bins", "LucidRenderer::computeBins", ""},
 		{"tiles", "LucidRenderer::computeTiles", ""},
 		{"raster_masks", "LucidRenderer::rasterizeMasks", ""},
-		{"sort_masks", "LucidRenderer::sortMasks", ""},
+		//{"sort_masks", "LucidRenderer::sortMasks", ""},
 		{"final_raster", "LucidRenderer::rasterizeFinal", ""},
 	};
 
@@ -682,7 +682,7 @@ vector<LucidApp::StatPoint> LucidApp::selectPerfPoints() const {
 		}
 
 		if(!exec_id) {
-			print("Invalid perf point selected for stats: %s [%s]\n", selection[i][1].c_str(),
+			print("Invalid perf point selected for stats: % [%]\n", selection[i][1].c_str(),
 				  selection[i][2].c_str());
 			return {};
 		}

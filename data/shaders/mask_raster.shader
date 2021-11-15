@@ -5,7 +5,8 @@
 
 // Different sizes are optimal for different number of tris/bin
 // 512 for hairball, 256 for other scenes?
-#define LSIZE 256
+#define LSIZE 512
+#define LSHIFT 9
 
 // TODO: problem with uneven amounts of data in different tiles
 // TODO: jak dobrze obsługiwać różnego rodzaju dystrybucje trójkątów ?
@@ -24,15 +25,42 @@ layout(std430, binding =  8) buffer buf8_ { uint g_block_offsets[]; }; // TODO: 
 layout(std430, binding =  9) buffer buf9_  { uint g_tile_tris[]; };
 layout(std430, binding = 10) buffer buf10_ { uint g_block_tris[]; };
 layout(std430, binding = 11) buffer buf11_ { uint g_block_keys[]; };
-layout(std430, binding = 12) coherent buffer buf12_ { uint g_scratch[]; };
+layout(std430, binding = 12) coherent buffer buf12_ { uvec2 g_scratch[]; };
 
 // TODO: w przypadku dużych ilości trójkątów per-tile możemy robić sortowanie każdego bloku niezależnie
 //       łączenie ma sens w przypadku małych ilości instancji per blok
+//
+// TODO: problem: możemy jednak chcieć oddzielić sortowanie od generacji masek bo:
+// - możliwe że do generacji masek optymalnie jest użyć małej ilości wątków na kafel (np. 64)
+//   natomiast do sortowania musimy już miejscami użyć 512...
+//
+// generacja:
+// - mogą być duże różnice w ilości tróəkątów / tri-bloków między kaflami
+// - często trzeba robić synchronizację między wszystkimi wątkami: wtedy pierwsze 16 wątków coś liczy a reszta czeka...
 
 // TODO: enforce this somehow
 // TODO: scratch too big?
 #define MAX_TILE_TRIS 64 * 1024
-#define MAX_TILE_BLOCK_ROWS 32 * 1024
+#define MAX_BLOCK_TRIS 2048
+
+// Dostępne strategie:
+// - wszystkie trójkąty (z wszystkich binów) mieszczą się w SMEM
+//   jedno sortowanie
+// - trójkąty z każdego rzędu mieszczą się w SMEM
+//   sortowanie każdego rzędu niezależnie
+// - tróəkąty z każdego bloku mieszczą się w SMEM
+//
+// - tróəkąty mieszczą się w limicie tróəkątów na blok (2048)
+// - tróəkąty się nie mieszczą (FAIL)
+//
+//
+// Nowy plan:
+// - generujemy rzędy do SMEM
+// - z SMEM generujemy bloki do scratcha (pobinowane)
+// - bloki ze scratcha sortujemy i umieszczamy w miejscu docelowym
+//
+// - dwie opcje sortowania: albo wszystko na raz (jak się zmieści w 2048) albo każdy blok niezależnie
+//   ew. ładowanie po kilka bloków na raz (zależnie od ilości tróəkątów)
 
 shared int s_tile_tri_counts [TILES_PER_BIN];
 shared int s_tile_tri_offsets[TILES_PER_BIN];
@@ -41,9 +69,56 @@ shared ivec2 s_bin_pos, s_tile_pos;
 
 shared uint s_block_tri_counts[BLOCKS_PER_TILE];
 shared uint s_block_tri_offsets[BLOCKS_PER_TILE];
-shared uint s_tile_blocktri_offset, s_tile_base_blocktri_offset;
+shared uint s_tile_blocktri_offset;
 shared uint s_tile_blocktri_count, s_tile_rowtri_count;
 shared uint s_empty_tri_count;
+
+shared uvec2 s_buffer[LSIZE * 4];
+shared uint s_buffer_size;
+
+void sortBuffer(uint N)
+{
+	// TODO: fix this
+	uint TN = 32;
+	while(TN < N)
+		TN *= 2;
+
+	uint nn = N;
+	while(nn < TN) {
+		uint count = min(TN - nn, LSIZE);
+		if(LIX < count) // TODO: make sure that this key is bigger than all valid keys
+			s_buffer[nn + LIX] = uvec2(0xffffffff, 0xffffffff);
+		nn += count;
+	}
+	barrier();
+
+	// to zajmuje OK 36% czasu
+	for(uint k = 2; k <= TN; k = 2 * k) {
+		for(uint j = k >> 1; j > 0; j = j >> 1) {
+			for(uint ti = 0; ti < TN; ti += LSIZE) {
+				uint i = ti + LIX;
+				if(i >= TN)
+					continue;
+				uint ixj = i ^ j;
+				if((ixj) > i) {
+					uvec2 ivalue = s_buffer[i];
+					uvec2 rvalue = s_buffer[ixj];
+
+					// TODO: merge branches?
+					if((i & k) == 0 && ivalue.x > rvalue.x) {
+						s_buffer[i] = rvalue;
+						s_buffer[ixj] = ivalue;
+					}
+					if((i & k) != 0 && ivalue.x < rvalue.x) {
+						s_buffer[i] = rvalue;
+						s_buffer[ixj] = ivalue;
+					}
+				}
+			}
+			barrier();
+		}
+	}
+}
 
 // Sum of sample posititions in 4x4 block (multiplied by 2):
 // bit 0-7:   X value for rows 0123
@@ -132,7 +207,6 @@ void generateTriScanlines(uint local_tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, i
 	}
 
 	uint num_blocktris = 0;
-	uint soffset = gl_WorkGroupID.x * MAX_TILE_BLOCK_ROWS * 2;
 
 	for(int by = min_by; by <= max_by; by++) {
 		uint row_ranges = 0;
@@ -159,11 +233,8 @@ void generateTriScanlines(uint local_tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, i
 
 		if(row_ranges != 0x0f0f0f0f) {
 			num_blocktris += bitCount(block_bits);
-			uint roffset = atomicAdd(s_tile_rowtri_count, 1);
-			if(roffset < MAX_TILE_BLOCK_ROWS) { // TODO: mark tile red?
-				g_scratch[soffset + roffset] = row_ranges;
-				g_scratch[soffset + roffset + MAX_TILE_BLOCK_ROWS] = local_tri_idx | uint(by << 20);
-			}
+			uint toffset = atomicAdd(s_buffer_size, 1);
+			s_buffer[toffset] = uvec2(row_ranges, local_tri_idx | uint(by << 20));
 		}
 	}
 
@@ -193,79 +264,76 @@ void generateTriMasks(uint local_tri_idx, uint row_ranges, int by, vec3 plane_no
 		float depth = (1 << 28) / (1.0 + ray_pos); // 24 bits is enough
 
 		// TODO: count this in smarter way?
-		uint block_id = by * 4 + bx;
-		atomicAdd(s_block_tri_counts[block_id], 1);
-
 		// TODO: single add per row should be enough
-		uint cur_offset = atomicAdd(s_tile_blocktri_offset, 1);
-		g_block_tris[cur_offset] = (local_tri_idx << 16) | mask;
-		g_block_keys[cur_offset] = (block_id << 28) | (uint(depth) & 0xfffffff);
+		uint block_id = by * 4 + bx;
+		uint boffset = atomicAdd(s_block_tri_counts[block_id], 1);
+		uint soffset = gl_WorkGroupID.x * MAX_BLOCK_TRIS * 16 + block_id * MAX_BLOCK_TRIS;
+		if(boffset < MAX_BLOCK_TRIS) {
+			uint value = (local_tri_idx << 16) | mask;
+			uint key = (block_id << 28) | (uint(depth) & 0xfffffff);
+			g_scratch[soffset + boffset] = uvec2(value, key);
+		}
 	}
 }
 
 void generateTileMasks() {
 	// TODO: check if using SMEM var here makes sense
-	for(uint i = LIX; i < s_tile_tri_count; i += LSIZE) {
-		uint tri_idx = g_tile_tris[s_tile_tri_offset + i];
+	for(uint i = 0; i < s_tile_tri_count; i += LSIZE) {
+		uint local_tri_idx = i + LIX;
+		if(local_tri_idx < s_tile_tri_count) {
+			uint tri_idx = g_tile_tris[s_tile_tri_offset + local_tri_idx];
 
-		bool second_tri = (tri_idx & 0x80000000) != 0;
-		tri_idx &= 0x7fffffff;
-		
-		uvec4 aabb = g_tri_aabbs[tri_idx];
-		aabb = decodeAABB(second_tri? aabb.zw : aabb.xy);
-		int min_by = clamp(int(aabb[1]) - s_tile_pos.y, 0, 15) >> 2;
-		int max_by = clamp(int(aabb[3]) - s_tile_pos.y, 0, 15) >> 2;
+			bool second_tri = (tri_idx & 0x80000000) != 0;
+			tri_idx &= 0x7fffffff;
+			
+			uvec4 aabb = g_tri_aabbs[tri_idx];
+			aabb = decodeAABB(second_tri? aabb.zw : aabb.xy);
+			int min_by = clamp(int(aabb[1]) - s_tile_pos.y, 0, 15) >> 2;
+			int max_by = clamp(int(aabb[3]) - s_tile_pos.y, 0, 15) >> 2;
 
-		uint v0 = g_quad_indices[tri_idx * 4 + 0] & 0x03ffffff;
-		uint v1 = g_quad_indices[tri_idx * 4 + (second_tri? 2 : 1)] & 0x03ffffff;
-		uint v2 = g_quad_indices[tri_idx * 4 + (second_tri? 3 : 2)] & 0x03ffffff;
+			uint v0 = g_quad_indices[tri_idx * 4 + 0] & 0x03ffffff;
+			uint v1 = g_quad_indices[tri_idx * 4 + (second_tri? 2 : 1)] & 0x03ffffff;
+			uint v2 = g_quad_indices[tri_idx * 4 + (second_tri? 3 : 2)] & 0x03ffffff;
 
-		vec3 tri0 = vec3(g_verts[v0 * 3 + 0], g_verts[v0 * 3 + 1], g_verts[v0 * 3 + 2]) - frustum.ws_shared_origin;
-		vec3 tri1 = vec3(g_verts[v1 * 3 + 0], g_verts[v1 * 3 + 1], g_verts[v1 * 3 + 2]) - frustum.ws_shared_origin;
-		vec3 tri2 = vec3(g_verts[v2 * 3 + 0], g_verts[v2 * 3 + 1], g_verts[v2 * 3 + 2]) - frustum.ws_shared_origin;
-		generateTriScanlines(i, tri0, tri1, tri2, min_by, max_by);
-	}
+			vec3 tri0 = vec3(g_verts[v0 * 3 + 0], g_verts[v0 * 3 + 1], g_verts[v0 * 3 + 2]) - frustum.ws_shared_origin;
+			vec3 tri1 = vec3(g_verts[v1 * 3 + 0], g_verts[v1 * 3 + 1], g_verts[v1 * 3 + 2]) - frustum.ws_shared_origin;
+			vec3 tri2 = vec3(g_verts[v2 * 3 + 0], g_verts[v2 * 3 + 1], g_verts[v2 * 3 + 2]) - frustum.ws_shared_origin;
+			generateTriScanlines(local_tri_idx, tri0, tri1, tri2, min_by, max_by);
+		}
+		barrier();
+		for(uint j = LIX; j < s_buffer_size; j += LSIZE) {
+			uint row_ranges = s_buffer[j].x;
+			uint local_tri_idx = s_buffer[j].y;
+			int by = int((local_tri_idx >> 20) & 0x3);
+			local_tri_idx &= 0xfffff;
 
-	groupMemoryBarrier();
-	barrier();
+			uint tri_idx = g_tile_tris[s_tile_tri_offset + local_tri_idx];
+			bool second_tri = (tri_idx & 0x80000000) != 0;
+			tri_idx &= 0x7fffffff;
+			local_tri_idx |= (second_tri? 0x8000 : 0);
 
-	if(LIX == 0) {
-		// TODO: properly allocate mem for this?
-		uint blocktri_offset = atomicAdd(g_tiles.num_block_tris, s_tile_blocktri_count);
-		s_tile_base_blocktri_offset = blocktri_offset;
-		s_tile_blocktri_offset = blocktri_offset;
-		atomicAdd(g_tiles.num_processed_block_rows, s_tile_rowtri_count);
-		atomicMax(g_tiles.max_block_rows_per_tile, s_tile_rowtri_count);
-	}
+			uint v0 = g_quad_indices[tri_idx * 4 + 0] & 0x03ffffff;
+			uint v1 = g_quad_indices[tri_idx * 4 + (second_tri? 2 : 1)] & 0x03ffffff;
+			uint v2 = g_quad_indices[tri_idx * 4 + (second_tri? 3 : 2)] & 0x03ffffff;
 
-	barrier();
+			vec3 tri0 = vec3(g_verts[v0 * 3 + 0], g_verts[v0 * 3 + 1], g_verts[v0 * 3 + 2]) - frustum.ws_shared_origin;
+			vec3 tri1 = vec3(g_verts[v1 * 3 + 0], g_verts[v1 * 3 + 1], g_verts[v1 * 3 + 2]) - frustum.ws_shared_origin;
+			vec3 tri2 = vec3(g_verts[v2 * 3 + 0], g_verts[v2 * 3 + 1], g_verts[v2 * 3 + 2]) - frustum.ws_shared_origin;
 
-	uint soffset = gl_WorkGroupID.x * MAX_TILE_BLOCK_ROWS * 2;
-	for(uint i = LIX; i < s_tile_rowtri_count; i += LSIZE) {
-		uint row_ranges = g_scratch[soffset + i];
-		uint local_tri_idx = g_scratch[soffset + i + MAX_TILE_BLOCK_ROWS];
-		int by = int((local_tri_idx >> 20) & 0x3);
-		local_tri_idx &= 0xfffff;
+			// TODO: this has to be procemputed, makes no sense to compute it multiple times for different blocks!
+			vec3 plane_normal = normalize(cross(tri0 - tri2, tri1 - tri0));
+			float plane_dist = dot(plane_normal, tri0);
+			plane_normal *= (1.0 / plane_dist);
 
-		uint tri_idx = g_tile_tris[s_tile_tri_offset + local_tri_idx];
-		bool second_tri = (tri_idx & 0x80000000) != 0;
-		tri_idx &= 0x7fffffff;
-		local_tri_idx |= (second_tri? 0x8000 : 0);
+			generateTriMasks(local_tri_idx, row_ranges, by, plane_normal);
+		}
 
-		uint v0 = g_quad_indices[tri_idx * 4 + 0] & 0x03ffffff;
-		uint v1 = g_quad_indices[tri_idx * 4 + (second_tri? 2 : 1)] & 0x03ffffff;
-		uint v2 = g_quad_indices[tri_idx * 4 + (second_tri? 3 : 2)] & 0x03ffffff;
-
-		vec3 tri0 = vec3(g_verts[v0 * 3 + 0], g_verts[v0 * 3 + 1], g_verts[v0 * 3 + 2]) - frustum.ws_shared_origin;
-		vec3 tri1 = vec3(g_verts[v1 * 3 + 0], g_verts[v1 * 3 + 1], g_verts[v1 * 3 + 2]) - frustum.ws_shared_origin;
-		vec3 tri2 = vec3(g_verts[v2 * 3 + 0], g_verts[v2 * 3 + 1], g_verts[v2 * 3 + 2]) - frustum.ws_shared_origin;
-
-		// TODO: this has to be procemputed, makes no sense to compute it multiple times for different blocks!
-		vec3 plane_normal = normalize(cross(tri0 - tri2, tri1 - tri0));
-		float plane_dist = dot(plane_normal, tri0);
-		plane_normal *= (1.0 / plane_dist);
-
-		generateTriMasks(local_tri_idx, row_ranges, by, plane_normal);
+		barrier();
+		if(LIX == 0) {
+			atomicAdd(s_tile_rowtri_count, s_buffer_size);
+			s_buffer_size = 0;
+		}
+		barrier();
 	}
 }
 
@@ -288,7 +356,6 @@ void generateBinMasks(int bin_id) {
 				s_tile_tri_offset = s_tile_tri_offsets[tile_id];
 				s_tile_pos = s_bin_pos + ivec2(tile_id & 3, tile_id >> 2) * TILE_SIZE;
 				s_tile_blocktri_count = 0;
-				s_tile_rowtri_count = 0;
 			}
 			s_block_tri_counts[LIX] = 0;
 		}
@@ -298,13 +365,18 @@ void generateBinMasks(int bin_id) {
 
 		barrier();
 		if(LIX < 16) {
-			// TODO: make sure it works when warp size < 16
-			s_block_tri_offsets[LIX] = LIX == 0? 0 : s_block_tri_counts[LIX - 1];
 			if(LIX == 0) {
-				// TODO: write to smem first?
-				g_tiles.tile_block_tri_counts[bin_id][tile_id] = s_tile_blocktri_count;
-				g_tiles.tile_block_tri_offsets[bin_id][tile_id] = s_tile_base_blocktri_offset;
+				// TODO: properly allocate mem for this?
+				uint blocktri_count = s_tile_blocktri_count;
+				uint blocktri_offset = atomicAdd(g_tiles.num_block_tris, blocktri_count);
+				s_tile_blocktri_offset = blocktri_offset;
+				// TODO: write to smem first? then use all threads to write all in one go
+				g_tiles.tile_block_tri_counts[bin_id][tile_id] = blocktri_count;
+				g_tiles.tile_block_tri_offsets[bin_id][tile_id] = blocktri_offset;
 			}
+			// TODO: make sure it works when warp size < 16
+			s_block_tri_counts[LIX] = min(s_block_tri_counts[LIX], MAX_BLOCK_TRIS);
+			s_block_tri_offsets[LIX] = LIX == 0? 0 : s_block_tri_counts[LIX - 1];
 		}
 
 		barrier(); // TODO: why is this barrier needed?
@@ -317,19 +389,55 @@ void generateBinMasks(int bin_id) {
 			if(LIX >= 8) s_block_tri_offsets[LIX] += s_block_tri_offsets[LIX - 8];
 		}
 
+		groupMemoryBarrier();
 		barrier();
+
+		if(s_tile_blocktri_count < MAX_BLOCK_TRIS) {
+			uint soffset = gl_WorkGroupID.x * MAX_BLOCK_TRIS * 16;
+			uint b = LIX >> (LSHIFT - 4);
+			uint boffset = soffset + b * MAX_BLOCK_TRIS;
+			uint bcount = s_block_tri_counts[b];
+			for(uint block_idx = LIX & (LSIZE / 16 - 1); block_idx < bcount; block_idx += LSIZE / 16) {
+				uvec2 value_key = g_scratch[boffset + block_idx];
+				s_buffer[s_block_tri_offsets[b] + block_idx] = uvec2(value_key.y, value_key.x);
+			}
+			barrier();
+			sortBuffer(s_tile_blocktri_count);
+			barrier();
+			uint roffset = s_tile_blocktri_offset + s_block_tri_offsets[b];
+			for(uint block_idx = LIX & (LSIZE / 16 - 1); block_idx < bcount; block_idx += LSIZE / 16)
+				g_block_tris[roffset + block_idx] = s_buffer[s_block_tri_offsets[b] + block_idx].y;
+		}
+		else {
+			uint soffset = gl_WorkGroupID.x * MAX_BLOCK_TRIS * 16;
+			for(int b = 0; b < BLOCKS_PER_TILE; b++) {
+				uint boffset = soffset + b * MAX_BLOCK_TRIS;
+				uint roffset = s_tile_blocktri_offset + s_block_tri_offsets[b];
+				uint bcount = s_block_tri_counts[b];
+
+				for(uint block_idx = LIX; block_idx < bcount; block_idx += LSIZE) {
+					uvec2 value_key = g_scratch[boffset + block_idx];
+					s_buffer[block_idx] = uvec2(value_key.y, value_key.x);
+				}
+				barrier();
+				sortBuffer(bcount);
+				barrier();
+				for(uint block_idx = LIX; block_idx < bcount; block_idx += LSIZE)
+					g_block_tris[roffset + block_idx] = s_buffer[block_idx].y;
+			}
+		}
+
 		if(LIX < 16) {
 			// Sanity checks
 			if(LIX >= 1 && s_block_tri_offsets[LIX - 1] > s_block_tri_offsets[LIX])
 				RECORD(s_block_tri_offsets[LIX - 1], s_block_tri_offsets[LIX], s_block_tri_counts[LIX - 1], s_block_tri_counts[LIX]);
 			if(LIX == 0 && s_block_tri_offsets[15] + s_block_tri_counts[15] != s_tile_blocktri_count)
 				RECORD(s_block_tri_offsets[15], s_block_tri_counts[15], s_tile_blocktri_count, 0);
-			if(LIX == 0 && s_tile_blocktri_offset - s_tile_base_blocktri_offset != s_tile_blocktri_count)
-				RECORD(s_tile_blocktri_count, s_tile_base_blocktri_offset, s_tile_blocktri_offset, 0);
 
 			uint block_id = (bin_id * TILES_PER_BIN + tile_id) * BLOCKS_PER_TILE + LIX;
+			// TODO: more efficient update? for whole tile?
 			g_block_counts[block_id] = s_block_tri_counts[LIX];
-			g_block_offsets[block_id] = s_block_tri_offsets[LIX] + s_tile_base_blocktri_offset;
+			g_block_offsets[block_id] = s_block_tri_offsets[LIX] + s_tile_blocktri_offset;
 			atomicMax(g_tiles.max_tris_per_block, s_block_tri_counts[LIX]);
 		}
 	}
@@ -347,8 +455,11 @@ int loadNextBin() {
 }
 
 void main() {
-	if(LIX == 0)
+	if(LIX == 0) {
 		s_empty_tri_count = 0;
+		s_tile_rowtri_count = 0;
+		s_buffer_size = 0;
+	}
 	// TODO: remove this variable
 	int bin_id = loadNextBin();
 	while(bin_id < BIN_COUNT) {
@@ -356,6 +467,9 @@ void main() {
 		generateBinMasks(bin_id);
 		bin_id = loadNextBin();
 	}
-	if(LIX == 0)
+	if(LIX == 0) {
 		atomicAdd(g_tiles.num_tile_tris_with_no_blocks, s_empty_tri_count);
+		atomicAdd(g_tiles.num_processed_block_rows, s_tile_rowtri_count);
+		atomicMax(g_tiles.max_block_rows_per_tile, s_tile_rowtri_count);
+	}
 }

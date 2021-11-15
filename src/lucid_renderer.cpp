@@ -180,8 +180,8 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	final_raster_program = EX_PASS(Program::makeCompute("final_raster", defs));
 	mask_raster_program = EX_PASS(Program::makeCompute(
 		"mask_raster", defs, mask(m_opts & Opt::debug_masks, ProgramOpt::debug)));
-	sort_program = EX_PASS(Program::makeCompute(
-		"mask_sort", defs, mask(m_opts & Opt::debug_masks, ProgramOpt::debug)));
+	//	sort_program = EX_PASS(Program::makeCompute(
+	//		"mask_sort", defs, mask(m_opts & Opt::debug_masks, ProgramOpt::debug)));
 	dummy_program = EX_PASS(Program::makeCompute("dummy", defs));
 
 	compose_program = EX_PASS(Program::make("compose", "", {"in_pos"}));
@@ -218,9 +218,9 @@ void LucidRenderer::render(const Context &ctx) {
 	rasterizeMasks(ctx);
 	if(m_opts & Opt::debug_masks)
 		debugMasks(false);
-	sortMasks(ctx);
-	if(m_opts & Opt::debug_masks)
-		debugMasks(true);
+	//	sortMasks(ctx);
+	//	if(m_opts & Opt::debug_masks)
+	//		debugMasks(true);
 
 	rasterizeFinal(ctx);
 	copyCounters();
@@ -894,7 +894,7 @@ RasterBlockInfo LucidRenderer::introspectBlock4x4(const RasterTileInfo &tile,
 	if(!masks)
 		return out;
 
-	print("Triangle masks for given block (%):", masks.size());
+	print("Triangle masks: %", masks.size());
 	/*for(int i : intRange(masks)) {
 		printf("%4d: %c %f - %f", i, mask_overlaps[i] ? 'X' : ' ', mask_depths[i].first,
 			   mask_depths[i].second);
@@ -975,7 +975,8 @@ RasterBlockInfo LucidRenderer::introspectBlock4x4(const RasterTileInfo &tile,
 				mmask.indices[i] = index;
 	}
 
-	print("\nMerged masks: (%)\n", mmasks.size());
+	printf("\nMerged masks: %d (%.2f %%)\n", mmasks.size(),
+		   double(mmasks.size()) / masks.size() * 100.0);
 	max_row_size = 6;
 	for(int i = 0; i < mmasks.size(); i += max_row_size) {
 		printf("\n");
@@ -1174,7 +1175,7 @@ RasterBlockInfo LucidRenderer::introspectBlock8x8(const RasterTileInfo &tile,
 				mmask.indices[i] = index;
 	}
 
-	print("Triangle masks for given 8x8 block:\n");
+	print("Triangle masks: %\n", masks8x8.size());
 	int max_row_size = 8;
 	for(int i = 0; i < masks8x8.size(); i += max_row_size) {
 		int row_size = min(masks8x8.size() - i, max_row_size);
@@ -1196,7 +1197,8 @@ RasterBlockInfo LucidRenderer::introspectBlock8x8(const RasterTileInfo &tile,
 		}
 	}
 
-	print("\nMerged masks:\n");
+	printf("\nMerged masks: %d (%.2f %%)\n", mmasks.size(),
+		   double(mmasks.size()) / masks8x8.size() * 100.0);
 	max_row_size = 4;
 	for(int i = 0; i < mmasks.size(); i += max_row_size) {
 		printf("\n");

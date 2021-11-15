@@ -20,6 +20,8 @@ struct RasterTileInfo {
 	vector<u32> tri_indices;
 	vector<u32> tri_instances;
 
+	vector<vector<bool>> triNeighbourMap(int max_dist) const;
+
 	int2 bin_pos, tile_pos;
 	int bin_id, tile_id;
 };

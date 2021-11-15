@@ -431,6 +431,12 @@ bool LucidApp::handleInput(vector<InputEvent> events, float time_diff) {
 		if(event.isMouseOverEvent())
 			m_mouse_pos = (float2)event.mousePos();
 
+		if(event.mouseButtonDown(InputButton::right) && m_is_picking_block) {
+			m_is_picking_block = false;
+			m_selected_block = none;
+			m_block_info = none;
+		}
+
 		if(event.mouseButtonDown(InputButton::left) && m_setup_idx != -1) {
 			if(m_is_picking_block) {
 				m_is_final_pick = true;

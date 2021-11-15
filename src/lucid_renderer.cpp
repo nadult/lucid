@@ -736,6 +736,42 @@ void LucidRenderer::analyzeMaskRasterizer() const {
 	print("\n");
 }
 
+vector<vector<bool>> RasterTileInfo::triNeighbourMap(int max_dist) const {
+	DASSERT(max_dist >= 1);
+	vector<vector<int>> neighbours(tri_verts.size());
+	for(int i : intRange(tri_verts)) {
+		for(int j : intRange(tri_verts)) {
+			int num_shared = 0;
+			for(auto v : tri_verts[i])
+				if(isOneOf(v, tri_verts[j]))
+					num_shared++;
+			if(num_shared == 2)
+				neighbours[i].emplace_back(j);
+		}
+	}
+
+	max_dist--;
+	for(int r = 0; r < max_dist; r++) {
+		vector<vector<int>> temp = neighbours;
+		for(int i : intRange(tri_verts))
+			for(auto n1 : neighbours[i])
+				for(auto n2 : neighbours[i])
+					if(n1 != n2 && !isOneOf(n2, temp[n1])) {
+						temp[n1].emplace_back(n2);
+						temp[n2].emplace_back(n1);
+					}
+		neighbours = temp;
+	}
+
+	vector<vector<bool>> neighbour_map(neighbours.size());
+	for(auto i : intRange(neighbours)) {
+		neighbour_map[i].resize(neighbours.size(), false);
+		for(auto n : neighbours[i])
+			neighbour_map[i][n] = true;
+	}
+	return neighbour_map;
+}
+
 RasterTileInfo LucidRenderer::introspectTile(CSpan<float3> verts, int2 full_tile_pos) const {
 	RasterTileInfo out;
 
@@ -801,7 +837,7 @@ RasterBlockInfo LucidRenderer::introspectBlock4x4(const RasterTileInfo &tile,
 	int block_id = tile_id * blocks_per_tile + block_pos.x + block_pos.y * (tile_size / block_size);
 	int bin_count = m_bin_counts.x * m_bin_counts.y;
 
-	vector<u32> block_tri_masks;
+	vector<u32> masks;
 
 	out.num_tile_tris = tile.tris.size();
 	out.num_block_tris = m_block_counts->map<u32>(AccessMode::read_only)[block_id];
@@ -809,14 +845,14 @@ RasterBlockInfo LucidRenderer::introspectBlock4x4(const RasterTileInfo &tile,
 	int block_tri_offset = m_block_offsets->map<u32>(AccessMode::read_only)[block_id];
 	m_block_offsets->unmap();
 	if(out.num_block_tris)
-		block_tri_masks = m_block_tris->download<u32>(out.num_block_tris, block_tri_offset);
+		masks = m_block_tris->download<u32>(out.num_block_tris, block_tri_offset);
 	vector<Pair<float>> mask_depths;
 
 	// Note: it makes no sense without merging non-overlapping masks into layers
 
-	for(int i : intRange(block_tri_masks)) {
-		u32 mask = block_tri_masks[i] & 0xffff;
-		u32 local_idx = (block_tri_masks[i] >> 16) & 0x7fff;
+	for(int i : intRange(masks)) {
+		u32 mask = masks[i] & 0xffff;
+		u32 local_idx = (masks[i] >> 16) & 0x7fff;
 		auto &tri = tile.tris[local_idx];
 		float depth_min = inf, depth_max = -inf;
 		Plane3F plane(tri);
@@ -849,44 +885,121 @@ RasterBlockInfo LucidRenderer::introspectBlock4x4(const RasterTileInfo &tile,
 				mask_overlaps[i] = mask_overlaps[j] = true;
 	}
 
-	if(block_tri_masks) {
-		print("Triangle masks for given block:\n");
-		for(int i : intRange(block_tri_masks)) {
-			printf("%4d: %c %f - %f", i, mask_overlaps[i] ? 'X' : ' ', mask_depths[i].first,
-				   mask_depths[i].second);
-			uint local_idx = (block_tri_masks[i] >> 16) & 0x7fff;
-			print("%\n", tile.tris[local_idx]);
-		}
-		int max_row_size = 16;
-		for(int i = 0; i < block_tri_masks.size(); i += max_row_size) {
-			printf("\n");
-			int row_size = min(block_tri_masks.size() - i, max_row_size);
-			for(int j = 0; j < row_size; j++) {
-				uint local_idx = (block_tri_masks[i + j] >> 16) & 0x7fff;
-				uint tri_idx = tile.tri_indices[local_idx];
-				printf(" %4d  ", i + j);
-				//printf("%c%6d ", tri_idx & 0x80000000 ? '*' : ' ', tri_idx & 0xffffff);
-			}
-			printf("\n");
-			for(int iy = 0; iy < 4; iy++) {
-				for(int j = 0; j < row_size; j++) {
-					u32 mask = block_tri_masks[i + j];
-					int y = 3 - iy;
-					printf(" ");
-					for(int x = 0; x < 4; x++)
-						printf("%c", mask & (1 << (x + y * 4)) ? 'X' : '.');
-					printf(j + 1 == row_size ? "\n" : "  ");
-				}
-			}
-		}
-		print("\n");
-	}
-
 	out.selected_tile_tris.resize(tile.tris.size());
-	for(int i : intRange(block_tri_masks)) {
-		u32 local_idx = (block_tri_masks[i] >> 16) & 0x7fff;
+	for(int i : intRange(masks)) {
+		u32 local_idx = (masks[i] >> 16) & 0x7fff;
 		out.selected_tile_tris[local_idx] = true;
 	}
+
+	if(!masks)
+		return out;
+
+	print("Triangle masks for given block (%):", masks.size());
+	/*for(int i : intRange(masks)) {
+		printf("%4d: %c %f - %f", i, mask_overlaps[i] ? 'X' : ' ', mask_depths[i].first,
+			   mask_depths[i].second);
+		uint local_idx = (masks[i] >> 16) & 0x7fff;
+		print("%\n", tile.tris[local_idx]);
+	}*/
+	int max_row_size = 16;
+	for(int i = 0; i < masks.size(); i += max_row_size) {
+		printf("\n");
+		int row_size = min(masks.size() - i, max_row_size);
+		for(int j = 0; j < row_size; j++) {
+			uint local_idx = (masks[i + j] >> 16) & 0x7fff;
+			uint tri_idx = tile.tri_indices[local_idx];
+			printf(" %4d  ", i + j);
+			//printf("%c%6d ", tri_idx & 0x80000000 ? '*' : ' ', tri_idx & 0xffffff);
+		}
+		printf("\n");
+		for(int iy = 0; iy < 4; iy++) {
+			for(int j = 0; j < row_size; j++) {
+				u32 mask = masks[i + j];
+				int y = 3 - iy;
+				printf(" ");
+				for(int x = 0; x < 4; x++)
+					printf("%c", mask & (1 << (x + y * 4)) ? 'X' : '.');
+				printf(j + 1 == row_size ? "\n" : "  ");
+			}
+		}
+	}
+	print("\n");
+
+	struct MergedMask4x4 {
+		vector<u16> tri_ids;
+		array<u8, 16> indices;
+		u16 bits = 0;
+	};
+
+	auto neighbour_map = tile.triNeighbourMap(5);
+	auto are_compatible_tris = [&](int id0, int id1) -> bool {
+		id0 &= 0x7fff, id1 &= 0x7fff;
+		return neighbour_map[id0][id1];
+	};
+
+	// We have to make sure that depth ranges don't get too mixed up...
+	vector<MergedMask4x4> mmasks;
+	constexpr int max_merged_tris = 15;
+	for(auto &mask : masks) {
+		int mmask_idx = -1;
+		u16 bits = u16(mask & 0xffff);
+		u16 tri_id = u16(mask >> 16);
+
+		for(int i = max(0, mmasks.size() - 1); i < mmasks.size(); i++)
+			if((mmasks[i].bits & bits) == 0 && mmasks[i].tri_ids.size() < max_merged_tris) {
+				bool compatible = true;
+				for(auto tid : mmasks[i].tri_ids)
+					if(!are_compatible_tris(tri_id, tid)) {
+						compatible = false;
+						break;
+					}
+				if(compatible) {
+					mmask_idx = i;
+					break;
+				}
+			}
+		if(mmask_idx == -1) {
+			MergedMask4x4 new_mask;
+			new_mask.bits = 0;
+			fill(new_mask.indices, 255);
+			mmask_idx = mmasks.size();
+			mmasks.emplace_back(new_mask);
+		}
+
+		auto &mmask = mmasks[mmask_idx];
+		mmask.bits |= bits;
+		uint index = mmask.tri_ids.size();
+		mmask.tri_ids.emplace_back(tri_id);
+		for(int i : intRange(64))
+			if(bits & (1ull << i))
+				mmask.indices[i] = index;
+	}
+
+	print("\nMerged masks: (%)\n", mmasks.size());
+	max_row_size = 6;
+	for(int i = 0; i < mmasks.size(); i += max_row_size) {
+		printf("\n");
+		int row_size = min(mmasks.size() - i, max_row_size);
+		for(int j = 0; j < row_size; j++)
+			printf("  %4d (%d)   ", i + j, (int)mmasks[i + j].tri_ids.size());
+		printf("\n");
+		for(int iy = 0; iy < 4; iy++) {
+			for(int j = 0; j < row_size; j++) {
+				auto &mmask = mmasks[i + j];
+				int y = 3 - iy;
+				printf(" ");
+				for(int x = 0; x < 4; x++) {
+					int index = x + y * 4;
+					if(mmask.indices[index] != 255)
+						printf("%2d ", mmask.indices[index]);
+					else
+						printf(" . ");
+				}
+				printf(j + 1 == row_size ? "\n" : "  ");
+			}
+		}
+	}
+	print("\n");
 
 	return out;
 }
@@ -935,37 +1048,6 @@ RasterBlockInfo LucidRenderer::introspectBlock8x8(const RasterTileInfo &tile,
 						block_tri_offsets[i], block_tri_offsets[i] + block_tri_counts[i]);
 			m_block_tris->unmap();
 		}
-	}
-
-	vector<vector<int>> neighbours(tile.tri_verts.size());
-	for(int i : intRange(tile.tri_verts)) {
-		for(int j : intRange(tile.tri_verts)) {
-			int num_shared = 0;
-			for(auto v : tile.tri_verts[i])
-				if(isOneOf(v, tile.tri_verts[j]))
-					num_shared++;
-			if(num_shared == 2)
-				neighbours[i].emplace_back(j);
-		}
-	}
-
-	for(int r = 0; r < 4; r++) {
-		vector<vector<int>> temp = neighbours;
-		for(int i : intRange(tile.tri_verts))
-			for(auto n1 : neighbours[i])
-				for(auto n2 : neighbours[i])
-					if(n1 != n2 && !isOneOf(n2, temp[n1])) {
-						temp[n1].emplace_back(n2);
-						temp[n2].emplace_back(n1);
-					}
-		neighbours = temp;
-	}
-
-	vector<vector<bool>> neighbour_map(neighbours.size());
-	for(auto i : intRange(neighbours)) {
-		neighbour_map[i].resize(neighbours.size(), false);
-		for(auto n : neighbours[i])
-			neighbour_map[i][n] = true;
 	}
 
 	struct Mask8x8 {
@@ -1048,25 +1130,17 @@ RasterBlockInfo LucidRenderer::introspectBlock8x8(const RasterTileInfo &tile,
 		u64 bits;
 	};
 
-	// TODO: what about continous surfaces which are missing some tris in between
-	// (because they are in between samples for example?)
-	// They should be merged too. We should merge as much as possible!
-
-	float max_dist = 0.5f;
+	auto neighbour_map = tile.triNeighbourMap(5);
 	auto are_compatible_tris = [&](int id0, int id1) -> bool {
 		id0 &= 0x7fff, id1 &= 0x7fff;
 		return neighbour_map[id0][id1];
 	};
 
-	vector<MergedMask8x8> mmasks;
-	vector<u32> instances;
-
-	constexpr int max_merged_tris = 15;
-
 	// We have to make sure that depth ranges don't get too mixed up...
+	vector<MergedMask8x8> mmasks;
+	constexpr int max_merged_tris = 15;
 	for(auto &mask : masks8x8) {
 		int mmask_idx = -1;
-		instances.emplace_back(tile.tri_instances[mask.tri_id & 0x7fff]);
 
 		for(int i = max(0, mmasks.size() - 1); i < mmasks.size(); i++)
 			if((mmasks[i].bits & mask.bits) == 0 && mmasks[i].tri_ids.size() < max_merged_tris) {
@@ -1099,7 +1173,6 @@ RasterBlockInfo LucidRenderer::introspectBlock8x8(const RasterTileInfo &tile,
 			if(mask.bits & (1ull << i))
 				mmask.indices[i] = index;
 	}
-	makeSortedUnique(instances);
 
 	print("Triangle masks for given 8x8 block:\n");
 	int max_row_size = 8;

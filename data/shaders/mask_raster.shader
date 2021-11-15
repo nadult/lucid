@@ -109,7 +109,7 @@ void sortBuffer(uint N)
 	for(uint i = LIX; i < TN; i += LSIZE) {
 		uvec2 value = s_buffer[i];
 		// TODO: where does the glitches come from?
-		// repro: only do first step on powerplant or sanmiguel
+		// repro: only do first step on powerplant or sanmiguel, sponza & dragon too
 		value = swap(value, 0x01, bfe(LIX, 1) ^ bfe(LIX, 0)); // K = 2
 		value = swap(value, 0x02, bfe(LIX, 2) ^ bfe(LIX, 1)); // K = 4
 		value = swap(value, 0x01, bfe(LIX, 2) ^ bfe(LIX, 0));
@@ -134,22 +134,20 @@ void sortBuffer(uint N)
 #endif
 
 	// na _ to zajmuje _ czasu mask_raster:
-	// powerplant 51% ( 9.38 z 18.46) -> 14.84 -> 12.51
-	// hairball   64% (17.23 z 26.84) -> 21.01 -> 16.97
-	// miguel     62% ( 6.44 z 10.37) ->  7.94 -> 6.41
-	// sponza     64% ( 3.37 z  5.27) ->  3.84 -> 3.10
-	// dragon     57% ( 0.97 z  1.68) ->  1.15 -> 0.97
+	// powerplant 51% ( 9.38 z 18.46) -> 14.84 -> 12.51 -> 12.17
+	// hairball   64% (17.23 z 26.84) -> 21.01 -> 16.97 -> 15.90
+	// miguel     62% ( 6.44 z 10.37) ->  7.94 ->  6.41 -> 6.22
+	// sponza     64% ( 3.37 z  5.27) ->  3.84 ->  3.10 -> 3.03
+	// dragon     57% ( 0.97 z  1.68) ->  1.15 ->  0.97 -> 0.96
 	for(uint k = start_k; k <= TN; k = 2 * k) {
 		for(uint j = k >> 1; j >= end_j; j = j >> 1) {
-			for(uint i = LIX; i < TN; i += LSIZE) {
-				uint ixj = i ^ j;
-				if(ixj > i) {
-					uvec2 lvalue = s_buffer[i  ];
-					uvec2 rvalue = s_buffer[ixj];
-					if( ((i & k) != 0) == (lvalue.x < rvalue.x) ) {
-						s_buffer[i  ] = rvalue;
-						s_buffer[ixj] = lvalue;
-					}
+			for(uint i = LIX; i < TN; i += LSIZE * 2) {
+				uint idx = (i & j) != 0? i + LSIZE - j : i;
+				uvec2 lvalue = s_buffer[idx];
+				uvec2 rvalue = s_buffer[idx + j];
+				if( ((idx & k) != 0) == (lvalue.x < rvalue.x) ) {
+					s_buffer[idx] = rvalue;
+					s_buffer[idx + j] = lvalue;
 				}
 			}
 			barrier();

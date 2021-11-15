@@ -565,7 +565,7 @@ void LucidRenderer::debugMasks(bool sort_phase) {
 struct LucidRenderer::BinBlockStats {
 	double avg_max_pixel_depth = 0, avg_min_pixel_depth = 0, avg_tris_per_block = 0;
 	int max_pixel_depth = 0, max_tris_per_block = 0, max_blocktris_per_tile = 0;
-	int num_nonempty_blocks = 0, num_pixels = 0, unique_tris_sum = 0;
+	int num_nonempty_blocks = 0, num_fragments = 0, unique_tris_sum = 0;
 	int num_blocktris = 0;
 
 	bool empty() const { return num_blocktris == 0; }
@@ -591,7 +591,7 @@ struct LucidRenderer::BinBlockStats {
 			ACCUM_MAX(max_tris_per_block);
 			ACCUM_MAX(max_blocktris_per_tile);
 			ACCUM(num_nonempty_blocks);
-			ACCUM(num_pixels);
+			ACCUM(num_fragments);
 			ACCUM(unique_tris_sum);
 			ACCUM(num_blocktris);
 #undef ACCUM_MAX
@@ -644,7 +644,7 @@ auto LucidRenderer::computeBlockStats(int bin_id, CSpan<u32> block_instances,
 			for(auto val : pixel_stacks) {
 				max_depth = max(max_depth, val);
 				min_depth = min(min_depth, val);
-				stats.num_pixels += val;
+				stats.num_fragments += val;
 			}
 			stats.avg_max_pixel_depth += max_depth;
 			stats.avg_min_pixel_depth += min_depth;
@@ -706,15 +706,15 @@ void LucidRenderer::analyzeMaskRasterizer() const {
 		print("Invalid number of summed block tris: %\n", stats.num_blocktris);
 	print("Block-tris / unique tris per tile ratio: %\n",
 		  double(num_block_tris) / stats.unique_tris_sum);
-	print("Total pixels rasterized: %\n", stats.num_pixels);
+	print("Total fragments rasterized: %\n", stats.num_fragments);
 	print("\nStats for non-empty blocks:\n");
 	printf("    Max pixel depth: %d\n", stats.max_pixel_depth);
 	printf("Avg min pixel depth: %.2f\n", stats.avg_min_pixel_depth);
 	printf("Avg max pixel depth: %.2f\n\n", stats.avg_max_pixel_depth);
-	printf("      Max tris per block: %8d\n", stats.max_tris_per_block);
-	printf(" Max block-tris per tile: %8d\n", stats.max_blocktris_per_tile);
-	printf("      Avg tris per block: %8.2f\n", stats.avg_tris_per_block);
-	printf("Avg pixels per tri-block: %8.2f\n", double(stats.num_pixels) / num_block_tris);
+	printf("         Max tris per block: %8d\n", stats.max_tris_per_block);
+	printf("    Max block-tris per tile: %8d\n", stats.max_blocktris_per_tile);
+	printf("         Avg tris per block: %8.2f\n", stats.avg_tris_per_block);
+	printf("Avg fragments per tri-block: %8.2f\n", double(stats.num_fragments) / num_block_tris);
 	print("\nBlock-tris per bin:\n");
 
 	int max_width = 40, max_height = 60;
@@ -938,6 +938,37 @@ RasterBlockInfo LucidRenderer::introspectBlock8x8(CSpan<float3> verts,
 	out.tile_tris = tile_tris;
 	m_quad_indices->unmap();
 
+	vector<vector<int>> neighbours(tile_tri_verts.size());
+	for(int i : intRange(tile_tri_verts)) {
+		for(int j : intRange(tile_tri_verts)) {
+			int num_shared = 0;
+			for(auto v : tile_tri_verts[i])
+				if(isOneOf(v, tile_tri_verts[j]))
+					num_shared++;
+			if(num_shared == 2)
+				neighbours[i].emplace_back(j);
+		}
+	}
+
+	for(int r = 0; r < 4; r++) {
+		vector<vector<int>> temp = neighbours;
+		for(int i : intRange(tile_tri_verts))
+			for(auto n1 : neighbours[i])
+				for(auto n2 : neighbours[i])
+					if(n1 != n2 && !isOneOf(n2, temp[n1])) {
+						temp[n1].emplace_back(n2);
+						temp[n2].emplace_back(n1);
+					}
+		neighbours = temp;
+	}
+
+	vector<vector<bool>> neighbour_map(neighbours.size());
+	for(auto i : intRange(neighbours)) {
+		neighbour_map[i].resize(neighbours.size(), false);
+		for(auto n : neighbours[i])
+			neighbour_map[i][n] = true;
+	}
+
 	struct Mask8x8 {
 		u64 bits;
 		int tri_id;
@@ -945,6 +976,9 @@ RasterBlockInfo LucidRenderer::introspectBlock8x8(CSpan<float3> verts,
 	};
 
 	vector<Mask8x8> masks8x8;
+	array<int, 64> layer_depth = {
+		0,
+	};
 	{
 		vector<int> tri_ids;
 		for(auto &masks : block_tri_masks)
@@ -971,6 +1005,9 @@ RasterBlockInfo LucidRenderer::introspectBlock8x8(CSpan<float3> verts,
 						mask8x8 |= u64(row_bits) << (bx * 4 + y * 8 + by * 32);
 					}
 			}
+			for(int i : intRange(64))
+				if(mask8x8 & (1ull << i))
+					layer_depth[i]++;
 			masks8x8.emplace_back(mask8x8, tri_id);
 		}
 	}
@@ -1018,8 +1055,9 @@ RasterBlockInfo LucidRenderer::introspectBlock8x8(CSpan<float3> verts,
 
 	float max_dist = 0.5f;
 	auto are_compatible_tris = [&](int id0, int id1) -> bool {
-		return true;
 		id0 &= 0x7fff, id1 &= 0x7fff;
+		return neighbour_map[id0][id1];
+
 		//if(tile_tri_instances[id0] != tile_tri_instances[id1])
 		//	return false;
 		auto aabb0 = enclose(tile_tris[id0]);
@@ -1037,7 +1075,7 @@ RasterBlockInfo LucidRenderer::introspectBlock8x8(CSpan<float3> verts,
 		int mmask_idx = -1;
 		instances.emplace_back(tile_tri_instances[mask.tri_id & 0x7fff]);
 
-		for(int i : intRange(mmasks))
+		for(int i = max(0, mmasks.size() - 1); i < mmasks.size(); i++)
 			if((mmasks[i].bits & mask.bits) == 0 && mmasks[i].tri_ids.size() < max_merged_tris) {
 				bool compatible = true;
 				for(auto tid : mmasks[i].tri_ids)
@@ -1092,9 +1130,8 @@ RasterBlockInfo LucidRenderer::introspectBlock8x8(CSpan<float3> verts,
 			}
 		}
 	}
-	print("\n");
 
-	print("Merged masks:\n");
+	print("\nMerged masks:\n");
 	max_row_size = 4;
 	for(int i = 0; i < mmasks.size(); i += max_row_size) {
 		printf("\n");
@@ -1121,6 +1158,14 @@ RasterBlockInfo LucidRenderer::introspectBlock8x8(CSpan<float3> verts,
 				printf(j + 1 == row_size ? "\n" : "  ");
 			}
 		}
+	}
+
+	print("\nLayer depths: (min/max: %)\n", minMax(layer_depth));
+	for(int y = 0; y < 8; y++) {
+		for(int x = 0; x < 8; x++) {
+			printf("%3d ", layer_depth[x + y * 8]);
+		}
+		printf("\n");
 	}
 
 	out.block_tris_map.resize(out.tile_tris.size());
@@ -1312,6 +1357,7 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 									num_rejected[2], num_rejected[3]);
 
 	vector<StatsRow> basic_rows = {
+		{"resolution", format("% x %", m_size.x, m_size.y)},
 		{"input quads", toString(num_input_quads)},
 		{"rejected quads", rejected_info, rejection_details},
 		{"bin-quads", toString(num_bin_quads), "Per-bin quads"},
@@ -1332,6 +1378,12 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 		 stdFormat("%.2f", double(num_block_rows) / num_nonempty_tiles)},
 		{"block-tris / non-empty tile",
 		 stdFormat("%.2f", double(num_block_tris) / num_nonempty_tiles)},
+		{"block-tris / block*",
+		 stdFormat("%.2f", double(num_block_tris) / (num_nonempty_tiles * blocks_per_tile)),
+		 "Counting all blocks in non-empty tiles"},
+		{"block-tris / pixel*",
+		 stdFormat("%.2f", double(num_block_tris) / (num_nonempty_tiles * square(tile_size))),
+		 "Counting all pixels in non-empty tiles"},
 	};
 
 	vector<StatsRow> max_rows = {

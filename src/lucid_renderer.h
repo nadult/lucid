@@ -9,11 +9,19 @@ DEFINE_ENUM(LucidRenderOpt, check_bins, check_tiles, debug_masks);
 using LucidRenderOpts = EnumFlags<LucidRenderOpt>;
 
 struct RasterBlockInfo {
-	vector<Triangle3F> tile_tris;
-	vector<bool> block_tris_map;
-
+	vector<bool> selected_tile_tris;
 	int2 bin_pos, tile_pos, block_pos;
 	int num_block_tris = 0, num_tile_tris = 0;
+};
+
+struct RasterTileInfo {
+	vector<Triangle3F> tris;
+	vector<array<u32, 3>> tri_verts;
+	vector<u32> tri_indices;
+	vector<u32> tri_instances;
+
+	int2 bin_pos, tile_pos;
+	int bin_id, tile_id;
 };
 
 class LucidRenderer {
@@ -55,8 +63,9 @@ class LucidRenderer {
 	Image masksSnapshot();
 
 	void analyzeMaskRasterizer() const;
-	RasterBlockInfo introspectBlock(CSpan<float3> verts, int2) const;
-	RasterBlockInfo introspectBlock8x8(CSpan<float3> verts, int2) const;
+	RasterTileInfo introspectTile(CSpan<float3> verts, int2 full_tile_pos) const;
+	RasterBlockInfo introspectBlock4x4(const RasterTileInfo &, int2 full_block_pos) const;
+	RasterBlockInfo introspectBlock8x8(const RasterTileInfo &, int2 full_block_pos) const;
 	vector<StatsGroup> getStats() const;
 
   private:

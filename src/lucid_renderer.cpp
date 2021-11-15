@@ -736,8 +736,56 @@ void LucidRenderer::analyzeMaskRasterizer() const {
 	print("\n");
 }
 
-// TODO: cleanup introspection code
-RasterBlockInfo LucidRenderer::introspectBlock(CSpan<float3> verts, int2 full_block_pos) const {
+RasterTileInfo LucidRenderer::introspectTile(CSpan<float3> verts, int2 full_tile_pos) const {
+	RasterTileInfo out;
+
+	int2 bin_pos = full_tile_pos / 4;
+	int2 tile_pos = full_tile_pos - bin_pos * 4;
+	out.bin_pos = bin_pos;
+	out.tile_pos = tile_pos;
+
+	out.bin_id = bin_pos.x + bin_pos.y * m_bin_counts.x;
+	out.tile_id = out.bin_id * tiles_per_bin + tile_pos.x + tile_pos.y * (bin_size / tile_size);
+	int bin_count = m_bin_counts.x * m_bin_counts.y;
+
+	vector<u32> tile_tri_indices, block_tri_masks[4];
+	vector<Triangle3F> tile_tris;
+	vector<int> tile_tri_instances;
+	vector<array<uint, 3>> tile_tri_verts;
+
+	auto tile_counters = m_tile_counters->map<u32>(AccessMode::read_only);
+	int num_tile_tris = tile_counters[32 + out.tile_id];
+	int tile_tri_offset = tile_counters[32 + bin_count * tiles_per_bin + out.tile_id];
+	m_tile_counters->unmap();
+
+	if(num_tile_tris)
+		tile_tri_indices = m_tile_tris->download<u32>(num_tile_tris, tile_tri_offset);
+
+	auto quad_indices = m_quad_indices->map<u32>(AccessMode::read_only);
+	out.tris.reserve(tile_tri_indices.size());
+	out.tri_verts.reserve(tile_tri_indices.size());
+	out.tri_instances.reserve(tile_tri_indices.size());
+
+	for(auto idx : tile_tri_indices) {
+		bool second_tri = idx & 0x80000000;
+		idx &= 0xffffff;
+		u32 v0 = quad_indices[idx * 4 + 0], v1 = quad_indices[idx * 4 + 1];
+		u32 v2 = quad_indices[idx * 4 + 2], v3 = quad_indices[idx * 4 + 3];
+		uint instance_id = (v0 >> 26) | ((v1 >> 20) & 0xfc0) | ((v2 >> 14) & 0x3f000);
+		v0 &= 0x3ffffff, v1 &= 0x3ffffff, v2 &= 0x3ffffff, v3 &= 0x3ffffff;
+		out.tri_verts.emplace_back(v0, second_tri ? v2 : v1, second_tri ? v3 : v2);
+		out.tris.emplace_back(verts[v0], verts[second_tri ? v2 : v1], verts[second_tri ? v3 : v2]);
+		out.tri_instances.emplace_back(instance_id);
+	}
+
+	out.tri_indices = move(tile_tri_indices);
+	m_quad_indices->unmap();
+
+	return out;
+}
+
+RasterBlockInfo LucidRenderer::introspectBlock4x4(const RasterTileInfo &tile,
+												  int2 full_block_pos) const {
 	RasterBlockInfo out;
 	PERF_GPU_SCOPE();
 	int2 tile_pos = full_block_pos / 4;
@@ -753,38 +801,15 @@ RasterBlockInfo LucidRenderer::introspectBlock(CSpan<float3> verts, int2 full_bl
 	int block_id = tile_id * blocks_per_tile + block_pos.x + block_pos.y * (tile_size / block_size);
 	int bin_count = m_bin_counts.x * m_bin_counts.y;
 
-	vector<u32> tile_tri_indices, block_tri_masks;
-	vector<array<int, 3>> tile_tri_verts;
-	vector<Triangle3F> tile_tris;
+	vector<u32> block_tri_masks;
 
+	out.num_tile_tris = tile.tris.size();
 	out.num_block_tris = m_block_counts->map<u32>(AccessMode::read_only)[block_id];
 	m_block_counts->unmap();
 	int block_tri_offset = m_block_offsets->map<u32>(AccessMode::read_only)[block_id];
 	m_block_offsets->unmap();
-	auto tile_counters = m_tile_counters->map<u32>(AccessMode::read_only);
-	out.num_tile_tris = tile_counters[32 + tile_id];
-	int tile_tri_offset = tile_counters[32 + bin_count * tiles_per_bin + tile_id];
-	m_tile_counters->unmap();
-
-	if(out.num_tile_tris)
-		tile_tri_indices = m_tile_tris->download<u32>(out.num_tile_tris, tile_tri_offset);
 	if(out.num_block_tris)
 		block_tri_masks = m_block_tris->download<u32>(out.num_block_tris, block_tri_offset);
-
-	auto quad_indices = m_quad_indices->map<u32>(AccessMode::read_only);
-	tile_tri_verts.reserve(tile_tri_indices.size());
-	for(auto idx : tile_tri_indices) {
-		bool second_tri = idx & 0x80000000;
-		idx &= 0xffffff;
-		auto &inds = tile_tri_verts.emplace_back((int)quad_indices[idx * 4 + 0],
-												 (int)quad_indices[idx * 4 + (second_tri ? 2 : 1)],
-												 (int)quad_indices[idx * 4 + (second_tri ? 3 : 2)]);
-		tile_tris.emplace_back(verts[inds[0] & 0x3ffffff], verts[inds[1] & 0x3ffffff],
-							   verts[inds[2] & 0x3ffffff]);
-	}
-	m_quad_indices->unmap();
-
-	tile_tris.reserve(tile_tri_verts.size());
 	vector<Pair<float>> mask_depths;
 
 	// Note: it makes no sense without merging non-overlapping masks into layers
@@ -792,7 +817,7 @@ RasterBlockInfo LucidRenderer::introspectBlock(CSpan<float3> verts, int2 full_bl
 	for(int i : intRange(block_tri_masks)) {
 		u32 mask = block_tri_masks[i] & 0xffff;
 		u32 local_idx = (block_tri_masks[i] >> 16) & 0x7fff;
-		auto &tri = tile_tris[local_idx];
+		auto &tri = tile.tris[local_idx];
 		float depth_min = inf, depth_max = -inf;
 		Plane3F plane(tri);
 
@@ -830,7 +855,7 @@ RasterBlockInfo LucidRenderer::introspectBlock(CSpan<float3> verts, int2 full_bl
 			printf("%4d: %c %f - %f", i, mask_overlaps[i] ? 'X' : ' ', mask_depths[i].first,
 				   mask_depths[i].second);
 			uint local_idx = (block_tri_masks[i] >> 16) & 0x7fff;
-			print("%\n", tile_tris[local_idx]);
+			print("%\n", tile.tris[local_idx]);
 		}
 		int max_row_size = 16;
 		for(int i = 0; i < block_tri_masks.size(); i += max_row_size) {
@@ -838,7 +863,7 @@ RasterBlockInfo LucidRenderer::introspectBlock(CSpan<float3> verts, int2 full_bl
 			int row_size = min(block_tri_masks.size() - i, max_row_size);
 			for(int j = 0; j < row_size; j++) {
 				uint local_idx = (block_tri_masks[i + j] >> 16) & 0x7fff;
-				uint tri_idx = tile_tri_indices[local_idx];
+				uint tri_idx = tile.tri_indices[local_idx];
 				printf(" %4d  ", i + j);
 				//printf("%c%6d ", tri_idx & 0x80000000 ? '*' : ' ', tri_idx & 0xffffff);
 			}
@@ -857,17 +882,16 @@ RasterBlockInfo LucidRenderer::introspectBlock(CSpan<float3> verts, int2 full_bl
 		print("\n");
 	}
 
-	out.tile_tris = move(tile_tris);
-	out.block_tris_map.resize(out.tile_tris.size());
+	out.selected_tile_tris.resize(tile.tris.size());
 	for(int i : intRange(block_tri_masks)) {
 		u32 local_idx = (block_tri_masks[i] >> 16) & 0x7fff;
-		out.block_tris_map[local_idx] = true;
+		out.selected_tile_tris[local_idx] = true;
 	}
 
 	return out;
 }
 
-RasterBlockInfo LucidRenderer::introspectBlock8x8(CSpan<float3> verts,
+RasterBlockInfo LucidRenderer::introspectBlock8x8(const RasterTileInfo &tile,
 												  int2 full_block8x8_pos) const {
 	RasterBlockInfo out;
 	PERF_GPU_SCOPE();
@@ -889,14 +913,12 @@ RasterBlockInfo LucidRenderer::introspectBlock8x8(CSpan<float3> verts,
 	int bin_count = m_bin_counts.x * m_bin_counts.y;
 	int block_tri_counts[4], block_tri_offsets[4];
 
-	vector<u32> tile_tri_indices, block_tri_masks[4];
-	vector<Triangle3F> tile_tris;
-	vector<int> tile_tri_instances;
-	vector<array<uint, 3>> tile_tri_verts;
+	vector<u32> block_tri_masks[4];
 
 	{
 		auto block_counts = m_block_counts->map<u32>(AccessMode::read_only);
 		auto block_offsets = m_block_offsets->map<u32>(AccessMode::read_only);
+		out.num_tile_tris = tile.tris.size();
 		out.num_block_tris = 0;
 		for(int i = 0; i < 4; i++) {
 			block_tri_counts[i] = block_counts[block_ids[i]];
@@ -905,13 +927,6 @@ RasterBlockInfo LucidRenderer::introspectBlock8x8(CSpan<float3> verts,
 		}
 		m_block_counts->unmap();
 		m_block_offsets->unmap();
-		auto tile_counters = m_tile_counters->map<u32>(AccessMode::read_only);
-		out.num_tile_tris = tile_counters[32 + tile_id];
-		int tile_tri_offset = tile_counters[32 + bin_count * tiles_per_bin + tile_id];
-		m_tile_counters->unmap();
-
-		if(out.num_tile_tris)
-			tile_tri_indices = m_tile_tris->download<u32>(out.num_tile_tris, tile_tri_offset);
 		if(out.num_block_tris) {
 			auto block_tris = m_block_tris->map<u32>(AccessMode::read_only);
 			for(int i = 0; i < 4; i++)
@@ -922,28 +937,12 @@ RasterBlockInfo LucidRenderer::introspectBlock8x8(CSpan<float3> verts,
 		}
 	}
 
-	auto quad_indices = m_quad_indices->map<u32>(AccessMode::read_only);
-	tile_tris.reserve(tile_tri_indices.size());
-	for(auto idx : tile_tri_indices) {
-		bool second_tri = idx & 0x80000000;
-		idx &= 0xffffff;
-		u32 v0 = quad_indices[idx * 4 + 0], v1 = quad_indices[idx * 4 + 1];
-		u32 v2 = quad_indices[idx * 4 + 2], v3 = quad_indices[idx * 4 + 3];
-		uint instance_id = (v0 >> 26) | ((v1 >> 20) & 0xfc0) | ((v2 >> 14) & 0x3f000);
-		v0 &= 0x3ffffff, v1 &= 0x3ffffff, v2 &= 0x3ffffff, v3 &= 0x3ffffff;
-		tile_tri_verts.emplace_back(v0, second_tri ? v2 : v1, second_tri ? v3 : v2);
-		tile_tris.emplace_back(verts[v0], verts[second_tri ? v2 : v1], verts[second_tri ? v3 : v2]);
-		tile_tri_instances.emplace_back((int)instance_id);
-	}
-	out.tile_tris = tile_tris;
-	m_quad_indices->unmap();
-
-	vector<vector<int>> neighbours(tile_tri_verts.size());
-	for(int i : intRange(tile_tri_verts)) {
-		for(int j : intRange(tile_tri_verts)) {
+	vector<vector<int>> neighbours(tile.tri_verts.size());
+	for(int i : intRange(tile.tri_verts)) {
+		for(int j : intRange(tile.tri_verts)) {
 			int num_shared = 0;
-			for(auto v : tile_tri_verts[i])
-				if(isOneOf(v, tile_tri_verts[j]))
+			for(auto v : tile.tri_verts[i])
+				if(isOneOf(v, tile.tri_verts[j]))
 					num_shared++;
 			if(num_shared == 2)
 				neighbours[i].emplace_back(j);
@@ -952,7 +951,7 @@ RasterBlockInfo LucidRenderer::introspectBlock8x8(CSpan<float3> verts,
 
 	for(int r = 0; r < 4; r++) {
 		vector<vector<int>> temp = neighbours;
-		for(int i : intRange(tile_tri_verts))
+		for(int i : intRange(tile.tri_verts))
 			for(auto n1 : neighbours[i])
 				for(auto n2 : neighbours[i])
 					if(n1 != n2 && !isOneOf(n2, temp[n1])) {
@@ -1018,7 +1017,7 @@ RasterBlockInfo LucidRenderer::introspectBlock8x8(CSpan<float3> verts,
 
 	// Note: it makes no sense without merging non-overlapping masks into layers
 	for(auto &mask : masks8x8) {
-		auto &tri = tile_tris[mask.tri_id & 0x7fff];
+		auto &tri = tile.tris[mask.tri_id & 0x7fff];
 		float depth_min = inf, depth_max = -inf;
 		Plane3F plane(tri);
 
@@ -1057,23 +1056,17 @@ RasterBlockInfo LucidRenderer::introspectBlock8x8(CSpan<float3> verts,
 	auto are_compatible_tris = [&](int id0, int id1) -> bool {
 		id0 &= 0x7fff, id1 &= 0x7fff;
 		return neighbour_map[id0][id1];
-
-		//if(tile_tri_instances[id0] != tile_tri_instances[id1])
-		//	return false;
-		auto aabb0 = enclose(tile_tris[id0]);
-		auto aabb1 = enclose(tile_tris[id1]);
-		return aabb0.distance(aabb1) <= max_dist;
 	};
 
 	vector<MergedMask8x8> mmasks;
-	vector<int> instances;
+	vector<u32> instances;
 
 	constexpr int max_merged_tris = 15;
 
 	// We have to make sure that depth ranges don't get too mixed up...
 	for(auto &mask : masks8x8) {
 		int mmask_idx = -1;
-		instances.emplace_back(tile_tri_instances[mask.tri_id & 0x7fff]);
+		instances.emplace_back(tile.tri_instances[mask.tri_id & 0x7fff]);
 
 		for(int i = max(0, mmasks.size() - 1); i < mmasks.size(); i++)
 			if((mmasks[i].bits & mask.bits) == 0 && mmasks[i].tri_ids.size() < max_merged_tris) {
@@ -1107,7 +1100,6 @@ RasterBlockInfo LucidRenderer::introspectBlock8x8(CSpan<float3> verts,
 				mmask.indices[i] = index;
 	}
 	makeSortedUnique(instances);
-	DUMP(instances);
 
 	print("Triangle masks for given 8x8 block:\n");
 	int max_row_size = 8;
@@ -1168,10 +1160,10 @@ RasterBlockInfo LucidRenderer::introspectBlock8x8(CSpan<float3> verts,
 		printf("\n");
 	}
 
-	out.block_tris_map.resize(out.tile_tris.size());
+	out.selected_tile_tris.resize(tile.tris.size());
 	for(auto &mask : masks8x8) {
 		int id = mask.tri_id & 0x7fff;
-		out.block_tris_map[id] = true;
+		out.selected_tile_tris[id] = true;
 	}
 
 	return out;

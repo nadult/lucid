@@ -567,28 +567,28 @@ void LucidApp::draw2D() {
 	renderer_2d.render();
 }
 
-static void visualizeBlockTris(const RasterBlockInfo &info) {
+static void visualizeBlockTris(const RasterTileInfo &tile, const RasterBlockInfo &block) {
 	auto vis_func = [&](Visualizer3 &vis, double2) -> string {
-		for(int i : intRange(info.tile_tris)) {
-			if(!info.block_tris_map[i])
+		for(int i : intRange(tile.tris)) {
+			if(!block.selected_tile_tris[i])
 				continue;
-			auto &tri = info.tile_tris[i];
+			auto &tri = tile.tris[i];
 			vis(tri);
 			vis(tri.flipped());
 			for(auto edge : tri.edges())
 				vis(edge, ColorId::black);
 		}
 
-		for(int i : intRange(info.tile_tris)) {
-			if(info.block_tris_map[i])
+		for(int i : intRange(tile.tris)) {
+			if(block.selected_tile_tris[i])
 				continue;
-			vis(info.tile_tris[i], ColorId::yellow);
-			vis(info.tile_tris[i].flipped(), ColorId::yellow);
+			vis(tile.tris[i], ColorId::yellow);
+			vis(tile.tris[i].flipped(), ColorId::yellow);
 		}
 
 		TextFormatter fmt;
 		fmt << "Introspecting triangles intersecting current block (white) and tile (yellow)\n";
-		fmt("Tile-tris: %\nBlock-tris: %\n", info.tile_tris.size(), countIf(info.block_tris_map));
+		fmt("Tile-tris: %\nBlock-tris: %\n", tile.tris.size(), countIf(block.selected_tile_tris));
 		return fmt.text();
 	};
 	investigate(vis_func, none, InvestigatorOpt::exit_with_space);
@@ -619,13 +619,15 @@ bool LucidApp::mainLoop(GlDevice &device) {
 	if(m_selected_block && m_lucid_renderer && m_rendering_mode != RenderingMode::simple &&
 	   m_setup_idx != -1) {
 		auto &verts = m_setups[m_setup_idx]->scene->positions;
+		auto tile_pos = *m_selected_block / (m_is_picking_8x8 ? 2 : 4);
+		auto tile_info = m_lucid_renderer->introspectTile(verts, tile_pos);
 		if(m_is_picking_8x8)
-			m_block_info = m_lucid_renderer->introspectBlock8x8(verts, *m_selected_block);
+			m_block_info = m_lucid_renderer->introspectBlock8x8(tile_info, *m_selected_block);
 		else
-			m_block_info = m_lucid_renderer->introspectBlock(verts, *m_selected_block);
+			m_block_info = m_lucid_renderer->introspectBlock4x4(tile_info, *m_selected_block);
 		if(m_is_final_pick) {
-			if(m_block_info->tile_tris)
-				visualizeBlockTris(*m_block_info);
+			if(tile_info.tris)
+				visualizeBlockTris(tile_info, *m_block_info);
 			m_is_final_pick = false;
 			m_is_picking_block = false;
 			m_selected_block = none;

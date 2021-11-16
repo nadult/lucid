@@ -71,7 +71,8 @@ shared uint s_block_tri_counts[BLOCKS_PER_TILE];
 shared uint s_block_tri_offsets[BLOCKS_PER_TILE];
 shared uint s_tile_blocktri_offset;
 shared uint s_tile_blocktri_count, s_tile_rowtri_count;
-shared uint s_empty_tri_count;
+shared uint s_total_rowtri_count, s_max_rowtri_count;
+shared uint s_max_blocktri_count, s_empty_tri_count;
 
 shared uvec2 s_buffer[LSIZE * 4];
 shared uint s_buffer_size;
@@ -162,7 +163,7 @@ void sortBuffer(uint N)
 // bit 16-23: Y value for rows 23
 uniform uint mask_centroids[256];
 
-// Note: inlining it makes code run a bit faster...
+// Note: inlining makes this code run a bit faster...
 vec2 computeCentroid4x4(vec2 base_pos, uint mask) {
 	vec2 cpoint = base_pos + vec2(2.0, 2.0);
 	bool quick_centroid = false;
@@ -392,6 +393,7 @@ void generateBinMasks(int bin_id) {
 				s_tile_tri_offset = s_tile_tri_offsets[tile_id];
 				s_tile_pos = s_bin_pos + ivec2(tile_id & 3, tile_id >> 2) * TILE_SIZE;
 				s_tile_blocktri_count = 0;
+				s_tile_rowtri_count = 0;
 			}
 			s_block_tri_counts[LIX] = 0;
 		}
@@ -475,6 +477,11 @@ void generateBinMasks(int bin_id) {
 			g_block_counts[block_id] = s_block_tri_counts[LIX];
 			g_block_offsets[block_id] = s_block_tri_offsets[LIX] + s_tile_blocktri_offset;
 			atomicMax(g_tiles.max_tris_per_block, s_block_tri_counts[LIX]);
+			if(LIX == 0) {
+				s_total_rowtri_count += s_tile_rowtri_count;
+				s_max_rowtri_count = max(s_max_rowtri_count, s_tile_rowtri_count);
+				s_max_blocktri_count = max(s_max_blocktri_count, s_tile_blocktri_count);
+			}
 		}
 	}
 }
@@ -493,7 +500,9 @@ int loadNextBin() {
 void main() {
 	if(LIX == 0) {
 		s_empty_tri_count = 0;
-		s_tile_rowtri_count = 0;
+		s_total_rowtri_count = 0;
+		s_max_rowtri_count = 0;
+		s_max_blocktri_count = 0;
 		s_buffer_size = 0;
 	}
 	// TODO: remove this variable
@@ -505,12 +514,8 @@ void main() {
 	}
 	if(LIX == 0) {
 		atomicAdd(g_tiles.num_tile_tris_with_no_blocks, s_empty_tri_count);
-		atomicAdd(g_tiles.num_processed_block_rows, s_tile_rowtri_count);
-		atomicMax(g_tiles.max_block_rows_per_tile, s_tile_rowtri_count);
+		atomicAdd(g_tiles.num_processed_block_rows, s_total_rowtri_count);
+		atomicMax(g_tiles.max_row_tris_per_tile, s_max_rowtri_count);
+		atomicMax(g_tiles.max_block_tris_per_tile, s_max_blocktri_count);
 	}
-/*	if(LIX < 32) {
-		uvec2 value1 = uvec2(32 - LIX, LIX / 8);
-		uvec2 value2 = swap(value1, 1, bfe(LIX, 1) ^ bfe(LIX, 0));
-		RECORD(value1.x, value2.x, value1.y, value2.y);
-	}*/
 }

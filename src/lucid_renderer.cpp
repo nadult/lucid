@@ -1428,7 +1428,8 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 		{"rejected quads", rejected_info, rejection_details},
 		{"bin-quads", toString(num_bin_quads), "Per-bin quads"},
 		{"tile-tris", toString(num_tile_tris), "Per-tile triangles"},
-		{"estimated tile-tris", toString(tile_tris_estimate)},
+		{"estimated tile-tris", toString(tile_tris_estimate),
+		 "Estimating space needed for tile-tris is inaccurate"},
 		{"empty tile-tris",
 		 stdFormat("%d (%.2f %%)", tile_counters[13],
 				   double(tile_counters[13]) / num_tile_tris * 100.0),
@@ -1436,6 +1437,7 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 		{"block-rows", toString(num_block_rows), "Block rows generated for each per-tile triangle"},
 		{"block-tris", toString(num_block_tris),
 		 "Per-block triangle instances with at least 1 sample"},
+		{"fragments", toString(tile_counters[19])},
 	};
 
 	vector<StatsRow> avg_rows = {
@@ -1455,9 +1457,11 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 
 	vector<StatsRow> max_rows = {
 		{"max quads / bin", toString(max_quads_per_bin)},
-		{"max tris / tile", toString(tile_counters[16])},
-		{"max block-rows / tile", toString(tile_counters[17])},
-		{"max tris / block", toString(tile_counters[15])},
+		{"max tile-tris / tile", toString(tile_counters[16])},
+		{"max row-tris / tile", toString(tile_counters[17])},
+		{"max block-tris / tile", toString(tile_counters[18])},
+		{"max block-tris / block", toString(tile_counters[15])},
+		{"max fragments / tile", toString(tile_counters[20])},
 	};
 
 	vector<StatsRow> invalid_rows = {

@@ -53,6 +53,8 @@ shared int s_block_tri_offsets[BLOCKS_PER_TILE];
 shared int s_block_max_tri_count;
 
 shared uint s_invalid_block_mask;
+shared uint s_fragment_count;
+shared uint s_total_fragment_count, s_max_fragment_count;
 
 layout(binding = 0) uniform sampler2D opaque_texture;
 layout(binding = 1) uniform sampler2D transparent_texture;
@@ -259,8 +261,10 @@ void rasterizeBlocks(ivec2 tile_pos) {
 			uint mask_id = BLOCKS_PER_TILE * j + LID.x;
 			if(i + mask_id < num_block_tris) {
 				uint block_tri = g_block_tris[block_offset + i + mask_id];
+				uint mask = block_tri & 0xffff;
+				atomicAdd(s_fragment_count, bitCount(mask));
 				mask_id += LID.y * MAX_MASKS;
-				s_masks[mask_id] = block_tri & 0xffff;
+				s_masks[mask_id] = mask;
 				uint tri_idx =  g_tile_tris[s_tile_tri_offset + ((block_tri >> 16) & 0x7fff)];
 				uint second_tri = block_tri >> 31;
 				uint verts[4] = { g_quad_indices[tri_idx * 4 + 0], g_quad_indices[tri_idx * 4 + 1],
@@ -322,6 +326,7 @@ void rasterizeBin(int bin_id) {
 		if(LIX == 0) {
 			s_block_max_tri_count = 0;
 			s_invalid_block_mask = 0;
+			s_fragment_count = 0;
 		}
 		barrier();
 		if(LIX < BLOCKS_PER_TILE) {
@@ -340,6 +345,10 @@ void rasterizeBin(int bin_id) {
 		if(LIX == 0 && s_invalid_block_mask != 0) {
 			atomicAdd(g_tiles.num_invalid_blocks, bitCount(s_invalid_block_mask));
 			atomicAdd(g_tiles.num_invalid_tiles, 1);
+		}
+		if(LIX == 0) {
+			atomicAdd(s_total_fragment_count, s_fragment_count);
+			atomicMax(s_max_fragment_count, s_fragment_count);
 		}
 	}
 }
@@ -376,6 +385,10 @@ int loadNextBin() {
 }
 
 void main() {
+	if(LIX == 0) {
+		s_total_fragment_count = 0;
+		s_max_fragment_count = 0;
+	}
 	int bin_id = loadNextBin();
 	while(bin_id < BIN_COUNT) {
 		barrier();
@@ -383,4 +396,9 @@ void main() {
 		rasterizeBin(bin_id);
 		bin_id = loadNextBin();
 	}
+	if(LIX == 0) {
+		atomicAdd(g_tiles.num_fragments, s_total_fragment_count);
+		atomicMax(g_tiles.max_fragments_per_tile, s_max_fragment_count);
+	}
+
 }

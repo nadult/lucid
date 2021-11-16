@@ -10,6 +10,8 @@
 
 // TODO: problem with uneven amounts of data in different tiles
 // TODO: jak dobrze obsługiwać różnego rodzaju dystrybucje trójkątów ?
+//
+// TODO: replace 16 to BLOCKS_PER_TILE ? it's not that simple...
 
 layout(local_size_x = LSIZE) in;
 
@@ -93,6 +95,7 @@ void computeOffsets()
 		s_block_tri_offsets[LIX] = LIX == 0? 0 : s_block_tri_counts[LIX - 1];
 	barrier(); // TODO: why is this barrier needed?
 	// TODO: cleanup small parallel scans
+	// TODO: this is probably wrong on intel because warp size is 8 (need more barriers)
 	if(LIX < 16) {
 		if(LIX >= 1) s_block_tri_offsets[LIX] += s_block_tri_offsets[LIX - 1];
 		if(LIX >= 2) s_block_tri_offsets[LIX] += s_block_tri_offsets[LIX - 2];

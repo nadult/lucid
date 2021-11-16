@@ -5,6 +5,9 @@
 
 #define LSIZE 512
 
+// TODO: with small number of bins we might have poor paralellization. maybe we spawn more threads per each bin?
+// There is definitely space for optimization here
+
 layout(local_size_x = LSIZE) in;
 layout(std430, binding = 1) buffer buf1_ { BinCounters  g_bins; };
 layout(std430, binding = 2) buffer buf2_ { TileCounters g_tiles; };
@@ -40,9 +43,6 @@ uint testTriangle(vec3 tri0, vec3 tri1, vec3 tri2, int tsx, int tsy, int tex, in
 		vec3(dot(nrm2, frustum.ws_dirx), dot(nrm2, frustum.ws_diry), dot(nrm2, frustum.ws_dir0)),
 	};
 
-	vec3 inv_ex = vec3(1.0 / edges[0].x, 1.0 / edges[1].x, 1.0 / edges[2].x);
-	vec3 inv_ey = vec3(1.0 / edges[0].y, 1.0 / edges[1].y, 1.0 / edges[2].y);
-
 	// Adding offset for trivial reject corner
 	for(int i = 0; i < 3; i++) {
 		float x_offset = edges[i].x < 0.0? 0.0 : TILE_SIZE - 0.989;
@@ -58,13 +58,13 @@ uint testTriangle(vec3 tri0, vec3 tri1, vec3 tri2, int tsx, int tsy, int tex, in
 	// Trivial reject test
 	uint mask = 0;
 	for(int ty = tsy; ty <= tey; ty++) {
-		vec2 tile_pos = s_bin_pos + vec2(tsx, ty) * 16.0 + vec2(0.49, 0.49);
+		vec2 tile_pos = s_bin_pos + vec2(tsx, ty) * float(TILE_SIZE) + vec2(0.49, 0.49);
 		for(int tx = tsx; tx <= tex; tx++) {
 			if(edges[0].x * tile_pos.x + edges[0].y * tile_pos.y + edges[0].z >= 0.0 &&
 			   edges[1].x * tile_pos.x + edges[1].y * tile_pos.y + edges[1].z >= 0.0 &&
 			   edges[2].x * tile_pos.x + edges[2].y * tile_pos.y + edges[2].z >= 0.0)
 				mask |= 1 << (ty * 4 + tx);
-			tile_pos.x += 16.0;
+			tile_pos.x += float(TILE_SIZE);
 		}
 	}
 
@@ -161,10 +161,14 @@ void dispatchBinTris(int bin_id) {
 		uvec4 aabb = g_tri_aabbs[tri_idx];
 		ivec4 aabb0 = ivec4(decodeAABB(aabb.xy)) - ivec4(s_bin_ipos, s_bin_ipos);
 		ivec4 aabb1 = ivec4(decodeAABB(aabb.zw)) - ivec4(s_bin_ipos, s_bin_ipos);
+		for(int i = 0; i < 4; i++) {
+			aabb0[i] >>= TILE_SHIFT;
+			aabb1[i] >>= TILE_SHIFT;
+		}
 
-		mask0 = testTriangle(quad0, quad1, quad2, aabb0[0] >> 4, aabb0[1] >> 4, aabb0[2] >> 4, aabb0[3] >> 4);
+		mask0 = testTriangle(quad0, quad1, quad2, aabb0[0], aabb0[1], aabb0[2], aabb0[3]);
 		if(v2 != v3)
-			mask1 = testTriangle(quad0, quad2, quad3, aabb1[0] >> 4, aabb1[1] >> 4, aabb1[2] >> 4, aabb1[3] >> 4);
+			mask1 = testTriangle(quad0, quad2, quad3, aabb1[0], aabb1[1], aabb1[2], aabb1[3]);
 
 		if((mask0 | mask1) != 0)
 			for(uint ty = tsy; ty <= tey; ty++)

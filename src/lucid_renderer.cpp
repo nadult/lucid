@@ -439,19 +439,19 @@ void LucidRenderer::checkBins() {
 
 void LucidRenderer::checkTiles() {
 	int bin_counts = m_bin_counts.x * m_bin_counts.y;
-	vector<int> tile_quad_counts;
+	vector<int> tile_tri_counts;
 	{
 		auto vals = m_tile_counters->map<int>(AccessMode::read_only);
 		vals = vals.subSpan(32);
-		tile_quad_counts = vals.subSpan(0, bin_counts * tiles_per_bin);
+		tile_tri_counts = vals.subSpan(0, bin_counts * tiles_per_bin);
 		m_tile_counters->unmap();
 	}
 
-	print("Per-tile quad count histogram:\n");
+	print("Per-tile triangle count histogram:\n");
 	vector<pair<int, int>> histogram(32);
 	pair<int, int> sum = {0, 0};
 
-	for(int value : tile_quad_counts) {
+	for(int value : tile_tri_counts) {
 		int i = value == 0 ? 0 : value <= 16 ? 1 : int(log2(value - 1)) - 2;
 		if(histogram.inRange(i)) {
 			histogram[i].first++;
@@ -471,7 +471,7 @@ void LucidRenderer::checkTiles() {
 		printf("%s %8d: ", i == 0 ? "  " : "<=", level);
 		printf("%5d tiles (%5.2f %%); ", histogram[i].first,
 			   double(histogram[i].first) / sum.first * 100.0);
-		printf("%7d quads total (%5.2f %%)\n", histogram[i].second,
+		printf("%7d tris total (%5.2f %%)\n", histogram[i].second,
 			   double(histogram[i].second) / sum.second * 100.0);
 	}
 	printf("\n");

@@ -29,17 +29,25 @@
   white_oak: 10781  56     60    186    671           2734        6923
  
 *Stats 16.11*: total  setup  bins  tiles  raster_masks  final_raster
-      bunny: 1894   50     48    89     996           589
- conference: 3457   97     87    224    1684          1233
-     dragon: 2860   324    128   252    1265          759
-    gallery: 6440   365    148   405    2701          2666
-   hairball: 38878  1093   578   2216   15262         18740
- powerplant: 32656  3665   1636  2378   11634         12206
- san-miguel: 24417  2527   629   1306   6266          12960
-     sponza: 11358  173    161   329    3057          7475
-     teapot: 1940   32     46    74     901           768
-  white_oak: 9204   56     57    179    2256          6523
+      bunny: 1975   104    48    89     1004          605
+ conference: 3481   85     83    223    1697          1262
+     dragon: 2858   299    128   249    1271          781
+    gallery: 6494   386    147   401    2702          2708
+   hairball: 39292  1023   577   2242   15445         19099
+ powerplant: 32365  3800   1838  2340   11582         12317
+ san-miguel: 23592  2028   627   1269   6263          13064
+     sponza: 11420  164    160   330    3058          7549
+     teapot: 1965   32     45    74     911           785
+  white_oak: 9283   71     56    178    2252          6589
 *Resolution:* (1280, 1024)
+
+-----------------------------------------------------------------------------------------
+                                === Rasteryzacja 8x8 ===
+-----------------------------------------------------------------------------------------
+
+- Z bina od razu generujemy bloki 8x8? A może biny 128x128 i tile-e 32x32?
+
+- Alternatywnie z poziomu bina od razu rozrzucamy do bloków 8x8?
 
 -----------------------------------------------------------------------------------------
                              === Nowa finalna rasteryzacja ===
@@ -241,6 +249,7 @@ Powiedzmy, że na razie chcemy jedynie przyspieszyć sortowanie i na razie robim
                  === Potencjalne rozwiązania / ulepszenia algorytmu ===
 -----------------------------------------------------------------------------------------
 
+* *Dodać opcję wizualizacji głębokości do głównego menu (bez rekompilacji)*
 
 * *Bucketowanie trójkątów w tile-ach po ilości rzędów*
   Najlepiej by było brać pod uwagę wygenerowane maski, ale nie mamy ich na etapie estymacji

@@ -121,8 +121,8 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	// TODO: better estimate needed
 	// TODO: properly handle situations when limits were reached
 	uint max_bin_quads = max_quads * 3 / 2;
-	uint max_tile_tris = max_quads * 3 / 2;
-	uint max_block_tris = max_quads * 3 / 2;
+	uint max_tile_tris = max_quads * 3;
+	uint max_block_tris = max_quads * 2;
 
 	m_quad_indices.emplace(BufferType::shader_storage, max_quads * 4 * sizeof(u32));
 	m_quad_aabbs.emplace(BufferType::shader_storage, max_quads * sizeof(u32));
@@ -1424,11 +1424,11 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 									num_rejected[2], num_rejected[3]);
 
 	vector<StatsRow> basic_rows = {
-		{"resolution", format("% x %", m_size.x, m_size.y)},
 		{"input quads", toString(num_input_quads)},
 		{"rejected quads", rejected_info, rejection_details},
 		{"bin-quads", toString(num_bin_quads), "Per-bin quads"},
 		{"tile-tris", toString(num_tile_tris), "Per-tile triangles"},
+		{"estimated tile-tris", toString(tile_tris_estimate)},
 		{"empty tile-tris",
 		 stdFormat("%d (%.2f %%)", tile_counters[13],
 				   double(tile_counters[13]) / num_tile_tris * 100.0),

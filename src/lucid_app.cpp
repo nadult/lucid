@@ -229,6 +229,7 @@ void LucidApp::showSceneStats(const Scene &scene) {
 
 	vector<StatsRow> rows;
 	rows = {
+		{"resolution", toString(m_viewport.size()), ""},
 		{"mesh instances", toString(scene.meshes.size()), ""},
 		{"triangles", formatSize(scene.numTris()), toString(scene.numTris())},
 		{"vertices", formatSize(scene.numVerts()), toString(scene.numVerts())},
@@ -799,7 +800,7 @@ void LucidApp::printPerfStats() {
 	}
 
 	if(rows) {
-		print("Minimum GPU timings shown; unit: microseconds\n");
+		print("Minimum GPU timings shown; unit: microseconds; Resolution: %\n", m_viewport.size());
 		print2DArray(column_names, row_names, rows);
 	}
 }

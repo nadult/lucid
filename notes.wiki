@@ -413,6 +413,8 @@ Powiedzmy, że na razie chcemy jedynie przyspieszyć sortowanie i na razie robim
 * *Bug jeśli dwie powierzchnie na siebie prawie nachodzą (jedna backface)*
   szczególnie widoczne na sponzie
 
+* *Bugi na Haswellu pojawiające się gdy jest za mała liczba wątków w mask_raster*
+
 * Lepsze cache-owanie danych wierzchołków w finalnym rasterze? Ale jak to zrobić sensownie...
 
 * Lepsza kolejność danych wejściowych: może to mocno wpływać na wydajność początkowych etapów

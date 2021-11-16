@@ -77,6 +77,31 @@ shared uint s_max_blocktri_count, s_empty_tri_count;
 shared uvec2 s_buffer[LSIZE * 4];
 shared uint s_buffer_size;
 
+void computeOffsets()
+{
+#ifdef VENDOR_NVIDIA
+	if(LIX < 16) {
+		uint off = LIX == 0? 0 : s_block_tri_counts[LIX - 1], temp;
+		temp = shuffleUpNV(off, 1, 16); if(LIX >= 1) off += temp;
+		temp = shuffleUpNV(off, 2, 16); if(LIX >= 2) off += temp;
+		temp = shuffleUpNV(off, 4, 16); if(LIX >= 4) off += temp;
+		temp = shuffleUpNV(off, 8, 16); if(LIX >= 8) off += temp;
+		s_block_tri_offsets[LIX] = off;
+	}
+#else
+	if(LIX < 16)
+		s_block_tri_offsets[LIX] = LIX == 0? 0 : s_block_tri_counts[LIX - 1];
+	barrier(); // TODO: why is this barrier needed?
+	// TODO: cleanup small parallel scans
+	if(LIX < 16) {
+		if(LIX >= 1) s_block_tri_offsets[LIX] += s_block_tri_offsets[LIX - 1];
+		if(LIX >= 2) s_block_tri_offsets[LIX] += s_block_tri_offsets[LIX - 2];
+		if(LIX >= 4) s_block_tri_offsets[LIX] += s_block_tri_offsets[LIX - 4];
+		if(LIX >= 8) s_block_tri_offsets[LIX] += s_block_tri_offsets[LIX - 8];
+	}
+#endif
+}
+
 #ifdef VENDOR_NVIDIA
 uvec2 swap(uvec2 x, int mask, uint dir)
 {
@@ -414,18 +439,9 @@ void generateBinMasks(int bin_id) {
 			}
 			// TODO: make sure it works when warp size < 16
 			s_block_tri_counts[LIX] = min(s_block_tri_counts[LIX], MAX_BLOCK_TRIS);
-			s_block_tri_offsets[LIX] = LIX == 0? 0 : s_block_tri_counts[LIX - 1];
 		}
-
-		barrier(); // TODO: why is this barrier needed?
-
-		// TODO: cleanup small parallel scans
-		if(LIX < 16) {
-			if(LIX >= 1) s_block_tri_offsets[LIX] += s_block_tri_offsets[LIX - 1];
-			if(LIX >= 2) s_block_tri_offsets[LIX] += s_block_tri_offsets[LIX - 2];
-			if(LIX >= 4) s_block_tri_offsets[LIX] += s_block_tri_offsets[LIX - 4];
-			if(LIX >= 8) s_block_tri_offsets[LIX] += s_block_tri_offsets[LIX - 8];
-		}
+		
+		computeOffsets();
 
 		groupMemoryBarrier();
 		barrier();

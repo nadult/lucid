@@ -37,7 +37,7 @@ class LucidRenderer {
 
 	static constexpr int max_width = 2560, max_height = 2048, max_quads = 10 * 1024 * 1024,
 						 max_verts = 12 * 1024 * 1024, block_size = 4, tile_size = 16,
-						 bin_size = 64, max_instance_quads = 1024;
+						 bin_size = 64;
 	static constexpr int blocks_per_bin = square(bin_size / block_size),
 						 tiles_per_bin = square(bin_size / tile_size),
 						 blocks_per_tile = square(tile_size / block_size);

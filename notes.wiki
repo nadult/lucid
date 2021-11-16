@@ -249,9 +249,6 @@ Powiedzmy, że na razie chcemy jedynie przyspieszyć sortowanie i na razie robim
   Problem jest taki, że nie jestem w stanie z wyprzedzeniem wyliczyć ile trójkątów będzie w
   każdym z bucketów, bo niektóre mogą być zcullowane.
 
-* *Poprawka w tile dispatcher:* tile_counts to tak naprawdę estymaty; Możemy też zapisać gdzieś
-  ile miejsca się marnuje w listach tile-i
-
 * *4x4 może sie okazać zbyt kosztowne* Może zrobić tylko opcję 8x8?
 
 * *Nowy algorytm rasteryzacji finalnej*

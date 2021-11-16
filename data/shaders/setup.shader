@@ -1,13 +1,13 @@
 // $$include funcs data frustum
 
-#define LSIZE 1024
+#define LSIZE MAX_LSIZE
 layout(local_size_x = LSIZE) in;
 
 #define LID gl_LocalInvocationID
 #define LIX gl_LocalInvocationIndex
 #define WGID gl_WorkGroupID
 
-#define MAX_INSTANCES 16
+#define MAX_INSTANCES 32
 
 uniform mat4 view_proj_matrix;
 uniform int enable_backface_culling;

@@ -463,6 +463,7 @@ void generateBinMasks(int bin_id) {
 				g_block_tris[roffset + block_idx] = s_buffer[s_block_tri_offsets[b] + block_idx].y;
 		}
 		else {
+			// TODO: possible optimization: merge more groups together
 			uint soffset = gl_WorkGroupID.x * MAX_BLOCK_TRIS * 16;
 			for(int b = 0; b < BLOCKS_PER_TILE; b++) {
 				uint boffset = soffset + b * MAX_BLOCK_TRIS;

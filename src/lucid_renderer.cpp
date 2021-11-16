@@ -168,6 +168,7 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	defs["TILES_PER_BIN"] = tiles_per_bin;
 	defs["BLOCKS_PER_TILE"] = blocks_per_tile;
 	defs["BLOCKS_PER_BIN"] = blocks_per_bin;
+	defs["MAX_LSIZE"] = gl_info->limits[GlLimit::max_compute_work_group_invocations];
 
 	init_counters_program = EX_PASS(Program::makeCompute("init_counters", defs));
 	setup_program = EX_PASS(Program::makeCompute("setup", defs));
@@ -260,10 +261,11 @@ void LucidRenderer::uploadInstances(const Context &ctx) {
 	PERF_GPU_SCOPE();
 
 	vector<InstanceData> instances;
-	instances.reserve(16 * 1024);
+	instances.reserve(32 * 1024);
 
 	vector<IColor> mat_colors = transform(
 		ctx.materials, [](auto &mat) { return IColor(FColor(mat.diffuse, mat.opacity)); });
+	int max_instance_quads = gl_info->limits[GlLimit::max_compute_work_group_invocations];
 
 	m_num_quads = 0;
 	for(auto &dc : ctx.dcs) {
@@ -322,7 +324,7 @@ void LucidRenderer::setupQuads(const Context &ctx) {
 	program.setFrustum(ctx.camera);
 	program.use();
 
-	glDispatchCompute((m_num_instances + 15) / 16, 1, 1);
+	glDispatchCompute((m_num_instances + 31) / 32, 1, 1);
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 }
 

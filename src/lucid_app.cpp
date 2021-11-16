@@ -391,13 +391,18 @@ void LucidApp::doMenu() {
 
 	if(m_is_picking_block) {
 		menu::text("Picking % block: %", m_is_picking_8x8 ? "8x8" : "4x4", m_selected_block);
-		if(m_block_info)
-			menu::text("bin:% tile:% block:%\ntris/block:% tris/tile:%\nmerged tris/block:% %",
-					   m_block_info->bin_pos, m_block_info->tile_pos, m_block_info->block_pos,
-					   m_block_info->num_block_tris, m_block_info->num_tile_tris,
-					   m_block_info->num_merged_block_tris,
-					   stdFormat("(%.2f %%)", double(m_block_info->num_merged_block_tris) /
-												  m_block_info->num_block_tris * 100.0));
+		if(m_block_info) {
+			menu::text("bin:% tile:% block:%\ntris/block:% tris/tile:%", m_block_info->bin_pos,
+					   m_block_info->tile_pos, m_block_info->block_pos,
+					   m_block_info->num_block_tris, m_block_info->num_tile_tris);
+			if(m_block_info->num_sub_block_tris)
+				ImGui::Text("total tris/sub block:%d (%.2f %%)\n", m_block_info->num_sub_block_tris,
+							double(m_block_info->num_sub_block_tris) /
+								m_block_info->num_block_tris * 100);
+			ImGui::Text("merged tris/block:%d (%.2f %%)", m_block_info->num_merged_block_tris,
+						double(m_block_info->num_merged_block_tris) / m_block_info->num_block_tris *
+							100);
+		}
 	} else if(ImGui::Button("Introspect 8x8 raster block")) {
 		m_is_picking_block = true;
 		m_is_picking_8x8 = true;

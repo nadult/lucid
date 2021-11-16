@@ -1046,9 +1046,11 @@ RasterBlockInfo LucidRenderer::introspectBlock8x8(const RasterTileInfo &tile,
 		for(int i = 0; i < 4; i++) {
 			block_tri_counts[i] = block_counts[block_ids[i]];
 			block_tri_offsets[i] = block_offsets[block_ids[i]];
-			if(block_tri_counts[i])
+			if(block_tri_counts[i]) {
 				block_tri_masks[i] = block_tris.subSpan(block_tri_offsets[i],
 														block_tri_offsets[i] + block_tri_counts[i]);
+				out.num_sub_block_tris += block_tri_counts[i];
+			}
 		}
 		m_block_counts->unmap();
 		m_block_offsets->unmap();
@@ -1441,7 +1443,7 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 		 stdFormat("%d (%.2f %%)", tile_counters[13],
 				   double(tile_counters[13]) / num_tile_tris * 100.0),
 		 "Per-tile triangles which generate no samples"},
-		{"block-rows", toString(num_block_rows), "Block rows generated for each per-tile triangle"},
+		{"row-tris", toString(num_block_rows), "Block rows generated for each per-tile triangle"},
 		{"block-tris", toString(num_block_tris),
 		 "Per-block triangle instances with at least 1 sample"},
 		{"fragments", toString(tile_counters[19])},
@@ -1449,8 +1451,9 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 
 	vector<StatsRow> avg_rows = {
 		{"quads / non-empty bin", stdFormat("%.2f", double(num_bin_quads) / num_nonempty_bins)},
-		{"tris / non-empty tile", stdFormat("%.2f", double(num_tile_tris) / num_nonempty_tiles)},
-		{"block-rows / non-empty tile",
+		{"tile-tris / non-empty tile",
+		 stdFormat("%.2f", double(num_tile_tris) / num_nonempty_tiles)},
+		{"row-tris / non-empty tile",
 		 stdFormat("%.2f", double(num_block_rows) / num_nonempty_tiles)},
 		{"block-tris / non-empty tile",
 		 stdFormat("%.2f", double(num_block_tris) / num_nonempty_tiles)},

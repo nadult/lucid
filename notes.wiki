@@ -394,9 +394,7 @@ Powiedzmy, że na razie chcemy jedynie przyspieszyć sortowanie i na razie robim
   widocznych trójkątach/quadach.
   Problem: dane trójkątów nie mają szans zmieścić się w SMEM...
 
-* *Naprawić i przyspieszyć mip-mapping*
-  - z jakiegoś powodu pochodne są inne niż te generowane za pomocą dfdx/dfdy... mimo tego, że
-	wartości UV w konkretnych pikselach są identyczne.
+* *Przyspieszyć mip-mapping*
   - na razie w każdym pikselu efektywnie liczymy 3x zinterpolowane współrzędne UV i liczymy
 	różnicę. Może dałoby się to zrobić jakoś szybciej? Np. wymuszając rendering w grupach 2x2?
 	Coś mi się zdaje że będzie wolniej...
@@ -414,6 +412,9 @@ Powiedzmy, że na razie chcemy jedynie przyspieszyć sortowanie i na razie robim
   szczególnie widoczne na sponzie
 
 * *Bugi na Haswellu pojawiające się gdy jest za mała liczba wątków w mask_raster*
+
+* *Bugi widoczne w różnych miejscach na powerplant jak się wyłączy backfaceculling*
+  Czasami też widać miganie na rurach (pewnie są identyczne wartości głębi)
 
 * Lepsze cache-owanie danych wierzchołków w finalnym rasterze? Ale jak to zrobić sensownie...
 

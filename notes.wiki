@@ -27,8 +27,19 @@
 	 sponza: 13280  173    177   358    1101          3194        8074
 	 teapot: 1857   33     46    80     302           456         815
   white_oak: 10781  56     60    186    671           2734        6923
-  
-TODO: next time save resolution as well!
+ 
+*Stats 16.11*: total  setup  bins  tiles  raster_masks  final_raster
+      bunny: 1894   50     48    89     996           589
+ conference: 3457   97     87    224    1684          1233
+     dragon: 2860   324    128   252    1265          759
+    gallery: 6440   365    148   405    2701          2666
+   hairball: 38878  1093   578   2216   15262         18740
+ powerplant: 32656  3665   1636  2378   11634         12206
+ san-miguel: 24417  2527   629   1306   6266          12960
+     sponza: 11358  173    161   329    3057          7475
+     teapot: 1940   32     46    74     901           768
+  white_oak: 9204   56     57    179    2256          6523
+*Resolution:* (1280, 1024)
 
 -----------------------------------------------------------------------------------------
                              === Nowa finalna rasteryzacja ===

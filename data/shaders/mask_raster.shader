@@ -83,48 +83,42 @@ uvec2 swap(uvec2 x, int mask, uint dir)
 	return x.x != y.x && (x.x < y.x) == (dir != 0) ? y : x;
 }
 
-uint bfe(uint value, uint boffset) 
+uint bitExtract(uint value, int boffset) 
 {
 	return (value >> boffset) & 1;
+}
+
+uint xorBits(uint value, int bit0, int bit1)
+{
+	return ((value >> bit0) ^ (value >> bit1)) & 1;
 }
 #endif
 
 void sortBuffer(uint N)
 {
-	// TODO: fix this
-	uint TN = 32;
-	while(TN < N)
-		TN *= 2;
-
-	uint nn = N;
-	while(nn < TN) {
-		uint count = min(TN - nn, LSIZE);
-		if(LIX < count) // TODO: make sure that this key is bigger than all valid keys
-			s_buffer[nn + LIX] = uvec2(0xffffffff, 0xffffffff);
-		nn += count;
-	}
+	uint TN = max(32, (N & (N - 1)) == 0? N : (2 << findMSB(N)));
+	for(uint i = LIX + N; i < TN; i += LSIZE)
+		s_buffer[i].x = 0xffffffff;
 	barrier();
 
 #ifdef VENDOR_NVIDIA
 	for(uint i = LIX; i < TN; i += LSIZE) {
 		uvec2 value = s_buffer[i];
-		// TODO: where does the glitches come from?
-		// repro: only do first step on powerplant or sanmiguel, sponza & dragon too
-		value = swap(value, 0x01, bfe(LIX, 1) ^ bfe(LIX, 0)); // K = 2
-		value = swap(value, 0x02, bfe(LIX, 2) ^ bfe(LIX, 1)); // K = 4
-		value = swap(value, 0x01, bfe(LIX, 2) ^ bfe(LIX, 0));
-		value = swap(value, 0x04, bfe(LIX, 3) ^ bfe(LIX, 2)); // K = 8
-		value = swap(value, 0x02, bfe(LIX, 3) ^ bfe(LIX, 1));
-		value = swap(value, 0x01, bfe(LIX, 3) ^ bfe(LIX, 0));
-		value = swap(value, 0x08, bfe(LIX, 4) ^ bfe(LIX, 3)); // K = 16
-		value = swap(value, 0x04, bfe(LIX, 4) ^ bfe(LIX, 2));
-		value = swap(value, 0x02, bfe(LIX, 4) ^ bfe(LIX, 1));
-		value = swap(value, 0x01, bfe(LIX, 4) ^ bfe(LIX, 0));
-		value = swap(value, 0x10, bfe(LIX, 5) ^ bfe(LIX, 4)); // K = 32
-		value = swap(value, 0x08, bfe(LIX, 5) ^ bfe(LIX, 3));
-		value = swap(value, 0x04, bfe(LIX, 5) ^ bfe(LIX, 2));
-		value = swap(value, 0x02, bfe(LIX, 5) ^ bfe(LIX, 1));
-		value = swap(value, 0x01, bfe(LIX, 5) ^ bfe(LIX, 0));
+		value = swap(value, 0x01, xorBits(LIX, 1, 0)); // K = 2
+		value = swap(value, 0x02, xorBits(LIX, 2, 1)); // K = 4
+		value = swap(value, 0x01, xorBits(LIX, 2, 0));
+		value = swap(value, 0x04, xorBits(LIX, 3, 2)); // K = 8
+		value = swap(value, 0x02, xorBits(LIX, 3, 1));
+		value = swap(value, 0x01, xorBits(LIX, 3, 0));
+		value = swap(value, 0x08, xorBits(LIX, 4, 3)); // K = 16
+		value = swap(value, 0x04, xorBits(LIX, 4, 2));
+		value = swap(value, 0x02, xorBits(LIX, 4, 1));
+		value = swap(value, 0x01, xorBits(LIX, 4, 0));
+		value = swap(value, 0x10, xorBits(LIX, 5, 4)); // K = 32
+		value = swap(value, 0x08, xorBits(LIX, 5, 3));
+		value = swap(value, 0x04, xorBits(LIX, 5, 2));
+		value = swap(value, 0x02, xorBits(LIX, 5, 1));
+		value = swap(value, 0x01, xorBits(LIX, 5, 0));
 		s_buffer[i] = value;
 	}
 	barrier();
@@ -133,12 +127,6 @@ void sortBuffer(uint N)
 	int start_k = 2, end_j = 1;
 #endif
 
-	// na _ to zajmuje _ czasu mask_raster:
-	// powerplant 51% ( 9.38 z 18.46) -> 14.84 -> 12.51 -> 12.17
-	// hairball   64% (17.23 z 26.84) -> 21.01 -> 16.97 -> 15.90
-	// miguel     62% ( 6.44 z 10.37) ->  7.94 ->  6.41 -> 6.22
-	// sponza     64% ( 3.37 z  5.27) ->  3.84 ->  3.10 -> 3.03
-	// dragon     57% ( 0.97 z  1.68) ->  1.15 ->  0.97 -> 0.96
 	for(uint k = start_k; k <= TN; k = 2 * k) {
 		for(uint j = k >> 1; j >= end_j; j = j >> 1) {
 			for(uint i = LIX; i < TN; i += LSIZE * 2) {
@@ -156,11 +144,11 @@ void sortBuffer(uint N)
 		for(uint i = LIX; i < TN; i += LSIZE) {
 			uint bit = (i & k) == 0? 0 : 1;
 			uvec2 value = s_buffer[i];
-			value = swap(value, 0x10, bit ^ bfe(LIX, 4));
-			value = swap(value, 0x08, bit ^ bfe(LIX, 3));
-			value = swap(value, 0x04, bit ^ bfe(LIX, 2));
-			value = swap(value, 0x02, bit ^ bfe(LIX, 1));
-			value = swap(value, 0x01, bit ^ bfe(LIX, 0));
+			value = swap(value, 0x10, bit ^ bitExtract(LIX, 4));
+			value = swap(value, 0x08, bit ^ bitExtract(LIX, 3));
+			value = swap(value, 0x04, bit ^ bitExtract(LIX, 2));
+			value = swap(value, 0x02, bit ^ bitExtract(LIX, 1));
+			value = swap(value, 0x01, bit ^ bitExtract(LIX, 0));
 			s_buffer[i] = value;
 		}
 		barrier();

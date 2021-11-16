@@ -736,18 +736,31 @@ void LucidRenderer::analyzeMaskRasterizer() const {
 	print("\n");
 }
 
-vector<vector<bool>> RasterTileInfo::triNeighbourMap(int max_dist) const {
+vector<vector<int>> RasterTileInfo::triNeighbourMap(int max_dist) const {
 	DASSERT(max_dist >= 1);
 	vector<vector<int>> neighbours(tri_verts.size());
+	HashMap<int, vector<int>> vertex_tri_map(tri_verts.size() * 2);
+	for(auto i : intRange(tri_verts))
+		for(auto v : tri_verts[i])
+			vertex_tri_map[v].emplace_back(i);
+
 	for(int i : intRange(tri_verts)) {
-		for(int j : intRange(tri_verts)) {
+		auto &tri = tri_verts[i];
+		auto is_neighbour = [&](int nid) {
+			auto &ntri = tri_verts[nid];
 			int num_shared = 0;
-			for(auto v : tri_verts[i])
-				if(isOneOf(v, tri_verts[j]))
+			for(auto v : tri)
+				if(isOneOf(v, ntri))
 					num_shared++;
-			if(num_shared == 2)
-				neighbours[i].emplace_back(j);
-		}
+			return num_shared >= 2;
+		};
+
+		for(auto v : tri)
+			for(auto nid : vertex_tri_map[v])
+				if(nid > i && is_neighbour(nid)) {
+					neighbours[i].emplace_back(nid);
+					neighbours[nid].emplace_back(i);
+				}
 	}
 
 	max_dist--;
@@ -760,16 +773,10 @@ vector<vector<bool>> RasterTileInfo::triNeighbourMap(int max_dist) const {
 						temp[n1].emplace_back(n2);
 						temp[n2].emplace_back(n1);
 					}
-		neighbours = temp;
+		neighbours = move(temp);
 	}
 
-	vector<vector<bool>> neighbour_map(neighbours.size());
-	for(auto i : intRange(neighbours)) {
-		neighbour_map[i].resize(neighbours.size(), false);
-		for(auto n : neighbours[i])
-			neighbour_map[i][n] = true;
-	}
-	return neighbour_map;
+	return neighbours;
 }
 
 RasterTileInfo LucidRenderer::introspectTile(CSpan<float3> verts, int2 full_tile_pos) const {
@@ -931,10 +938,10 @@ RasterBlockInfo LucidRenderer::introspectBlock4x4(const RasterTileInfo &tile,
 		u16 bits = 0;
 	};
 
-	auto neighbour_map = tile.triNeighbourMap(5);
+	auto neighbour_map = tile.triNeighbourMap(4);
 	auto are_compatible_tris = [&](int id0, int id1) -> bool {
 		id0 &= 0x7fff, id1 &= 0x7fff;
-		return neighbour_map[id0][id1];
+		return isOneOf(id1, neighbour_map[id0]);
 	};
 
 	// We have to make sure that depth ranges don't get too mixed up...
@@ -1131,10 +1138,10 @@ RasterBlockInfo LucidRenderer::introspectBlock8x8(const RasterTileInfo &tile,
 		u64 bits;
 	};
 
-	auto neighbour_map = tile.triNeighbourMap(5);
+	auto neighbour_map = tile.triNeighbourMap(4);
 	auto are_compatible_tris = [&](int id0, int id1) -> bool {
 		id0 &= 0x7fff, id1 &= 0x7fff;
-		return neighbour_map[id0][id1];
+		return isOneOf(id1, neighbour_map[id0]);
 	};
 
 	// We have to make sure that depth ranges don't get too mixed up...

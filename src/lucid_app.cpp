@@ -691,9 +691,9 @@ vector<LucidApp::StatPoint> LucidApp::selectPerfPoints() const {
 		}
 
 		if(!exec_id) {
-			print("Invalid perf point selected for stats: % [%]\n", selection[i][1].c_str(),
+			print("Invalid/missing perf point selected for stats: % [%]\n", selection[i][1].c_str(),
 				  selection[i][2].c_str());
-			return {};
+			continue;
 		}
 
 		out.emplace_back(*exec_id, selection[i][0]);

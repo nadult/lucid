@@ -35,12 +35,13 @@ class LucidRenderer {
 	using Opts = LucidRenderOpts;
 	using Context = RenderContext;
 
-	static constexpr int max_width = 2560, max_height = 2048, max_quads = 10 * 1024 * 1024,
-						 max_verts = 12 * 1024 * 1024, block_size = 4, tile_size = 16,
-						 bin_size = 64;
+	static constexpr int block_size = 4, tile_size = 16, bin_size = 64;
 	static constexpr int blocks_per_bin = square(bin_size / block_size),
 						 tiles_per_bin = square(bin_size / tile_size),
 						 blocks_per_tile = square(tile_size / block_size);
+
+	static constexpr int max_width = 2560, max_height = 2048;
+	static constexpr int max_quads = 10 * 1024 * 1024, max_verts = 12 * 1024 * 1024;
 
 	static_assert(isPowerOfTwo(bin_size));
 
@@ -119,7 +120,7 @@ class LucidRenderer {
 
 	PFramebuffer m_initial_fbo;
 	int2 m_size;
-	int m_num_instances = 0, m_num_quads = 0, m_num_verts = 0;
+	int m_num_instances = 0, m_num_quads = 0;
 	int2 m_bin_counts;
 
 	FrustumRays m_frustum_rays;

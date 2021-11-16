@@ -229,13 +229,8 @@ void LucidRenderer::render(const Context &ctx) {
 	// TODO: is this needed?
 	glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_SHADER_STORAGE_BARRIER_BIT);
 
-	// todo: we can modify fb directly? probably not :(
 	compose(ctx);
 	testGlError("LucidRenderer::render finish");
-
-	PERF_COUNT(m_num_instances, "num_instances");
-	PERF_COUNT(m_num_quads, "num_quads");
-	PERF_COUNT(m_num_verts, "num_vertices");
 }
 
 void LucidRenderer::initCounters(const Context &ctx) {
@@ -395,14 +390,13 @@ void LucidRenderer::computeTiles(const Context &ctx) {
 
 void LucidRenderer::checkBins() {
 	vector<int> bin_quad_counts, bin_quad_offsets, bin_quad_offsets2;
-	int num_binned_quads, num_input_quads, num_estimated_quads;
+	int num_binned_quads, num_input_quads;
 	int bin_counts = m_bin_counts.x * m_bin_counts.y;
 
 	{
 		auto vals = m_bin_counters->map<int>(AccessMode::read_only);
-		num_binned_quads = vals[0];
 		num_input_quads = vals[1];
-		num_estimated_quads = vals[2];
+		num_binned_quads = vals[2];
 		vals = vals.subSpan(32);
 		bin_quad_counts = vals.subSpan(bin_counts * 0, bin_counts * 1);
 		bin_quad_offsets = vals.subSpan(bin_counts * 1, bin_counts * 2);
@@ -416,23 +410,13 @@ void LucidRenderer::checkBins() {
 		max_height = dim->y * 3 / 4;
 	}
 
-	print("Quads: input:% estimated:% binned:%\n", num_input_quads, num_estimated_quads,
-		  num_binned_quads);
-	print("\nEstimated quad counts: %\n", num_estimated_quads);
+	print("Checking bins:\n");
+	print("Input quads:%\nBinned quads:%\n", num_input_quads, num_binned_quads);
+	print("\nBin quad counts:\n");
 	for(int y = 0; y < min(max_height, m_bin_counts.y); y++) {
 		for(int x = 0; x < min(max_width, m_bin_counts.x); x++) {
 			int count = bin_quad_counts[x + y * m_bin_counts.x];
-			printf("%5d ", count);
-		}
-		printf("\n");
-	}
-
-	print("\nActual quad counts: %\n", num_binned_quads);
-	for(int y = 0; y < min(max_height, m_bin_counts.y); y++) {
-		for(int x = 0; x < min(max_width, m_bin_counts.x); x++) {
-			int idx = x + y * m_bin_counts.x;
-			int count = bin_quad_offsets2[idx] - bin_quad_offsets[idx];
-			printf("%5d ", count);
+			printf("%6d ", count);
 		}
 		printf("\n");
 	}
@@ -450,6 +434,7 @@ void LucidRenderer::checkBins() {
 			cur_offset += bin_quad_counts[idx];
 		}
 	}
+	print("\n");
 }
 
 void LucidRenderer::checkTiles() {
@@ -1435,6 +1420,7 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 									num_rejected[2], num_rejected[3]);
 
 	vector<StatsRow> basic_rows = {
+		{"input instances", toString(m_num_instances)},
 		{"input quads", toString(num_input_quads)},
 		{"rejected quads", rejected_info, rejection_details},
 		{"bin-quads", toString(num_bin_quads), "Per-bin quads"},

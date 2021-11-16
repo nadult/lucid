@@ -982,6 +982,8 @@ RasterBlockInfo LucidRenderer::introspectBlock4x4(const RasterTileInfo &tile,
 				mmask.indices[i] = index;
 	}
 
+	out.num_merged_block_tris = mmasks.size();
+
 	printf("\nMerged masks: %d (%.2f %%)\n", mmasks.size(),
 		   double(mmasks.size()) / masks.size() * 100.0);
 	max_row_size = 6;
@@ -1039,23 +1041,18 @@ RasterBlockInfo LucidRenderer::introspectBlock8x8(const RasterTileInfo &tile,
 	{
 		auto block_counts = m_block_counts->map<u32>(AccessMode::read_only);
 		auto block_offsets = m_block_offsets->map<u32>(AccessMode::read_only);
+		auto block_tris = m_block_tris->map<u32>(AccessMode::read_only);
 		out.num_tile_tris = tile.tris.size();
-		out.num_block_tris = 0;
 		for(int i = 0; i < 4; i++) {
 			block_tri_counts[i] = block_counts[block_ids[i]];
 			block_tri_offsets[i] = block_offsets[block_ids[i]];
-			out.num_block_tris += block_tri_counts[i];
+			if(block_tri_counts[i])
+				block_tri_masks[i] = block_tris.subSpan(block_tri_offsets[i],
+														block_tri_offsets[i] + block_tri_counts[i]);
 		}
 		m_block_counts->unmap();
 		m_block_offsets->unmap();
-		if(out.num_block_tris) {
-			auto block_tris = m_block_tris->map<u32>(AccessMode::read_only);
-			for(int i = 0; i < 4; i++)
-				if(block_tri_counts[i])
-					block_tri_masks[i] = block_tris.subSpan(
-						block_tri_offsets[i], block_tri_offsets[i] + block_tri_counts[i]);
-			m_block_tris->unmap();
-		}
+		m_block_tris->unmap();
 	}
 
 	struct Mask8x8 {
@@ -1100,6 +1097,8 @@ RasterBlockInfo LucidRenderer::introspectBlock8x8(const RasterTileInfo &tile,
 			masks8x8.emplace_back(mask8x8, tri_id);
 		}
 	}
+
+	out.num_block_tris = masks8x8.size();
 
 	// TODO: We're assuming that backface culling is enabled?
 	if(!masks8x8)
@@ -1181,6 +1180,7 @@ RasterBlockInfo LucidRenderer::introspectBlock8x8(const RasterTileInfo &tile,
 			if(mask.bits & (1ull << i))
 				mmask.indices[i] = index;
 	}
+	out.num_merged_block_tris = mmasks.size();
 
 	print("Triangle masks: %\n", masks8x8.size());
 	int max_row_size = 8;

@@ -12,6 +12,7 @@ struct RasterBlockInfo {
 	vector<bool> selected_tile_tris;
 	int2 bin_pos, tile_pos, block_pos;
 	int num_block_tris = 0, num_tile_tris = 0;
+	int num_merged_block_tris = 0;
 };
 
 struct RasterTileInfo {

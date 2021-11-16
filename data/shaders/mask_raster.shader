@@ -80,7 +80,7 @@ shared uint s_buffer_size;
 uvec2 swap(uvec2 x, int mask, uint dir)
 {
 	uvec2 y = shuffleXorNV(x, mask, 32);
-	return (x.x < y.x) == (dir != 0) ? y : x;
+	return x.x != y.x && (x.x < y.x) == (dir != 0) ? y : x;
 }
 
 uint bfe(uint value, uint boffset) 

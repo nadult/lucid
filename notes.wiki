@@ -1,6 +1,14 @@
  
  *Skupiamy się na wydajnym renderingu przezroczystości; Chcemy szybko zamknąć ten temat*
- 
+
+*Simple 1280x1024 (full alpha)*
+             normal  msaa4x  msaa16x
+	 dragon:   900    1010    1100
+   hairball:  5780    7380   14270
+ powerplant: 13030   12540   19330
+ san-miguel:  8590    9440   15790
+	 sponza:  1700    1940    6390
+
 *Stats 29.10*: total  setup  bins  tiles  raster_masks  sort_masks  final_raster
 	 #boxes: 6334   25     54    136    487           1693        3513
 	  bunny: 1989   48     48    96     388           487         720
@@ -42,12 +50,141 @@
 *Resolution:* (1280, 1024)
 
 -----------------------------------------------------------------------------------------
-                                === Rasteryzacja 8x8 ===
+                    === Rasteryzacja wszystkich sampli na raz ===
 -----------------------------------------------------------------------------------------
 
-- Z bina od razu generujemy bloki 8x8? A może biny 128x128 i tile-e 32x32?
+* Spawnujemy tyle wątków, żeby dało się zrenderować wszystkie sample do SMEM. Jeśli sampli
+  jest za dużo na dany kafel, to zawężamy zakres pikseli (16x16, 8x8, 4x4).
+  Np. 1024 wątki powinny pozwolić spokojnie na 2048 sampli.
 
-- Alternatywnie z poziomu bina od razu rozrzucamy do bloków 8x8?
+* Najpierw musimy oszacować ile fragmentów mamy w każdym pikselu. Wyznaczamy też offsety
+  dla każdego piksela.
+
+* Teraz musimy równomiernie rozłożyć pracę cieniowania pomiędzy wątki. Jest kilka podejść:
+  - Zaraz po wygenerowaniu masek dla trójkątów, bucketujemy maski wg. ilości fragmentów.
+	Następnie każdy tróəkąt przydzielamy dla innego wątku. Taka metoda może dobrze działać jak
+	mamy dużo tróəkątów i mało sampli na trójkąt.
+	
+  - Bardziej zbalansowana metoda: równomiernie rozdzielamy sample z trójkątów między wątki
+	(sąsiednie wątki mogą pracować na tym samym trójkącie).
+    - Prefix Sum po ilości sampli w trójkątach. A następnie każdy wątek znajduje swoje sample binarnie?
+	  da się lepiej?
+	  troszkę hierarchicznie: znajdujemy min/max indeks najpierw dla każdego warpa a następnie
+	  w ramach warpów.
+	  
+	  Uwaga: jeśli mamy więcej niż dwa sample na wątek, to może się zdarzyć, że jeden wątek
+	  obsługuje dwa trójkąty? TODO
+      
+	  Dla każdego wątka będziemy mieli przydział (id_trójkąta, id_sampla_w_trójkącie)
+	  Jak wyznaczyć pozycję piksela ?
+
+      Chyba, że najpierw bym wygenerował pozycje sampli w SMEM a następnie je po prostu
+	  zgarniał?
+	  
+	  Generowanie pozycji:
+	  - trójkąty są posortowane wg. ilości sampli (bucket sort); każdy wątek dostaje jeden
+	    tróəkąt i iteruje po samplach...
+		To jest słabe... czy da się lepiej?
+	  - zależy od tego jaką mam reprezentację...
+	  - TODO: do rozwiązania!
+	  
+* Następnie robimy cieniowanie. Każdy wątek teraz wie jaki cieniuje tróəkąt i w jakiej pozycji.
+  Ale nie ma jeszcze danych trójkąta! Więc zanim zajmiemy się cieniowaniem, najpierw robimy triangle
+  setup. Używamy do tego tego samego miejsca którego docelowo użyjemy do sampli. Zakładamy
+  tutaj, że całe dane trójkątów się zmieszczą w SMEM. jeśli nie, to zawężamy...
+  
+  Na każdy trójkąt używamy jednego wątka: wyliczamy wszystko potrzebne do wyznaczania
+  głębokości oraz współrzędnych barycentrycznych.
+  
+  Jeśli mielibyśmy też więcej miejsca (np. ilość trójkątów 2* mniejsza niż ilość miejsca)
+  to robimy special case gdzie ładujemy też np. koordynaty UV, etc.
+  
+  Po załadowaniu tróəkątów do SMEM wszystkie wątki ładują odpowiadające im dane trójkąta do
+  rejestrów. TODO: Zakładamy, że każdy wątek może obsługiwać max 1 trójkąt.
+  Robimy synchronizację i w tym momencie dane trójkątów w SMEM nie są już potrzebne.
+
+  Cieniujemy wszystkie sample i wrzucamy je do SMEM używając atomowych liczników per pixel
+  (mogą być 16-bitowe).
+  
+* Mamy wygenerowane sample w SMEM, teraz musimy te sample w ramach każdego piksela.
+  Dostępne opcje:
+  - jakiś segmented sort (TODO: czy bitonic sort da się przerobić na taki?)
+    bitonic sort musiałby działać tak, że w każdym wątku musimy wiedzieć, do jakiego segmentu
+	należy aktualna i porównywana próbka. jeśli są różne to nic nie robimy?
+    zrobienie tego na shuffle-ach może być problematyczne...
+	na początek możemy zrobić bez shuffle-i
+	
+* Po posortowaniu musimy zmergować wszystkie sample w ramach każdego z pikseli. Robimy coś w
+  rodzaju segmented reduce.
+  
+  Np. mamy sample S0, S1, S2, S3, ..., SN
+  Chcemy wyliczyć:
+  ( ... (Back.col * (1 - S0.a) + S0.col * S0.a) * (1 - S1.a) + S1.col * S1.a ...) * (1 - SN.a) + SN.col * SN.a
+
+  Łączymy sample hierarchicznie, przy czym zamiast trzymać (Color, Alpha) lepiej trzymać:
+   (Color * Alpha, 1 - Alpha), takie sample łatwiej się merguje:
+   
+   Merge(S0, S1) = (S0.premul_color * S1.neg_alpha + S1.premul_color, S0.neg_alpha * S1.neg_alpha)
+
+   Robimy segmentowaną redukcję używając tej funkcji Merge. Tak samo jak z sortowaniem:
+   mergujemy tylko jeśli sample należą do tego samego piksela.
+   
+   W samplach encodujemy pozycję piksela, czy każdy wątek z innego źródła wie który to piksel?
+   - jak z innego źródła ? Z offsetów sampli per pixel ?
+     Vectorized search od nvidii (pdf na lapku), ale na razie chyba po prostu każda próbka zajmie 40 bitów?
+
+   - 24 bity na głębokość
+   - 8 bitów na alphę
+   - 11 + 11 + 10 bitów na RGB ? wystarczy? jeśli nie to możemy jeszcze z 8 bitów przeznaczyć? 13 + 14 + 13
+   - 8 bitów na pozycję piksela
+    Np. 2048 sampli: 8KB głębia + alpha, 8KB kolory, 2KB na pozycje piksela
+  
+  Po redukcji (bedzie tu pewnie trochę zabawy z wydajnymi dostępami do SMEM) zapisujemy
+  wartości pikseli do Framebuffera i voila!
+  
+  
+  Problem: MSAA! jak rozdzielić funkcję widoczności od cieniowania?
+
+
+-----------------------------------------------------------------------------------------
+                                      === Różne ===
+-----------------------------------------------------------------------------------------
+
+*Nowy pomysł !!!*
+- rendering wszystkich sampli na raz
+  (możemy renderować cały tile jeśli się zmieszczą, jeśli nie to bloki 8x8 albo 4x4).
+- wrzucamy wszystkie sample do SMEM
+- sortujemy i robimy redukcję po pikselach (segmentowana?)
+  Problem: nawet jeśli sample się zmieszczą w SMEM to tróəkąty już nie muszą.
+  nie mogę też zająć całego miejsca w SMEM samplami pewnie
+
+  Jeśli trójkąty byłyby posortowane wg. ilości sampli (można by je pobinować)
+  to generacja mogłaby być całkiem szybka?
+
+
+
+  Problem by był tylko jeśli mielibyśmy np. bardzo mało tróəkątów per bin, ale taką sytuację
+  BARDZO ŁATWO można obsłużyć prostszym algorytmem!
+
+
+*Sortowanie niektórych trójkątów per tile a niektórych per blok; a potem mergowanie ich?*
+
+* Po fazie binowania może lepiej by było nie generować wszystkich danych, ale używać scratcha,
+  od generacji indeksów trójkątów per tile aż do finalnej rasteryzacji. Tym sposobem można by
+  mocno ograniczyć zużycie pamięci a może też ilość operacji na pamięci (ale raczej tylko w
+  przypadku małych binów).
+
+
+*Binowanie tróəkątów w tile-ach po ilości linii a następnie generowanie linii dla całego tile-a od razu*
+- tam gdzie wiemy że będzie <= 4, 8, 12 linii możemy użyć mniej uintów do zapisania masek
+
+*Potrzebujemy różnych strategii na różne sytuacje!*
+
+warstwy są na zmianę? w aktualnym algo to nie jest proste: iteruję po maskach i testuję bity...
+iteracja po co drugiej warstwie?
+
+Co mi to da oprócz dodatkowego skomplikowania? Będzie trzeba załadowac 2x tyle tróəkątów i
+tak...
 
 -----------------------------------------------------------------------------------------
                              === Nowa finalna rasteryzacja ===

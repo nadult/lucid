@@ -1509,6 +1509,7 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 		{"max block-tris / tile", toString(tile_counters[18])},
 		{"max block-tris / block", toString(tile_counters[15])},
 		{"max fragments / tile", toString(tile_counters[20])},
+		{"max fragments / pixel", toString(tile_counters[21])},
 	};
 
 	vector<StatsRow> invalid_rows = {

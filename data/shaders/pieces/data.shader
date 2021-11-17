@@ -65,6 +65,7 @@ struct TileCounters {
 
 	uint num_fragments;
 	uint max_fragments_per_tile;
+	uint max_fragments_per_pixel;
 
 	uint temp2[11];
 

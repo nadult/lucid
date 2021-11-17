@@ -55,6 +55,7 @@ shared int s_block_max_tri_count;
 shared uint s_invalid_block_mask;
 shared uint s_fragment_count;
 shared uint s_total_fragment_count, s_max_fragment_count;
+shared uint s_max_fragment_count_per_pixel;
 
 layout(binding = 0) uniform sampler2D opaque_texture;
 layout(binding = 1) uniform sampler2D transparent_texture;
@@ -243,6 +244,13 @@ void rasterizeTri(const ivec2 pixel_pos, uint tri_idx) {
 	rasterPixel(color, ray_pos);
 }
 
+// Times:      total / only loading & iterating (shading %)
+// powerplant: 12.63 /  6.14  (51%)
+// san-miguel: 13.43 /  4.66  (65%)
+//     dragon:  0.80 /  0.59  (26%)
+//     sponza:  7.75 /  1.70  (78%)
+//   hairball: 19.56 / 11.39  (41%)
+//    gallery:  2.77 /  1.32  (52%)
 void rasterizeBlocks(ivec2 tile_pos) {
 	int tile_block_idx = int(LID.y);
 	const ivec2 block_pos = ivec2(tile_block_idx & 3, tile_block_idx >> 2) * BLOCK_SIZE;
@@ -301,6 +309,7 @@ void rasterizeBlocks(ivec2 tile_pos) {
 		}
 	}
 	
+	atomicMax(s_max_fragment_count_per_pixel, cur_tri_count);
 	//result = vec3(float(cur_tri_count) / 4, float(cur_tri_count) / 32, float(cur_tri_count) / 256);
 	//result_neg_alpha = 0.2;
 
@@ -388,6 +397,7 @@ void main() {
 	if(LIX == 0) {
 		s_total_fragment_count = 0;
 		s_max_fragment_count = 0;
+		s_max_fragment_count_per_pixel = 0;
 	}
 	int bin_id = loadNextBin();
 	while(bin_id < BIN_COUNT) {
@@ -399,6 +409,7 @@ void main() {
 	if(LIX == 0) {
 		atomicAdd(g_tiles.num_fragments, s_total_fragment_count);
 		atomicMax(g_tiles.max_fragments_per_tile, s_max_fragment_count);
+		atomicMax(g_tiles.max_fragments_per_pixel, s_max_fragment_count_per_pixel);
 	}
 
 }

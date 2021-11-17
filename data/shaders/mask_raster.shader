@@ -45,25 +45,6 @@ layout(std430, binding = 12) coherent buffer buf12_ { uvec2 g_scratch[]; };
 #define MAX_TILE_TRIS 64 * 1024
 #define MAX_BLOCK_TRIS 2048
 
-// Dostępne strategie:
-// - wszystkie trójkąty (z wszystkich binów) mieszczą się w SMEM
-//   jedno sortowanie
-// - trójkąty z każdego rzędu mieszczą się w SMEM
-//   sortowanie każdego rzędu niezależnie
-// - tróəkąty z każdego bloku mieszczą się w SMEM
-//
-// - tróəkąty mieszczą się w limicie tróəkątów na blok (2048)
-// - tróəkąty się nie mieszczą (FAIL)
-//
-//
-// Nowy plan:
-// - generujemy rzędy do SMEM
-// - z SMEM generujemy bloki do scratcha (pobinowane)
-// - bloki ze scratcha sortujemy i umieszczamy w miejscu docelowym
-//
-// - dwie opcje sortowania: albo wszystko na raz (jak się zmieści w 2048) albo każdy blok niezależnie
-//   ew. ładowanie po kilka bloków na raz (zależnie od ilości tróəkątów)
-
 shared int s_tile_tri_counts [TILES_PER_BIN];
 shared int s_tile_tri_offsets[TILES_PER_BIN];
 shared int s_tile_tri_count, s_tile_tri_offset;
@@ -76,6 +57,7 @@ shared uint s_tile_blocktri_count, s_tile_rowtri_count;
 shared uint s_total_rowtri_count, s_max_rowtri_count;
 shared uint s_max_blocktri_count, s_empty_tri_count;
 
+// TODO: possible opt: keep values & keys in separate buffers?
 shared uvec2 s_buffer[LSIZE * 4];
 shared uint s_buffer_size;
 

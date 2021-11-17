@@ -75,6 +75,7 @@ class LucidApp {
 	float m_square_weight = 0.5f;
 	int m_setup_idx = -1;
 
+	bool m_merge_masks = false;
 	bool m_is_picking_block = false;
 	bool m_is_picking_8x8 = false;
 	bool m_is_final_pick = false;

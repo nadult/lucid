@@ -723,6 +723,19 @@ void LucidRenderer::analyzeMaskRasterizer() const {
 	print("\n");
 }
 
+string RasterBlockInfo::description() const {
+	TextFormatter fmt;
+	fmt("bin:% tile:% block:%\ntris/block:% tris/tile:%", bin_pos, tile_pos, block_pos,
+		num_block_tris, num_tile_tris);
+	if(num_sub_block_tris)
+		fmt.stdFormat("total tris/sub block:%d (%.2f %%)\n", num_sub_block_tris,
+					  double(num_sub_block_tris) / num_block_tris * 100);
+	if(num_merged_block_tris)
+		fmt.stdFormat("merged tris/block:%d (%.2f %%)", num_merged_block_tris,
+					  double(num_merged_block_tris) / num_block_tris * 100);
+	return fmt.text();
+}
+
 vector<vector<int>> RasterTileInfo::triNeighbourMap(int max_dist) const {
 	DASSERT(max_dist >= 1);
 	vector<vector<int>> neighbours(tri_verts.size());
@@ -814,8 +827,8 @@ RasterTileInfo LucidRenderer::introspectTile(CSpan<float3> verts, int2 full_tile
 	return out;
 }
 
-RasterBlockInfo LucidRenderer::introspectBlock4x4(const RasterTileInfo &tile,
-												  int2 full_block_pos) const {
+RasterBlockInfo LucidRenderer::introspectBlock4x4(const RasterTileInfo &tile, int2 full_block_pos,
+												  bool merge_masks) const {
 	RasterBlockInfo out;
 	PERF_GPU_SCOPE();
 	int2 tile_pos = full_block_pos / 4;
@@ -849,6 +862,8 @@ RasterBlockInfo LucidRenderer::introspectBlock4x4(const RasterTileInfo &tile,
 		u32 local_idx = (masks[i] >> 16) & 0x7fff;
 		auto &tri = tile.tris[local_idx];
 		float depth_min = inf, depth_max = -inf;
+		if(tri.degenerate())
+			continue;
 		Plane3F plane(tri);
 
 		for(int j = 0; j < 16; j++) {
@@ -918,6 +933,38 @@ RasterBlockInfo LucidRenderer::introspectBlock4x4(const RasterTileInfo &tile,
 		}
 	}
 	print("\n");
+	vector<pair<int, u16>> mask_layers;
+	mask_layers.emplace_back(0, 0);
+	for(int i : intRange(masks)) {
+		auto &layer = mask_layers.back();
+		auto mask = masks[i] & 0xffff;
+		if((layer.second & mask) == 0) {
+			layer.first++;
+			layer.second |= mask;
+		} else {
+			mask_layers.emplace_back(1, mask);
+		}
+	}
+
+	int num_fragments = 0;
+	for(auto &mask : masks)
+		num_fragments += countBits(mask & 0xffff);
+	print("masks:% fragments:% layers:%\n", masks.size(), num_fragments, mask_layers.size());
+	printf("fragments/mask:%.2f fragments/layer:%.2f masks/layer:%.2f\n",
+		   double(num_fragments) / masks.size(), double(num_fragments) / mask_layers.size(),
+		   double(masks.size()) / mask_layers.size());
+	for(int i = 0; i < mask_layers.size(); i += 4) {
+		int row_size = min(mask_layers.size() - i, 4);
+		for(int j = 0; j < row_size; j++) {
+			auto &layer = mask_layers[i + j];
+			printf("[%03d]: %2d tri %2d pix %s", i + j, layer.first, countBits((u32)layer.second),
+				   j + 1 == row_size ? "\n" : "| ");
+		}
+	}
+	print("\n");
+
+	if(!merge_masks)
+		return out;
 
 	struct MergedMask4x4 {
 		vector<u16> tri_ids;
@@ -977,8 +1024,10 @@ RasterBlockInfo LucidRenderer::introspectBlock4x4(const RasterTileInfo &tile,
 	for(int i = 0; i < mmasks.size(); i += max_row_size) {
 		printf("\n");
 		int row_size = min(mmasks.size() - i, max_row_size);
-		for(int j = 0; j < row_size; j++)
-			printf("  %4d (%d)   ", i + j, (int)mmasks[i + j].tri_ids.size());
+		for(int j = 0; j < row_size; j++) {
+			int num_tris = (int)mmasks[i + j].tri_ids.size();
+			printf("  %4d (%d)    %s", i + j, num_tris, num_tris < 10 ? " " : "");
+		}
 		printf("\n");
 		for(int iy = 0; iy < 4; iy++) {
 			for(int j = 0; j < row_size; j++) {
@@ -1002,7 +1051,7 @@ RasterBlockInfo LucidRenderer::introspectBlock4x4(const RasterTileInfo &tile,
 }
 
 RasterBlockInfo LucidRenderer::introspectBlock8x8(const RasterTileInfo &tile,
-												  int2 full_block8x8_pos) const {
+												  int2 full_block8x8_pos, bool merge_masks) const {
 	RasterBlockInfo out;
 	PERF_GPU_SCOPE();
 	int2 tile_pos = full_block8x8_pos / 2;
@@ -1089,10 +1138,10 @@ RasterBlockInfo LucidRenderer::introspectBlock8x8(const RasterTileInfo &tile,
 
 	out.num_block_tris = masks8x8.size();
 
-	// TODO: We're assuming that backface culling is enabled?
-	if(!masks8x8)
+	if(!masks8x8 || !merge_masks)
 		return out;
 
+	// TODO: We're assuming that backface culling is enabled?
 	// Note: it makes no sense without merging non-overlapping masks into layers
 	for(auto &mask : masks8x8) {
 		auto &tri = tile.tris[mask.tri_id & 0x7fff];

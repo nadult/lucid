@@ -1,5 +1,6 @@
 #include "lucid_app.h"
 
+#include "lucid_renderer.h"
 #include "meshlet.h"
 #include "scene_setup.h"
 #include "simple_renderer.h"
@@ -392,16 +393,8 @@ void LucidApp::doMenu() {
 	if(m_is_picking_block) {
 		menu::text("Picking % block: %", m_is_picking_8x8 ? "8x8" : "4x4", m_selected_block);
 		if(m_block_info) {
-			menu::text("bin:% tile:% block:%\ntris/block:% tris/tile:%", m_block_info->bin_pos,
-					   m_block_info->tile_pos, m_block_info->block_pos,
-					   m_block_info->num_block_tris, m_block_info->num_tile_tris);
-			if(m_block_info->num_sub_block_tris)
-				ImGui::Text("total tris/sub block:%d (%.2f %%)\n", m_block_info->num_sub_block_tris,
-							double(m_block_info->num_sub_block_tris) /
-								m_block_info->num_block_tris * 100);
-			ImGui::Text("merged tris/block:%d (%.2f %%)", m_block_info->num_merged_block_tris,
-						double(m_block_info->num_merged_block_tris) / m_block_info->num_block_tris *
-							100);
+			auto desc = m_block_info->description();
+			menu::text(desc.c_str());
 		}
 	} else if(ImGui::Button("Introspect 8x8 raster block")) {
 		m_is_picking_block = true;
@@ -410,6 +403,7 @@ void LucidApp::doMenu() {
 		m_is_picking_block = true;
 		m_is_picking_8x8 = false;
 	}
+	ImGui::Checkbox("Merge introspected masks", &m_merge_masks);
 
 	ImGui::End();
 
@@ -636,10 +630,9 @@ bool LucidApp::mainLoop(GlDevice &device) {
 		auto &verts = m_setups[m_setup_idx]->scene->positions;
 		auto tile_pos = *m_selected_block / (m_is_picking_8x8 ? 2 : 4);
 		auto tile_info = m_lucid_renderer->introspectTile(verts, tile_pos);
-		if(m_is_picking_8x8)
-			m_block_info = m_lucid_renderer->introspectBlock8x8(tile_info, *m_selected_block);
-		else
-			m_block_info = m_lucid_renderer->introspectBlock4x4(tile_info, *m_selected_block);
+		auto func = m_is_picking_8x8 ? &LucidRenderer::introspectBlock8x8
+									 : &LucidRenderer::introspectBlock4x4;
+		m_block_info = (m_lucid_renderer.get()->*func)(tile_info, *m_selected_block, m_merge_masks);
 		if(m_is_final_pick) {
 			if(tile_info.tris)
 				visualizeBlockTris(tile_info, *m_block_info);

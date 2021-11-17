@@ -265,8 +265,8 @@ void rasterizeBlocks(ivec2 tile_pos) {
 				atomicAdd(s_fragment_count, bitCount(mask));
 				mask_id += LID.y * MAX_MASKS;
 				s_masks[mask_id] = mask;
-				uint tri_idx =  g_tile_tris[s_tile_tri_offset + ((block_tri >> 16) & 0x7fff)];
-				uint second_tri = block_tri >> 31;
+				uint tri_idx = g_tile_tris[s_tile_tri_offset + ((block_tri >> 16) & 0xffff)];
+				uint second_tri = tri_idx >> 31;
 				uint verts[4] = { g_quad_indices[tri_idx * 4 + 0], g_quad_indices[tri_idx * 4 + 1],
 								  g_quad_indices[tri_idx * 4 + 2], g_quad_indices[tri_idx * 4 + 3] };
 				uint instance_id = (verts[0] >> 26) | ((verts[1] >> 20) & 0xfc0) | ((verts[2] >> 14) & 0x3f000);

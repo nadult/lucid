@@ -375,7 +375,6 @@ void generateTileMasks() {
 			uint tri_idx = g_tile_tris[s_tile_tri_offset + local_tri_idx];
 			bool second_tri = (tri_idx & 0x80000000) != 0;
 			tri_idx &= 0x7fffffff;
-			local_tri_idx |= (second_tri? 0x8000 : 0);
 
 			uint v0 = g_quad_indices[tri_idx * 4 + 0] & 0x03ffffff;
 			uint v1 = g_quad_indices[tri_idx * 4 + (second_tri? 2 : 1)] & 0x03ffffff;

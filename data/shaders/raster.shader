@@ -3,7 +3,7 @@
 #define LIX gl_LocalInvocationIndex
 #define LID gl_LocalInvocationID
 
-#define LSIZE 512
+#define LSIZE 256
 
 // TODO: when storing rows, store each row independently as a triple: (tri_id, row, row_id)
 // this way we can easily bin them into buckets of different sample sizes
@@ -36,9 +36,9 @@ layout(binding = 1) uniform sampler2D transparent_texture;
 //       first divide rows in 4 different sets
 //       then divide each row in 4 blocks if necessary
 #define MAX_TRIS (LSIZE / 2)
-#define MAX_SAMPLES (LSIZE * 4)
-#define MAX_ROW_TRIS (LSIZE * 4)
 #define SAMPLES_PER_THREAD 4
+#define MAX_SAMPLES (LSIZE * SAMPLES_PER_THREAD)
+#define MAX_ROW_TRIS (LSIZE * 4)
 
 shared int s_tile_tri_counts [TILES_PER_BIN];
 shared int s_tile_tri_offsets[TILES_PER_BIN];
@@ -49,8 +49,10 @@ shared ivec2 s_bin_pos, s_tile_pos;
 //  low 16 bits: counts
 // high 16 bits: offsets
 shared uint s_pixel_counts[TILE_SIZE][TILE_SIZE];
+shared uint s_pixel_temp[TILE_SIZE][TILE_SIZE];
 
 shared int s_buffer_count, s_tile_rowtri_count, s_tile_sample_count;
+// TODO: size is wrong
 shared uint s_buffer[LSIZE * 4 + 1];
 shared float s_fbuffer[LSIZE * 4 + 1];
 
@@ -204,6 +206,7 @@ void sumPixelCounts()
 		uint value = s_pixel_counts[row_id][col_id];
 		value = value + row_offset - (value << 16);
 		s_pixel_counts[row_id][col_id] = value;
+		s_pixel_temp[row_id][col_id] = value >> 16;
 	}
 #else
 #error write me please
@@ -223,7 +226,6 @@ void rasterPixelCounts()
 
 		uint pix_count  = s_pixel_counts[pixel_pos.y][pixel_pos.x] & 0xffff;
 		uint pix_offset = s_pixel_counts[pixel_pos.y][pixel_pos.x] >> 16;
-		pix_offset = getNumSamples();
 
 		//vec4 color = vec4(float(pix_count) / 1024.0, float(pix_count) / 16.0, float(pix_count) / 128.0, pix_count == 0? 0.0 : 1.0);
 		//vec4 color = vec4(float(pix_count) / 255.0, float(pix_count) / 63.0, float(pix_count) / 255.0, pix_count == 0? 0.0 : 1.0);
@@ -292,8 +294,8 @@ void loadTriangles()
 		s_fbuffer[MAX_TRIS * 4 + i] = edge1.y;
 		s_fbuffer[MAX_TRIS * 5 + i] = edge1.z;
 
-		s_fbuffer[MAX_TRIS * 6 + i] = v2;
-		s_fbuffer[MAX_TRIS * 7 + i] = instance_id;
+		s_fbuffer[MAX_TRIS * 6 + i] = uintBitsToFloat(v2);
+		s_fbuffer[MAX_TRIS * 7 + i] = uintBitsToFloat(instance_id);
 	}
 }
 
@@ -372,7 +374,7 @@ uvec2 shadeSample(uint sample_id)
 	}
 
 	// TODO: too many registers used?
-	/*if((instance_flags & INST_HAS_TEXTURE) != 0) {
+	if((instance_flags & INST_HAS_TEXTURE) != 0) {
 		vec2 tex0 = g_tex_coords[v0];
 		vec2 tex1 = g_tex_coords[v1];
 		vec2 tex2 = g_tex_coords[v2];
@@ -409,7 +411,7 @@ uvec2 shadeSample(uint sample_id)
 			color.xyz *= textureGrad(opaque_texture, tex_coord, tex_dx, tex_dy).xyz;
 		else
 			color *= textureGrad(transparent_texture, tex_coord, tex_dx, tex_dy);
-	}*/
+	}
 
 	if((instance_flags & INST_HAS_VERTEX_NORMALS) != 0) {
 		vec3 nrm0 = decodeNormalUint(g_normals[v0]);
@@ -484,9 +486,31 @@ void assignSamples_()
 	s_buffer[LIX] = min_pos;
 }
 
-// TODO: może tile dispatcher też jest zbędny? moglibyśmy od razu iterować po trójkątach z bina?
-//       nawet jeśli to jest to pomysł na później jak już wszystko inne będzie szybciej działać
-void generateBinMasks(int bin_id) {
+void reduceSamples()
+{
+	// TODO: optimize
+	if(LIX < TILE_SIZE * TILE_SIZE) {
+		uint row_id = LIX >> TILE_SHIFT, col_id = LIX & (TILE_SIZE - 1);
+		uint pixel_counter = s_pixel_counts[row_id][col_id];
+		int num_samples = int(pixel_counter & 0xffff);
+		int sample_offset = int(pixel_counter >> 16);
+		
+		uint enc_color = 0;
+		float depth = 1.0 / 0.0;
+		for(int i = 0; i < num_samples; i++) {
+			float sdepth = s_fbuffer[sample_offset + i];
+			if(sdepth < depth) {
+				depth = sdepth;
+				enc_color = s_buffer[sample_offset + i];
+			}
+		}
+
+		//enc_color = encodeRGBA8(vec4(vec3(float(sample_offset) / MAX_SAMPLES), 1.0));
+		imageStore(final_raster, s_tile_pos + ivec2(col_id, row_id), uvec4(enc_color, 0, 0, 0));
+	}
+}
+
+void rasterBins(int bin_id) {
 	if(LIX < TILES_PER_BIN) {
 		s_tile_tri_counts [LIX] = int(g_tiles.tile_tri_counts[bin_id][LIX]);
 		s_tile_tri_offsets[LIX] = int(g_tiles.tile_tri_offsets[bin_id][LIX]);
@@ -510,31 +534,43 @@ void generateBinMasks(int bin_id) {
 		barrier();
 		generateTileMasks();
 		barrier();
-		if(s_tile_sample_count > MAX_ROW_TRIS || s_tile_tri_count > MAX_TRIS) {
+		sumPixelCounts();
+		barrier();
+			if(s_tile_sample_count > MAX_ROW_TRIS || s_tile_tri_count > MAX_TRIS || getNumSamples() > MAX_SAMPLES) {
 			rasterInvalidTile();
 			continue;
 		}
-		sumPixelCounts();
-		barrier();
 
-		uint samples[4];
-		for(int i = 0; i < 4; i++) {
-			uint sample_id = LIX * 4 + i;
-			samples[i] = sample_id < s_tile_sample_count? s_buffer[i] : ~0u;
+		// Selecting samples
+		uint sample_ids[SAMPLES_PER_THREAD];
+		uvec2 samples[SAMPLES_PER_THREAD];
+		for(int i = 0; i < SAMPLES_PER_THREAD; i++) {
+			uint sample_idx = LIX * SAMPLES_PER_THREAD + i;
+			sample_ids[i] = sample_idx < s_tile_sample_count? s_buffer[sample_idx] : ~0u;
 		}
+
 		barrier();
 		loadTriangles();
 		barrier();
 
-		for(int i = 0; i < 4; i++) {
-			if(samples[i] == ~0u)
-				break;
-			uvec2 value = shadeSample(samples[i]);
-			s_fbuffer[LIX * 4 + i] = uintBitsToFloat(value.x);
-			s_buffer[LIX * 4 + i] = value.y;
-		}
-		
-		rasterPixelCounts();
+		// Shading samples
+		for(int i = 0; i < SAMPLES_PER_THREAD; i++)
+			if(sample_ids[i] != ~0u)
+				samples[i] = shadeSample(sample_ids[i]);
+		barrier();
+
+		// Ordering samples by pixel pos
+		for(int i = 0; i < SAMPLES_PER_THREAD; i++)
+			if(sample_ids[i] != ~0u) { // TODO: make sure that this test OK
+				ivec2 pixel_pos = ivec2(sample_ids[i] & 0xf, (sample_ids[i] >> 4) & 0xf);
+				uint sample_idx = atomicAdd(s_pixel_temp[pixel_pos.y][pixel_pos.x], 1);
+				s_buffer[sample_idx] = samples[i].y;
+				s_fbuffer[sample_idx] = uintBitsToFloat(samples[i].x);
+			}
+		barrier();
+
+		reduceSamples();
+		//rasterPixelCounts();
 	}
 }
 
@@ -554,7 +590,7 @@ void main() {
 	int bin_id = loadNextBin();
 	while(bin_id < BIN_COUNT) {
 		barrier();
-		generateBinMasks(bin_id);
+		rasterBins(bin_id);
 		bin_id = loadNextBin();
 	}
 }

@@ -1,15 +1,10 @@
-// $$include funcs frustum viewport data
+// $$include funcs lighting frustum viewport data
 
 #define LIX gl_LocalInvocationIndex
 #define LID gl_LocalInvocationID
 
-#define LSIZE 1024
+#define LSIZE 512
 
-// TODO: problem with uneven amounts of data in different tiles
-// TODO: jak dobrze obsługiwać różnego rodzaju dystrybucje trójkątów ?
-//
-// TODO: replace 16 to BLOCKS_PER_TILE ? it's not that simple...
-//
 // TODO: when storing rows, store each row independently as a triple: (tri_id, row, row_id)
 // this way we can easily bin them into buckets of different sample sizes
 
@@ -30,12 +25,17 @@ layout(std430, binding = 7) buffer buf7_ { TileCounters g_tiles; };
 layout(std430, binding = 8) buffer buf8_  { uint g_tile_tris[]; };
 layout(std430, binding = 9) coherent buffer buf9_ { uvec2 g_scratch[]; };
 
+layout(std430, binding = 10) readonly buffer buf10_ { InstanceData g_instances[]; };
+
+layout(binding = 0) uniform sampler2D opaque_texture;
+layout(binding = 1) uniform sampler2D transparent_texture;
+
 // TODO: enforce this somehow
 // TODO: scratch too big?
 // TODO: stratedy for large number of rows
 //       first divide rows in 4 different sets
 //       then divide each row in 4 blocks if necessary
-#define MAX_TILE_TRIS 64 * 1024
+#define MAX_TRIS (LSIZE / 2)
 #define MAX_SAMPLES (LSIZE * 4)
 #define MAX_ROW_TRIS (LSIZE * 4)
 #define SAMPLES_PER_THREAD 4
@@ -50,8 +50,9 @@ shared ivec2 s_bin_pos, s_tile_pos;
 // high 16 bits: offsets
 shared uint s_pixel_counts[TILE_SIZE][TILE_SIZE];
 
-shared int s_buffer_count, s_tile_rowtri_count;
+shared int s_buffer_count, s_tile_rowtri_count, s_tile_sample_count;
 shared uint s_buffer[LSIZE * 4 + 1];
+shared float s_fbuffer[LSIZE * 4 + 1];
 
 shared uint s_mini_buffer[32];
 
@@ -116,15 +117,25 @@ void generateTriScanlines(uint local_tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, i
 				atomicAdd(s_pixel_counts[by * 4 + y][imin], 1);
 				if(imax < 15)
 					atomicAdd(s_pixel_counts[by * 4 + y][imax + 1], -1);
+
+				int num_samples = imax - imin + 1;
+				int sample_offset = atomicAdd(s_tile_sample_count, num_samples);
+				uint sample_value = (local_tri_idx << 16) | ((by * 4 + y) << 4) | imin;
+				num_samples = min(num_samples, MAX_SAMPLES - sample_offset);
+
+				// TODO: this is slow
+				for(int j = 0; j < num_samples; j++)
+					s_buffer[sample_offset++] = sample_value++;
 			}
 			row_ranges |= enc_value << ((y & 3) << 3);
 		}
 
+		/*
 		if(row_ranges != 0x0f0f0f0f) {
 			uint roffset = atomicAdd(s_tile_rowtri_count, 1);
 			if(roffset < MAX_ROW_TRIS) // TODO: handle this properly
 				g_scratch[soffset + roffset] = uvec2(row_ranges, local_tri_idx | uint(by << 20));
-		}
+		}*/
 	}
 }
 
@@ -235,6 +246,185 @@ void rasterInvalidTile()
 	}
 }
 
+// TODO: problem: we cannot use tile triangle indices, because there would be too many...
+// we have to remap triangles to those which are actually used in currently rasterized tile segment
+// We would have to store those indices (32-bit) in scratch probably
+void loadTriangles()
+{
+	for(uint i = LIX; i < s_tile_tri_count; i += LSIZE) {
+		uint tri_idx = g_tile_tris[s_tile_tri_offset + i];
+		uint second_tri = tri_idx >> 31;
+		uint verts[4] = { g_quad_indices[tri_idx * 4 + 0], g_quad_indices[tri_idx * 4 + 1],
+						  g_quad_indices[tri_idx * 4 + 2], g_quad_indices[tri_idx * 4 + 3] };
+		uint instance_id = (verts[0] >> 26) | ((verts[1] >> 20) & 0xfc0) | ((verts[2] >> 14) & 0x3f000);
+		uint v0 = verts[0] & 0x03ffffff;
+		uint v1 = verts[1 + second_tri] & 0x03ffffff;
+		uint v2 = verts[2 + second_tri] & 0x03ffffff;
+
+		// TODO: subtract ray origin to decreas number of ops ?
+		vec3 tri0 = vec3(g_verts[v0 * 3 + 0], g_verts[v0 * 3 + 1], g_verts[v0 * 3 + 2]);
+		vec3 tri1 = vec3(g_verts[v1 * 3 + 0], g_verts[v1 * 3 + 1], g_verts[v1 * 3 + 2]);
+		vec3 tri2 = vec3(g_verts[v2 * 3 + 0], g_verts[v2 * 3 + 1], g_verts[v2 * 3 + 2]);
+		
+		vec3 normal = cross(tri0 - tri2, tri1 - tri0);
+		float multiplier = 1.0 / length(normal);
+		normal *= multiplier;
+
+		vec3 edge0 = (tri0 - tri2) * multiplier;
+		vec3 edge1 = (tri1 - tri0) * multiplier;
+
+		s_buffer[MAX_TRIS * 0 + i] = floatBitsToUint(normal.x);
+		s_buffer[MAX_TRIS * 1 + i] = floatBitsToUint(normal.y);
+		s_buffer[MAX_TRIS * 2 + i] = floatBitsToUint(normal.z);
+		
+		s_buffer[MAX_TRIS * 3 + i] = floatBitsToUint(tri0.x);
+		s_buffer[MAX_TRIS * 4 + i] = floatBitsToUint(tri0.y);
+		s_buffer[MAX_TRIS * 5 + i] = floatBitsToUint(tri0.z);
+	
+		s_buffer[MAX_TRIS * 6 + i] = v0;
+		s_buffer[MAX_TRIS * 7 + i] = v1;
+	
+		s_fbuffer[MAX_TRIS * 0 + i] = edge0.x;
+		s_fbuffer[MAX_TRIS * 1 + i] = edge0.y;
+		s_fbuffer[MAX_TRIS * 2 + i] = edge0.z;
+		
+		s_fbuffer[MAX_TRIS * 3 + i] = edge1.x;
+		s_fbuffer[MAX_TRIS * 4 + i] = edge1.y;
+		s_fbuffer[MAX_TRIS * 5 + i] = edge1.z;
+
+		s_fbuffer[MAX_TRIS * 6 + i] = v2;
+		s_fbuffer[MAX_TRIS * 7 + i] = instance_id;
+	}
+}
+
+vec3 getTriangleNormal(uint local_tri_idx) {
+	return vec3(
+		uintBitsToFloat(s_buffer[MAX_TRIS * 0 + local_tri_idx]),
+		uintBitsToFloat(s_buffer[MAX_TRIS * 1 + local_tri_idx]),
+		uintBitsToFloat(s_buffer[MAX_TRIS * 2 + local_tri_idx]));
+}
+
+vec3 getTriangleV0(uint local_tri_idx) {
+	return vec3(
+		uintBitsToFloat(s_buffer[MAX_TRIS * 3 + local_tri_idx]),
+		uintBitsToFloat(s_buffer[MAX_TRIS * 4 + local_tri_idx]),
+		uintBitsToFloat(s_buffer[MAX_TRIS * 5 + local_tri_idx]));
+}
+
+vec3 getTriangleEdge(uint local_tri_idx, uint edge_idx) {
+	uint eoffset = edge_idx == 1? MAX_TRIS * 3 : 0;
+	return vec3(
+		s_fbuffer[eoffset + MAX_TRIS * 0 + local_tri_idx],
+		s_fbuffer[eoffset + MAX_TRIS * 1 + local_tri_idx],
+		s_fbuffer[eoffset + MAX_TRIS * 2 + local_tri_idx]);
+}
+
+uvec3 getTriangleVerts(uint local_tri_idx) {
+	return uvec3(
+		s_buffer[MAX_TRIS * 6 + local_tri_idx],
+		s_buffer[MAX_TRIS * 7 + local_tri_idx],
+		floatBitsToUint(s_fbuffer[MAX_TRIS * 6 + local_tri_idx]));
+}
+
+uint getTriangleInstanceId(uint local_tri_idx) {
+	return floatBitsToUint(s_fbuffer[MAX_TRIS * 7 + local_tri_idx]);
+}
+
+uvec2 shadeSample(uint sample_id)
+{
+	ivec2 pixel_pos = ivec2(sample_id & 15, (sample_id >> 4) & 15) + s_tile_pos;
+	uint local_tri_idx = sample_id >> 16;
+
+	vec3 ray_dir = frustum.ws_dir0 + frustum.ws_dirx * (pixel_pos.x + 0.5)
+								   + frustum.ws_diry * (pixel_pos.y + 0.5);
+
+	vec3 tri0   = getTriangleV0(local_tri_idx);
+	vec3 normal = getTriangleNormal(local_tri_idx);
+	vec3 edge0 = getTriangleEdge(local_tri_idx, 0);
+	vec3 edge1 = getTriangleEdge(local_tri_idx, 1);
+	float plane_dist = dot(normal, tri0);
+
+	float ray_pos0 = -(dot(frustum.ws_shared_origin, normal) - plane_dist);
+	float ray_pos = ray_pos0 / dot(normal, ray_dir);
+	vec3 hitpoint = frustum.ws_shared_origin + ray_pos * ray_dir;
+
+	vec3 diff = hitpoint - tri0;
+	float v = dot(cross(edge0, diff), normal);
+	float w = dot(cross(edge1, diff), normal);
+	vec3 bary = vec3(1.0 - v - w, v, w);
+
+	uint instance_id = getTriangleInstanceId(local_tri_idx);
+	uint instance_flags = g_instances[instance_id].flags;
+
+	uint v0, v1, v2;
+	if((instance_flags & (INST_HAS_VERTEX_COLORS | INST_HAS_TEXTURE | INST_HAS_VERTEX_NORMALS)) != 0) {
+		uvec3 verts = getTriangleVerts(local_tri_idx);
+		v0 = verts[0], v1 = verts[1], v2 = verts[2];
+	}
+
+	// TODO: how to compute derivative?
+	vec4 color = decodeRGBA8(g_instances[instance_id].color);
+	if((instance_flags & INST_HAS_VERTEX_COLORS) != 0) {
+		vec4 col0 = decodeRGBA8(g_colors[v0]);
+		vec4 col1 = decodeRGBA8(g_colors[v1]);
+		vec4 col2 = decodeRGBA8(g_colors[v2]);
+		color *= bary[0] * col0 + bary[1] * col1 + bary[2] * col2;
+	}
+
+	// TODO: too many registers used?
+	/*if((instance_flags & INST_HAS_TEXTURE) != 0) {
+		vec2 tex0 = g_tex_coords[v0];
+		vec2 tex1 = g_tex_coords[v1];
+		vec2 tex2 = g_tex_coords[v2];
+		tex1 -= tex0;
+		tex2 -= tex0;
+
+		vec3 ray_dirx = ray_dir + frustum.ws_dirx;
+		float ray_posx = ray_pos0 / dot(normal, ray_dirx);
+		vec3 hitpointx = frustum.ws_shared_origin + ray_posx * ray_dirx;
+		vec3 diffx = hitpointx - tri0;
+		
+		vec3 ray_diry = ray_dir + frustum.ws_diry;
+		float ray_posy = ray_pos0 / dot(normal, ray_diry);
+		vec3 hitpointy = frustum.ws_shared_origin + ray_posy * ray_diry;
+		vec3 diffy = hitpointy - tri0;
+
+		vec2 bary_dx = vec2(dot(cross(edge0, diffx), normal), dot(cross(edge1, diffx), normal));
+		vec2 bary_dy = vec2(dot(cross(edge0, diffy), normal), dot(cross(edge1, diffy), normal));
+
+		vec2 tex_coord = bary[1] * tex1 + bary[2] * tex2;
+		vec2 tex_dx = (bary_dx.x * tex1 + bary_dx.y * tex2 - tex_coord);
+		vec2 tex_dy = bary_dy.x * tex1 + bary_dy.y * tex2 - tex_coord;
+		tex_coord += tex0;
+
+		if((instance_flags & INST_HAS_UV_RECT) != 0) {
+			vec2 uv_rect_pos = vec2(g_instances[instance_id].uv_rect[0], g_instances[instance_id].uv_rect[1]);
+			vec2 uv_rect_size = vec2(g_instances[instance_id].uv_rect[2], g_instances[instance_id].uv_rect[3]);
+			tex_coord = uv_rect_pos + uv_rect_size * fract(tex_coord);
+			tex_dx *= uv_rect_size;
+			tex_dy *= uv_rect_size;
+		}
+
+		if((instance_flags & INST_TEX_OPAQUE) != 0)
+			color.xyz *= textureGrad(opaque_texture, tex_coord, tex_dx, tex_dy).xyz;
+		else
+			color *= textureGrad(transparent_texture, tex_coord, tex_dx, tex_dy);
+	}*/
+
+	if((instance_flags & INST_HAS_VERTEX_NORMALS) != 0) {
+		vec3 nrm0 = decodeNormalUint(g_normals[v0]);
+		vec3 nrm1 = decodeNormalUint(g_normals[v1]);
+		vec3 nrm2 = decodeNormalUint(g_normals[v2]);
+		nrm1 -= nrm0; nrm2 -= nrm0;
+		normal = nrm0 + bary[1] * nrm1 + bary[2] * nrm2;
+	}
+
+	float light_value = max(0.0, dot(-lighting.sun_dir, normal) * 0.7 + 0.3);
+	color.rgb = min(finalShading(color.rgb, light_value), vec3(1.0, 1.0, 1.0));
+
+	return uvec2(floatBitsToUint(ray_pos), encodeRGBA8(color));
+}
+
 void assignSamples_()
 {
 	// Dla każdego rzędu liczymy ile ma trójkątów
@@ -313,18 +503,37 @@ void generateBinMasks(int bin_id) {
 				s_tile_tri_offset = s_tile_tri_offsets[tile_id];
 				s_tile_pos = s_bin_pos + ivec2(tile_id & 3, tile_id >> 2) * TILE_SIZE;
 				s_tile_rowtri_count = 0;
+				s_tile_sample_count = 0;
 			}
 			s_pixel_counts[LIX >> TILE_SHIFT][LIX & (TILE_SIZE - 1)] = 0;
 		}
 		barrier();
 		generateTileMasks();
 		barrier();
-		if(s_tile_rowtri_count > MAX_ROW_TRIS) {
+		if(s_tile_sample_count > MAX_ROW_TRIS || s_tile_tri_count > MAX_TRIS) {
 			rasterInvalidTile();
 			continue;
 		}
 		sumPixelCounts();
 		barrier();
+
+		uint samples[4];
+		for(int i = 0; i < 4; i++) {
+			uint sample_id = LIX * 4 + i;
+			samples[i] = sample_id < s_tile_sample_count? s_buffer[i] : ~0u;
+		}
+		barrier();
+		loadTriangles();
+		barrier();
+
+		for(int i = 0; i < 4; i++) {
+			if(samples[i] == ~0u)
+				break;
+			uvec2 value = shadeSample(samples[i]);
+			s_fbuffer[LIX * 4 + i] = uintBitsToFloat(value.x);
+			s_buffer[LIX * 4 + i] = value.y;
+		}
+		
 		rasterPixelCounts();
 	}
 }

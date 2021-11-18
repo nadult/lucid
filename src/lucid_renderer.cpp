@@ -1352,6 +1352,7 @@ void LucidRenderer::newRaster(const Context &ctx) {
 	m_tile_counters->bindIndex(7);
 	m_tile_tris->bindIndex(8);
 	m_scratch->bindIndex(9);
+	m_instance_data->bindIndex(10);
 
 	m_raster_image->bindImage(0, AccessMode::write_only);
 	new_raster_program.use();

@@ -5,7 +5,8 @@
 #include <fwk/gfx/color.h>
 
 // TODO: better handling of phases
-DEFINE_ENUM(LucidRenderOpt, check_bins, check_tiles, debug_masks);
+// TODO: ability to change options without recreating renderer
+DEFINE_ENUM(LucidRenderOpt, check_bins, check_tiles, debug_masks, debug_raster, new_raster);
 using LucidRenderOpts = EnumFlags<LucidRenderOpt>;
 
 struct RasterBlockInfo {
@@ -89,6 +90,7 @@ class LucidRenderer {
 	void rasterizeMasks(const Context &);
 	void sortMasks(const Context &);
 	void rasterizeFinal(const Context &);
+	void newRaster(const Context &);
 	void compose(const Context &);
 
 	// Does nothing useful; can be used for measuring
@@ -111,7 +113,7 @@ class LucidRenderer {
 	// TODO: m_ prefix
 	Program init_counters_program, setup_program;
 	Program bin_estimator_program, bin_dispatcher_program, tile_dispatcher_program;
-	Program final_raster_program, mask_raster_program, sort_program;
+	Program final_raster_program, mask_raster_program, sort_program, new_raster_program;
 	Program compose_program, dummy_program;
 
 	PTexture m_raster_image;

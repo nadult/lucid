@@ -181,6 +181,8 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	final_raster_program = EX_PASS(Program::makeCompute("final_raster", defs));
 	mask_raster_program = EX_PASS(Program::makeCompute(
 		"mask_raster", defs, mask(m_opts & Opt::debug_masks, ProgramOpt::debug)));
+	new_raster_program = EX_PASS(
+		Program::makeCompute("raster", defs, mask(m_opts & Opt::debug_raster, ProgramOpt::debug)));
 	//	sort_program = EX_PASS(Program::makeCompute(
 	//		"mask_sort", defs, mask(m_opts & Opt::debug_masks, ProgramOpt::debug)));
 	dummy_program = EX_PASS(Program::makeCompute("dummy", defs));
@@ -216,14 +218,15 @@ void LucidRenderer::render(const Context &ctx) {
 	if(false)
 		dummyIterateBins(ctx);
 
-	rasterizeMasks(ctx);
-	if(m_opts & Opt::debug_masks)
-		debugMasks(false);
-	//	sortMasks(ctx);
-	//	if(m_opts & Opt::debug_masks)
-	//		debugMasks(true);
+	if(m_opts & Opt::new_raster) {
+		newRaster(ctx);
+	} else {
+		rasterizeMasks(ctx);
+		if(m_opts & Opt::debug_masks)
+			debugMasks(false);
+		rasterizeFinal(ctx);
+	}
 
-	rasterizeFinal(ctx);
 	copyCounters();
 
 	// TODO: is this needed?
@@ -1328,6 +1331,47 @@ Image LucidRenderer::masksSnapshot() {
 	}
 
 	return image;
+}
+
+void LucidRenderer::newRaster(const Context &ctx) {
+	PERF_GPU_SCOPE();
+
+	m_tri_aabbs->bindIndex(0);
+	m_quad_indices->bindIndex(1);
+	auto vbuffers = ctx.vao->buffers();
+	DASSERT(vbuffers.size() == 4);
+	vbuffers[0]->bindIndexAs(2, BufferType::shader_storage);
+	if(auto tex_vb = vbuffers[2])
+		tex_vb->bindIndexAs(3, BufferType::shader_storage);
+	if(auto col_vb = vbuffers[1])
+		col_vb->bindIndexAs(4, BufferType::shader_storage);
+	if(auto nrm_vb = vbuffers[3])
+		nrm_vb->bindIndexAs(5, BufferType::shader_storage);
+
+	m_bin_counters->bindIndex(6);
+	m_tile_counters->bindIndex(7);
+	m_tile_tris->bindIndex(8);
+	m_scratch->bindIndex(9);
+
+	m_raster_image->bindImage(0, AccessMode::write_only);
+	new_raster_program.use();
+
+	GlTexture::bind({ctx.opaque_tex, ctx.trans_tex});
+	//GlTexture::bind({ctx.depth_buffer, ctx.shadows.map});
+
+	ctx.lighting.setUniforms(new_raster_program.glProgram());
+	new_raster_program.setFrustum(ctx.camera);
+	new_raster_program.setViewport(ctx.camera, m_size);
+	new_raster_program.setShadows(ctx.shadows.matrix, ctx.shadows.enable);
+	ctx.lighting.setUniforms(new_raster_program.glProgram());
+
+	// TODO: lepiej by było, jakby było to bardziej zintegrowane z GlProgramem
+	// - dispatch też mógłby być funkcją debuggera);
+	// - Inny debugger dla compute i inny dla pozostałych shaderów
+	// - możliwość przekazywania konkretnych wartości (np. 4 różne wartości?)
+	// - jakaś klasa do prostej introspekcji linii kodu programu
+	glDispatchCompute(128, 1, 1);
+	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 }
 
 void LucidRenderer::rasterizeFinal(const Context &ctx) {

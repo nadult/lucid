@@ -142,8 +142,21 @@
   Po redukcji (bedzie tu pewnie trochę zabawy z wydajnymi dostępami do SMEM) zapisujemy
   wartości pikseli do Framebuffera i voila!
   
-  
   Problem: MSAA! jak rozdzielić funkcję widoczności od cieniowania?
+
+=== Pierwsza implementacja ===
+
+- przerabiamy mask_raster:
+  - wywalamy sort
+  - generujemy maski (16x16) do scratcha, bez wyliczania głębokości!
+    - na razie poo prostu generujmy 4 uinty i tyle!
+
+  - jak szybko zliczyć sample w pikselach?
+    - tablica +1 / -1
+	- na końcu prefix sum? 2 rzędy liczymy równocześnie (16-bitów)
+
+  - na początek tylko wyświetlanie ilości pikseli, nic więcej
+
 
 
 -----------------------------------------------------------------------------------------

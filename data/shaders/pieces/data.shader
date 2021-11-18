@@ -67,7 +67,7 @@ struct TileCounters {
 	uint max_fragments_per_tile;
 	uint max_fragments_per_pixel;
 
-	uint temp2[11];
+	uint temp2[10];
 
 	// TODO: 16-bit counters
 	uint  tile_tri_counts  [BIN_COUNT][TILES_PER_BIN];

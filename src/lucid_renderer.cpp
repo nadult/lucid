@@ -782,6 +782,9 @@ vector<vector<int>> RasterTileInfo::triNeighbourMap(int max_dist) const {
 RasterTileInfo LucidRenderer::introspectTile(CSpan<float3> verts, int2 full_tile_pos) const {
 	RasterTileInfo out;
 
+	PERF_GPU_SCOPE();
+	glMemoryBarrier(GL_ALL_BARRIER_BITS);
+
 	int2 bin_pos = full_tile_pos / 4;
 	int2 tile_pos = full_tile_pos - bin_pos * 4;
 	out.bin_pos = bin_pos;
@@ -859,7 +862,7 @@ RasterBlockInfo LucidRenderer::introspectBlock4x4(const RasterTileInfo &tile, in
 
 	for(int i : intRange(masks)) {
 		u32 mask = masks[i] & 0xffff;
-		u32 local_idx = (masks[i] >> 16) & 0x7fff;
+		u32 local_idx = masks[i] >> 16;
 		auto &tri = tile.tris[local_idx];
 		float depth_min = inf, depth_max = -inf;
 		if(tri.degenerate())
@@ -896,7 +899,7 @@ RasterBlockInfo LucidRenderer::introspectBlock4x4(const RasterTileInfo &tile, in
 
 	out.selected_tile_tris.resize(tile.tris.size());
 	for(int i : intRange(masks)) {
-		u32 local_idx = (masks[i] >> 16) & 0x7fff;
+		u32 local_idx = masks[i] >> 16;
 		out.selected_tile_tris[local_idx] = true;
 	}
 
@@ -907,7 +910,7 @@ RasterBlockInfo LucidRenderer::introspectBlock4x4(const RasterTileInfo &tile, in
 	/*for(int i : intRange(masks)) {
 		printf("%4d: %c %f - %f", i, mask_overlaps[i] ? 'X' : ' ', mask_depths[i].first,
 			   mask_depths[i].second);
-		uint local_idx = (masks[i] >> 16) & 0x7fff;
+		uint local_idx = masks[i] >> 16;
 		print("%\n", tile.tris[local_idx]);
 	}*/
 	int max_row_size = 16;
@@ -915,7 +918,7 @@ RasterBlockInfo LucidRenderer::introspectBlock4x4(const RasterTileInfo &tile, in
 		printf("\n");
 		int row_size = min(masks.size() - i, max_row_size);
 		for(int j = 0; j < row_size; j++) {
-			uint local_idx = (masks[i + j] >> 16) & 0x7fff;
+			uint local_idx = masks[i + j] >> 16;
 			uint tri_idx = tile.tri_indices[local_idx];
 			printf(" %4d  ", i + j);
 			//printf("%c%6d ", tri_idx & 0x80000000 ? '*' : ' ', tri_idx & 0xffffff);
@@ -974,7 +977,6 @@ RasterBlockInfo LucidRenderer::introspectBlock4x4(const RasterTileInfo &tile, in
 
 	auto neighbour_map = tile.triNeighbourMap(4);
 	auto are_compatible_tris = [&](int id0, int id1) -> bool {
-		id0 &= 0x7fff, id1 &= 0x7fff;
 		return isOneOf(id1, neighbour_map[id0]);
 	};
 
@@ -1100,9 +1102,9 @@ RasterBlockInfo LucidRenderer::introspectBlock8x8(const RasterTileInfo &tile,
 	};
 
 	vector<Mask8x8> masks8x8;
-	array<int, 64> layer_depth = {
-		0,
-	};
+	array<int, 64> layer_depth;
+	fill(layer_depth, 0);
+
 	{
 		vector<int> tri_ids;
 		for(auto &masks : block_tri_masks)
@@ -1144,7 +1146,7 @@ RasterBlockInfo LucidRenderer::introspectBlock8x8(const RasterTileInfo &tile,
 	// TODO: We're assuming that backface culling is enabled?
 	// Note: it makes no sense without merging non-overlapping masks into layers
 	for(auto &mask : masks8x8) {
-		auto &tri = tile.tris[mask.tri_id & 0x7fff];
+		auto &tri = tile.tris[mask.tri_id];
 		float depth_min = inf, depth_max = -inf;
 		Plane3F plane(tri);
 
@@ -1177,7 +1179,6 @@ RasterBlockInfo LucidRenderer::introspectBlock8x8(const RasterTileInfo &tile,
 
 	auto neighbour_map = tile.triNeighbourMap(4);
 	auto are_compatible_tris = [&](int id0, int id1) -> bool {
-		id0 &= 0x7fff, id1 &= 0x7fff;
 		return isOneOf(id1, neighbour_map[id0]);
 	};
 
@@ -1281,10 +1282,8 @@ RasterBlockInfo LucidRenderer::introspectBlock8x8(const RasterTileInfo &tile,
 	}
 
 	out.selected_tile_tris.resize(tile.tris.size());
-	for(auto &mask : masks8x8) {
-		int id = mask.tri_id & 0x7fff;
-		out.selected_tile_tris[id] = true;
-	}
+	for(auto &mask : masks8x8)
+		out.selected_tile_tris[mask.tri_id] = true;
 
 	return out;
 }

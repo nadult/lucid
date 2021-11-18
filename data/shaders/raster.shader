@@ -3,9 +3,7 @@
 #define LIX gl_LocalInvocationIndex
 #define LID gl_LocalInvocationID
 
-// Different sizes are optimal for different number of tris/bin
-// 512 for hairball, 256 for other scenes?
-#define LSIZE 256
+#define LSIZE 1024
 
 // TODO: problem with uneven amounts of data in different tiles
 // TODO: jak dobrze obsługiwać różnego rodzaju dystrybucje trójkątów ?
@@ -31,8 +29,12 @@ layout(std430, binding = 9) coherent buffer buf9_ { uvec2 g_scratch[]; };
 
 // TODO: enforce this somehow
 // TODO: scratch too big?
+// TODO: stratedy for large number of rows
+//       first divide rows in 4 different sets
+//       then divide each row in 4 blocks if necessary
 #define MAX_TILE_TRIS 64 * 1024
-#define MAX_TRI_ROWS (LSIZE * 4)
+#define MAX_SAMPLES (LSIZE * 4)
+#define MAX_TRI_ROWS (LSIZE * 2)
 
 shared int s_tile_tri_counts [TILES_PER_BIN];
 shared int s_tile_tri_offsets[TILES_PER_BIN];
@@ -40,10 +42,14 @@ shared int s_tile_tri_count, s_tile_tri_offset;
 shared ivec2 s_bin_pos, s_tile_pos;
 
 // TODO: 16 bit
+//  low 16 bits: counts
+// high 16 bits: offsets
 shared uint s_pixel_counts[TILE_SIZE][TILE_SIZE];
 
 shared int s_buffer_count, s_tile_rowtri_count;
-shared uvec2 s_buffer[LSIZE * 4];
+shared uvec2 s_buffer[LSIZE * 2];
+
+shared uint s_mini_buffer[32];
 
 uint computeScanlineParams(vec3 tri0, vec3 tri1, vec3 tri2, out vec3 scan_base, out vec3 scan_step) {
 	vec3 nrm0 = cross(tri2, tri1 - tri2);
@@ -87,6 +93,7 @@ void generateTriScanlines(uint local_tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, i
 				(sign_mask & 4) != 0? scan[2] : 1.0 / 0.0);
 	}
 
+	uint soffset = gl_WorkGroupID.x * MAX_TRI_ROWS;
 	for(int by = min_by; by <= max_by; by++) {
 		uint row_ranges = 0;
 
@@ -112,7 +119,7 @@ void generateTriScanlines(uint local_tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, i
 		if(row_ranges != 0x0f0f0f0f) {
 			uint roffset = atomicAdd(s_tile_rowtri_count, 1);
 			if(roffset < MAX_TRI_ROWS) // TODO: handle this properly
-				s_buffer[roffset] = uvec2(row_ranges, local_tri_idx | uint(by << 20));
+				g_scratch[soffset + roffset] = uvec2(row_ranges, local_tri_idx | uint(by << 20));
 		}
 	}
 }
@@ -149,12 +156,36 @@ void sumPixelCounts()
 #ifdef VENDOR_NVIDIA
 	if(LIX < TILE_SIZE * TILE_SIZE) {
 		uint col_id = LIX & (TILE_SIZE - 1);
+		// Computing initial counts
 		uint value = s_pixel_counts[LIX >> TILE_SHIFT][col_id], temp;
 		temp = shuffleUpNV(value, 1, 16); if(col_id >= 1) value += temp;
 		temp = shuffleUpNV(value, 2, 16); if(col_id >= 2) value += temp;
 		temp = shuffleUpNV(value, 4, 16); if(col_id >= 4) value += temp;
 		temp = shuffleUpNV(value, 8, 16); if(col_id >= 8) value += temp;
+
+		// Computing pixel offsets per row
+		value += (value << 16);
+		temp = shuffleUpNV(value, 1, 16); if(col_id >= 1) value += temp & 0xffff0000;
+		temp = shuffleUpNV(value, 2, 16); if(col_id >= 2) value += temp & 0xffff0000;
+		temp = shuffleUpNV(value, 4, 16); if(col_id >= 4) value += temp & 0xffff0000;
+		temp = shuffleUpNV(value, 8, 16); if(col_id >= 8) value += temp & 0xffff0000;
 		s_pixel_counts[LIX >> TILE_SHIFT][col_id] = value;
+	}
+	barrier();
+	// Computing pixel row offsets
+	if(LIX < TILE_SIZE) {
+		uint row_value = s_pixel_counts[LIX][15] >> 16, temp;
+		temp = shuffleUpNV(row_value, 1, 16); if(LIX >= 1) row_value += temp;
+		temp = shuffleUpNV(row_value, 2, 16); if(LIX >= 2) row_value += temp;
+		temp = shuffleUpNV(row_value, 4, 16); if(LIX >= 4) row_value += temp;
+		temp = shuffleUpNV(row_value, 8, 16); if(LIX >= 8) row_value += temp;
+		s_mini_buffer[LIX] = row_value << 16;
+	}
+	barrier();
+	if(LIX < TILE_SIZE * TILE_SIZE) {
+		uint row_id = LIX >> TILE_SHIFT;
+		uint row_offset = row_id == 0? 0 : s_mini_buffer[row_id - 1];
+		s_pixel_counts[row_id][LIX & (TILE_SIZE - 1)] += row_offset;
 	}
 #else
 #error write me please
@@ -165,12 +196,28 @@ void rasterPixelCounts()
 {
 	if(LIX < TILE_SIZE * TILE_SIZE) {
 		ivec2 pixel_pos = ivec2(LIX & (TILE_SIZE - 1), LIX >> TILE_SHIFT);
-		uint value = s_pixel_counts[pixel_pos.y][pixel_pos.x];
-		//vec4 color = vec4(float(value) / 1024.0, float(value) / 16.0, float(value) / 128.0, value == 0? 0.0 : 1.0);
-		vec4 color = vec4(float(value) / 255.0, float(value) / 63.0, float(value) / 255.0, value == 0? 0.0 : 1.0);
+
+		uint pix_count  = s_pixel_counts[pixel_pos.y][pixel_pos.x] & 0xffff;
+		uint pix_offset = s_pixel_counts[pixel_pos.y][pixel_pos.x] >> 16;
+
+		//vec4 color = vec4(float(pix_count) / 1024.0, float(pix_count) / 16.0, float(pix_count) / 128.0, pix_count == 0? 0.0 : 1.0);
+		//vec4 color = vec4(float(pix_count) / 255.0, float(pix_count) / 63.0, float(pix_count) / 255.0, pix_count == 0? 0.0 : 1.0);
+		vec4 color = vec4(vec3(float(pix_offset) / MAX_SAMPLES), pix_offset == 0? 0.0 : 1.0);
+		if(pix_offset >= MAX_SAMPLES)
+			color.rgb = vec3(1.0, 0.0, 0.0);
+		color = min(color, vec4(1.0));
 		uint enc_col = encodeRGBA8(color);
 		imageStore(final_raster, s_tile_pos + pixel_pos, uvec4(enc_col, 0, 0, 0));
 	}
+}
+
+void assignSamples()
+{
+	// Dla każdego rzędu liczymy ile ma trójkątów
+	// prefix sum: w s_buffer mamy ilości 
+	// następnie binarnie każdy wątek znajduje sobie sample do rasteryzacji
+
+
 }
 
 // TODO: może tile dispatcher też jest zbędny? moglibyśmy od razu iterować po trójkątach z bina?

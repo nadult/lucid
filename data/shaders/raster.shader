@@ -481,66 +481,6 @@ uvec2 shadeSample(uint sample_id)
 	return uvec2(floatBitsToUint(ray_pos), encodeRGBA8(color));
 }
 
-/*
-void assignSamples_()
-{
-	// Dla każdego rzędu liczymy ile ma trójkątów
-	// prefix sum: w s_buffer mamy ilości 
-	// następnie binarnie każdy wątek znajduje sobie sample do rasteryzacji
-
-	uint soffset = gl_WorkGroupID.x * MAX_ROW_TRIS;
-	// Computing number of samples for each row-tri (offseted by 1 index)
-	for(uint i = LIX; i < s_tile_rowtri_count; i += LSIZE) {
-		uint rows = g_scratch[soffset + i].x;
-		uint num_pixels = 0;
-		for(int j = 0; j < 4; j++) {
-			uint minx = rows & 0xf, maxx = (rows >> 4) & 0xf;
-			num_pixels += max(0, maxx - minx + 1);
-			rows >>= 8;
-		}
-		s_buffer[i + 1] = num_pixels;
-	}
-	if(LIX == 0)
-		s_buffer[0] = 0;
-	barrier();
-
-	// Computing prefix sum of samples for each row-tri
-	// TODO: optimize
-	for(uint shift = 1; shift < s_tile_rowtri_count; shift *= 4) {
-		for(uint i = LIX; i < s_tile_rowtri_count; i += LSIZE) {
-			uint v0 = s_buffer[i], v1 = i >= shift? s_buffer[i - shift] : 0;
-			uint value = (v0 & 0xffff) + (v1 & 0xffff);
-			atomicAnd(s_buffer[i], 0xffff);
-			atomicAdd(s_buffer[i], value << 16);
-		}
-		barrier();
-		for(uint i = LIX; i < s_tile_rowtri_count; i += LSIZE) {
-			uint v0 = s_buffer[i], v1 = i >= shift? s_buffer[i - shift] : 0;
-			uint value = (v0 >> 16) + (v1 >> 16);
-			atomicAnd(s_buffer[i], 0xffff);
-			atomicAdd(s_buffer[i], value << 16);
-		}
-		barrier();
-	}
-
-	// Assigning samples to threads
-	// TODO: fix & optimize (vectorized search)
-	uint min_pos = 0, max_pos = s_tile_rowtri_count - 1;
-	uint target_value = LIX * 4;
-	int steps = 0;
-	while(min_pos + 1 < max_pos && steps < 20) {
-		uint mid_pos = (max_pos + min_pos) >> 1;
-		uint mid_value = s_buffer[mid_pos] & 0xffff;
-		if(mid_value <= target_value)
-			min_pos = mid_pos;
-		else
-			max_pos = mid_pos - 1;
-		steps++;
-	}
-
-	s_buffer[LIX] = min_pos;
-}*/
-
 void reduceSamples()
 {
 	// TODO: optimize

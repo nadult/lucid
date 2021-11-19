@@ -305,6 +305,11 @@ void loadTriangles()
 		s_buffer[MAX_TRIS * 6 + i] = v0;
 		s_buffer[MAX_TRIS * 7 + i] = v1;
 	
+		// Nice optimization for barycentric computations:
+		// dot(cross(edge, dir), normal) == dot(dir, cross(normal, edge))
+		edge0 = cross(normal, edge0);
+		edge1 = cross(normal, edge1);
+
 		s_fbuffer[MAX_TRIS * 0 + i] = edge0.x;
 		s_fbuffer[MAX_TRIS * 1 + i] = edge0.y;
 		s_fbuffer[MAX_TRIS * 2 + i] = edge0.z;
@@ -368,8 +373,7 @@ uvec2 shadeSample(uint sample_id)
 	uint instance_flags = g_instances[instance_id].flags;
 
 	float ray_pos = params[0] / dot(normal, ray_dir);
-	vec2 bary = vec2(dot(cross(edge0, ray_dir), normal),
-					 dot(cross(edge1, ray_dir), normal)) * ray_pos;
+	vec2 bary = vec2(dot(edge0, ray_dir), dot(edge1, ray_dir)) * ray_pos;
 
 	vec2 bary_dx, bary_dy;
 	if((instance_flags & INST_HAS_TEXTURE) != 0) {
@@ -379,15 +383,11 @@ uvec2 shadeSample(uint sample_id)
 		float ray_posx = params[0] / dot(normal, ray_dirx);
 		float ray_posy = params[0] / dot(normal, ray_diry);
 
-		bary_dx = vec2(dot(cross(edge0, ray_dirx), normal),
-					   dot(cross(edge1, ray_dirx), normal)) * ray_posx;
-		bary_dy = vec2(dot(cross(edge0, ray_diry), normal),
-					   dot(cross(edge1, ray_diry), normal)) * ray_posy;
-		bary_dx -= bary;
-		bary_dy -= bary;
+		bary_dx = vec2(dot(edge0, ray_dirx), dot(edge1, ray_dirx)) * ray_posx - bary;
+		bary_dy = vec2(dot(edge0, ray_diry), dot(edge1, ray_diry)) * ray_posy - bary;
 	}
-	// params, normal, edge0 & edge1 no longer needed!
 	bary -= vec2(params[1], params[2]);
+	// params, normal, edge0 & edge1 no longer needed!
 
 	uint v0, v1, v2;
 	if((instance_flags & (INST_HAS_VERTEX_COLORS | INST_HAS_TEXTURE | INST_HAS_VERTEX_NORMALS)) != 0) {

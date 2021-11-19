@@ -41,7 +41,6 @@ layout(std430, binding = 10) readonly buffer buf10_ { InstanceData g_instances[]
 layout(binding = 0) uniform sampler2D opaque_texture;
 layout(binding = 1) uniform sampler2D transparent_texture;
 
-
 shared int s_tile_tri_counts [TILES_PER_BIN];
 shared int s_tile_tri_offsets[TILES_PER_BIN];
 shared vec3 s_tile_ray_dirs0[TILES_PER_BIN];
@@ -51,6 +50,7 @@ shared vec3 s_tile_ray_dir0;
 
 //  low 16 bits: counts
 // high 16 bits: offsets
+// TODO: make it 1D array, indexing could be simpler, we could save some regs
 shared uint s_pixel_counts[TILE_SIZE][TILE_SIZE];
 shared int s_block_row_tri_count[4];
 
@@ -59,7 +59,6 @@ shared uint s_buffer[MAX_SAMPLES + 1];
 shared float s_fbuffer[MAX_SAMPLES + 1];
 
 shared uint s_mini_buffer[32];
-
 
 uint computeScanlineParams(vec3 tri0, vec3 tri1, vec3 tri2, out vec3 scan_base, out vec3 scan_step) {
 	vec3 nrm0 = cross(tri2, tri1 - tri2);
@@ -122,14 +121,6 @@ void generateTriRows(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, int min_by, 
 				atomicAdd(s_pixel_counts[by * 4 + y][imin], 1);
 				if(imax < 15)
 					atomicAdd(s_pixel_counts[by * 4 + y][imax + 1], -1);
-
-				/*int num_samples = imax - imin + 1;
-				int sample_offset = atomicAdd(s_sample_count, num_samples);
-				uint sample_value = (local_tri_idx << 16) | ((by * 4 + y) << 4) | imin;
-				num_samples = min(num_samples, MAX_SAMPLES - sample_offset);
-				// TODO: this is slow
-				for(int j = 0; j < num_samples; j++)
-					s_buffer[sample_offset++] = sample_value++;*/
 			}
 			row_ranges |= enc_value << ((y & 3) << 3);
 		}
@@ -290,10 +281,10 @@ void loadAllRowsSamples() {
 void sumPixelCounts()
 {
 #ifdef VENDOR_NVIDIA
-	if(LIX < TILE_SIZE * TILE_SIZE) {
-		uint col_id = LIX & (TILE_SIZE - 1);
+	for(uint i = LIX; i < TILE_SIZE * TILE_SIZE; i += LSIZE) {
+		uint col_id = i & (TILE_SIZE - 1), row_id = i >> TILE_SHIFT;
 		// Computing initial counts
-		uint value = s_pixel_counts[LIX >> TILE_SHIFT][col_id], temp;
+		uint value = s_pixel_counts[row_id][col_id], temp;
 		temp = shuffleUpNV(value, 1, 16); if(col_id >= 1) value += temp;
 		temp = shuffleUpNV(value, 2, 16); if(col_id >= 2) value += temp;
 		temp = shuffleUpNV(value, 4, 16); if(col_id >= 4) value += temp;
@@ -305,7 +296,7 @@ void sumPixelCounts()
 		temp = shuffleUpNV(value, 2, 16); if(col_id >= 2) value += temp & 0xffff0000;
 		temp = shuffleUpNV(value, 4, 16); if(col_id >= 4) value += temp & 0xffff0000;
 		temp = shuffleUpNV(value, 8, 16); if(col_id >= 8) value += temp & 0xffff0000;
-		s_pixel_counts[LIX >> TILE_SHIFT][col_id] = value;
+		s_pixel_counts[row_id][col_id] = value;
 	}
 	barrier();
 	// Computing pixel row offsets
@@ -319,9 +310,8 @@ void sumPixelCounts()
 	}
 	barrier();
 	// Adding row offsets to pixel offsets
-	if(LIX < TILE_SIZE * TILE_SIZE) {
-		uint row_id = LIX >> TILE_SHIFT;
-		uint col_id = LIX & (TILE_SIZE - 1);
+	for(uint i = LIX; i < TILE_SIZE * TILE_SIZE; i += LSIZE) {
+		uint row_id = i >> TILE_SHIFT, col_id = i & (TILE_SIZE - 1);
 		uint row_offset = row_id == 0? 0 : s_mini_buffer[row_id - 1];
 		uint value = s_pixel_counts[row_id][col_id];
 		value = value + row_offset - (value << 16);
@@ -340,8 +330,8 @@ void prepareBlockRowOffsets()
 		s_mini_buffer[LIX] = s_pixel_counts[LIX][0] & 0xffff0000;
 	barrier();
 	// Resetting offsets so that each block row starts from 0
-	if(LIX < TILE_SIZE * TILE_SIZE) {
-		uint col_id = LIX & (TILE_SIZE - 1), row_id = LIX >> TILE_SHIFT;
+	for(uint i = LIX; i < TILE_SIZE * TILE_SIZE; i += LSIZE) {
+		uint col_id = i & (TILE_SIZE - 1), row_id = i >> TILE_SHIFT;
 		uint first_block_row_id = row_id & ~3;
 		uint value = s_pixel_counts[row_id][col_id];
 		uint block_row_offset = s_mini_buffer[first_block_row_id];
@@ -446,8 +436,8 @@ void shadeSample(ivec2 tile_pixel_pos, uint local_tri_idx, out uint out_color, o
 void reduce16x16Samples()
 {
 	// TODO: optimize
-	if(LIX < TILE_SIZE * TILE_SIZE) {
-		uint row_id = LIX >> TILE_SHIFT, col_id = LIX & (TILE_SIZE - 1);
+	for(uint i = LIX; i < TILE_SIZE * TILE_SIZE; i += LSIZE) {
+		uint row_id = i >> TILE_SHIFT, col_id = i & (TILE_SIZE - 1);
 		uint pixel_counter = s_pixel_counts[row_id][col_id];
 		int num_samples = int(pixel_counter & 0xffff);
 		int sample_offset = int(pixel_counter >> 16) - num_samples;
@@ -494,8 +484,8 @@ void reduce16x4Samples(int by)
 
 void rasterPixelCounts()
 {
-	if(LIX < TILE_SIZE * TILE_SIZE) {
-		ivec2 pixel_pos = ivec2(LIX & (TILE_SIZE - 1), LIX >> TILE_SHIFT);
+	for(uint i = LIX; i < TILE_SIZE * TILE_SIZE; i += LSIZE) {
+		ivec2 pixel_pos = ivec2(i & (TILE_SIZE - 1), i >> TILE_SHIFT);
 
 		uint pix_count  = s_pixel_counts[pixel_pos.y][pixel_pos.x] & 0xffff;
 		uint pix_offset = s_pixel_counts[pixel_pos.y][pixel_pos.x] >> 16;
@@ -514,8 +504,8 @@ void rasterPixelCounts()
 
 void rasterInvalidTile(vec3 color)
 {
-	if(LIX < TILE_SIZE * TILE_SIZE) {
-		ivec2 pixel_pos = ivec2(LIX & (TILE_SIZE - 1), LIX >> TILE_SHIFT);
+	for(uint i = LIX; i < TILE_SIZE * TILE_SIZE; i += LSIZE) {
+		ivec2 pixel_pos = ivec2(i & (TILE_SIZE - 1), i >> TILE_SHIFT);
 		vec4 color = vec4(color, 1.0);
 		uint enc_col = encodeRGBA8(color);
 		imageStore(final_raster, s_tile_pos + pixel_pos, uvec4(enc_col, 0, 0, 0));
@@ -615,7 +605,7 @@ void rasterBins(int bin_id) {
 
 	for(int tile_id = 0; tile_id < TILES_PER_BIN; tile_id++) {
 		barrier();
-		if(LIX < TILE_SIZE * TILE_SIZE) {
+		if(LIX < 4) {
 			if(LIX == 0) {
 				s_tile_tri_count  = s_tile_tri_counts[tile_id];
 				s_tile_tri_offset = s_tile_tri_offsets[tile_id];
@@ -623,10 +613,10 @@ void rasterBins(int bin_id) {
 				s_tile_ray_dir0 = s_tile_ray_dirs0[tile_id];
 				s_sample_count = 0;
 			}
-			if(LIX < 4)
-				s_block_row_tri_count[LIX] = 0;
-			s_pixel_counts[LIX >> TILE_SHIFT][LIX & (TILE_SIZE - 1)] = 0;
+			s_block_row_tri_count[LIX] = 0;
 		}
+		for(uint i = LIX; i < TILE_SIZE * TILE_SIZE; i += LSIZE)
+			s_pixel_counts[i >> TILE_SHIFT][i & (TILE_SIZE - 1)] = 0;
 		barrier();
 		generateRows();
 		groupMemoryBarrier();

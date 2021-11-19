@@ -4,9 +4,12 @@
 #define LID gl_LocalInvocationID
 
 #define LSIZE 512
+#define LSHIFT 9
 
 // TODO: when storing rows, store each row independently as a triple: (tri_id, row, row_id)
 // this way we can easily bin them into buckets of different sample sizes
+//
+// TODO: dziwna przycinka na san-miguel (kamera w kierunku kolumn)
 
 layout(local_size_x = LSIZE) in;
 layout(binding = 0, r32ui) uniform uimage2D final_raster;
@@ -38,12 +41,12 @@ layout(binding = 1) uniform sampler2D transparent_texture;
 #define MAX_TRIS (LSIZE / 2)
 #define SAMPLES_PER_THREAD 4
 #define MAX_SAMPLES (LSIZE * SAMPLES_PER_THREAD)
-#define MAX_ROW_TRIS (LSIZE * 4)
 
 shared int s_tile_tri_counts [TILES_PER_BIN];
 shared int s_tile_tri_offsets[TILES_PER_BIN];
 shared vec3 s_tile_ray_dirs0[TILES_PER_BIN];
 shared int s_tile_tri_count, s_tile_tri_offset;
+shared int s_tile_rowtri_count[4];
 shared ivec2 s_bin_pos, s_tile_pos;
 shared vec3 s_tile_ray_dir0;
 
@@ -52,12 +55,14 @@ shared vec3 s_tile_ray_dir0;
 // high 16 bits: offsets
 shared uint s_pixel_counts[TILE_SIZE][TILE_SIZE];
 
-shared int s_buffer_count, s_tile_rowtri_count, s_tile_sample_count;
+shared int s_buffer_count, s_sample_count;
 // TODO: size is wrong
 shared uint s_buffer[LSIZE * 4 + 1];
 shared float s_fbuffer[LSIZE * 4 + 1];
 
 shared uint s_mini_buffer[32];
+
+#define MAX_BLOCK_ROW_TRIS (8 * 1024)
 
 uint computeScanlineParams(vec3 tri0, vec3 tri1, vec3 tri2, out vec3 scan_base, out vec3 scan_step) {
 	vec3 nrm0 = cross(tri2, tri1 - tri2);
@@ -80,7 +85,7 @@ uint computeScanlineParams(vec3 tri0, vec3 tri1, vec3 tri2, out vec3 scan_base, 
 }
 
 // TODO: można by tutaj użyć algorytmu bazującego na liniach
-void generateTriScanlines(uint local_tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, int min_by, int max_by) {
+void generateTriRows(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, int min_by, int max_by) {
 	// Inspired by Nanite scanline rasterizer
 	vec3 scan_min, scan_max, scan_step;
 	{
@@ -101,7 +106,7 @@ void generateTriScanlines(uint local_tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, i
 				(sign_mask & 4) != 0? scan[2] : 1.0 / 0.0);
 	}
 
-	uint soffset = gl_WorkGroupID.x * MAX_ROW_TRIS;
+	uint soffset = (gl_WorkGroupID.x * 4 + min_by) * MAX_BLOCK_ROW_TRIS;
 	for(int by = min_by; by <= max_by; by++) {
 		uint row_ranges = 0;
 
@@ -121,53 +126,86 @@ void generateTriScanlines(uint local_tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, i
 				if(imax < 15)
 					atomicAdd(s_pixel_counts[by * 4 + y][imax + 1], -1);
 
-				int num_samples = imax - imin + 1;
-				int sample_offset = atomicAdd(s_tile_sample_count, num_samples);
+				/*int num_samples = imax - imin + 1;
+				int sample_offset = atomicAdd(s_sample_count, num_samples);
 				uint sample_value = (local_tri_idx << 16) | ((by * 4 + y) << 4) | imin;
 				num_samples = min(num_samples, MAX_SAMPLES - sample_offset);
-
 				// TODO: this is slow
 				for(int j = 0; j < num_samples; j++)
-					s_buffer[sample_offset++] = sample_value++;
+					s_buffer[sample_offset++] = sample_value++;*/
 			}
 			row_ranges |= enc_value << ((y & 3) << 3);
 		}
 
-		/*
 		if(row_ranges != 0x0f0f0f0f) {
-			uint roffset = atomicAdd(s_tile_rowtri_count, 1);
-			if(roffset < MAX_ROW_TRIS) // TODO: handle this properly
-				g_scratch[soffset + roffset] = uvec2(row_ranges, local_tri_idx | uint(by << 20));
-		}*/
+			uint roffset = atomicAdd(s_tile_rowtri_count[by], 1);
+			if(roffset < MAX_BLOCK_ROW_TRIS) // TODO: handle this properly
+				g_scratch[soffset + roffset] = uvec2(row_ranges, tri_idx);
+		}
+		soffset += MAX_BLOCK_ROW_TRIS;
 	}
 }
 
-void generateTileMasks() {
+void generateRows() {
+	// TODO: optimization: in many cases all rows may very well fit in SMEM,
+	// maybe it would be worth it not to use scratch at all then?
+	//
 	// TODO: check if using SMEM var here makes sense
 	for(uint i = 0; i < s_tile_tri_count; i += LSIZE) {
-		uint local_tri_idx = i + LIX;
-		if(local_tri_idx < s_tile_tri_count) {
-			uint tri_idx = g_tile_tris[s_tile_tri_offset + local_tri_idx];
-
-			bool second_tri = (tri_idx & 0x80000000) != 0;
-			tri_idx &= 0x7fffffff;
+		uint tile_tri_idx = i + LIX;
+		if(tile_tri_idx < s_tile_tri_count) {
+			uint tri_idx = g_tile_tris[s_tile_tri_offset + tile_tri_idx];
+			uint second_tri = tri_idx >> 31;
+			uint masked_idx = tri_idx & 0x7fffffff;
 			
-			uvec4 aabb = g_tri_aabbs[tri_idx];
-			aabb = decodeAABB(second_tri? aabb.zw : aabb.xy);
+			uvec4 aabb = g_tri_aabbs[masked_idx];
+			aabb = decodeAABB(second_tri != 0? aabb.zw : aabb.xy);
 			int min_by = clamp(int(aabb[1]) - s_tile_pos.y, 0, 15) >> 2;
 			int max_by = clamp(int(aabb[3]) - s_tile_pos.y, 0, 15) >> 2;
 
-			uint v0 = g_quad_indices[tri_idx * 4 + 0] & 0x03ffffff;
-			uint v1 = g_quad_indices[tri_idx * 4 + (second_tri? 2 : 1)] & 0x03ffffff;
-			uint v2 = g_quad_indices[tri_idx * 4 + (second_tri? 3 : 2)] & 0x03ffffff;
+			uint v0 = g_quad_indices[masked_idx * 4 + 0] & 0x03ffffff;
+			uint v1 = g_quad_indices[masked_idx * 4 + 1 + second_tri] & 0x03ffffff;
+			uint v2 = g_quad_indices[masked_idx * 4 + 2 + second_tri] & 0x03ffffff;
 
 			vec3 tri0 = vec3(g_verts[v0 * 3 + 0], g_verts[v0 * 3 + 1], g_verts[v0 * 3 + 2]) - frustum.ws_shared_origin;
 			vec3 tri1 = vec3(g_verts[v1 * 3 + 0], g_verts[v1 * 3 + 1], g_verts[v1 * 3 + 2]) - frustum.ws_shared_origin;
 			vec3 tri2 = vec3(g_verts[v2 * 3 + 0], g_verts[v2 * 3 + 1], g_verts[v2 * 3 + 2]) - frustum.ws_shared_origin;
-			generateTriScanlines(local_tri_idx, tri0, tri1, tri2, min_by, max_by);
+
+			generateTriRows(tile_tri_idx, tri0, tri1, tri2, min_by, max_by);
 		}
 	}
 }
+
+void loadRowSamples(uint by) {
+	for(uint i = LIX; i < s_tile_rowtri_count[by]; i += LSIZE) {
+
+	}
+}
+
+void loadAllRowsSamples() {
+	uint by = LIX >> (LSHIFT - 2);
+	uint soffset = (gl_WorkGroupID.x * 4 + by) * MAX_BLOCK_ROW_TRIS;
+	for(uint i = LIX & (LSIZE / 4 - 1); i < s_tile_rowtri_count[by]; i += LSIZE / 4) {
+		uvec2 row = g_scratch[soffset + i];
+		uint tile_tri_idx = row[1], row_ranges = row[0];
+
+		// TODO: optimize
+		for(uint y = 0; y < 4; y++) {
+			int row_range = int((row_ranges >> (y * 8)) & 0xff);
+			if(row_range == 0x0f)
+				continue;
+
+			int minx = row_range & 0xf, maxx = (row_range >> 4) & 0xf;
+			int num_samples = maxx - minx + 1;
+			int sample_offset = atomicAdd(s_sample_count, num_samples);
+			uint sample_value = (tile_tri_idx << 16) | ((by * 4 + y) << 4) | uint(minx);
+			num_samples = min(num_samples, MAX_SAMPLES - sample_offset);
+			for(int j = 0; j < num_samples; j++)
+				s_buffer[sample_offset++] = sample_value++;
+		}
+	}
+}
+
 
 void sumPixelCounts()
 {
@@ -243,21 +281,22 @@ void rasterPixelCounts()
 		uint pix_offset = s_pixel_counts[pixel_pos.y][pixel_pos.x] >> 16;
 
 		//vec4 color = vec4(float(pix_count) / 1024.0, float(pix_count) / 16.0, float(pix_count) / 128.0, pix_count == 0? 0.0 : 1.0);
-		//vec4 color = vec4(float(pix_count) / 255.0, float(pix_count) / 63.0, float(pix_count) / 255.0, pix_count == 0? 0.0 : 1.0);
-		vec4 color = vec4(vec3(float(pix_offset) / MAX_SAMPLES), pix_offset == 0? 0.0 : 1.0);
+		vec4 color = vec4(float(pix_count) / 255.0, float(pix_count) / 63.0, float(pix_count) / 255.0, pix_count == 0? 0.0 : 1.0);
+		//vec4 color = vec4(vec3(float(pix_offset) / MAX_SAMPLES), pix_offset == 0? 0.0 : 1.0);
 		if(pix_offset >= MAX_SAMPLES)
 			color.rgb = vec3(1.0, 0.0, 0.0);
+
 		color = min(color, vec4(1.0));
 		uint enc_col = encodeRGBA8(color);
 		imageStore(final_raster, s_tile_pos + pixel_pos, uvec4(enc_col, 0, 0, 0));
 	}
 }
 
-void rasterInvalidTile()
+void rasterInvalidTile(vec3 color)
 {
 	if(LIX < TILE_SIZE * TILE_SIZE) {
 		ivec2 pixel_pos = ivec2(LIX & (TILE_SIZE - 1), LIX >> TILE_SHIFT);
-		vec4 color = vec4(1.0, 0.0, 0.0, 1.0);
+		vec4 color = vec4(color, 1.0);
 		uint enc_col = encodeRGBA8(color);
 		imageStore(final_raster, s_tile_pos + pixel_pos, uvec4(enc_col, 0, 0, 0));
 	}
@@ -442,6 +481,7 @@ uvec2 shadeSample(uint sample_id)
 	return uvec2(floatBitsToUint(ray_pos), encodeRGBA8(color));
 }
 
+/*
 void assignSamples_()
 {
 	// Dla każdego rzędu liczymy ile ma trójkątów
@@ -499,7 +539,7 @@ void assignSamples_()
 	}
 
 	s_buffer[LIX] = min_pos;
-}
+}*/
 
 void reduceSamples()
 {
@@ -525,6 +565,44 @@ void reduceSamples()
 	}
 }
 
+void shadeWholeTile() {
+	loadAllRowsSamples();
+	barrier();
+
+	// Selecting samples
+	uint sample_pos = 0; // max 4 samples / thread
+	uvec2 samples[SAMPLES_PER_THREAD];
+	for(int i = 0; i < SAMPLES_PER_THREAD; i++) {
+		uint sample_idx = LIX * SAMPLES_PER_THREAD + i;
+		samples[i].x = sample_idx < s_sample_count? s_buffer[sample_idx] : ~0u;
+		sample_pos |= (samples[i].x & 0xff) << (i * 8);
+	}
+
+	barrier();
+	loadTriangles();
+	barrier();
+	
+	// Shading samples
+	for(int i = 0; i < SAMPLES_PER_THREAD; i++)
+		if(samples[i].x != ~0u)
+			samples[i] = shadeSample(samples[i].x);
+	barrier();
+
+	// Ordering samples by pixel pos
+	for(int i = 0; i < SAMPLES_PER_THREAD; i++)
+		if(samples[i].x != ~0u) { // TODO: make sure that this test OK
+			ivec2 pixel_pos = ivec2((sample_pos >> (i * 8)) & 0xf, (sample_pos >> (i * 8 + 4)) & 0xf);
+			uint sample_idx = atomicAdd(s_pixel_counts[pixel_pos.y][pixel_pos.x], 0x10000) >> 16;
+			s_buffer[sample_idx] = samples[i].y;
+			s_fbuffer[sample_idx] = uintBitsToFloat(samples[i].x);
+		}
+	barrier();
+	resetPixelOffsets();
+	barrier();
+	reduceSamples();
+	//rasterPixelCounts();
+}
+
 void rasterBins(int bin_id) {
 	if(LIX < TILES_PER_BIN) {
 		s_tile_tri_counts [LIX] = int(g_tiles.tile_tri_counts[bin_id][LIX]);
@@ -546,54 +624,30 @@ void rasterBins(int bin_id) {
 				s_tile_tri_offset = s_tile_tri_offsets[tile_id];
 				s_tile_pos = s_bin_pos + ivec2(tile_id & 3, tile_id >> 2) * TILE_SIZE;
 				s_tile_ray_dir0 = s_tile_ray_dirs0[tile_id];
-				s_tile_rowtri_count = 0;
-				s_tile_sample_count = 0;
+				s_sample_count = 0;
 			}
+			if(LIX < 4)
+				s_tile_rowtri_count[LIX] = 0;
 			s_pixel_counts[LIX >> TILE_SHIFT][LIX & (TILE_SIZE - 1)] = 0;
 		}
 		barrier();
-		generateTileMasks();
+		generateRows();
+		groupMemoryBarrier();
 		barrier();
 		sumPixelCounts();
 		barrier();
-
-		if(s_tile_sample_count > MAX_ROW_TRIS || s_tile_tri_count > MAX_TRIS || getNumSamples() > MAX_SAMPLES) {
-			rasterInvalidTile();
+		
+		if(s_tile_tri_count > MAX_TRIS) {
+			rasterInvalidTile(vec3(1.0, 1.0, 0.0));
+			continue;
+		}
+		
+		if(getNumSamples() > MAX_SAMPLES) {
+			rasterInvalidTile(vec3(1.0, 0.0, 0.0));
 			continue;
 		}
 
-		// Selecting samples
-		uint sample_pos = 0; // max 4 samples / thread
-		uvec2 samples[SAMPLES_PER_THREAD];
-		for(int i = 0; i < SAMPLES_PER_THREAD; i++) {
-			uint sample_idx = LIX * SAMPLES_PER_THREAD + i;
-			samples[i].x = sample_idx < s_tile_sample_count? s_buffer[sample_idx] : ~0u;
-			sample_pos |= (samples[i].x & 0xff) << (i * 8);
-		}
-
-		barrier();
-		loadTriangles();
-		barrier();
-		
-		// Shading samples
-		for(int i = 0; i < SAMPLES_PER_THREAD; i++)
-			if(samples[i].x != ~0u)
-				samples[i] = shadeSample(samples[i].x);
-		barrier();
-
-		// Ordering samples by pixel pos
-		for(int i = 0; i < SAMPLES_PER_THREAD; i++)
-			if(samples[i].x != ~0u) { // TODO: make sure that this test OK
-				ivec2 pixel_pos = ivec2((sample_pos >> (i * 8)) & 0xf, (sample_pos >> (i * 8 + 4)) & 0xf);
-				uint sample_idx = atomicAdd(s_pixel_counts[pixel_pos.y][pixel_pos.x], 0x10000) >> 16;
-				s_buffer[sample_idx] = samples[i].y;
-				s_fbuffer[sample_idx] = uintBitsToFloat(samples[i].x);
-			}
-		barrier();
-		resetPixelOffsets();
-		barrier();
-		reduceSamples();
-		//rasterPixelCounts();
+		shadeWholeTile();
 	}
 }
 

@@ -57,7 +57,8 @@ shared float s_fbuffer[LSIZE * 4 + 1];
 
 shared uint s_mini_buffer[32];
 
-#define MAX_BLOCK_ROW_TRIS (8 * 1024)
+#define MAX_BLOCK_ROW_TRIS (4 * 1024)
+#define MAX_SCRATCH_TRIS (16 * 1024)
 
 uint computeScanlineParams(vec3 tri0, vec3 tri1, vec3 tri2, out vec3 scan_base, out vec3 scan_step) {
 	vec3 nrm0 = cross(tri2, tri1 - tri2);
@@ -356,38 +357,30 @@ void loadTriangles()
 	}
 }
 
-vec3 getTriangleNormal(uint local_tri_idx) {
-	return vec3(
+void getTriangleParams(uint local_tri_idx, out vec3 normal, out vec3 params, out vec3 edge0, out vec3 edge1, out uint instance_id) {
+	normal = vec3(
 		uintBitsToFloat(s_buffer[MAX_TRIS * 0 + local_tri_idx]),
 		uintBitsToFloat(s_buffer[MAX_TRIS * 1 + local_tri_idx]),
 		uintBitsToFloat(s_buffer[MAX_TRIS * 2 + local_tri_idx]));
-}
-
-// plane_dist, param0, param1
-vec3 getTriangleParams(uint local_tri_idx) {
-	return vec3(
+	params = vec3(
 		uintBitsToFloat(s_buffer[MAX_TRIS * 3 + local_tri_idx]),
 		uintBitsToFloat(s_buffer[MAX_TRIS * 4 + local_tri_idx]),
 		uintBitsToFloat(s_buffer[MAX_TRIS * 5 + local_tri_idx]));
+	edge0 = vec3(
+		s_fbuffer[MAX_TRIS * 0 + local_tri_idx],
+		s_fbuffer[MAX_TRIS * 1 + local_tri_idx],
+		s_fbuffer[MAX_TRIS * 2 + local_tri_idx]);
+	edge1 = vec3(
+		s_fbuffer[MAX_TRIS * 3 + local_tri_idx],
+		s_fbuffer[MAX_TRIS * 4 + local_tri_idx],
+		s_fbuffer[MAX_TRIS * 5 + local_tri_idx]);
+	instance_id = floatBitsToUint(s_fbuffer[MAX_TRIS * 7 + local_tri_idx]);
 }
 
-vec3 getTriangleEdge(uint local_tri_idx, uint edge_idx) {
-	uint eoffset = edge_idx == 1? MAX_TRIS * 3 : 0;
-	return vec3(
-		s_fbuffer[eoffset + MAX_TRIS * 0 + local_tri_idx],
-		s_fbuffer[eoffset + MAX_TRIS * 1 + local_tri_idx],
-		s_fbuffer[eoffset + MAX_TRIS * 2 + local_tri_idx]);
-}
-
-uvec3 getTriangleVerts(uint local_tri_idx) {
-	return uvec3(
-		s_buffer[MAX_TRIS * 6 + local_tri_idx],
-		s_buffer[MAX_TRIS * 7 + local_tri_idx],
-		floatBitsToUint(s_fbuffer[MAX_TRIS * 6 + local_tri_idx]));
-}
-
-uint getTriangleInstanceId(uint local_tri_idx) {
-	return floatBitsToUint(s_fbuffer[MAX_TRIS * 7 + local_tri_idx]);
+void getTriangleVerts(uint local_tri_idx, out uint v0, out uint v1, out uint v2) {
+	v0 = s_buffer[MAX_TRIS * 6 + local_tri_idx],
+	v1 = s_buffer[MAX_TRIS * 7 + local_tri_idx],
+	v2 = floatBitsToUint(s_fbuffer[MAX_TRIS * 6 + local_tri_idx]);
 }
 
 uvec2 shadeSample(uint sample_id)
@@ -397,13 +390,10 @@ uvec2 shadeSample(uint sample_id)
 								   + frustum.ws_diry * tile_pixel_pos.y;
 
 	uint local_tri_idx = sample_id >> 16;
-	vec3 params = getTriangleParams(local_tri_idx);
-	vec3 normal = getTriangleNormal(local_tri_idx);
-	vec3 edge0 = getTriangleEdge(local_tri_idx, 0);
-	vec3 edge1 = getTriangleEdge(local_tri_idx, 1);
-	
-	uint instance_id = getTriangleInstanceId(local_tri_idx);
-	uint instance_flags = g_instances[instance_id].flags;
+	vec3 normal, params, edge0, edge1;
+	uint instance_id, instance_flags;
+	getTriangleParams(local_tri_idx, normal, params, edge0, edge1, instance_id);
+	instance_flags = g_instances[instance_id].flags;
 
 	float ray_pos = params[0] / dot(normal, ray_dir);
 	vec2 bary = vec2(dot(edge0, ray_dir), dot(edge1, ray_dir)) * ray_pos;
@@ -420,13 +410,11 @@ uvec2 shadeSample(uint sample_id)
 		bary_dy = vec2(dot(edge0, ray_diry), dot(edge1, ray_diry)) * ray_posy - bary;
 	}
 	bary -= vec2(params[1], params[2]);
-	// params, normal, edge0 & edge1 no longer needed!
+	// params, edge0 & edge1 no longer needed!
 
 	uint v0, v1, v2;
-	if((instance_flags & (INST_HAS_VERTEX_COLORS | INST_HAS_TEXTURE | INST_HAS_VERTEX_NORMALS)) != 0) {
-		uvec3 verts = getTriangleVerts(local_tri_idx);
-		v0 = verts[0], v1 = verts[1], v2 = verts[2];
-	}
+	if((instance_flags & (INST_HAS_VERTEX_COLORS | INST_HAS_TEXTURE | INST_HAS_VERTEX_NORMALS)) != 0)
+		getTriangleVerts(local_tri_idx, v0, v1, v2);
 
 	vec4 color = decodeRGBA8(g_instances[instance_id].color);
 	if((instance_flags & INST_HAS_VERTEX_COLORS) != 0) {

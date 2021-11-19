@@ -287,14 +287,18 @@ void loadTriangles()
 
 		vec3 edge0 = (tri0 - tri2) * multiplier;
 		vec3 edge1 = (tri1 - tri0) * multiplier;
-
 		s_buffer[MAX_TRIS * 0 + i] = floatBitsToUint(normal.x);
 		s_buffer[MAX_TRIS * 1 + i] = floatBitsToUint(normal.y);
 		s_buffer[MAX_TRIS * 2 + i] = floatBitsToUint(normal.z);
 		
-		s_buffer[MAX_TRIS * 3 + i] = floatBitsToUint(tri0.x);
-		s_buffer[MAX_TRIS * 4 + i] = floatBitsToUint(tri0.y);
-		s_buffer[MAX_TRIS * 5 + i] = floatBitsToUint(tri0.z);
+		tri0 -= frustum.ws_shared_origin;
+		float plane_dist = dot(normal, tri0);
+		float param0 = dot(cross(edge0, tri0), normal);
+		float param1 = dot(cross(edge1, tri0), normal);
+
+		s_buffer[MAX_TRIS * 3 + i] = floatBitsToUint(plane_dist);
+		s_buffer[MAX_TRIS * 4 + i] = floatBitsToUint(param0);
+		s_buffer[MAX_TRIS * 5 + i] = floatBitsToUint(param1);
 	
 		s_buffer[MAX_TRIS * 6 + i] = v0;
 		s_buffer[MAX_TRIS * 7 + i] = v1;
@@ -319,7 +323,8 @@ vec3 getTriangleNormal(uint local_tri_idx) {
 		uintBitsToFloat(s_buffer[MAX_TRIS * 2 + local_tri_idx]));
 }
 
-vec3 getTriangleV0(uint local_tri_idx) {
+// plane_dist, param0, param1
+vec3 getTriangleParams(uint local_tri_idx) {
 	return vec3(
 		uintBitsToFloat(s_buffer[MAX_TRIS * 3 + local_tri_idx]),
 		uintBitsToFloat(s_buffer[MAX_TRIS * 4 + local_tri_idx]),
@@ -353,20 +358,15 @@ uvec2 shadeSample(uint sample_id)
 	vec3 ray_dir = frustum.ws_dir0 + frustum.ws_dirx * (pixel_pos.x + 0.5)
 								   + frustum.ws_diry * (pixel_pos.y + 0.5);
 
-	vec3 tri0   = getTriangleV0(local_tri_idx);
+	vec3 params = getTriangleParams(local_tri_idx);
 	vec3 normal = getTriangleNormal(local_tri_idx);
 	vec3 edge0 = getTriangleEdge(local_tri_idx, 0);
 	vec3 edge1 = getTriangleEdge(local_tri_idx, 1);
-	float plane_dist = dot(normal, tri0);
 
-	float ray_pos0 = -(dot(frustum.ws_shared_origin, normal) - plane_dist);
-	float ray_pos = ray_pos0 / dot(normal, ray_dir);
-	vec3 hitpoint = frustum.ws_shared_origin + ray_pos * ray_dir;
-
-	vec3 diff = hitpoint - tri0;
-	float v = dot(cross(edge0, diff), normal);
-	float w = dot(cross(edge1, diff), normal);
-	vec3 bary = vec3(1.0 - v - w, v, w);
+	float ray_pos = params[0] / dot(normal, ray_dir);
+	vec2 bary = vec2(
+		dot(cross(edge0, ray_dir), normal) * ray_pos - params[1],
+		dot(cross(edge1, ray_dir), normal) * ray_pos - params[2]);
 
 	uint instance_id = getTriangleInstanceId(local_tri_idx);
 	uint instance_flags = g_instances[instance_id].flags;
@@ -377,16 +377,14 @@ uvec2 shadeSample(uint sample_id)
 		v0 = verts[0], v1 = verts[1], v2 = verts[2];
 	}
 
-	// TODO: how to compute derivative?
 	vec4 color = decodeRGBA8(g_instances[instance_id].color);
 	if((instance_flags & INST_HAS_VERTEX_COLORS) != 0) {
 		vec4 col0 = decodeRGBA8(g_colors[v0]);
 		vec4 col1 = decodeRGBA8(g_colors[v1]);
 		vec4 col2 = decodeRGBA8(g_colors[v2]);
-		color *= bary[0] * col0 + bary[1] * col1 + bary[2] * col2;
+		color *= (1.0 - bary[0] - bary[1]) * col0 + bary[0] * col1 + bary[1] * col2;
 	}
 
-	// TODO: too many registers used?
 	if((instance_flags & INST_HAS_TEXTURE) != 0) {
 		vec2 tex0 = g_tex_coords[v0];
 		vec2 tex1 = g_tex_coords[v1];
@@ -395,22 +393,21 @@ uvec2 shadeSample(uint sample_id)
 		tex2 -= tex0;
 
 		vec3 ray_dirx = ray_dir + frustum.ws_dirx;
-		float ray_posx = ray_pos0 / dot(normal, ray_dirx);
-		vec3 hitpointx = frustum.ws_shared_origin + ray_posx * ray_dirx;
-		vec3 diffx = hitpointx - tri0;
-		
 		vec3 ray_diry = ray_dir + frustum.ws_diry;
-		float ray_posy = ray_pos0 / dot(normal, ray_diry);
-		vec3 hitpointy = frustum.ws_shared_origin + ray_posy * ray_diry;
-		vec3 diffy = hitpointy - tri0;
 
-		vec2 bary_dx = vec2(dot(cross(edge0, diffx), normal), dot(cross(edge1, diffx), normal));
-		vec2 bary_dy = vec2(dot(cross(edge0, diffy), normal), dot(cross(edge1, diffy), normal));
+		float ray_posx = params[0] / dot(normal, ray_dirx);
+		float ray_posy = params[0] / dot(normal, ray_diry);
 
-		vec2 tex_coord = bary[1] * tex1 + bary[2] * tex2;
-		vec2 tex_dx = (bary_dx.x * tex1 + bary_dx.y * tex2 - tex_coord);
-		vec2 tex_dy = bary_dy.x * tex1 + bary_dy.y * tex2 - tex_coord;
-		tex_coord += tex0;
+		vec2 bary_dx = vec2(dot(cross(edge0, ray_dirx), normal) * ray_posx - params[1],
+							dot(cross(edge1, ray_dirx), normal) * ray_posx - params[2]);
+		vec2 bary_dy = vec2(dot(cross(edge0, ray_diry), normal) * ray_posy - params[1],
+							dot(cross(edge1, ray_diry), normal) * ray_posy - params[2]);
+		bary_dx -= bary;
+		bary_dy -= bary;
+
+		vec2 tex_coord = bary[0] * tex1 + bary[1] * tex2 + tex0;
+		vec2 tex_dx = bary_dx[0] * tex1 + bary_dx[1] * tex2;
+		vec2 tex_dy = bary_dy[0] * tex1 + bary_dy[1] * tex2;
 
 		if((instance_flags & INST_HAS_UV_RECT) != 0) {
 			vec2 uv_rect_pos = vec2(g_instances[instance_id].uv_rect[0], g_instances[instance_id].uv_rect[1]);
@@ -431,7 +428,7 @@ uvec2 shadeSample(uint sample_id)
 		vec3 nrm1 = decodeNormalUint(g_normals[v1]);
 		vec3 nrm2 = decodeNormalUint(g_normals[v2]);
 		nrm1 -= nrm0; nrm2 -= nrm0;
-		normal = nrm0 + bary[1] * nrm1 + bary[2] * nrm2;
+		normal = nrm0 + bary[0] * nrm1 + bary[1] * nrm2;
 	}
 
 	float light_value = max(0.0, dot(-lighting.sun_dir, normal) * 0.7 + 0.3);
@@ -549,7 +546,8 @@ void rasterBins(int bin_id) {
 		barrier();
 		sumPixelCounts();
 		barrier();
-			if(s_tile_sample_count > MAX_ROW_TRIS || s_tile_tri_count > MAX_TRIS || getNumSamples() > MAX_SAMPLES) {
+
+		if(s_tile_sample_count > MAX_ROW_TRIS || s_tile_tri_count > MAX_TRIS || getNumSamples() > MAX_SAMPLES) {
 			rasterInvalidTile();
 			continue;
 		}

@@ -6,6 +6,14 @@
 #define LSIZE 256
 #define LSHIFT 8
 
+#define WORKGROUP_SCRATCH_SIZE	(32 * 1024)
+#define MAX_BLOCK_ROW_TRIS (4 * 1024)
+#define MAX_SCRATCH_TRIS (2 * 1024)
+#define SCRATCH_TRI_OFFSET (MAX_BLOCK_ROW_TRIS * 4)
+
+#define SAMPLES_PER_THREAD 4
+#define MAX_SAMPLES (LSIZE * SAMPLES_PER_THREAD)
+
 // TODO: when storing rows, store each row independently as a triple: (tri_id, row, row_id)
 // this way we can easily bin them into buckets of different sample sizes
 //
@@ -33,9 +41,6 @@ layout(std430, binding = 10) readonly buffer buf10_ { InstanceData g_instances[]
 layout(binding = 0) uniform sampler2D opaque_texture;
 layout(binding = 1) uniform sampler2D transparent_texture;
 
-#define MAX_TRIS (LSIZE / 2)
-#define SAMPLES_PER_THREAD 4
-#define MAX_SAMPLES (LSIZE * SAMPLES_PER_THREAD)
 
 shared int s_tile_tri_counts [TILES_PER_BIN];
 shared int s_tile_tri_offsets[TILES_PER_BIN];
@@ -44,21 +49,17 @@ shared int s_tile_tri_count, s_tile_tri_offset;
 shared ivec2 s_bin_pos, s_tile_pos;
 shared vec3 s_tile_ray_dir0;
 
-// TODO: 16 bit
 //  low 16 bits: counts
 // high 16 bits: offsets
 shared uint s_pixel_counts[TILE_SIZE][TILE_SIZE];
 shared int s_block_row_tri_count[4];
 
 shared int s_buffer_count, s_sample_count;
-// TODO: size is wrong
-shared uint s_buffer[LSIZE * 4 + 1];
-shared float s_fbuffer[LSIZE * 4 + 1];
+shared uint s_buffer[MAX_SAMPLES + 1];
+shared float s_fbuffer[MAX_SAMPLES + 1];
 
 shared uint s_mini_buffer[32];
 
-#define MAX_BLOCK_ROW_TRIS (4 * 1024)
-#define MAX_SCRATCH_TRIS (16 * 1024)
 
 uint computeScanlineParams(vec3 tri0, vec3 tri1, vec3 tri2, out vec3 scan_base, out vec3 scan_step) {
 	vec3 nrm0 = cross(tri2, tri1 - tri2);
@@ -102,7 +103,7 @@ void generateTriRows(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, int min_by, 
 				(sign_mask & 4) != 0? scan[2] : 1.0 / 0.0);
 	}
 
-	uint soffset = (gl_WorkGroupID.x * 4 + min_by) * MAX_BLOCK_ROW_TRIS;
+	uint soffset = gl_WorkGroupID.x * WORKGROUP_SCRATCH_SIZE + min_by * MAX_BLOCK_ROW_TRIS;
 	for(int by = min_by; by <= max_by; by++) {
 		uint row_ranges = 0;
 
@@ -142,6 +143,67 @@ void generateTriRows(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, int min_by, 
 	}
 }
 
+// TODO: problem: we cannot use tile triangle indices, because there would be too many...
+// we have to remap triangles to those which are actually used in currently rasterized tile segment
+// We would have to store those indices (32-bit) in scratch probably
+//
+// TODO: don't store triangles which generate very small number of samples in scratch,
+// instead precompute them directly when sampling; We would have to somehow group those triangles together
+void storeTriangle(uint local_tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, uint v0, uint v1, uint v2, uint instance_id)
+{
+	if(local_tri_idx >= MAX_SCRATCH_TRIS)
+		return;
+	uint toffset = gl_WorkGroupID.x * WORKGROUP_SCRATCH_SIZE + SCRATCH_TRI_OFFSET + local_tri_idx * 8;
+
+	vec3 normal = cross(tri0 - tri2, tri1 - tri0);
+	float multiplier = 1.0 / length(normal);
+	normal *= multiplier;
+
+	vec3 edge0 = (tri0 - tri2) * multiplier;
+	vec3 edge1 = (tri1 - tri0) * multiplier;
+	
+	float plane_dist = dot(normal, tri0);
+	float param0 = dot(cross(edge0, tri0), normal);
+	float param1 = dot(cross(edge1, tri0), normal);
+
+	// Nice optimization for barycentric computations:
+	// dot(cross(edge, dir), normal) == dot(dir, cross(normal, edge))
+	edge0 = cross(normal, edge0);
+	edge1 = cross(normal, edge1);
+
+	g_scratch[toffset + 0] = uvec2(floatBitsToUint(normal.x), floatBitsToUint(normal.y));
+	g_scratch[toffset + 1] = uvec2(floatBitsToUint(normal.z), floatBitsToUint(plane_dist));
+	g_scratch[toffset + 2] = uvec2(floatBitsToUint(param0), floatBitsToUint(param1));
+	g_scratch[toffset + 3] = uvec2(floatBitsToUint(edge0.x), floatBitsToUint(edge0.y));
+	g_scratch[toffset + 4] = uvec2(floatBitsToUint(edge0.z), floatBitsToUint(edge1.x));
+	g_scratch[toffset + 5] = uvec2(floatBitsToUint(edge1.y), floatBitsToUint(edge1.z));
+	g_scratch[toffset + 6] = uvec2(v0, v1);
+	g_scratch[toffset + 7] = uvec2(v2, instance_id);
+}
+
+void getTriangleParams(uint local_tri_idx, out vec3 normal, out vec3 params, out vec3 edge0, out vec3 edge1, out uint instance_id) {
+	uint toffset = gl_WorkGroupID.x * WORKGROUP_SCRATCH_SIZE + SCRATCH_TRI_OFFSET + local_tri_idx * 8;
+
+	{
+		uvec2 val0 = g_scratch[toffset + 0], val1 = g_scratch[toffset + 1], val2 = g_scratch[toffset + 2];
+		normal = vec3(uintBitsToFloat(val0[0]), uintBitsToFloat(val0[1]), uintBitsToFloat(val1[0]));
+		params = vec3(uintBitsToFloat(val1[1]), uintBitsToFloat(val2[0]), uintBitsToFloat(val2[1]));
+	}
+	{
+		uvec2 val0 = g_scratch[toffset + 3], val1 = g_scratch[toffset + 4], val2 = g_scratch[toffset + 5];
+		edge0 = vec3(uintBitsToFloat(val0[0]), uintBitsToFloat(val0[1]), uintBitsToFloat(val1[0]));
+		edge1 = vec3(uintBitsToFloat(val1[1]), uintBitsToFloat(val2[0]), uintBitsToFloat(val2[1]));
+	}
+
+	instance_id = g_scratch[toffset + 7].y;
+}
+
+void getTriangleVerts(uint local_tri_idx, out uint v0, out uint v1, out uint v2) {
+	uint toffset = gl_WorkGroupID.x * WORKGROUP_SCRATCH_SIZE + SCRATCH_TRI_OFFSET + local_tri_idx * 8;
+	uvec2 val0 = g_scratch[toffset + 6];
+	v0 = val0[0], v1 = val0[1], v2 = g_scratch[toffset + 7].x;
+}
+
 void generateRows() {
 	// TODO: optimization: in many cases all rows may very well fit in SMEM,
 	// maybe it would be worth it not to use scratch at all then?
@@ -159,21 +221,27 @@ void generateRows() {
 			int min_by = clamp(int(aabb[1]) - s_tile_pos.y, 0, 15) >> 2;
 			int max_by = clamp(int(aabb[3]) - s_tile_pos.y, 0, 15) >> 2;
 
-			uint v0 = g_quad_indices[masked_idx * 4 + 0] & 0x03ffffff;
-			uint v1 = g_quad_indices[masked_idx * 4 + 1 + second_tri] & 0x03ffffff;
-			uint v2 = g_quad_indices[masked_idx * 4 + 2 + second_tri] & 0x03ffffff;
+			uint verts[4] = { g_quad_indices[masked_idx * 4 + 0], g_quad_indices[masked_idx * 4 + 1],
+							  g_quad_indices[masked_idx * 4 + 2], g_quad_indices[masked_idx * 4 + 3] };
+			uint instance_id = (verts[0] >> 26) | ((verts[1] >> 20) & 0xfc0) | ((verts[2] >> 14) & 0x3f000);
+			uint v0 = verts[0] & 0x03ffffff;
+			uint v1 = verts[1 + second_tri] & 0x03ffffff;
+			uint v2 = verts[2 + second_tri] & 0x03ffffff;
 
 			vec3 tri0 = vec3(g_verts[v0 * 3 + 0], g_verts[v0 * 3 + 1], g_verts[v0 * 3 + 2]) - frustum.ws_shared_origin;
 			vec3 tri1 = vec3(g_verts[v1 * 3 + 0], g_verts[v1 * 3 + 1], g_verts[v1 * 3 + 2]) - frustum.ws_shared_origin;
 			vec3 tri2 = vec3(g_verts[v2 * 3 + 0], g_verts[v2 * 3 + 1], g_verts[v2 * 3 + 2]) - frustum.ws_shared_origin;
-
+			
+			// TODO: store only if samples were generated
+			// TODO: do triangle storing later
+			storeTriangle(tile_tri_idx, tri0, tri1, tri2, v0, v1, v2, instance_id);
 			generateTriRows(tile_tri_idx, tri0, tri1, tri2, min_by, max_by);
 		}
 	}
 }
 
 void loadBlockRowSamples(uint by) {
-	uint soffset = (gl_WorkGroupID.x * 4 + by) * MAX_BLOCK_ROW_TRIS;
+	uint soffset = gl_WorkGroupID.x * WORKGROUP_SCRATCH_SIZE + by * MAX_BLOCK_ROW_TRIS;
 	for(uint i = LIX; i < s_block_row_tri_count[by]; i += LSIZE) {
 		uvec2 row = g_scratch[soffset + i];
 		uint tile_tri_idx = row[1], row_ranges = row[0];
@@ -197,7 +265,7 @@ void loadBlockRowSamples(uint by) {
 
 void loadAllRowsSamples() {
 	uint by = LIX >> (LSHIFT - 2);
-	uint soffset = (gl_WorkGroupID.x * 4 + by) * MAX_BLOCK_ROW_TRIS;
+	uint soffset = gl_WorkGroupID.x * WORKGROUP_SCRATCH_SIZE + by * MAX_BLOCK_ROW_TRIS;
 	for(uint i = LIX & (LSIZE / 4 - 1); i < s_block_row_tri_count[by]; i += LSIZE / 4) {
 		uvec2 row = g_scratch[soffset + i];
 		uint tile_tri_idx = row[1], row_ranges = row[0];
@@ -296,100 +364,11 @@ uint getNumSamples16x4(int by)
 	return (value & 0xffff) + (value >> 16);
 }
 
-
-// TODO: problem: we cannot use tile triangle indices, because there would be too many...
-// we have to remap triangles to those which are actually used in currently rasterized tile segment
-// We would have to store those indices (32-bit) in scratch probably
-void loadTriangles()
+void shadeSample(ivec2 tile_pixel_pos, uint local_tri_idx, out uint out_color, out float out_depth)
 {
-	for(uint i = LIX; i < s_tile_tri_count; i += LSIZE) {
-		uint tri_idx = g_tile_tris[s_tile_tri_offset + i];
-		uint second_tri = tri_idx >> 31;
-		uint verts[4] = { g_quad_indices[tri_idx * 4 + 0], g_quad_indices[tri_idx * 4 + 1],
-						  g_quad_indices[tri_idx * 4 + 2], g_quad_indices[tri_idx * 4 + 3] };
-		uint instance_id = (verts[0] >> 26) | ((verts[1] >> 20) & 0xfc0) | ((verts[2] >> 14) & 0x3f000);
-		uint v0 = verts[0] & 0x03ffffff;
-		uint v1 = verts[1 + second_tri] & 0x03ffffff;
-		uint v2 = verts[2 + second_tri] & 0x03ffffff;
-
-		// TODO: subtract ray origin to decreas number of ops ?
-		vec3 tri0 = vec3(g_verts[v0 * 3 + 0], g_verts[v0 * 3 + 1], g_verts[v0 * 3 + 2]);
-		vec3 tri1 = vec3(g_verts[v1 * 3 + 0], g_verts[v1 * 3 + 1], g_verts[v1 * 3 + 2]);
-		vec3 tri2 = vec3(g_verts[v2 * 3 + 0], g_verts[v2 * 3 + 1], g_verts[v2 * 3 + 2]);
-		
-		vec3 normal = cross(tri0 - tri2, tri1 - tri0);
-		float multiplier = 1.0 / length(normal);
-		normal *= multiplier;
-
-		vec3 edge0 = (tri0 - tri2) * multiplier;
-		vec3 edge1 = (tri1 - tri0) * multiplier;
-		s_buffer[MAX_TRIS * 0 + i] = floatBitsToUint(normal.x);
-		s_buffer[MAX_TRIS * 1 + i] = floatBitsToUint(normal.y);
-		s_buffer[MAX_TRIS * 2 + i] = floatBitsToUint(normal.z);
-		
-		tri0 -= frustum.ws_shared_origin;
-		float plane_dist = dot(normal, tri0);
-		float param0 = dot(cross(edge0, tri0), normal);
-		float param1 = dot(cross(edge1, tri0), normal);
-
-		s_buffer[MAX_TRIS * 3 + i] = floatBitsToUint(plane_dist);
-		s_buffer[MAX_TRIS * 4 + i] = floatBitsToUint(param0);
-		s_buffer[MAX_TRIS * 5 + i] = floatBitsToUint(param1);
-	
-		s_buffer[MAX_TRIS * 6 + i] = v0;
-		s_buffer[MAX_TRIS * 7 + i] = v1;
-	
-		// Nice optimization for barycentric computations:
-		// dot(cross(edge, dir), normal) == dot(dir, cross(normal, edge))
-		edge0 = cross(normal, edge0);
-		edge1 = cross(normal, edge1);
-
-		s_fbuffer[MAX_TRIS * 0 + i] = edge0.x;
-		s_fbuffer[MAX_TRIS * 1 + i] = edge0.y;
-		s_fbuffer[MAX_TRIS * 2 + i] = edge0.z;
-		
-		s_fbuffer[MAX_TRIS * 3 + i] = edge1.x;
-		s_fbuffer[MAX_TRIS * 4 + i] = edge1.y;
-		s_fbuffer[MAX_TRIS * 5 + i] = edge1.z;
-
-		s_fbuffer[MAX_TRIS * 6 + i] = uintBitsToFloat(v2);
-		s_fbuffer[MAX_TRIS * 7 + i] = uintBitsToFloat(instance_id);
-	}
-}
-
-void getTriangleParams(uint local_tri_idx, out vec3 normal, out vec3 params, out vec3 edge0, out vec3 edge1, out uint instance_id) {
-	normal = vec3(
-		uintBitsToFloat(s_buffer[MAX_TRIS * 0 + local_tri_idx]),
-		uintBitsToFloat(s_buffer[MAX_TRIS * 1 + local_tri_idx]),
-		uintBitsToFloat(s_buffer[MAX_TRIS * 2 + local_tri_idx]));
-	params = vec3(
-		uintBitsToFloat(s_buffer[MAX_TRIS * 3 + local_tri_idx]),
-		uintBitsToFloat(s_buffer[MAX_TRIS * 4 + local_tri_idx]),
-		uintBitsToFloat(s_buffer[MAX_TRIS * 5 + local_tri_idx]));
-	edge0 = vec3(
-		s_fbuffer[MAX_TRIS * 0 + local_tri_idx],
-		s_fbuffer[MAX_TRIS * 1 + local_tri_idx],
-		s_fbuffer[MAX_TRIS * 2 + local_tri_idx]);
-	edge1 = vec3(
-		s_fbuffer[MAX_TRIS * 3 + local_tri_idx],
-		s_fbuffer[MAX_TRIS * 4 + local_tri_idx],
-		s_fbuffer[MAX_TRIS * 5 + local_tri_idx]);
-	instance_id = floatBitsToUint(s_fbuffer[MAX_TRIS * 7 + local_tri_idx]);
-}
-
-void getTriangleVerts(uint local_tri_idx, out uint v0, out uint v1, out uint v2) {
-	v0 = s_buffer[MAX_TRIS * 6 + local_tri_idx],
-	v1 = s_buffer[MAX_TRIS * 7 + local_tri_idx],
-	v2 = floatBitsToUint(s_fbuffer[MAX_TRIS * 6 + local_tri_idx]);
-}
-
-uvec2 shadeSample(uint sample_id)
-{
-	ivec2 tile_pixel_pos = ivec2(sample_id & 15, (sample_id >> 4) & 15);
 	vec3 ray_dir = s_tile_ray_dir0 + frustum.ws_dirx * tile_pixel_pos.x
 								   + frustum.ws_diry * tile_pixel_pos.y;
 
-	uint local_tri_idx = sample_id >> 16;
 	vec3 normal, params, edge0, edge1;
 	uint instance_id, instance_flags;
 	getTriangleParams(local_tri_idx, normal, params, edge0, edge1, instance_id);
@@ -460,7 +439,8 @@ uvec2 shadeSample(uint sample_id)
 	float light_value = max(0.0, dot(-lighting.sun_dir, normal) * 0.7 + 0.3);
 	color.rgb = min(finalShading(color.rgb, light_value), vec3(1.0, 1.0, 1.0));
 
-	return uvec2(floatBitsToUint(ray_pos), encodeRGBA8(color));
+	out_depth = ray_pos;
+	out_color = encodeRGBA8(color);
 }
 
 void reduce16x16Samples()
@@ -547,31 +527,25 @@ void shadeWholeTile() {
 	barrier();
 
 	// Selecting samples
-	uint sample_pos = 0; // max 4 samples / thread
-	uvec2 samples[SAMPLES_PER_THREAD];
+	uint samples[SAMPLES_PER_THREAD];
 	for(int i = 0; i < SAMPLES_PER_THREAD; i++) {
 		uint sample_idx = LIX * SAMPLES_PER_THREAD + i;
-		samples[i].x = sample_idx < s_sample_count? s_buffer[sample_idx] : ~0u;
-		sample_pos |= (samples[i].x & 0xff) << (i * 8);
+		samples[i] = sample_idx < s_sample_count? s_buffer[sample_idx] : ~0u;
 	}
-
-	barrier();
-	loadTriangles();
 	barrier();
 	
-	// Shading samples
+	// Shading samples & storing them ordered by pixel pos
 	for(int i = 0; i < SAMPLES_PER_THREAD; i++)
-		if(samples[i].x != ~0u)
-			samples[i] = shadeSample(samples[i].x);
-	barrier();
+		if(samples[i] != ~0u) {
+			ivec2 tile_pixel_pos = ivec2(samples[i] & 15, (samples[i] >> 4) & 15);
+			uint tri_idx = samples[i] >> 16;
 
-	// Ordering samples by pixel pos
-	for(int i = 0; i < SAMPLES_PER_THREAD; i++)
-		if(samples[i].x != ~0u) { // TODO: make sure that this test OK
-			ivec2 pixel_pos = ivec2((sample_pos >> (i * 8)) & 0xf, (sample_pos >> (i * 8 + 4)) & 0xf);
-			uint sample_idx = atomicAdd(s_pixel_counts[pixel_pos.y][pixel_pos.x], 0x10000) >> 16;
-			s_buffer[sample_idx] = samples[i].y;
-			s_fbuffer[sample_idx] = uintBitsToFloat(samples[i].x);
+			uint sample_color;
+			float sample_depth;
+			shadeSample(tile_pixel_pos, tri_idx, sample_color, sample_depth);
+			uint sample_idx = atomicAdd(s_pixel_counts[tile_pixel_pos.y][tile_pixel_pos.x], 0x10000) >> 16;
+			s_buffer[sample_idx] = sample_color;
+			s_fbuffer[sample_idx] = sample_depth;
 		}
 	barrier();
 	reduce16x16Samples();
@@ -589,7 +563,7 @@ void shade16x4Tiles() {
 								max(sample_count23 & 0xffff, sample_count23 >> 16));
 
 	if(max_sample_count > MAX_SAMPLES) {
-		rasterInvalidTile(vec3(1.0, 0.0, 0.5));
+		rasterInvalidTile(vec3(1.0, 0.0, 0.0));
 		return;
 	}
 
@@ -598,35 +572,29 @@ void shade16x4Tiles() {
 		barrier();
 
 		// Selecting samples
-		uint sample_pos = 0; // max 4 samples / thread
-		uvec2 samples[SAMPLES_PER_THREAD];
+		uint samples[SAMPLES_PER_THREAD];
 		for(int i = 0; i < SAMPLES_PER_THREAD; i++) {
 			uint sample_idx = LIX * SAMPLES_PER_THREAD + i;
-			samples[i].x = sample_idx < s_sample_count? s_buffer[sample_idx] : ~0u;
-			sample_pos |= (samples[i].x & 0xff) << (i * 8);
+			samples[i] = sample_idx < s_sample_count? s_buffer[sample_idx] : ~0u;
 		}
-
 		barrier();
 		if(LIX == 0)
 			s_sample_count = 0;
-		// TODO: load only triangles used in this block-row
-		loadTriangles();
-		barrier();
 		
-		// Shading samples
+		// Shading samples & storing them ordered by pixel pos
 		for(int i = 0; i < SAMPLES_PER_THREAD; i++)
-			if(samples[i].x != ~0u)
-				samples[i] = shadeSample(samples[i].x);
-		barrier();
+			if(samples[i] != ~0u) {
+				ivec2 tile_pixel_pos = ivec2(samples[i] & 15, (samples[i] >> 4) & 15);
+				uint tri_idx = samples[i] >> 16;
 
-		// Ordering samples by pixel pos
-		for(int i = 0; i < SAMPLES_PER_THREAD; i++)
-			if(samples[i].x != ~0u) { // TODO: make sure that this test OK
-				ivec2 pixel_pos = ivec2((sample_pos >> (i * 8)) & 0xf, (sample_pos >> (i * 8 + 4)) & 0xf);
-				uint sample_idx = atomicAdd(s_pixel_counts[pixel_pos.y][pixel_pos.x], 0x10000) >> 16;
-				s_buffer[sample_idx] = samples[i].y;
-				s_fbuffer[sample_idx] = uintBitsToFloat(samples[i].x);
+				uint sample_color;
+				float sample_depth;
+				shadeSample(tile_pixel_pos, tri_idx, sample_color, sample_depth);
+				uint sample_idx = atomicAdd(s_pixel_counts[tile_pixel_pos.y][tile_pixel_pos.x], 0x10000) >> 16;
+				s_buffer[sample_idx] = sample_color;
+				s_fbuffer[sample_idx] = sample_depth;
 			}
+
 		barrier();
 		reduce16x4Samples(by);
 	}
@@ -666,11 +634,11 @@ void rasterBins(int bin_id) {
 		sumPixelCounts();
 		barrier();
 		
-		if(s_tile_tri_count > MAX_TRIS) {
-			rasterInvalidTile(vec3(1.0, 1.0, 0.0));
+		if(s_tile_tri_count > MAX_SCRATCH_TRIS) {
+			rasterInvalidTile(vec3(1.0, 0.0, 0.5));
 			continue;
 		}
-		
+			
 		if(getNumSamples16x16() > MAX_SAMPLES) {
 			shade16x4Tiles();
 		}

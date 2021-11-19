@@ -3,7 +3,7 @@
 #define LIX gl_LocalInvocationIndex
 #define LID gl_LocalInvocationID
 
-#define LSIZE 256
+#define LSIZE 512
 
 // TODO: when storing rows, store each row independently as a triple: (tri_id, row, row_id)
 // this way we can easily bin them into buckets of different sample sizes
@@ -362,14 +362,31 @@ uvec2 shadeSample(uint sample_id)
 	vec3 normal = getTriangleNormal(local_tri_idx);
 	vec3 edge0 = getTriangleEdge(local_tri_idx, 0);
 	vec3 edge1 = getTriangleEdge(local_tri_idx, 1);
-
-	float ray_pos = params[0] / dot(normal, ray_dir);
-	vec2 bary = vec2(
-		dot(cross(edge0, ray_dir), normal) * ray_pos - params[1],
-		dot(cross(edge1, ray_dir), normal) * ray_pos - params[2]);
-
+	
 	uint instance_id = getTriangleInstanceId(local_tri_idx);
 	uint instance_flags = g_instances[instance_id].flags;
+
+	float ray_pos = params[0] / dot(normal, ray_dir);
+	vec2 bary = vec2(dot(cross(edge0, ray_dir), normal),
+					 dot(cross(edge1, ray_dir), normal)) * ray_pos;
+
+	vec2 bary_dx, bary_dy;
+	if((instance_flags & INST_HAS_TEXTURE) != 0) {
+		vec3 ray_dirx = ray_dir + frustum.ws_dirx;
+		vec3 ray_diry = ray_dir + frustum.ws_diry;
+
+		float ray_posx = params[0] / dot(normal, ray_dirx);
+		float ray_posy = params[0] / dot(normal, ray_diry);
+
+		bary_dx = vec2(dot(cross(edge0, ray_dirx), normal),
+					   dot(cross(edge1, ray_dirx), normal)) * ray_posx;
+		bary_dy = vec2(dot(cross(edge0, ray_diry), normal),
+					   dot(cross(edge1, ray_diry), normal)) * ray_posy;
+		bary_dx -= bary;
+		bary_dy -= bary;
+	}
+	// params, normal, edge0 & edge1 no longer needed!
+	bary -= vec2(params[1], params[2]);
 
 	uint v0, v1, v2;
 	if((instance_flags & (INST_HAS_VERTEX_COLORS | INST_HAS_TEXTURE | INST_HAS_VERTEX_NORMALS)) != 0) {
@@ -392,20 +409,7 @@ uvec2 shadeSample(uint sample_id)
 		tex1 -= tex0;
 		tex2 -= tex0;
 
-		vec3 ray_dirx = ray_dir + frustum.ws_dirx;
-		vec3 ray_diry = ray_dir + frustum.ws_diry;
-
-		float ray_posx = params[0] / dot(normal, ray_dirx);
-		float ray_posy = params[0] / dot(normal, ray_diry);
-
-		vec2 bary_dx = vec2(dot(cross(edge0, ray_dirx), normal) * ray_posx - params[1],
-							dot(cross(edge1, ray_dirx), normal) * ray_posx - params[2]);
-		vec2 bary_dy = vec2(dot(cross(edge0, ray_diry), normal) * ray_posy - params[1],
-							dot(cross(edge1, ray_diry), normal) * ray_posy - params[2]);
-		bary_dx -= bary;
-		bary_dy -= bary;
-
-		vec2 tex_coord = bary[0] * tex1 + bary[1] * tex2 + tex0;
+		vec2 tex_coord = tex0 + bary[0] * tex1 + bary[1] * tex2;
 		vec2 tex_dx = bary_dx[0] * tex1 + bary_dx[1] * tex2;
 		vec2 tex_dy = bary_dy[0] * tex1 + bary_dy[1] * tex2;
 
@@ -581,7 +585,6 @@ void rasterBins(int bin_id) {
 		barrier();
 		resetPixelOffsets();
 		barrier();
-
 		reduceSamples();
 		//rasterPixelCounts();
 	}

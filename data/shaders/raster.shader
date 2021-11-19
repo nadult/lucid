@@ -49,7 +49,6 @@ shared ivec2 s_bin_pos, s_tile_pos;
 //  low 16 bits: counts
 // high 16 bits: offsets
 shared uint s_pixel_counts[TILE_SIZE][TILE_SIZE];
-shared uint s_pixel_temp[TILE_SIZE][TILE_SIZE];
 
 shared int s_buffer_count, s_tile_rowtri_count, s_tile_sample_count;
 // TODO: size is wrong
@@ -199,6 +198,7 @@ void sumPixelCounts()
 		s_mini_buffer[LIX] = row_value << 16;
 	}
 	barrier();
+	// Adding row offsets to pixel offsets
 	if(LIX < TILE_SIZE * TILE_SIZE) {
 		uint row_id = LIX >> TILE_SHIFT;
 		uint col_id = LIX & (TILE_SIZE - 1);
@@ -206,11 +206,24 @@ void sumPixelCounts()
 		uint value = s_pixel_counts[row_id][col_id];
 		value = value + row_offset - (value << 16);
 		s_pixel_counts[row_id][col_id] = value;
-		s_pixel_temp[row_id][col_id] = value >> 16;
 	}
 #else
 #error write me please
 #endif
+}
+
+// Repositions pixel offsets from next pixel to current pixel
+// (this will happen after using offsets to position data at appropriate
+// pixel offsets with atomics)
+void resetPixelOffsets()
+{
+	if(LIX < TILE_SIZE * TILE_SIZE) {
+		uint row_id = LIX >> TILE_SHIFT;
+		uint col_id = LIX & (TILE_SIZE - 1);
+		uint row_offset = row_id == 0? 0 : s_mini_buffer[row_id - 1];
+		uint value = s_pixel_counts[row_id][col_id];
+		s_pixel_counts[row_id][col_id] = value - (value << 16);
+	}
 }
 
 uint getNumSamples()
@@ -563,10 +576,12 @@ void rasterBins(int bin_id) {
 		for(int i = 0; i < SAMPLES_PER_THREAD; i++)
 			if(sample_ids[i] != ~0u) { // TODO: make sure that this test OK
 				ivec2 pixel_pos = ivec2(sample_ids[i] & 0xf, (sample_ids[i] >> 4) & 0xf);
-				uint sample_idx = atomicAdd(s_pixel_temp[pixel_pos.y][pixel_pos.x], 1);
+				uint sample_idx = atomicAdd(s_pixel_counts[pixel_pos.y][pixel_pos.x], 0x10000) >> 16;
 				s_buffer[sample_idx] = samples[i].y;
 				s_fbuffer[sample_idx] = uintBitsToFloat(samples[i].x);
 			}
+		barrier();
+		resetPixelOffsets();
 		barrier();
 
 		reduceSamples();

@@ -563,27 +563,28 @@ void rasterBins(int bin_id) {
 		}
 
 		// Selecting samples
-		uint sample_ids[SAMPLES_PER_THREAD];
+		uint sample_pos = 0; // max 4 samples / thread
 		uvec2 samples[SAMPLES_PER_THREAD];
 		for(int i = 0; i < SAMPLES_PER_THREAD; i++) {
 			uint sample_idx = LIX * SAMPLES_PER_THREAD + i;
-			sample_ids[i] = sample_idx < s_tile_sample_count? s_buffer[sample_idx] : ~0u;
+			samples[i].x = sample_idx < s_tile_sample_count? s_buffer[sample_idx] : ~0u;
+			sample_pos |= (samples[i].x & 0xff) << (i * 8);
 		}
 
 		barrier();
 		loadTriangles();
 		barrier();
-
+		
 		// Shading samples
 		for(int i = 0; i < SAMPLES_PER_THREAD; i++)
-			if(sample_ids[i] != ~0u)
-				samples[i] = shadeSample(sample_ids[i]);
+			if(samples[i].x != ~0u)
+				samples[i] = shadeSample(samples[i].x);
 		barrier();
 
 		// Ordering samples by pixel pos
 		for(int i = 0; i < SAMPLES_PER_THREAD; i++)
-			if(sample_ids[i] != ~0u) { // TODO: make sure that this test OK
-				ivec2 pixel_pos = ivec2(sample_ids[i] & 0xf, (sample_ids[i] >> 4) & 0xf);
+			if(samples[i].x != ~0u) { // TODO: make sure that this test OK
+				ivec2 pixel_pos = ivec2((sample_pos >> (i * 8)) & 0xf, (sample_pos >> (i * 8 + 4)) & 0xf);
 				uint sample_idx = atomicAdd(s_pixel_counts[pixel_pos.y][pixel_pos.x], 0x10000) >> 16;
 				s_buffer[sample_idx] = samples[i].y;
 				s_fbuffer[sample_idx] = uintBitsToFloat(samples[i].x);

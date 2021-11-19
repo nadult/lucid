@@ -42,8 +42,10 @@ layout(binding = 1) uniform sampler2D transparent_texture;
 
 shared int s_tile_tri_counts [TILES_PER_BIN];
 shared int s_tile_tri_offsets[TILES_PER_BIN];
+shared vec3 s_tile_ray_dirs0[TILES_PER_BIN];
 shared int s_tile_tri_count, s_tile_tri_offset;
 shared ivec2 s_bin_pos, s_tile_pos;
+shared vec3 s_tile_ray_dir0;
 
 // TODO: 16 bit
 //  low 16 bits: counts
@@ -352,12 +354,11 @@ uint getTriangleInstanceId(uint local_tri_idx) {
 
 uvec2 shadeSample(uint sample_id)
 {
-	ivec2 pixel_pos = ivec2(sample_id & 15, (sample_id >> 4) & 15) + s_tile_pos;
+	ivec2 tile_pixel_pos = ivec2(sample_id & 15, (sample_id >> 4) & 15);
+	vec3 ray_dir = s_tile_ray_dir0 + frustum.ws_dirx * tile_pixel_pos.x
+								   + frustum.ws_diry * tile_pixel_pos.y;
+
 	uint local_tri_idx = sample_id >> 16;
-
-	vec3 ray_dir = frustum.ws_dir0 + frustum.ws_dirx * (pixel_pos.x + 0.5)
-								   + frustum.ws_diry * (pixel_pos.y + 0.5);
-
 	vec3 params = getTriangleParams(local_tri_idx);
 	vec3 normal = getTriangleNormal(local_tri_idx);
 	vec3 edge0 = getTriangleEdge(local_tri_idx, 0);
@@ -528,8 +529,12 @@ void rasterBins(int bin_id) {
 	if(LIX < TILES_PER_BIN) {
 		s_tile_tri_counts [LIX] = int(g_tiles.tile_tri_counts[bin_id][LIX]);
 		s_tile_tri_offsets[LIX] = int(g_tiles.tile_tri_offsets[bin_id][LIX]);
+		ivec2 bin_pos = ivec2(bin_id % BIN_COUNT_X, bin_id / BIN_COUNT_X) * BIN_SIZE;
+		ivec2 tile_pos = bin_pos + ivec2(LIX & 3, LIX >> 2) * TILE_SIZE;
+		s_tile_ray_dirs0[LIX] = frustum.ws_dir0 + frustum.ws_dirx * (tile_pos.x + 0.5)
+												+ frustum.ws_diry * (tile_pos.y + 0.5);
 		if(LIX == 0)
-			s_bin_pos = ivec2(bin_id % BIN_COUNT_X, bin_id / BIN_COUNT_X) * BIN_SIZE;
+			s_bin_pos = bin_pos;
 	}
 	barrier();
 
@@ -540,6 +545,7 @@ void rasterBins(int bin_id) {
 				s_tile_tri_count  = s_tile_tri_counts[tile_id];
 				s_tile_tri_offset = s_tile_tri_offsets[tile_id];
 				s_tile_pos = s_bin_pos + ivec2(tile_id & 3, tile_id >> 2) * TILE_SIZE;
+				s_tile_ray_dir0 = s_tile_ray_dirs0[tile_id];
 				s_tile_rowtri_count = 0;
 				s_tile_sample_count = 0;
 			}

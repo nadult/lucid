@@ -3,8 +3,8 @@
 #define LIX gl_LocalInvocationIndex
 #define LID gl_LocalInvocationID
 
-#define LSIZE 512
-#define LSHIFT 9
+#define LSIZE 256
+#define LSHIFT 8
 
 // TODO: when storing rows, store each row independently as a triple: (tri_id, row, row_id)
 // this way we can easily bin them into buckets of different sample sizes
@@ -33,11 +33,6 @@ layout(std430, binding = 10) readonly buffer buf10_ { InstanceData g_instances[]
 layout(binding = 0) uniform sampler2D opaque_texture;
 layout(binding = 1) uniform sampler2D transparent_texture;
 
-// TODO: enforce this somehow
-// TODO: scratch too big?
-// TODO: stratedy for large number of rows
-//       first divide rows in 4 different sets
-//       then divide each row in 4 blocks if necessary
 #define MAX_TRIS (LSIZE / 2)
 #define SAMPLES_PER_THREAD 4
 #define MAX_SAMPLES (LSIZE * SAMPLES_PER_THREAD)
@@ -46,7 +41,6 @@ shared int s_tile_tri_counts [TILES_PER_BIN];
 shared int s_tile_tri_offsets[TILES_PER_BIN];
 shared vec3 s_tile_ray_dirs0[TILES_PER_BIN];
 shared int s_tile_tri_count, s_tile_tri_offset;
-shared int s_tile_rowtri_count[4];
 shared ivec2 s_bin_pos, s_tile_pos;
 shared vec3 s_tile_ray_dir0;
 
@@ -54,6 +48,7 @@ shared vec3 s_tile_ray_dir0;
 //  low 16 bits: counts
 // high 16 bits: offsets
 shared uint s_pixel_counts[TILE_SIZE][TILE_SIZE];
+shared int s_block_row_tri_count[4];
 
 shared int s_buffer_count, s_sample_count;
 // TODO: size is wrong
@@ -138,7 +133,7 @@ void generateTriRows(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, int min_by, 
 		}
 
 		if(row_ranges != 0x0f0f0f0f) {
-			uint roffset = atomicAdd(s_tile_rowtri_count[by], 1);
+			uint roffset = atomicAdd(s_block_row_tri_count[by], 1);
 			if(roffset < MAX_BLOCK_ROW_TRIS) // TODO: handle this properly
 				g_scratch[soffset + roffset] = uvec2(row_ranges, tri_idx);
 		}
@@ -176,16 +171,9 @@ void generateRows() {
 	}
 }
 
-void loadRowSamples(uint by) {
-	for(uint i = LIX; i < s_tile_rowtri_count[by]; i += LSIZE) {
-
-	}
-}
-
-void loadAllRowsSamples() {
-	uint by = LIX >> (LSHIFT - 2);
+void loadBlockRowSamples(uint by) {
 	uint soffset = (gl_WorkGroupID.x * 4 + by) * MAX_BLOCK_ROW_TRIS;
-	for(uint i = LIX & (LSIZE / 4 - 1); i < s_tile_rowtri_count[by]; i += LSIZE / 4) {
+	for(uint i = LIX; i < s_block_row_tri_count[by]; i += LSIZE) {
 		uvec2 row = g_scratch[soffset + i];
 		uint tile_tri_idx = row[1], row_ranges = row[0];
 
@@ -206,6 +194,29 @@ void loadAllRowsSamples() {
 	}
 }
 
+void loadAllRowsSamples() {
+	uint by = LIX >> (LSHIFT - 2);
+	uint soffset = (gl_WorkGroupID.x * 4 + by) * MAX_BLOCK_ROW_TRIS;
+	for(uint i = LIX & (LSIZE / 4 - 1); i < s_block_row_tri_count[by]; i += LSIZE / 4) {
+		uvec2 row = g_scratch[soffset + i];
+		uint tile_tri_idx = row[1], row_ranges = row[0];
+
+		// TODO: optimize
+		for(uint y = 0; y < 4; y++) {
+			int row_range = int((row_ranges >> (y * 8)) & 0xff);
+			if(row_range == 0x0f)
+				continue;
+
+			int minx = row_range & 0xf, maxx = (row_range >> 4) & 0xf;
+			int num_samples = maxx - minx + 1;
+			int sample_offset = atomicAdd(s_sample_count, num_samples);
+			uint sample_value = (tile_tri_idx << 16) | ((by * 4 + y) << 4) | uint(minx);
+			num_samples = min(num_samples, MAX_SAMPLES - sample_offset);
+			for(int j = 0; j < num_samples; j++)
+				s_buffer[sample_offset++] = sample_value++;
+		}
+	}
+}
 
 void sumPixelCounts()
 {
@@ -252,55 +263,38 @@ void sumPixelCounts()
 #endif
 }
 
-// Repositions pixel offsets from next pixel to current pixel
-// (this will happen after using offsets to position data at appropriate
-// pixel offsets with atomics)
-void resetPixelOffsets()
+// Needed for 16x4 rendering
+void prepareBlockRowOffsets()
 {
+	#ifdef VENDOR_NVIDIA
+	if(LIX < 16)
+		s_mini_buffer[LIX] = s_pixel_counts[LIX][0] & 0xffff0000;
+	barrier();
+	// Resetting offsets so that each block row starts from 0
 	if(LIX < TILE_SIZE * TILE_SIZE) {
-		uint row_id = LIX >> TILE_SHIFT;
-		uint col_id = LIX & (TILE_SIZE - 1);
-		uint row_offset = row_id == 0? 0 : s_mini_buffer[row_id - 1];
+		uint col_id = LIX & (TILE_SIZE - 1), row_id = LIX >> TILE_SHIFT;
+		uint first_block_row_id = row_id & ~3;
 		uint value = s_pixel_counts[row_id][col_id];
-		s_pixel_counts[row_id][col_id] = value - (value << 16);
+		uint block_row_offset = s_mini_buffer[first_block_row_id];
+		s_pixel_counts[row_id][col_id] -= block_row_offset;
 	}
+#else
+#error write me please
+#endif
 }
 
-uint getNumSamples()
+uint getNumSamples16x16()
 {
 	uint value = s_pixel_counts[TILE_SIZE - 1][TILE_SIZE - 1];
 	return (value & 0xffff) + (value >> 16);
 }
 
-void rasterPixelCounts()
+uint getNumSamples16x4(int by)
 {
-	if(LIX < TILE_SIZE * TILE_SIZE) {
-		ivec2 pixel_pos = ivec2(LIX & (TILE_SIZE - 1), LIX >> TILE_SHIFT);
-
-		uint pix_count  = s_pixel_counts[pixel_pos.y][pixel_pos.x] & 0xffff;
-		uint pix_offset = s_pixel_counts[pixel_pos.y][pixel_pos.x] >> 16;
-
-		//vec4 color = vec4(float(pix_count) / 1024.0, float(pix_count) / 16.0, float(pix_count) / 128.0, pix_count == 0? 0.0 : 1.0);
-		vec4 color = vec4(float(pix_count) / 255.0, float(pix_count) / 63.0, float(pix_count) / 255.0, pix_count == 0? 0.0 : 1.0);
-		//vec4 color = vec4(vec3(float(pix_offset) / MAX_SAMPLES), pix_offset == 0? 0.0 : 1.0);
-		if(pix_offset >= MAX_SAMPLES)
-			color.rgb = vec3(1.0, 0.0, 0.0);
-
-		color = min(color, vec4(1.0));
-		uint enc_col = encodeRGBA8(color);
-		imageStore(final_raster, s_tile_pos + pixel_pos, uvec4(enc_col, 0, 0, 0));
-	}
+	uint value = s_pixel_counts[by * 4 + 3][TILE_SIZE - 1];
+	return (value & 0xffff) + (value >> 16);
 }
 
-void rasterInvalidTile(vec3 color)
-{
-	if(LIX < TILE_SIZE * TILE_SIZE) {
-		ivec2 pixel_pos = ivec2(LIX & (TILE_SIZE - 1), LIX >> TILE_SHIFT);
-		vec4 color = vec4(color, 1.0);
-		uint enc_col = encodeRGBA8(color);
-		imageStore(final_raster, s_tile_pos + pixel_pos, uvec4(enc_col, 0, 0, 0));
-	}
-}
 
 // TODO: problem: we cannot use tile triangle indices, because there would be too many...
 // we have to remap triangles to those which are actually used in currently rasterized tile segment
@@ -481,14 +475,14 @@ uvec2 shadeSample(uint sample_id)
 	return uvec2(floatBitsToUint(ray_pos), encodeRGBA8(color));
 }
 
-void reduceSamples()
+void reduce16x16Samples()
 {
 	// TODO: optimize
 	if(LIX < TILE_SIZE * TILE_SIZE) {
 		uint row_id = LIX >> TILE_SHIFT, col_id = LIX & (TILE_SIZE - 1);
 		uint pixel_counter = s_pixel_counts[row_id][col_id];
 		int num_samples = int(pixel_counter & 0xffff);
-		int sample_offset = int(pixel_counter >> 16);
+		int sample_offset = int(pixel_counter >> 16) - num_samples;
 		
 		uint enc_color = 0;
 		float depth = 1.0 / 0.0;
@@ -502,6 +496,61 @@ void reduceSamples()
 
 		//enc_color = encodeRGBA8(vec4(vec3(float(sample_offset) / MAX_SAMPLES), 1.0));
 		imageStore(final_raster, s_tile_pos + ivec2(col_id, row_id), uvec4(enc_color, 0, 0, 0));
+	}
+}
+
+void reduce16x4Samples(int by)
+{
+	// TODO: optimize
+	if(LIX < TILE_SIZE * 4) {
+		uint row_id = by * 4 + (LIX >> TILE_SHIFT), col_id = LIX & (TILE_SIZE - 1);
+		uint pixel_counter = s_pixel_counts[row_id][col_id];
+		int num_samples = int(pixel_counter & 0xffff);
+		int sample_offset = int(pixel_counter >> 16) - num_samples;
+		
+		uint enc_color = 0;
+		float depth = 1.0 / 0.0;
+		for(int i = 0; i < num_samples; i++) {
+			float sdepth = s_fbuffer[sample_offset + i];
+			if(sdepth < depth) {
+				depth = sdepth;
+				enc_color = s_buffer[sample_offset + i];
+			}
+		}
+
+		//enc_color = encodeRGBA8(vec4(vec3(float(sample_offset) / MAX_SAMPLES), 1.0));
+		imageStore(final_raster, s_tile_pos + ivec2(col_id, row_id), uvec4(enc_color, 0, 0, 0));
+	}
+}
+
+
+void rasterPixelCounts()
+{
+	if(LIX < TILE_SIZE * TILE_SIZE) {
+		ivec2 pixel_pos = ivec2(LIX & (TILE_SIZE - 1), LIX >> TILE_SHIFT);
+
+		uint pix_count  = s_pixel_counts[pixel_pos.y][pixel_pos.x] & 0xffff;
+		uint pix_offset = s_pixel_counts[pixel_pos.y][pixel_pos.x] >> 16;
+
+		//vec4 color = vec4(float(pix_count) / 1024.0, float(pix_count) / 16.0, float(pix_count) / 128.0, pix_count == 0? 0.0 : 1.0);
+		//vec4 color = vec4(float(pix_count) / 255.0, float(pix_count) / 63.0, float(pix_count) / 255.0, pix_count == 0? 0.0 : 1.0);
+		vec4 color = vec4(vec3(float(pix_offset) / MAX_SAMPLES), pix_offset == 0? 0.0 : 1.0);
+		if(pix_offset >= MAX_SAMPLES)
+			color.rgb = vec3(1.0, 0.0, 0.0);
+
+		color = min(color, vec4(1.0));
+		uint enc_col = encodeRGBA8(color);
+		imageStore(final_raster, s_tile_pos + pixel_pos, uvec4(enc_col, 0, 0, 0));
+	}
+}
+
+void rasterInvalidTile(vec3 color)
+{
+	if(LIX < TILE_SIZE * TILE_SIZE) {
+		ivec2 pixel_pos = ivec2(LIX & (TILE_SIZE - 1), LIX >> TILE_SHIFT);
+		vec4 color = vec4(color, 1.0);
+		uint enc_col = encodeRGBA8(color);
+		imageStore(final_raster, s_tile_pos + pixel_pos, uvec4(enc_col, 0, 0, 0));
 	}
 }
 
@@ -537,10 +586,62 @@ void shadeWholeTile() {
 			s_fbuffer[sample_idx] = uintBitsToFloat(samples[i].x);
 		}
 	barrier();
-	resetPixelOffsets();
-	barrier();
-	reduceSamples();
+	reduce16x16Samples();
 	//rasterPixelCounts();
+}
+
+void shade16x4Tiles() {
+	prepareBlockRowOffsets();
+	barrier();
+
+	// TODO: compute by first thread? see what is faster
+	uint sample_count01 = getNumSamples16x4(0) | (getNumSamples16x4(1) << 16);
+	uint sample_count23 = getNumSamples16x4(2) | (getNumSamples16x4(3) << 16);
+	uint max_sample_count = max(max(sample_count01 & 0xffff, sample_count01 >> 16),
+								max(sample_count23 & 0xffff, sample_count23 >> 16));
+
+	if(max_sample_count > MAX_SAMPLES) {
+		rasterInvalidTile(vec3(1.0, 0.0, 0.5));
+		return;
+	}
+
+	for(int by = 0; by < 4; by++) {
+		loadBlockRowSamples(by);
+		barrier();
+
+		// Selecting samples
+		uint sample_pos = 0; // max 4 samples / thread
+		uvec2 samples[SAMPLES_PER_THREAD];
+		for(int i = 0; i < SAMPLES_PER_THREAD; i++) {
+			uint sample_idx = LIX * SAMPLES_PER_THREAD + i;
+			samples[i].x = sample_idx < s_sample_count? s_buffer[sample_idx] : ~0u;
+			sample_pos |= (samples[i].x & 0xff) << (i * 8);
+		}
+
+		barrier();
+		if(LIX == 0)
+			s_sample_count = 0;
+		// TODO: load only triangles used in this block-row
+		loadTriangles();
+		barrier();
+		
+		// Shading samples
+		for(int i = 0; i < SAMPLES_PER_THREAD; i++)
+			if(samples[i].x != ~0u)
+				samples[i] = shadeSample(samples[i].x);
+		barrier();
+
+		// Ordering samples by pixel pos
+		for(int i = 0; i < SAMPLES_PER_THREAD; i++)
+			if(samples[i].x != ~0u) { // TODO: make sure that this test OK
+				ivec2 pixel_pos = ivec2((sample_pos >> (i * 8)) & 0xf, (sample_pos >> (i * 8 + 4)) & 0xf);
+				uint sample_idx = atomicAdd(s_pixel_counts[pixel_pos.y][pixel_pos.x], 0x10000) >> 16;
+				s_buffer[sample_idx] = samples[i].y;
+				s_fbuffer[sample_idx] = uintBitsToFloat(samples[i].x);
+			}
+		barrier();
+		reduce16x4Samples(by);
+	}
 }
 
 void rasterBins(int bin_id) {
@@ -567,7 +668,7 @@ void rasterBins(int bin_id) {
 				s_sample_count = 0;
 			}
 			if(LIX < 4)
-				s_tile_rowtri_count[LIX] = 0;
+				s_block_row_tri_count[LIX] = 0;
 			s_pixel_counts[LIX >> TILE_SHIFT][LIX & (TILE_SIZE - 1)] = 0;
 		}
 		barrier();
@@ -582,12 +683,12 @@ void rasterBins(int bin_id) {
 			continue;
 		}
 		
-		if(getNumSamples() > MAX_SAMPLES) {
-			rasterInvalidTile(vec3(1.0, 0.0, 0.0));
-			continue;
+		if(getNumSamples16x16() > MAX_SAMPLES) {
+			shade16x4Tiles();
 		}
-
-		shadeWholeTile();
+		else {
+			shadeWholeTile();
+		}
 	}
 }
 

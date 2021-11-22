@@ -232,13 +232,22 @@ void generateRows() {
 	}
 }
 
+// TODO: optimize
 void loadBlockRowSamples(uint by) {
 	uint soffset = gl_WorkGroupID.x * WORKGROUP_SCRATCH_SIZE + by * MAX_BLOCK_ROW_TRIS;
 	for(uint i = LIX; i < s_block_row_tri_count[by]; i += LSIZE) {
 		uvec2 row = g_scratch[soffset + i];
 		uint tile_tri_idx = row[1], row_ranges = row[0];
 
-		// TODO: optimize
+		int num_all_samples = 0;
+		for(uint y = 0; y < 4; y++) {
+			int row_range = int((row_ranges >> (y * 8)) & 0xff);
+			int minx = row_range & 0xf, maxx = (row_range >> 4) & 0xf;
+			num_all_samples += max(0, maxx - minx + 1);
+		}
+			
+		// Note: we're assuming that all samples will fit in s_buffer
+		int sample_offset = atomicAdd(s_sample_count, num_all_samples);
 		for(uint y = 0; y < 4; y++) {
 			int row_range = int((row_ranges >> (y * 8)) & 0xff);
 			if(row_range == 0x0f)
@@ -246,15 +255,14 @@ void loadBlockRowSamples(uint by) {
 
 			int minx = row_range & 0xf, maxx = (row_range >> 4) & 0xf;
 			int num_samples = maxx - minx + 1;
-			int sample_offset = atomicAdd(s_sample_count, num_samples);
 			uint sample_value = (tile_tri_idx << 16) | ((by * 4 + y) << 4) | uint(minx);
-			num_samples = min(num_samples, MAX_SAMPLES - sample_offset);
 			for(int j = 0; j < num_samples; j++)
 				s_buffer[sample_offset++] = sample_value++;
 		}
 	}
 }
 
+// TODO: optimize
 void loadAllRowsSamples() {
 	uint by = LIX >> (LSHIFT - 2);
 	uint soffset = gl_WorkGroupID.x * WORKGROUP_SCRATCH_SIZE + by * MAX_BLOCK_ROW_TRIS;
@@ -262,7 +270,6 @@ void loadAllRowsSamples() {
 		uvec2 row = g_scratch[soffset + i];
 		uint tile_tri_idx = row[1], row_ranges = row[0];
 
-		// TODO: optimize
 		for(uint y = 0; y < 4; y++) {
 			int row_range = int((row_ranges >> (y * 8)) & 0xff);
 			if(row_range == 0x0f)

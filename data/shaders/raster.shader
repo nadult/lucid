@@ -6,9 +6,9 @@
 #define LSIZE 256
 #define LSHIFT 8
 
-#define WORKGROUP_SCRATCH_SIZE	(32 * 1024)
+#define WORKGROUP_SCRATCH_SIZE	(64 * 1024)
 #define MAX_BLOCK_ROW_TRIS (4 * 1024)
-#define MAX_SCRATCH_TRIS (2 * 1024)
+#define MAX_SCRATCH_TRIS (6 * 1024)
 #define SCRATCH_TRI_OFFSET (MAX_BLOCK_ROW_TRIS * 4)
 
 #define SAMPLES_PER_THREAD 4
@@ -392,6 +392,7 @@ void shadeSample(ivec2 tile_pixel_pos, uint local_tri_idx, out uint out_color, o
 	if((instance_flags & (INST_HAS_VERTEX_COLORS | INST_HAS_TEXTURE | INST_HAS_VERTEX_NORMALS)) != 0)
 		getTriangleVerts(local_tri_idx, v0, v1, v2);
 
+	// 0.5ms on Sponza!!!
 	vec4 color = decodeRGBA8(g_instances[instance_id].color);
 	if((instance_flags & INST_HAS_VERTEX_COLORS) != 0) {
 		vec4 col0 = decodeRGBA8(g_colors[v0]);

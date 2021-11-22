@@ -43,6 +43,7 @@ layout(std430, binding = 9) buffer buf9_ { uint g_block_offsets[]; };
 
 layout(std430, binding = 10) readonly buffer buf10_ { uint g_tile_tris[]; };
 layout(std430, binding = 11) readonly buffer buf11_ { uint g_block_tris[]; };
+layout(std430, binding = 12) readonly buffer buf12_ { vec4 g_uv_rects[]; };
 
 shared int s_tile_tri_counts [TILES_PER_BIN];
 shared int s_tile_tri_offsets[TILES_PER_BIN];
@@ -218,11 +219,9 @@ void rasterizeTri(const ivec2 pixel_pos, uint tri_idx) {
 		tex_coord += tex0;
 
 		if((instance_flags & INST_HAS_UV_RECT) != 0) {
-			vec2 uv_rect_pos = vec2(g_instances[instance_id].uv_rect[0], g_instances[instance_id].uv_rect[1]);
-			vec2 uv_rect_size = vec2(g_instances[instance_id].uv_rect[2], g_instances[instance_id].uv_rect[3]);
-			tex_coord = uv_rect_pos + uv_rect_size * fract(tex_coord);
-			tex_dx *= uv_rect_size;
-			tex_dy *= uv_rect_size;
+			vec4 uv_rect = g_uv_rects[instance_id];
+			tex_coord = uv_rect.xy + uv_rect.zw * fract(tex_coord);
+			tex_dx *= uv_rect.zw, tex_dy *= uv_rect.zw;
 		}
 
 		if((instance_flags & INST_TEX_OPAQUE) != 0)

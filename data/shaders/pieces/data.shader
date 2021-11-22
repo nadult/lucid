@@ -12,7 +12,6 @@ struct InstanceData {
 	int num_quads;
 	uint flags, temp;
 	uint color;
-	float uv_rect[4];
 	// TODO: materials?
 };
 

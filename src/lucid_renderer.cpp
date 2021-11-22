@@ -260,6 +260,8 @@ void LucidRenderer::uploadInstances(const Context &ctx) {
 
 	vector<InstanceData> instances;
 	instances.reserve(32 * 1024);
+	vector<float4> uv_rects;
+	uv_rects.reserve(32 * 1024);
 
 	vector<IColor> mat_colors = transform(
 		ctx.materials, [](auto &mat) { return IColor(FColor(mat.diffuse, mat.opacity)); });
@@ -280,22 +282,24 @@ void LucidRenderer::uploadInstances(const Context &ctx) {
 		out.flags = (uint(dc.opts.bits) & 0xffff);
 		out.color = mat_colors[dc.material_id];
 		out.temp = 0;
-		out.uv_rect_pos = dc.uv_rect.min();
-		out.uv_rect_size = dc.uv_rect.size();
+		float4 uv_rect(dc.uv_rect.x(), dc.uv_rect.y(), dc.uv_rect.width(), dc.uv_rect.height());
 		m_num_quads += dc.num_quads;
 
 		if(num_quads <= max_instance_quads) {
 			instances.emplace_back(out);
+			uv_rects.emplace_back(uv_rect);
 		} else {
 			for(int i = 0; i < num_quads; i += max_instance_quads) {
 				out.index_offset = dc.quad_offset * 4 + i * 4;
 				out.num_quads = min(max_instance_quads, num_quads - i);
 				instances.emplace_back(out);
+				uv_rects.emplace_back(uv_rect);
 			}
 		}
 	}
 
 	m_instance_data.emplace(BufferType::shader_storage, instances);
+	m_uv_rects.emplace(BufferType::shader_storage, uv_rects);
 	m_num_instances = instances.size();
 }
 
@@ -1353,6 +1357,7 @@ void LucidRenderer::newRaster(const Context &ctx) {
 	m_tile_tris->bindIndex(8);
 	m_scratch->bindIndex(9);
 	m_instance_data->bindIndex(10);
+	m_uv_rects->bindIndex(11);
 
 	m_raster_image->bindImage(0, AccessMode::write_only);
 	new_raster_program.use();
@@ -1397,6 +1402,7 @@ void LucidRenderer::rasterizeFinal(const Context &ctx) {
 
 	m_tile_tris->bindIndex(10);
 	m_block_tris->bindIndex(11);
+	m_uv_rects->bindIndex(12);
 
 	m_raster_image->bindImage(0, AccessMode::write_only);
 	final_raster_program.use();

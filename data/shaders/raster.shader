@@ -37,6 +37,7 @@ layout(std430, binding = 8) buffer buf8_  { uint g_tile_tris[]; };
 layout(std430, binding = 9) coherent buffer buf9_ { uvec2 g_scratch[]; };
 
 layout(std430, binding = 10) readonly buffer buf10_ { InstanceData g_instances[]; };
+layout(std430, binding = 11) readonly buffer buf11_ { vec4 g_uv_rects[]; };
 
 layout(binding = 0) uniform sampler2D opaque_texture;
 layout(binding = 1) uniform sampler2D transparent_texture;
@@ -399,6 +400,7 @@ void shadeSample(ivec2 tile_pixel_pos, uint local_tri_idx, out uint out_color, o
 		color *= (1.0 - bary[0] - bary[1]) * col0 + bary[0] * col1 + bary[1] * col2;
 	}
 
+	// ~2ms on Sponza (mostly loading g_ data)
 	if((instance_flags & INST_HAS_TEXTURE) != 0) {
 		vec2 tex0 = g_tex_coords[v0];
 		vec2 tex1 = g_tex_coords[v1];
@@ -409,12 +411,11 @@ void shadeSample(ivec2 tile_pixel_pos, uint local_tri_idx, out uint out_color, o
 		vec2 tex_dx = bary_dx[0] * tex1 + bary_dx[1] * tex2;
 		vec2 tex_dy = bary_dy[0] * tex1 + bary_dy[1] * tex2;
 
+		// 0.8ms to load uv_rect on Sponza
 		if((instance_flags & INST_HAS_UV_RECT) != 0) {
-			vec2 uv_rect_pos = vec2(g_instances[instance_id].uv_rect[0], g_instances[instance_id].uv_rect[1]);
-			vec2 uv_rect_size = vec2(g_instances[instance_id].uv_rect[2], g_instances[instance_id].uv_rect[3]);
-			tex_coord = uv_rect_pos + uv_rect_size * fract(tex_coord);
-			tex_dx *= uv_rect_size;
-			tex_dy *= uv_rect_size;
+			vec4 uv_rect = g_uv_rects[instance_id];
+			tex_coord = uv_rect.xy + uv_rect.zw * fract(tex_coord);
+			tex_dx *= uv_rect.zw, tex_dy *= uv_rect.zw;
 		}
 
 		if((instance_flags & INST_TEX_OPAQUE) != 0)
@@ -423,6 +424,7 @@ void shadeSample(ivec2 tile_pixel_pos, uint local_tri_idx, out uint out_color, o
 			color *= textureGrad(transparent_texture, tex_coord, tex_dx, tex_dy);
 	}
 
+	// 0.75 ms on Sponza
 	if((instance_flags & INST_HAS_VERTEX_NORMALS) != 0) {
 		vec3 nrm0 = decodeNormalUint(g_normals[v0]);
 		vec3 nrm1 = decodeNormalUint(g_normals[v1]);

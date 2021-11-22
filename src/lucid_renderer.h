@@ -60,11 +60,9 @@ class LucidRenderer {
 		i32 num_quads;
 		u32 flags, temp;
 		IColor color;
-		float2 uv_rect_pos;
-		float2 uv_rect_size;
 	};
 
-	static_assert(sizeof(InstanceData) == sizeof(i32) * 10);
+	static_assert(sizeof(InstanceData) == sizeof(i32) * 6);
 
 	auto opts() const { return m_opts; }
 
@@ -118,7 +116,7 @@ class LucidRenderer {
 
 	PTexture m_raster_image;
 
-	PBuffer m_errors, m_scratch, m_instance_data;
+	PBuffer m_errors, m_scratch, m_instance_data, m_uv_rects;
 	PBuffer m_quad_indices, m_quad_aabbs, m_tri_aabbs;
 	PBuffer m_bin_counters, m_tile_counters, m_block_counts, m_block_offsets;
 	PBuffer m_bin_quads, m_tile_tris, m_block_tris, m_block_tri_keys;

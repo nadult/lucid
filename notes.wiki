@@ -53,8 +53,6 @@
                     === Rasteryzacja wszystkich sampli na raz ===
 -----------------------------------------------------------------------------------------
 
-* *Problem: delikatne miganie widoczne na niektórych scenach*
-
 * *Problem: wolne cieniowanie*
   Jak to przyspieszyć? wiele pikseli z jednego trójkąta w ramach jednego wątku?
   - duże sample (4x) i małe sample?

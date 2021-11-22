@@ -594,6 +594,7 @@ void shade16x4Tiles() {
 
 		barrier();
 		reduce16x4Samples(by);
+		barrier();
 	}
 }
 

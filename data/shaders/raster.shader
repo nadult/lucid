@@ -354,6 +354,12 @@ uint getNumSamples16x4(int by)
 	return (value & 0xffff) + (value >> 16);
 }
 
+// Shading 2 samples at once didn't help:
+// - decreased computation cost is not worth it because of increased register pressure
+// - it seems that it does not help at all with loading vertex attribs; it makes sense:
+//   if they are in the cache then it's not a problem...
+//
+// Can we improve speed of loading vertex data?
 void shadeSample(ivec2 tile_pixel_pos, uint local_tri_idx, out uint out_color, out float out_depth)
 {
 	vec3 ray_dir = s_tile_ray_dir0 + frustum.ws_dirx * tile_pixel_pos.x
@@ -397,8 +403,7 @@ void shadeSample(ivec2 tile_pixel_pos, uint local_tri_idx, out uint out_color, o
 		vec2 tex0 = g_tex_coords[v0];
 		vec2 tex1 = g_tex_coords[v1];
 		vec2 tex2 = g_tex_coords[v2];
-		tex1 -= tex0;
-		tex2 -= tex0;
+		tex1 -= tex0, tex2 -= tex0;
 
 		vec2 tex_coord = tex0 + bary[0] * tex1 + bary[1] * tex2;
 		vec2 tex_dx = bary_dx[0] * tex1 + bary_dx[1] * tex2;
@@ -512,14 +517,14 @@ void rasterInvalidTile(vec3 color)
 	}
 }
 
-void shadeWholeTile() {
+void shade16x16Tile() {
 	loadAllRowsSamples();
 	barrier();
 
 	// Selecting samples
 	uint samples[SAMPLES_PER_THREAD];
 	for(int i = 0; i < SAMPLES_PER_THREAD; i++) {
-		uint sample_idx = LIX * SAMPLES_PER_THREAD + i;
+		uint sample_idx = LSIZE * i + LIX;
 		samples[i] = sample_idx < s_sample_count? s_buffer[sample_idx] : ~0u;
 	}
 	barrier();
@@ -564,13 +569,13 @@ void shade16x4Tiles() {
 		// Selecting samples
 		uint samples[SAMPLES_PER_THREAD];
 		for(int i = 0; i < SAMPLES_PER_THREAD; i++) {
-			uint sample_idx = LIX * SAMPLES_PER_THREAD + i;
+			uint sample_idx = LSIZE * i + LIX;
 			samples[i] = sample_idx < s_sample_count? s_buffer[sample_idx] : ~0u;
 		}
 		barrier();
 		if(LIX == 0)
 			s_sample_count = 0;
-		
+
 		// Shading samples & storing them ordered by pixel pos
 		for(int i = 0; i < SAMPLES_PER_THREAD; i++)
 			if(samples[i] != ~0u) {
@@ -628,12 +633,12 @@ void rasterBins(int bin_id) {
 			rasterInvalidTile(vec3(1.0, 0.0, 0.5));
 			continue;
 		}
-			
+
 		if(getNumSamples16x16() > MAX_SAMPLES) {
 			shade16x4Tiles();
 		}
 		else {
-			shadeWholeTile();
+			shade16x16Tile();
 		}
 	}
 }

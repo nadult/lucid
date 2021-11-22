@@ -53,6 +53,19 @@
                     === Rasteryzacja wszystkich sampli na raz ===
 -----------------------------------------------------------------------------------------
 
+* *Problem: delikatne miganie widoczne na niektórych scenach*
+
+* *Problem: wolne cieniowanie*
+  Jak to przyspieszyć? wiele pikseli z jednego trójkąta w ramach jednego wątku?
+  - duże sample (4x) i małe sample?
+  - co jeszcze możemy zrobić?
+  - dla wybranych dużych tróəkątów ładujemy też parametry wierzchołków do SMEM?
+    czy problem jest z ładowaniem czy obliczeniami?
+
+  Dwu fazowy raster (najpierw generujemy głębokości + id trójkątów), sortujemy
+  problem: jeśli będziemy rasteryzować posortowane sample, to stracimy na koherencji
+  przy samplowaniu...
+
 * Spawnujemy tyle wątków, żeby dało się zrenderować wszystkie sample do SMEM. Jeśli sampli
   jest za dużo na dany kafel, to zawężamy zakres pikseli (16x16, 8x8, 4x4).
   Np. 1024 wątki powinny pozwolić spokojnie na 2048 sampli.

@@ -18,7 +18,7 @@ int main(int argc, char **argv) {
 	Maybe<AnyConfig> config = LucidApp::loadConfig();
 	GlDeviceConfig gl_config;
 	gl_config.flags = GlDeviceOpt::resizable;
-	gl_config.version = 4.3;
+	gl_config.version = 4.4;
 
 	for(int n = 1; n < argc; n++) {
 		string argument = argv[n];

@@ -30,11 +30,20 @@ struct BinCounters {
 
 	uint num_rejected_quads[4];
 
-	int temp[24];
+	int num_small_bins;
+	int num_medium_bins;
+	int num_big_bins;
+
+	int temp[21];
 
 	int bin_quad_counts[BIN_COUNT];
 	int bin_quad_offsets[BIN_COUNT];
 	int bin_quad_offsets_temp[BIN_COUNT];
+
+	// Bins are categorized based on quad count
+	int small_bins[BIN_COUNT];
+	int medium_bins[BIN_COUNT];
+	int big_bins[BIN_COUNT];
 };
 
 // TODO: better explanation of stats
@@ -43,7 +52,11 @@ struct TileCounters {
 	uint mask_raster_bin_counter;
 	uint final_raster_bin_counter;
 	uint sorted_bin_counter;
-	uint temp1[4];
+
+	uint small_bin_counter;
+	uint medium_bin_counter;
+	uint big_bin_counter;
+	uint temp1[1];
 
 	// This is only rough estimation (some tile-tris don't pass edge test)
 	uint num_tile_tris;

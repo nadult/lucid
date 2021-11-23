@@ -53,6 +53,37 @@
                     === Rasteryzacja wszystkich sampli na raz ===
 -----------------------------------------------------------------------------------------
 
+Sceny:        frag/4x4    tris/4x4
+Hairball:      1500        1000
+Powerplant:     700         300
+Sponza:         150         30
+Dragon:          50         20
+
+W przypadku hairballa możemy co najwyżej rasteryzować do 8x8 (i tak nie zawsze i przy 1024
+wątkach), większe będą miały za dużo fragmentów.
+
+Co możemy zrobić z dużymi ilościami trójkątów? Jeśli liczba fragmentów się zmieści, to nie
+powinno być problemu? Po prostu nie wszystkie tróəkąty będą pre-computeowane?
+
+* *Problem: jak mamy dużo tróəkątów na kafel to jest wolno*
+  - w przypadku sponzy ta nowa strategia działa całkiem dobrze...
+
+* *Nowe strategie:*
+  - rasteryzacja całego bina (ale musielibyśmy włączyć tutaj jakieś porządkowanie trójkątów po
+	ilości linii); To na pewno pomoże na sponzie, gdzie jest średnio mało trójkątów na tile
+	(kilkaset). Używając wszystkich wątków moglibyśmy pewnie je wszystkie trzymać w SMEM?
+  - co dla pozostałych case-ów? W hairballu mamy średnio 9400 q/bin (max 110K), na powerplancie
+    5600 q/bin (max: 59K)...
+
+  Do zrobienia:
+  - rasteryzacja całego bina (1024 wątki?)
+  - a może lepsza by była rasteryzacja 32x32?
+
+  - obsługa większej ilości sampli
+  - obsługa większej ilości tróəkątów:
+	generacja list 4x4? do scratcha? lepiej oddzielny shader, bo ten już ma i tak za dużo
+	opcji...
+
 * *Problem: wolne cieniowanie*
   Jak to przyspieszyć? wiele pikseli z jednego trójkąta w ramach jednego wątku?
   - duże sample (4x) i małe sample?

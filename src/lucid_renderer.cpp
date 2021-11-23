@@ -128,7 +128,7 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	m_quad_aabbs.emplace(BufferType::shader_storage, max_quads * sizeof(u32));
 	m_tri_aabbs.emplace(BufferType::shader_storage, max_quads * sizeof(int4));
 
-	uint bin_counters_size = (bin_counts * 3 + 256) * sizeof(u32);
+	uint bin_counters_size = (bin_counts * 6 + 256) * sizeof(u32);
 	uint tile_counters_size = (bin_counts * 16 * 4 + 256) * sizeof(u32);
 	m_bin_counters.emplace(BufferType::shader_storage, bin_counters_size);
 	m_tile_counters.emplace(BufferType::shader_storage, tile_counters_size);
@@ -176,13 +176,17 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 		"bin_estimator", defs, mask(m_opts & Opt::check_bins, ProgramOpt::debug)));
 	bin_dispatcher_program = EX_PASS(Program::makeCompute(
 		"bin_dispatcher", defs, mask(m_opts & Opt::check_bins, ProgramOpt::debug)));
+	bin_categorizer_program = EX_PASS(Program::makeCompute("bin_categorizer", defs));
+
 	tile_dispatcher_program = EX_PASS(Program::makeCompute(
 		"tile_dispatcher", defs, mask(m_opts & Opt::check_tiles, ProgramOpt::debug)));
 	final_raster_program = EX_PASS(Program::makeCompute("final_raster", defs));
 	mask_raster_program = EX_PASS(Program::makeCompute(
 		"mask_raster", defs, mask(m_opts & Opt::debug_masks, ProgramOpt::debug)));
-	new_raster_program = EX_PASS(
-		Program::makeCompute("raster", defs, mask(m_opts & Opt::debug_raster, ProgramOpt::debug)));
+	raster_tile_program = EX_PASS(Program::makeCompute(
+		"raster_tile", defs, mask(m_opts & Opt::debug_raster, ProgramOpt::debug)));
+	raster_block_program = EX_PASS(Program::makeCompute(
+		"raster_block", defs, mask(m_opts & Opt::debug_raster, ProgramOpt::debug)));
 	//	sort_program = EX_PASS(Program::makeCompute(
 	//		"mask_sort", defs, mask(m_opts & Opt::debug_masks, ProgramOpt::debug)));
 	dummy_program = EX_PASS(Program::makeCompute("dummy", defs));
@@ -219,7 +223,9 @@ void LucidRenderer::render(const Context &ctx) {
 		dummyIterateBins(ctx);
 
 	if(m_opts & Opt::new_raster) {
-		newRaster(ctx);
+		bindRaster(ctx);
+		rasterTile(ctx);
+		rasterBlock(ctx);
 	} else {
 		rasterizeMasks(ctx);
 		if(m_opts & Opt::debug_masks)
@@ -366,6 +372,11 @@ void LucidRenderer::computeBins(const Context &ctx) {
 	// TODO: how to optimize this ?
 	// 1ms for now for dragon...
 	glDispatchCompute(max_dispatches, 1, 1);
+	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+
+	PERF_SIBLING_SCOPE("bin categorizing phase");
+	bin_categorizer_program.use();
+	glDispatchCompute(1, 1, 1);
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 }
 
@@ -1337,9 +1348,7 @@ Image LucidRenderer::masksSnapshot() {
 	return image;
 }
 
-void LucidRenderer::newRaster(const Context &ctx) {
-	PERF_GPU_SCOPE();
-
+void LucidRenderer::bindRaster(const Context &ctx) {
 	m_tri_aabbs->bindIndex(0);
 	m_quad_indices->bindIndex(1);
 	auto vbuffers = ctx.vao->buffers();
@@ -1360,16 +1369,43 @@ void LucidRenderer::newRaster(const Context &ctx) {
 	m_uv_rects->bindIndex(11);
 
 	m_raster_image->bindImage(0, AccessMode::write_only);
-	new_raster_program.use();
+}
+
+void LucidRenderer::rasterBlock(const Context &ctx) {
+	PERF_GPU_SCOPE();
+	raster_block_program.use();
 
 	GlTexture::bind({ctx.opaque_tex, ctx.trans_tex});
 	//GlTexture::bind({ctx.depth_buffer, ctx.shadows.map});
 
-	ctx.lighting.setUniforms(new_raster_program.glProgram());
-	new_raster_program.setFrustum(ctx.camera);
-	new_raster_program.setViewport(ctx.camera, m_size);
-	new_raster_program.setShadows(ctx.shadows.matrix, ctx.shadows.enable);
-	ctx.lighting.setUniforms(new_raster_program.glProgram());
+	ctx.lighting.setUniforms(raster_block_program.glProgram());
+	raster_block_program.setFrustum(ctx.camera);
+	raster_block_program.setViewport(ctx.camera, m_size);
+	raster_block_program.setShadows(ctx.shadows.matrix, ctx.shadows.enable);
+	ctx.lighting.setUniforms(raster_block_program.glProgram());
+
+	// TODO: lepiej by było, jakby było to bardziej zintegrowane z GlProgramem
+	// - dispatch też mógłby być funkcją debuggera);
+	// - Inny debugger dla compute i inny dla pozostałych shaderów
+	// - możliwość przekazywania konkretnych wartości (np. 4 różne wartości?)
+	// - jakaś klasa do prostej introspekcji linii kodu programu
+	glDispatchCompute(128, 1, 1);
+	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+}
+
+void LucidRenderer::rasterTile(const Context &ctx) {
+	PERF_GPU_SCOPE();
+
+	raster_tile_program.use();
+
+	GlTexture::bind({ctx.opaque_tex, ctx.trans_tex});
+	//GlTexture::bind({ctx.depth_buffer, ctx.shadows.map});
+
+	ctx.lighting.setUniforms(raster_tile_program.glProgram());
+	raster_tile_program.setFrustum(ctx.camera);
+	raster_tile_program.setViewport(ctx.camera, m_size);
+	raster_tile_program.setShadows(ctx.shadows.matrix, ctx.shadows.enable);
+	ctx.lighting.setUniforms(raster_tile_program.glProgram());
 
 	// TODO: lepiej by było, jakby było to bardziej zintegrowane z GlProgramem
 	// - dispatch też mógłby być funkcją debuggera);

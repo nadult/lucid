@@ -640,6 +640,9 @@ void rasterBins(int bin_id) {
 		sumPixelCounts();
 		barrier();
 		
+//		rasterInvalidTile(vec3(0.2, 0.0, 0.0));
+//		continue;
+
 		if(s_tile_tri_count > MAX_SCRATCH_TRIS) {
 			rasterInvalidTile(vec3(1.0, 0.0, 0.5));
 			continue;
@@ -654,21 +657,22 @@ void rasterBins(int bin_id) {
 	}
 }
 
-shared int s_bin_id;
+shared int s_num_bins, s_bin_id;
 
-// TODO: some bins require a lot more computation than others
 int loadNextBin() {
 	if(LIX == 0) {
-		s_bin_id = int(atomicAdd(g_tiles.mask_raster_bin_counter, 1));
+		uint bin_idx = atomicAdd(g_tiles.medium_bin_counter, 1);
+		s_bin_id = bin_idx < s_num_bins? g_bins.medium_bins[bin_idx] : -1;
 	}
 	barrier();
 	return s_bin_id;
 }
 
 void main() {
-	// TODO: remove this variable
+	if(LIX == 0)
+		s_num_bins = g_bins.num_medium_bins;
 	int bin_id = loadNextBin();
-	while(bin_id < BIN_COUNT) {
+	while(bin_id != -1) {
 		barrier();
 		rasterBins(bin_id);
 		bin_id = loadNextBin();

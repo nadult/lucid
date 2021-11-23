@@ -88,7 +88,9 @@ class LucidRenderer {
 	void rasterizeMasks(const Context &);
 	void sortMasks(const Context &);
 	void rasterizeFinal(const Context &);
-	void newRaster(const Context &);
+	void bindRaster(const Context &);
+	void rasterTile(const Context &);
+	void rasterBlock(const Context &);
 	void compose(const Context &);
 
 	// Does nothing useful; can be used for measuring
@@ -111,7 +113,9 @@ class LucidRenderer {
 	// TODO: m_ prefix
 	Program init_counters_program, setup_program;
 	Program bin_estimator_program, bin_dispatcher_program, tile_dispatcher_program;
-	Program final_raster_program, mask_raster_program, sort_program, new_raster_program;
+	Program bin_categorizer_program;
+	Program final_raster_program, mask_raster_program, sort_program;
+	Program raster_tile_program, raster_block_program;
 	Program compose_program, dummy_program;
 
 	PTexture m_raster_image;

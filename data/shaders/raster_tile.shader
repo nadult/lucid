@@ -235,30 +235,23 @@ void generateRows() {
 // TODO: optimize
 void loadBlockRowSamples(uint by) {
 	uint soffset = gl_WorkGroupID.x * WORKGROUP_SCRATCH_SIZE + by * MAX_BLOCK_ROW_TRIS;
-	for(uint i = LIX; i < s_block_row_tri_count[by]; i += LSIZE) {
+	uint y = LIX & 3;
+
+	for(uint i = LIX >> 2; i < s_block_row_tri_count[by]; i += LSIZE / 4) {
 		uvec2 row = g_scratch[soffset + i];
 		uint tile_tri_idx = row[1], row_ranges = row[0];
 
-		int num_all_samples = 0;
-		for(uint y = 0; y < 4; y++) {
-			int row_range = int((row_ranges >> (y * 8)) & 0xff);
-			int minx = row_range & 0xf, maxx = (row_range >> 4) & 0xf;
-			num_all_samples += max(0, maxx - minx + 1);
-		}
-			
 		// Note: we're assuming that all samples will fit in s_buffer
-		int sample_offset = atomicAdd(s_sample_count, num_all_samples);
-		for(uint y = 0; y < 4; y++) {
-			int row_range = int((row_ranges >> (y * 8)) & 0xff);
-			if(row_range == 0x0f)
-				continue;
+		int row_range = int((row_ranges >> (y * 8)) & 0xff);
+		if(row_range == 0x0f)
+			continue;
 
-			int minx = row_range & 0xf, maxx = (row_range >> 4) & 0xf;
-			int num_samples = maxx - minx + 1;
-			uint sample_value = (tile_tri_idx << 16) | ((by * 4 + y) << 4) | uint(minx);
-			for(int j = 0; j < num_samples; j++)
-				s_buffer[sample_offset++] = sample_value++;
-		}
+		int minx = row_range & 0xf, maxx = (row_range >> 4) & 0xf;
+		int num_samples = maxx - minx + 1;
+		uint sample_value = (tile_tri_idx << 16) | ((by * 4 + y) << 4) | uint(minx);
+		int sample_offset = atomicAdd(s_sample_count, num_samples);
+		for(int j = 0; j < num_samples; j++)
+			s_buffer[sample_offset++] = sample_value++;
 	}
 }
 
@@ -266,23 +259,22 @@ void loadBlockRowSamples(uint by) {
 void loadAllRowsSamples() {
 	uint by = LIX >> (LSHIFT - 2);
 	uint soffset = gl_WorkGroupID.x * WORKGROUP_SCRATCH_SIZE + by * MAX_BLOCK_ROW_TRIS;
-	for(uint i = LIX & (LSIZE / 4 - 1); i < s_block_row_tri_count[by]; i += LSIZE / 4) {
+	uint y = LIX & 3;
+
+	for(uint i = (LIX & (LSIZE / 4 - 1)) >> 2; i < s_block_row_tri_count[by]; i += LSIZE / 16) {
 		uvec2 row = g_scratch[soffset + i];
 		uint tile_tri_idx = row[1], row_ranges = row[0];
+		int row_range = int((row_ranges >> (y * 8)) & 0xff);
+		if(row_range == 0x0f)
+			continue;
 
-		for(uint y = 0; y < 4; y++) {
-			int row_range = int((row_ranges >> (y * 8)) & 0xff);
-			if(row_range == 0x0f)
-				continue;
-
-			int minx = row_range & 0xf, maxx = (row_range >> 4) & 0xf;
-			int num_samples = maxx - minx + 1;
-			int sample_offset = atomicAdd(s_sample_count, num_samples);
-			uint sample_value = (tile_tri_idx << 16) | ((by * 4 + y) << 4) | uint(minx);
-			num_samples = min(num_samples, MAX_SAMPLES - sample_offset);
-			for(int j = 0; j < num_samples; j++)
-				s_buffer[sample_offset++] = sample_value++;
-		}
+		int minx = row_range & 0xf, maxx = (row_range >> 4) & 0xf;
+		int num_samples = maxx - minx + 1;
+		int sample_offset = atomicAdd(s_sample_count, num_samples);
+		uint sample_value = (tile_tri_idx << 16) | ((by * 4 + y) << 4) | uint(minx);
+		num_samples = min(num_samples, MAX_SAMPLES - sample_offset);
+		for(int j = 0; j < num_samples; j++)
+			s_buffer[sample_offset++] = sample_value++;
 	}
 }
 
@@ -527,6 +519,16 @@ void rasterInvalidTile(vec3 color)
 	}
 }
 
+void rasterInvalidBlockRow(int by, vec3 color)
+{
+	for(uint i = LIX; i < TILE_SIZE * 4; i += LSIZE) {
+		ivec2 pixel_pos = ivec2(i & (TILE_SIZE - 1), by * 4 + (i >> TILE_SHIFT));
+		vec4 color = vec4(color, 1.0);
+		uint enc_col = encodeRGBA8(color);
+		imageStore(final_raster, s_tile_pos + pixel_pos, uvec4(enc_col, 0, 0, 0));
+	}
+}
+
 void shade16x16Tile() {
 	loadAllRowsSamples();
 	barrier();
@@ -561,18 +563,13 @@ void shade16x4Tiles() {
 	prepareBlockRowOffsets();
 	barrier();
 
-	// TODO: compute by first thread? see what is faster
-	uint sample_count01 = getNumSamples16x4(0) | (getNumSamples16x4(1) << 16);
-	uint sample_count23 = getNumSamples16x4(2) | (getNumSamples16x4(3) << 16);
-	uint max_sample_count = max(max(sample_count01 & 0xffff, sample_count01 >> 16),
-								max(sample_count23 & 0xffff, sample_count23 >> 16));
-
-	if(max_sample_count > MAX_SAMPLES) {
-		rasterInvalidTile(vec3(1.0, 0.0, 0.0));
-		return;
-	}
-
 	for(int by = 0; by < 4; by++) {
+		uint sample_count = getNumSamples16x4(by);
+		if(sample_count > MAX_SAMPLES) {
+			rasterInvalidBlockRow(by, vec3(1.0, 0.0, 0.0));
+			continue;
+		}
+
 		loadBlockRowSamples(by);
 		barrier();
 

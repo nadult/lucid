@@ -503,10 +503,6 @@ void shadeTileRows() {
 			if(LIX == 0)
 				s_sample_count = 0;
 			
-			//rasterInvalidTile(vec3(0.0, 1.0, 0.0));
-			//barrier();
-			//continue;
-
 			// Shading samples & storing them ordered by pixel pos
 			for(int i = 0; i < SAMPLES_PER_THREAD; i++)
 				if(samples[i] != ~0u) {
@@ -554,6 +550,11 @@ void rasterBins(int bin_id) {
 				s_block_row_tri_count[LIX] = 0;
 			s_block_tri_counts[LIX] = 0;
 		}
+
+		rasterInvalidTile(vec3(0.3, 0.3, 0.3));
+		barrier();
+		continue;
+
 		for(uint i = LIX; i < TILE_SIZE * TILE_SIZE; i += LSIZE)
 			s_pixel_counts[i >> TILE_SHIFT][i & (TILE_SIZE - 1)] = 0;
 		barrier();

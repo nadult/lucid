@@ -255,29 +255,6 @@ void loadBlockRowSamples(uint by) {
 	}
 }
 
-// TODO: optimize
-void loadAllRowsSamples() {
-	uint by = LIX >> (LSHIFT - 2);
-	uint soffset = gl_WorkGroupID.x * WORKGROUP_SCRATCH_SIZE + by * MAX_BLOCK_ROW_TRIS;
-	uint y = LIX & 3;
-
-	for(uint i = (LIX & (LSIZE / 4 - 1)) >> 2; i < s_block_row_tri_count[by]; i += LSIZE / 16) {
-		uvec2 row = g_scratch[soffset + i];
-		uint tile_tri_idx = row[1], row_ranges = row[0];
-		int row_range = int((row_ranges >> (y * 8)) & 0xff);
-		if(row_range == 0x0f)
-			continue;
-
-		int minx = row_range & 0xf, maxx = (row_range >> 4) & 0xf;
-		int num_samples = maxx - minx + 1;
-		int sample_offset = atomicAdd(s_sample_count, num_samples);
-		uint sample_value = (tile_tri_idx << 16) | ((by * 4 + y) << 4) | uint(minx);
-		num_samples = min(num_samples, MAX_SAMPLES - sample_offset);
-		for(int j = 0; j < num_samples; j++)
-			s_buffer[sample_offset++] = sample_value++;
-	}
-}
-
 void sumPixelCounts()
 {
 #ifdef VENDOR_NVIDIA
@@ -440,30 +417,6 @@ void shadeSample(ivec2 tile_pixel_pos, uint local_tri_idx, out uint out_color, o
 	out_color = encodeRGBA8(color);
 }
 
-void reduce16x16Samples()
-{
-	// TODO: optimize
-	for(uint i = LIX; i < TILE_SIZE * TILE_SIZE; i += LSIZE) {
-		uint row_id = i >> TILE_SHIFT, col_id = i & (TILE_SIZE - 1);
-		uint pixel_counter = s_pixel_counts[row_id][col_id];
-		int num_samples = int(pixel_counter & 0xffff);
-		int sample_offset = int(pixel_counter >> 16) - num_samples;
-		
-		uint enc_color = 0;
-		float depth = 1.0 / 0.0;
-		for(int i = 0; i < num_samples; i++) {
-			float sdepth = s_fbuffer[sample_offset + i];
-			if(sdepth < depth) {
-				depth = sdepth;
-				enc_color = s_buffer[sample_offset + i];
-			}
-		}
-
-		//enc_color = encodeRGBA8(vec4(vec3(float(sample_offset) / MAX_SAMPLES), 1.0));
-		imageStore(final_raster, s_tile_pos + ivec2(col_id, row_id), uvec4(enc_color, 0, 0, 0));
-	}
-}
-
 void reduce16x4Samples(int by)
 {
 	// TODO: optimize
@@ -529,80 +482,6 @@ void rasterInvalidBlockRow(int by, vec3 color)
 	}
 }
 
-void shade16x16Tile() {
-	loadAllRowsSamples();
-	barrier();
-
-	// Selecting samples
-	uint samples[SAMPLES_PER_THREAD];
-	for(int i = 0; i < SAMPLES_PER_THREAD; i++) {
-		uint sample_idx = LSIZE * i + LIX;
-		samples[i] = sample_idx < s_sample_count? s_buffer[sample_idx] : ~0u;
-	}
-	barrier();
-	
-	// Shading samples & storing them ordered by pixel pos
-	for(int i = 0; i < SAMPLES_PER_THREAD; i++)
-		if(samples[i] != ~0u) {
-			ivec2 tile_pixel_pos = ivec2(samples[i] & 15, (samples[i] >> 4) & 15);
-			uint tri_idx = samples[i] >> 16;
-
-			uint sample_color;
-			float sample_depth;
-			shadeSample(tile_pixel_pos, tri_idx, sample_color, sample_depth);
-			uint sample_idx = atomicAdd(s_pixel_counts[tile_pixel_pos.y][tile_pixel_pos.x], 0x10000) >> 16;
-			s_buffer[sample_idx] = sample_color;
-			s_fbuffer[sample_idx] = sample_depth;
-		}
-	barrier();
-	reduce16x16Samples();
-	//rasterPixelCounts();
-}
-
-void shade16x4Tiles() {
-	prepareBlockRowOffsets();
-	barrier();
-
-	for(int by = 0; by < 4; by++) {
-		uint sample_count = getNumSamples16x4(by);
-		if(sample_count > MAX_SAMPLES) {
-			rasterInvalidBlockRow(by, vec3(1.0, 0.0, 0.0));
-			continue;
-		}
-
-		loadBlockRowSamples(by);
-		barrier();
-
-		// Selecting samples
-		uint samples[SAMPLES_PER_THREAD];
-		for(int i = 0; i < SAMPLES_PER_THREAD; i++) {
-			uint sample_idx = LSIZE * i + LIX;
-			samples[i] = sample_idx < s_sample_count? s_buffer[sample_idx] : ~0u;
-		}
-		barrier();
-		if(LIX == 0)
-			s_sample_count = 0;
-
-		// Shading samples & storing them ordered by pixel pos
-		for(int i = 0; i < SAMPLES_PER_THREAD; i++)
-			if(samples[i] != ~0u) {
-				ivec2 tile_pixel_pos = ivec2(samples[i] & 15, (samples[i] >> 4) & 15);
-				uint tri_idx = samples[i] >> 16;
-
-				uint sample_color;
-				float sample_depth;
-				shadeSample(tile_pixel_pos, tri_idx, sample_color, sample_depth);
-				uint sample_idx = atomicAdd(s_pixel_counts[tile_pixel_pos.y][tile_pixel_pos.x], 0x10000) >> 16;
-				s_buffer[sample_idx] = sample_color;
-				s_fbuffer[sample_idx] = sample_depth;
-			}
-
-		barrier();
-		reduce16x4Samples(by);
-		barrier();
-	}
-}
-
 void rasterBins(int bin_id) {
 	if(LIX < TILES_PER_BIN) {
 		s_tile_tri_counts [LIX] = int(g_tiles.tile_tri_counts[bin_id][LIX]);
@@ -645,11 +524,46 @@ void rasterBins(int bin_id) {
 			continue;
 		}
 
-		if(getNumSamples16x16() > MAX_SAMPLES) {
-			shade16x4Tiles();
-		}
-		else {
-			shade16x16Tile();
+		prepareBlockRowOffsets();
+		barrier();
+
+		for(int by = 0; by < 4; by++) {
+			uint sample_count = getNumSamples16x4(by);
+			if(sample_count > MAX_SAMPLES) {
+				rasterInvalidBlockRow(by, vec3(1.0, 0.0, 0.0));
+				continue;
+			}
+
+			loadBlockRowSamples(by);
+			barrier();
+
+			// Selecting samples
+			uint samples[SAMPLES_PER_THREAD];
+			for(int i = 0; i < SAMPLES_PER_THREAD; i++) {
+				uint sample_idx = LSIZE * i + LIX;
+				samples[i] = sample_idx < s_sample_count? s_buffer[sample_idx] : ~0u;
+			}
+			barrier();
+			if(LIX == 0)
+				s_sample_count = 0;
+
+			// Shading samples & storing them ordered by pixel pos
+			for(int i = 0; i < SAMPLES_PER_THREAD; i++)
+				if(samples[i] != ~0u) {
+					ivec2 tile_pixel_pos = ivec2(samples[i] & 15, (samples[i] >> 4) & 15);
+					uint tri_idx = samples[i] >> 16;
+
+					uint sample_color;
+					float sample_depth;
+					shadeSample(tile_pixel_pos, tri_idx, sample_color, sample_depth);
+					uint sample_idx = atomicAdd(s_pixel_counts[tile_pixel_pos.y][tile_pixel_pos.x], 0x10000) >> 16;
+					s_buffer[sample_idx] = sample_color;
+					s_fbuffer[sample_idx] = sample_depth;
+				}
+
+			barrier();
+			reduce16x4Samples(by);
+			barrier();
 		}
 	}
 }

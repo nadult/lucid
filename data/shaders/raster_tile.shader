@@ -6,6 +6,17 @@
 #define LSIZE 256
 #define LSHIFT 8
 
+// - generacja rzędów    512: 0.77  256: 0.5
+// - sumowanie pikseli   512: 0.09  256: 0.04
+// - generacja sampli    512: 0.56  256: 0.4
+// - cieniowanie sampli  512: 3.2   256: 2.23
+// - redukcja sampli     512: 0.3   256: 0.19
+// 
+// total 256: 3.36
+// total 512: 4.92
+//
+// TODO: keep all triangle data in one place (like in rtracer actually?)
+
 #define WORKGROUP_SCRATCH_SIZE	(64 * 1024)
 #define MAX_GROUP_TRIS (4 * 1024)
 #define MAX_SCRATCH_TRIS (6 * 1024)

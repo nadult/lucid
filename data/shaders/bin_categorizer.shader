@@ -18,12 +18,18 @@ void main() {
 	barrier();
 
 	// TODO: special shader for empty bins?
+	// TODO: problem w tym, że aby dobrze porozdzielac taski musimy znac liczbe sampli...
+	//       da się to jakoś oszacować? co najmniej w tile dispatcherze...
 	for(uint i = LIX; i < BIN_COUNT; i += LSIZE) {
 		int num_quads = g_bins.bin_quad_counts[i];
 		
 		// TODO: we need accurate count :(
 		int num_tris = num_quads * 2;
-		if(num_tris < 6 * 1024) {
+		if(false && num_tris < 256) {
+			int idx = atomicAdd(s_num_small_bins, 1);
+			g_bins.small_bins[idx] = int(i);
+		}
+		else if(num_tris < 6 * 1024) {
 			int idx = atomicAdd(s_num_medium_bins, 1);
 			g_bins.medium_bins[idx] = int(i);
 		}

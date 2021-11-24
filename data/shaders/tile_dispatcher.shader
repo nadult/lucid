@@ -25,15 +25,11 @@ shared uint s_tile_offsets[TILES_PER_BIN], s_tile_base_offsets[TILES_PER_BIN];
 shared vec2 s_bin_pos;
 shared ivec2 s_bin_ipos;
 
-// TODO: można by tutaj użyć algorytmu bazującego na liniach
-uint testTriangle(vec3 tri0, vec3 tri1, vec3 tri2, int tsx, int tsy, int tex, int tey) {
+uint computeScanlineParams(vec3 tri0, vec3 tri1, vec3 tri2, out vec3 scan_base, out vec3 scan_step) {
 	vec3 nrm0 = cross(tri2, tri1 - tri2);
 	vec3 nrm1 = cross(tri0, tri2 - tri0);
 	vec3 nrm2 = cross(tri1, tri0 - tri1);
 	float volume = dot(tri0, nrm0);
-
-	if(abs(volume) < 0.000001)
-		return 0;
 	if(volume < 0)
 		nrm0 = -nrm0, nrm1 = -nrm1, nrm2 = -nrm2;
 
@@ -43,29 +39,54 @@ uint testTriangle(vec3 tri0, vec3 tri1, vec3 tri2, int tsx, int tsy, int tex, in
 		vec3(dot(nrm2, frustum.ws_dirx), dot(nrm2, frustum.ws_diry), dot(nrm2, frustum.ws_dir0)),
 	};
 
-	// Adding offset for trivial reject corner
-	for(int i = 0; i < 3; i++) {
-		float x_offset = edges[i].x < 0.0? 0.0 : TILE_SIZE - 0.989;
-		float y_offset = edges[i].y < 0.0? 0.0 : TILE_SIZE - 0.989;
-		edges[i].z += edges[i].x * x_offset + edges[i].y * y_offset;
-	}
+	float inv_ex[3] = { 1.0 / edges[0].x, 1.0 / edges[1].x, 1.0 / edges[2].x };
+	scan_base = -vec3(edges[0].z * inv_ex[0], edges[1].z * inv_ex[1], edges[2].z * inv_ex[2]);
+	scan_step = -vec3(edges[0].y * inv_ex[0], edges[1].y * inv_ex[1], edges[2].y * inv_ex[2]);
+	uint xsigns = (edges[0].x < 0.0? 1 : 0) | (edges[1].x < 0.0? 2 : 0) | (edges[2].x < 0.0? 4 : 0);
+	uint ysigns = (edges[0].y < 0.0? 8 : 0) | (edges[1].y < 0.0? 16 : 0) | (edges[2].y < 0.0? 32 : 0);
+	return xsigns | ysigns;
+}
 
+uint testTriangle(vec3 tri0, vec3 tri1, vec3 tri2, int tsx, int tsy, int tex, int tey) {
 	tsx = max(tsx, 0);
 	tsy = max(tsy, 0);
 	tex = min(tex, 3);
 	tey = min(tey, 3);
 
+	vec3 scan_min, scan_max, scan_step;
+	{
+		float sx = s_bin_pos.x + 0.49;
+		float sy = s_bin_pos.y + tsy * TILE_SIZE + 0.49;
+
+		vec3 scan_base;
+		uint sign_mask = computeScanlineParams(tri0, tri1, tri2, scan_base, scan_step);
+
+		float tile_offset = TILE_SIZE - 0.989;
+		vec3 scan = vec3(
+				scan_step[0] * (sy + ((sign_mask &  8) == 0? tile_offset : 0.0)) + scan_base[0] - (sx + ((sign_mask & 1) == 0? tile_offset : 0.0)),
+				scan_step[1] * (sy + ((sign_mask & 16) == 0? tile_offset : 0.0)) + scan_base[1] - (sx + ((sign_mask & 2) == 0? tile_offset : 0.0)),
+				scan_step[2] * (sy + ((sign_mask & 32) == 0? tile_offset : 0.0)) + scan_base[2] - (sx + ((sign_mask & 4) == 0? tile_offset : 0.0)));
+		scan_min = vec3(
+				(sign_mask & 1) == 0? scan[0] : -1.0 / 0.0,
+				(sign_mask & 2) == 0? scan[1] : -1.0 / 0.0,
+				(sign_mask & 4) == 0? scan[2] : -1.0 / 0.0);
+		scan_max = vec3(
+				(sign_mask & 1) != 0? scan[0] : 1.0 / 0.0,
+				(sign_mask & 2) != 0? scan[1] : 1.0 / 0.0,
+				(sign_mask & 4) != 0? scan[2] : 1.0 / 0.0);
+	}
+
 	// Trivial reject test
 	uint mask = 0;
 	for(int ty = tsy; ty <= tey; ty++) {
-		vec2 tile_pos = s_bin_pos + vec2(tsx, ty) * float(TILE_SIZE) + vec2(0.49, 0.49);
-		for(int tx = tsx; tx <= tex; tx++) {
-			if(edges[0].x * tile_pos.x + edges[0].y * tile_pos.y + edges[0].z >= 0.0 &&
-			   edges[1].x * tile_pos.x + edges[1].y * tile_pos.y + edges[1].z >= 0.0 &&
-			   edges[2].x * tile_pos.x + edges[2].y * tile_pos.y + edges[2].z >= 0.0)
+		float xmin = max(max(scan_min[0], scan_min[1]), max(scan_min[2], 0.0));
+		float xmax = min(min(scan_max[0], scan_max[1]), min(scan_max[2], BIN_SIZE));
+
+		scan_min += scan_step * TILE_SIZE;
+		scan_max += scan_step * TILE_SIZE;
+		for(int tx = tsx; tx <= tex; tx++)
+			if(tx * TILE_SIZE >= xmin && tx * TILE_SIZE <= xmax)
 				mask |= 1 << (ty * 4 + tx);
-			tile_pos.x += float(TILE_SIZE);
-		}
 	}
 
 	// TODO: trivial accept

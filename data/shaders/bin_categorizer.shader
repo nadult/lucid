@@ -25,7 +25,7 @@ void main() {
 		
 		// TODO: we need accurate count :(
 		int num_tris = num_quads * 2;
-		if(false && num_tris < 256) {
+		if(num_tris < 256) {
 			int idx = atomicAdd(s_num_small_bins, 1);
 			g_bins.small_bins[idx] = int(i);
 		}

@@ -53,6 +53,17 @@
                     === Rasteryzacja wszystkich sampli na raz ===
 -----------------------------------------------------------------------------------------
 
+* Trzymanie danych cieniowania dla każdego tróəkąta oddzielnie (i przeliczenie tego w setupie)
+  trochę przyspiesza rasteryzację, ale nie dużo: 7.2 -> 6.54...
+  A było to dla wszystkich trójkątów i nie licząc czasu na ich precompute-owanie...
+
+* Iterowanie po tile-ach a nie po binach w raster_tile dla całej grupy tez nie pomaga (choć
+  teoretycznie jest bardziej cache friendly...)
+
+Inny pomysł:
+-trzymanie razem danych wierzchołków w różnych buforach:
+  uv+color+normal
+
 Sceny:        frag/4x4    tris/4x4
 Hairball:      1500        1000
 Powerplant:     700         300

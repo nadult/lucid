@@ -1432,6 +1432,7 @@ void LucidRenderer::rasterBin(const Context &ctx) {
 	PERF_GPU_SCOPE();
 
 	raster_bin_program.use();
+	m_bin_quads->bindIndex(8);
 
 	GlTexture::bind({ctx.opaque_tex, ctx.trans_tex});
 	//GlTexture::bind({ctx.depth_buffer, ctx.shadows.map});
@@ -1444,6 +1445,7 @@ void LucidRenderer::rasterBin(const Context &ctx) {
 
 	glDispatchCompute(128, 1, 1);
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+	m_tile_tris->bindIndex(8);
 }
 
 void LucidRenderer::rasterizeFinal(const Context &ctx) {

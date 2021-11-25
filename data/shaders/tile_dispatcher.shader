@@ -210,18 +210,22 @@ void dispatchBinTris(int bin_id) {
 
 }
 
-shared int s_bin_id;
+shared int s_num_bins, s_bin_id;
 
 int loadNextBin() {
-	if(LIX == 0)
-		s_bin_id = int(atomicAdd(g_tiles.tile_dispatch_bin_counter, 1));
+	if(LIX == 0) {
+		uint bin_idx = atomicAdd(g_tiles.tiled_bin_counter, 1);
+		s_bin_id = bin_idx < s_num_bins? g_bins.tiled_bins[bin_idx] : -1;
+	}
 	barrier();
 	return s_bin_id;
 }
 
 void main() {
+	if(LIX == 0)
+		s_num_bins = g_bins.num_tiled_bins;
 	int bin_id = loadNextBin();
-	while(bin_id < BIN_COUNT) {
+	while(bin_id != -1) {
 		barrier();
 		dispatchBinTris(bin_id);
 		bin_id = loadNextBin();

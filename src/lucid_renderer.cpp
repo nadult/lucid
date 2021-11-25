@@ -128,7 +128,7 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	m_quad_aabbs.emplace(BufferType::shader_storage, max_quads * sizeof(u32));
 	m_tri_aabbs.emplace(BufferType::shader_storage, max_quads * sizeof(int4));
 
-	uint bin_counters_size = (bin_counts * 6 + 256) * sizeof(u32);
+	uint bin_counters_size = (bin_counts * 8 + 256) * sizeof(u32);
 	uint tile_counters_size = (bin_counts * 16 * 4 + 256) * sizeof(u32);
 	m_bin_counters.emplace(BufferType::shader_storage, bin_counters_size);
 	m_tile_counters.emplace(BufferType::shader_storage, tile_counters_size);
@@ -379,6 +379,7 @@ void LucidRenderer::computeBins(const Context &ctx) {
 
 	PERF_SIBLING_SCOPE("bin categorizing phase");
 	bin_categorizer_program.use();
+	bin_categorizer_program["tile_all_bins"] = !(m_opts & Opt::new_raster);
 	glDispatchCompute(1, 1, 1);
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 }

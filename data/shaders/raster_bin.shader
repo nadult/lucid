@@ -43,7 +43,11 @@ shared vec3 s_bin_ray_dir0;
 
 shared uint s_block_row_tri_counts[BLOCK_ROW_COUNT];
 
-// TODO: 16-bit
+// TODO: add protection from too big number of samples:
+// maximum per row for raster_bin = min(4 * LSIZE, 32768) ?
+// we have to somehow estimate max# of samples during categorization?
+
+// TODO: 16-bit (it speeds up by about 1%...)
 shared uint s_row_frag_counts[BIN_SIZE];
 shared uint s_row2_frag_counts[BIN_SIZE / 2];
 shared uint s_block_row_frag_counts[BLOCK_ROW_COUNT];
@@ -142,6 +146,8 @@ void generateTriGroups(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, int min_by
 //
 // TODO: don't store triangles which generate very small number of samples in scratch,
 // instead precompute them directly when sampling; We would have to somehow group those triangles together
+//
+// TODO: store attributes close together (SOA)
 void storeTriangle(uint local_tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, uint v0, uint v1, uint v2, uint instance_id)
 {
 	uint toffset = gl_WorkGroupID.x * WORKGROUP_SCRATCH_SIZE + SCRATCH_TRI_OFFSET + local_tri_idx * 8;
@@ -222,8 +228,9 @@ void generateRows() {
 		
 		// TODO: store only if samples were generated
 		// TODO: do triangle storing later
-		storeTriangle(LIX, tri0, tri1, tri2, v0, v1, v2, instance_id);
-		generateTriGroups(LIX, tri0, tri1, tri2, min_by, max_by);
+		uint tri_idx = i * 2 + (LIX & 1);
+		storeTriangle(tri_idx, tri0, tri1, tri2, v0, v1, v2, instance_id);
+		generateTriGroups(tri_idx, tri0, tri1, tri2, min_by, max_by);
 	}
 }
 
@@ -450,9 +457,8 @@ void rasterFragmentCounts(int by)
 	for(uint i = LIX; i < BIN_SIZE * BLOCK_SIZE; i += LSIZE) {
 		ivec2 pixel_pos = ivec2(i & (BIN_SIZE - 1), by * 4 + (i >> BIN_SHIFT));
 		uint count = s_pixel_counts[i] & 0xffff;
-		count = s_pixel_counts[i] >> 16;
 
-		vec4 color = vec4(vec3(float(count) / 4096.0), 1.0);
+		vec4 color = vec4(vec3(float(count) / 32.0), 1.0);
 		uint enc_col = encodeRGBA8(color);
 		imageStore(final_raster, s_bin_pos + pixel_pos, uvec4(enc_col, 0, 0, 0));
 	}
@@ -534,13 +540,13 @@ void rasterBin(int bin_id) {
 			for(int i = 0; i < SAMPLES_PER_THREAD; i++)
 				if(samples[i] != ~0u) {
 					uint pixel_id = samples[i] & 0xfff;
-					ivec2 bin_pixel_pos = ivec2(pixel_id & 63, (by * 4 + y) + (pixel_id >> 6));
+					ivec2 bin_pixel_pos = ivec2(pixel_id & (BIN_SIZE - 1), (by * 4 + y) + (pixel_id >> 6));
 					uint bin_tri_idx = samples[i] >> 16;
 
 					uint sample_color;
 					float sample_depth;
 					shadeSample(bin_pixel_pos, bin_tri_idx, sample_color, sample_depth);
-					uint pixel_counter = atomicAdd(s_pixel_counts[y * 64 + pixel_id], 0x10000);
+					uint pixel_counter = atomicAdd(s_pixel_counts[y * BIN_SIZE + pixel_id], 0x10000);
 					uint sample_idx = (pixel_counter >> 16) - (pixel_counter & 0xffff);
 					if(sample_idx < MAX_SAMPLES) {
 						s_buffer[sample_idx] = sample_color;

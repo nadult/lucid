@@ -43,6 +43,12 @@ shared vec3 s_bin_ray_dir0;
 
 shared uint s_block_row_tri_counts[BLOCK_ROW_COUNT];
 
+// TODO: 16-bit
+shared uint s_row_frag_counts[BIN_SIZE];
+shared uint s_row2_frag_counts[BIN_SIZE / 2];
+shared uint s_block_row_frag_counts[BLOCK_ROW_COUNT];
+shared uint s_block_row_max_frag_counts[BLOCK_ROW_COUNT];
+
 shared uint s_bin_quad_count, s_bin_quad_offset;
 
 shared int s_pixel_counts[BIN_SIZE * BLOCK_SIZE];
@@ -53,18 +59,14 @@ shared float s_fbuffer[MAX_SAMPLES + 1];
 
 // TODO: add synthetic test: 256 planes one after another
 
-// 3 opcje renderingu: (kod do cieniowania ten sam?)
-// - rendering 4 linii na raz
-// - rendering 2 linii na raz
-// - rendering 1 linii na raz
-//
-// jeśli sampli jest więcej to rysujemy czerwony
-
-
-// Jeśli chcemy mieć więcej sampli to musimy też mieć więcej wątków...
-// wpp. musimy zmniejszyć zakres.
-// czy jest sens rysować linia po linii? nie lepiej w kawałkach 16x4, 8x4?
-//
+void computeRowFragCounts() {
+	if(LIX < BIN_SIZE) {
+		uint value = s_row_frag_counts[LIX];
+		atomicAdd(s_block_row_frag_counts[LIX >> 2], value);
+		atomicMax(s_block_row_max_frag_counts[LIX >> 2], value);
+		atomicAdd(s_row2_frag_counts[LIX >> 1], value);
+	}
+}
 
 uint computeScanlineParams(vec3 tri0, vec3 tri1, vec3 tri2, out vec3 scan_base, out vec3 scan_step) {
 	vec3 nrm0 = cross(tri2, tri1 - tri2);
@@ -121,6 +123,7 @@ void generateTriGroups(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, int min_by
 			
 			// TODO: use floor/ceil?
 			int imin = int(xmin), imax = int(xmax) - 1;
+			atomicAdd(s_row_frag_counts[by * 4 + y], uint(max(0, imax - imin + 1)));
 			row_ranges[y >> 1] |= (imin <= imax? (uint(imin) | (uint(imax) << 6)) : 0x3f) << ((y & 1) * 12);
 		}
 
@@ -456,52 +459,52 @@ void rasterFragmentCounts(int by)
 }
 
 void rasterBin(int bin_id) {
-	if(LIX < BLOCK_ROW_COUNT) {
-		if(LIX == 0) {
-			ivec2 bin_pos = ivec2(bin_id % BIN_COUNT_X, bin_id / BIN_COUNT_X) * BIN_SIZE;
-			s_bin_pos = bin_pos;
-			s_bin_quad_count = g_bins.bin_quad_counts[bin_id];
-			s_bin_quad_offset = g_bins.bin_quad_offsets[bin_id];
-			s_bin_ray_dir0 = frustum.ws_dir0 + frustum.ws_dirx * (bin_pos.x + 0.5)
-											 + frustum.ws_diry * (bin_pos.y + 0.5);
-		}
+	if(LIX < BIN_SIZE) {
+		if(LIX < BLOCK_ROW_COUNT) {
+			if(LIX == 0) {
+				ivec2 bin_pos = ivec2(bin_id % BIN_COUNT_X, bin_id / BIN_COUNT_X) * BIN_SIZE;
+				s_bin_pos = bin_pos;
+				s_bin_quad_count = g_bins.bin_quad_counts[bin_id];
+				s_bin_quad_offset = g_bins.bin_quad_offsets[bin_id];
+				s_bin_ray_dir0 = frustum.ws_dir0 + frustum.ws_dirx * (bin_pos.x + 0.5)
+												 + frustum.ws_diry * (bin_pos.y + 0.5);
+			}
 
-		s_block_row_tri_counts[LIX] = 0;
+			s_block_row_tri_counts[LIX] = 0;
+			s_block_row_max_frag_counts[LIX] = 0;
+			s_block_row_frag_counts[LIX] = 0;
+		}
+		s_row_frag_counts[LIX] = 0;
+		if(LIX < BIN_SIZE / 2)
+			s_row2_frag_counts[LIX] = 0;
 	}
 	barrier();
 	generateRows();
 	groupMemoryBarrier();
+	barrier();
+	computeRowFragCounts();
 
 	for(int by = 0; by < BLOCK_ROW_COUNT; by++) {
 		barrier();
 		computeBlockRowPixelCounts(by);
 		// iterujemy po liniach?
 		barrier();
-		// TODO: precompute row counts?
-		// once we know that row counts are OK, we can compute pixel counts
-		// during loading row samples?
-		int row_num_samples[4] = {
-			s_pixel_counts[0 * 64 + 63] >> 16, s_pixel_counts[1 * 64 + 63] >> 16,
-			s_pixel_counts[2 * 64 + 63] >> 16, s_pixel_counts[3 * 64 + 63] >> 16 };
-		uint max01 = max(row_num_samples[0], row_num_samples[1]);
-		uint max23 = max(row_num_samples[2], row_num_samples[3]);
-		uint max0123 = max(max01, max23);
-
-		if(max0123 > MAX_SAMPLES) {
+		if(s_block_row_max_frag_counts[by] > MAX_SAMPLES) {
 			rasterInvalidBlockRow(by, vec3(1.0, 0.0, 0.0));
 			continue;
 		}
 		
-		uint sum01 = row_num_samples[0] + row_num_samples[1];
-		uint sum23 = row_num_samples[2] + row_num_samples[3];
-		int ystep = sum01 + sum23 <= MAX_SAMPLES? 4 : max(sum01, sum23) <= MAX_SAMPLES? 2 : 1;
+		uint frag_count01 = s_row2_frag_counts[by * 2 + 0];
+		uint frag_count23 = s_row2_frag_counts[by * 2 + 1];
 
-		barrier();
+		// How many rows can we rasterize in single step?
+		int ystep = frag_count01 + frag_count23 <= MAX_SAMPLES? 4 : max(frag_count01, frag_count23) <= MAX_SAMPLES? 2 : 1;
+
 		// Accumulating prefix sums from 2 rows
 		if(ystep >= 2) {
 			if(LIX < BIN_SIZE * 2) {
 				uint y = (LIX >> BIN_SHIFT) * 2 + 1, x = LIX & (BIN_SIZE - 1);
-				s_pixel_counts[y * BIN_SIZE + x] += row_num_samples[y - 1] << 16;
+				s_pixel_counts[y * BIN_SIZE + x] += int(s_row_frag_counts[by * 4 + y - 1] << 16);
 			}
 		}
 		barrier();
@@ -509,10 +512,9 @@ void rasterBin(int bin_id) {
 		if(ystep == 4) {
 			if(LIX < BIN_SIZE * 2) {
 				uint y = 2 + (LIX >> BIN_SHIFT), x = LIX & (BIN_SIZE - 1);
-				s_pixel_counts[y * BIN_SIZE + x] += (row_num_samples[0] + row_num_samples[1]) << 16;
+				s_pixel_counts[y * BIN_SIZE + x] += int(frag_count01 << 16);
 			}
 		}
-		barrier();
 
 		for(int y = 0; y < 4; y += ystep) {
 			barrier();

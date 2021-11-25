@@ -29,8 +29,12 @@ layout(binding = 0) uniform sampler2D opaque_texture;
 layout(binding = 1) uniform sampler2D transparent_texture;
 
 #define WORKGROUP_SCRATCH_SIZE	(64 * 1024)
+#define WORKGROUP_SCRATCH_SHIFT	16
+
 #define MAX_BLOCK_ROW_TRIS		(2 * 1024)
-#define MAX_SCRATCH_TRIS		(2 * 1024)
+#define MAX_SCRATCH_TRIS		(1 * 1024)
+#define MAX_SCRATCH_TRIS_SHIFT  10
+
 #define SCRATCH_TRI_OFFSET		(MAX_BLOCK_ROW_TRIS * BLOCK_ROW_COUNT)
 #define BLOCK_ROW_COUNT			16
 
@@ -139,18 +143,21 @@ void generateTriGroups(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, int min_by
 	}
 }
 
-// TODO: problem: we cannot use tile triangle indices, because there would be too many...
-// we have to remap triangles to those which are actually used in currently rasterized tile segment
-// We would have to store those indices (32-bit) in scratch probably
-//
 // TODO: don't store triangles which generate very small number of samples in scratch,
 // instead precompute them directly when sampling; We would have to somehow group those triangles together
 //
-// TODO: store attributes close together (SOA)
-void storeTriangle(uint local_tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, uint v0, uint v1, uint v2, uint instance_id)
-{
-	uint toffset = gl_WorkGroupID.x * WORKGROUP_SCRATCH_SIZE + SCRATCH_TRI_OFFSET + local_tri_idx * 8;
+// TODO: use scratch based on uints, not uvec2, maybe it will be a bit faster?
 
+#define TRI_SCRATCH(var_idx) \
+	g_scratch[toffset + (var_idx << MAX_SCRATCH_TRIS_SHIFT)]
+
+uint scratchTriOffset(uint tri_idx) {
+	return (gl_WorkGroupID.x << WORKGROUP_SCRATCH_SHIFT) + SCRATCH_TRI_OFFSET + tri_idx;
+}
+
+void storeTriangle(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, uint v0, uint v1, uint v2, uint instance_id)
+{
+	uint toffset = scratchTriOffset(tri_idx);
 	vec3 normal = cross(tri0 - tri2, tri1 - tri0);
 	float multiplier = 1.0 / length(normal);
 	normal *= multiplier;
@@ -167,38 +174,95 @@ void storeTriangle(uint local_tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, uint v0,
 	edge0 = cross(normal, edge0);
 	edge1 = cross(normal, edge1);
 
-	g_scratch[toffset + 0] = uvec2(floatBitsToUint(normal.x), floatBitsToUint(normal.y));
-	g_scratch[toffset + 1] = uvec2(floatBitsToUint(normal.z), floatBitsToUint(plane_dist));
-	g_scratch[toffset + 2] = uvec2(floatBitsToUint(param0), floatBitsToUint(param1));
-	g_scratch[toffset + 3] = uvec2(floatBitsToUint(edge0.x), floatBitsToUint(edge0.y));
-	g_scratch[toffset + 4] = uvec2(floatBitsToUint(edge0.z), floatBitsToUint(edge1.x));
-	g_scratch[toffset + 5] = uvec2(floatBitsToUint(edge1.y), floatBitsToUint(edge1.z));
-	g_scratch[toffset + 6] = uvec2(v0, v1);
-	g_scratch[toffset + 7] = uvec2(v2, instance_id);
+	TRI_SCRATCH(0) = uvec2(floatBitsToUint(normal.x), floatBitsToUint(normal.y));
+	TRI_SCRATCH(1) = uvec2(floatBitsToUint(normal.z), floatBitsToUint(plane_dist));
+	TRI_SCRATCH(2) = uvec2(floatBitsToUint(param0), floatBitsToUint(param1));
+	TRI_SCRATCH(3) = uvec2(floatBitsToUint(edge0.x), floatBitsToUint(edge0.y));
+	TRI_SCRATCH(4) = uvec2(floatBitsToUint(edge0.z), floatBitsToUint(edge1.x));
+	TRI_SCRATCH(5) = uvec2(floatBitsToUint(edge1.y), floatBitsToUint(edge1.z));
+
+	uint instance_flags = g_instances[instance_id].flags;
+	uint instance_color = g_instances[instance_id].color;
+	
+	TRI_SCRATCH(6) = uvec2(instance_flags, instance_color);
+	TRI_SCRATCH(7) = uvec2(instance_id, 0);
+
+	uint vcolor2 = 0;
+	if((instance_flags & INST_HAS_VERTEX_COLORS) != 0) {
+		TRI_SCRATCH(8) = uvec2(g_colors[v0], g_colors[v1]);
+		vcolor2 = g_colors[v2];
+	}
+	uint vnormal2 = 0;
+	if((instance_flags & INST_HAS_VERTEX_NORMALS) != 0) {
+		TRI_SCRATCH(10) = uvec2(g_normals[v0], g_normals[v1]);
+		vnormal2 = g_normals[v2];
+	}
+	
+	if((instance_flags & (INST_HAS_VERTEX_COLORS | INST_HAS_VERTEX_NORMALS)) != 0) {
+		TRI_SCRATCH(9) = uvec2(vcolor2, vnormal2);
+	}
+	if((instance_flags & INST_HAS_TEXTURE) != 0) {
+		vec2 tex0 = g_tex_coords[v0];
+		vec2 tex1 = g_tex_coords[v1];
+		vec2 tex2 = g_tex_coords[v2];
+		tex1 -= tex0; tex2 -= tex0;
+		TRI_SCRATCH(11) = floatBitsToUint(tex0);
+		TRI_SCRATCH(12) = floatBitsToUint(tex1);
+		TRI_SCRATCH(13) = floatBitsToUint(tex2);
+	}
 }
 
-void getTriangleParams(uint local_tri_idx, out vec3 normal, out vec3 params, out vec3 edge0, out vec3 edge1, out uint instance_id) {
-	uint toffset = gl_WorkGroupID.x * WORKGROUP_SCRATCH_SIZE + SCRATCH_TRI_OFFSET + local_tri_idx * 8;
-
+void getTriangleParams(uint tri_idx, out vec3 normal, out vec3 params, out vec3 edge0, out vec3 edge1,
+		out uint instance_id, out uint instance_flags, out uint instance_color) {
+	uint toffset = scratchTriOffset(tri_idx);
 	{
-		uvec2 val0 = g_scratch[toffset + 0], val1 = g_scratch[toffset + 1], val2 = g_scratch[toffset + 2];
+		uvec2 val0 = TRI_SCRATCH(0), val1 = TRI_SCRATCH(1), val2 = TRI_SCRATCH(2);
 		normal = vec3(uintBitsToFloat(val0[0]), uintBitsToFloat(val0[1]), uintBitsToFloat(val1[0]));
 		params = vec3(uintBitsToFloat(val1[1]), uintBitsToFloat(val2[0]), uintBitsToFloat(val2[1]));
 	}
 	{
-		uvec2 val0 = g_scratch[toffset + 3], val1 = g_scratch[toffset + 4], val2 = g_scratch[toffset + 5];
+		uvec2 val0 = TRI_SCRATCH(3), val1 = TRI_SCRATCH(4), val2 = TRI_SCRATCH(5);
 		edge0 = vec3(uintBitsToFloat(val0[0]), uintBitsToFloat(val0[1]), uintBitsToFloat(val1[0]));
 		edge1 = vec3(uintBitsToFloat(val1[1]), uintBitsToFloat(val2[0]), uintBitsToFloat(val2[1]));
 	}
 
-	instance_id = g_scratch[toffset + 7].y;
+	{
+		uvec2 val0 = TRI_SCRATCH(6);
+		instance_flags = val0.x;
+		instance_color = val0.y;
+		instance_id = TRI_SCRATCH(7).x;
+	}
 }
 
-void getTriangleVerts(uint local_tri_idx, out uint v0, out uint v1, out uint v2) {
-	uint toffset = gl_WorkGroupID.x * WORKGROUP_SCRATCH_SIZE + SCRATCH_TRI_OFFSET + local_tri_idx * 8;
-	uvec2 val0 = g_scratch[toffset + 6];
-	v0 = val0[0], v1 = val0[1], v2 = g_scratch[toffset + 7].x;
+void getTriangleVertexColors(uint tri_idx, out vec4 color0, out vec4 color1, out vec4 color2) {
+	uint toffset = scratchTriOffset(tri_idx);
+	uvec2 val0 = TRI_SCRATCH(8);
+	uvec2 val1 = TRI_SCRATCH(9);
+	color0 = decodeRGBA8(val0[0]);
+	color1 = decodeRGBA8(val0[1]);
+	color2 = decodeRGBA8(val1[0]);
 }
+
+void getTriangleVertexNormals(uint tri_idx, out vec3 normal0, out vec3 normal1, out vec3 normal2) {
+	uint toffset = scratchTriOffset(tri_idx);
+	uvec2 val0 = TRI_SCRATCH(10);
+	uvec2 val1 = TRI_SCRATCH(9);
+	normal0 = decodeNormalUint(val0[0]);
+	normal1 = decodeNormalUint(val0[1]);
+	normal2 = decodeNormalUint(val1[1]);
+}
+
+void getTriangleVertexTexCoords(uint tri_idx, out vec2 tex0, out vec2 tex1, out vec2 tex2) {
+	uint toffset = scratchTriOffset(tri_idx);
+	uvec2 val0 = TRI_SCRATCH(11);
+	uvec2 val1 = TRI_SCRATCH(12);
+	uvec2 val2 = TRI_SCRATCH(13);
+	tex0 = uintBitsToFloat(val0);
+	tex1 = uintBitsToFloat(val1);
+	tex2 = uintBitsToFloat(val2);
+}
+
+#undef TRI_SCRATCH
 
 void generateRows() {
 	// TODO: optimization: in many cases all rows may very well fit in SMEM,
@@ -367,9 +431,8 @@ void shadeSample(ivec2 bin_pixel_pos, uint local_tri_idx, out uint out_color, ou
 								  + frustum.ws_diry * bin_pixel_pos.y;
 
 	vec3 normal, params, edge0, edge1;
-	uint instance_id, instance_flags;
-	getTriangleParams(local_tri_idx, normal, params, edge0, edge1, instance_id);
-	instance_flags = g_instances[instance_id].flags;
+	uint instance_id, instance_flags, instance_color;
+	getTriangleParams(local_tri_idx, normal, params, edge0, edge1, instance_id, instance_flags, instance_color);
 
 	float ray_pos = params[0] / dot(normal, ray_dir);
 	vec2 bary = vec2(dot(edge0, ray_dir), dot(edge1, ray_dir)) * ray_pos;
@@ -388,31 +451,21 @@ void shadeSample(ivec2 bin_pixel_pos, uint local_tri_idx, out uint out_color, ou
 	bary -= vec2(params[1], params[2]);
 	// params, edge0 & edge1 no longer needed!
 
-	uint v0, v1, v2;
-	if((instance_flags & (INST_HAS_VERTEX_COLORS | INST_HAS_TEXTURE | INST_HAS_VERTEX_NORMALS)) != 0)
-		getTriangleVerts(local_tri_idx, v0, v1, v2);
-
-	// 0.5ms on Sponza!!!
-	vec4 color = decodeRGBA8(g_instances[instance_id].color);
+	vec4 color = decodeRGBA8(instance_color);
 	if((instance_flags & INST_HAS_VERTEX_COLORS) != 0) {
-		vec4 col0 = decodeRGBA8(g_colors[v0]);
-		vec4 col1 = decodeRGBA8(g_colors[v1]);
-		vec4 col2 = decodeRGBA8(g_colors[v2]);
+		vec4 col0, col1, col2;
+		getTriangleVertexColors(local_tri_idx, col0, col1, col2);
 		color *= (1.0 - bary[0] - bary[1]) * col0 + bary[0] * col1 + bary[1] * col2;
 	}
 
-	// ~2ms on Sponza (mostly loading g_ data)
 	if((instance_flags & INST_HAS_TEXTURE) != 0) {
-		vec2 tex0 = g_tex_coords[v0];
-		vec2 tex1 = g_tex_coords[v1];
-		vec2 tex2 = g_tex_coords[v2];
-		tex1 -= tex0, tex2 -= tex0;
+		vec2 tex0, tex1, tex2;
+		getTriangleVertexTexCoords(local_tri_idx, tex0, tex1, tex2);
 
 		vec2 tex_coord = tex0 + bary[0] * tex1 + bary[1] * tex2;
 		vec2 tex_dx = bary_dx[0] * tex1 + bary_dx[1] * tex2;
 		vec2 tex_dy = bary_dy[0] * tex1 + bary_dy[1] * tex2;
 
-		// 0.8ms to load uv_rect on Sponza
 		if((instance_flags & INST_HAS_UV_RECT) != 0) {
 			vec4 uv_rect = g_uv_rects[instance_id];
 			tex_coord = uv_rect.xy + uv_rect.zw * fract(tex_coord);
@@ -425,11 +478,9 @@ void shadeSample(ivec2 bin_pixel_pos, uint local_tri_idx, out uint out_color, ou
 			color *= textureGrad(transparent_texture, tex_coord, tex_dx, tex_dy);
 	}
 
-	// 0.75 ms on Sponza
 	if((instance_flags & INST_HAS_VERTEX_NORMALS) != 0) {
-		vec3 nrm0 = decodeNormalUint(g_normals[v0]);
-		vec3 nrm1 = decodeNormalUint(g_normals[v1]);
-		vec3 nrm2 = decodeNormalUint(g_normals[v2]);
+		vec3 nrm0, nrm1, nrm2;
+		getTriangleVertexNormals(local_tri_idx, nrm0, nrm1, nrm2);
 		nrm1 -= nrm0; nrm2 -= nrm0;
 		normal = nrm0 + bary[0] * nrm1 + bary[1] * nrm2;
 	}

@@ -316,7 +316,7 @@ void loadRowSamples(int by, int y, int ystep) {
 		uint bin_tri_idx = (row.x >> 24) | ((row.y & 0xff000000) >> 16);
 		int minx = row_range & 0x3f, maxx = (row_range >> 6) & 0x3f;
 		int num_samples = maxx - minx + 1;
-		uint sample_value = (bin_tri_idx << 16) | ((LIX & ystep) << 6) | minx;
+		uint sample_value = (bin_tri_idx << 16) | (y << 6) | minx;
 		// Note: we're assuming that all samples will fit in s_buffer
 		int sample_offset = atomicAdd(s_sample_count, num_samples);
 		num_samples = min(num_samples, MAX_SAMPLES - sample_offset);
@@ -337,7 +337,7 @@ void reduceRowSamples(int by, int y, int ystep)
 
 		uint pixel_counter = s_pixel_counts[y * BIN_SIZE + x];
 		int num_samples = int(pixel_counter & 0xffff);
-		int sample_offset = int(pixel_counter >> 16) - num_samples * 2;
+		int sample_offset = int(pixel_counter >> 16) - num_samples;
 		
 		uint enc_color = 0;
 		float depth = 1.0 / 0.0;
@@ -407,12 +407,14 @@ void computeBlockRowPixelCounts(uint by)
 		temp = shuffleUpNV(value,  4, 32); if((LIX & 31) >=  4) value += temp & 0xffff0000;
 		temp = shuffleUpNV(value,  8, 32); if((LIX & 31) >=  8) value += temp & 0xffff0000;
 		temp = shuffleUpNV(value, 16, 32); if((LIX & 31) >= 16) value += temp & 0xffff0000;
-		s_pixel_counts[LIX] = value;
+		s_pixel_counts[LIX] = value - (value << 16);
 	}
 	barrier();
+	// Summing prefix sums from two 32-pixel columns
 	if(LIX < BIN_SIZE * BLOCK_SIZE / 2) {
 		uint y = LIX >> 5, x = LIX & 31;
-		s_pixel_counts[y * 64 + x + 32] += s_pixel_counts[y * 64 + 31] & 0xffff0000;
+		int value = s_pixel_counts[y * 64 + 31];
+		s_pixel_counts[y * 64 + x + 32] += (value & 0xffff0000) + (value << 16);
 	}
 #else
 #error write me please
@@ -590,14 +592,13 @@ void rasterBin(int bin_id) {
 			for(int i = 0; i < SAMPLES_PER_THREAD; i++)
 				if(samples[i] != ~0u) {
 					uint pixel_id = samples[i] & 0xfff;
-					ivec2 bin_pixel_pos = ivec2(pixel_id & (BIN_SIZE - 1), (by * 4 + y) + (pixel_id >> 6));
+					ivec2 bin_pixel_pos = ivec2(pixel_id & (BIN_SIZE - 1), (by * 4) + (pixel_id >> 6));
 					uint bin_tri_idx = samples[i] >> 16;
 
 					uint sample_color;
 					float sample_depth;
 					shadeSample(bin_pixel_pos, bin_tri_idx, sample_color, sample_depth);
-					uint pixel_counter = atomicAdd(s_pixel_counts[y * BIN_SIZE + pixel_id], 0x10000);
-					uint sample_idx = (pixel_counter >> 16) - (pixel_counter & 0xffff);
+					uint sample_idx = atomicAdd(s_pixel_counts[pixel_id], 0x10000) >> 16;
 					if(sample_idx < MAX_SAMPLES) {
 						s_buffer[sample_idx] = sample_color;
 						s_fbuffer[sample_idx] = sample_depth;

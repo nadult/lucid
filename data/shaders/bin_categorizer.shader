@@ -33,7 +33,7 @@ void main() {
 			int idx = atomicAdd(s_num_medium_bins, 1);
 			g_bins.medium_bins[idx] = int(i);
 		}
-		else {
+		else if(true) {
 			int idx = atomicAdd(s_num_big_bins, 1);
 			g_bins.big_bins[idx] = int(i);
 		}

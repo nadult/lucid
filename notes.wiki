@@ -53,6 +53,8 @@
                     === Rasteryzacja wszystkich sampli na raz ===
 -----------------------------------------------------------------------------------------
 
+* *Nie encoduj wielkości ekranu w shaderach: recompute przy resize*
+
 * Trzymanie danych cieniowania dla każdego tróəkąta oddzielnie (i przeliczenie tego w setupie)
   trochę przyspiesza rasteryzację, ale nie dużo: 7.2 -> 6.54...
   A było to dla wszystkich trójkątów i nie licząc czasu na ich precompute-owanie...

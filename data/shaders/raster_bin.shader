@@ -30,33 +30,41 @@ layout(binding = 0) uniform sampler2D opaque_texture;
 layout(binding = 1) uniform sampler2D transparent_texture;
 
 #define WORKGROUP_SCRATCH_SIZE	(64 * 1024)
-#define MAX_BLOCK_ROW_TRIS		(4 * 1024)
+#define MAX_BLOCK_ROW_TRIS		(2 * 1024)
 #define MAX_SCRATCH_TRIS		(2 * 1024)
-#define SCRATCH_TRI_OFFSET		(MAX_BLOCK_ROW_TRIS * 4)
+#define SCRATCH_TRI_OFFSET		(MAX_BLOCK_ROW_TRIS * BLOCK_ROW_COUNT)
 #define BLOCK_ROW_COUNT			16
 
 #define SAMPLES_PER_THREAD		4
 #define MAX_SAMPLES				(LSIZE * SAMPLES_PER_THREAD)
 
 shared ivec2 s_bin_pos;
+shared vec3 s_bin_ray_dir0;
 
 shared uint s_block_row_tri_counts[BLOCK_ROW_COUNT];
-shared uint s_block_row_frag_counts[BLOCK_ROW_COUNT];
 
 shared uint s_bin_quad_count, s_bin_quad_offset;
 
 shared int s_pixel_counts[BIN_SIZE * BLOCK_SIZE];
+
 shared int s_sample_count;
+shared uint s_buffer[MAX_SAMPLES + 1];
+shared float s_fbuffer[MAX_SAMPLES + 1];
+
+// TODO: add synthetic test: 256 planes one after another
+
+// 3 opcje renderingu: (kod do cieniowania ten sam?)
+// - rendering 4 linii na raz
+// - rendering 2 linii na raz
+// - rendering 1 linii na raz
+//
+// jeśli sampli jest więcej to rysujemy czerwony
 
 
-// Ile wątków najlepiej? mamy 4K pikseli; max 64 linie na trójkąt;
-// 12 bitów na linię: 48 bitów na 4 linie?
+// Jeśli chcemy mieć więcej sampli to musimy też mieć więcej wątków...
+// wpp. musimy zmniejszyć zakres.
+// czy jest sens rysować linia po linii? nie lepiej w kawałkach 16x4, 8x4?
 //
-// Max 4K instancji dla 256 trójkątów?
-// Rysujemy po 16 linii na raz?
-//
-// najpierw porządkujemy trojkaty po ilosci rzedow? potem
-// 
 
 uint computeScanlineParams(vec3 tri0, vec3 tri1, vec3 tri2, out vec3 scan_base, out vec3 scan_step) {
 	vec3 nrm0 = cross(tri2, tri1 - tri2);
@@ -100,11 +108,9 @@ void generateTriGroups(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, int min_by
 				(sign_mask & 4) != 0? scan[2] : 1.0 / 0.0);
 	}
 
-	// TODO: min/max by
 	uint soffset = gl_WorkGroupID.x * WORKGROUP_SCRATCH_SIZE + min_by * MAX_BLOCK_ROW_TRIS;
 	for(int by = min_by; by <= max_by; by++) {
 		uint row_ranges[2] = {0, 0};
-		int frag_counts = 0; // TODO: uint?
 
 		for(int y = 0; y < 4; y++) {
 			float xmin = max(max(scan_min[0], scan_min[1]), max(scan_min[2], 0.0));
@@ -115,16 +121,13 @@ void generateTriGroups(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, int min_by
 			
 			// TODO: use floor/ceil?
 			int imin = int(xmin), imax = int(xmax) - 1;
-			frag_counts += max(0, imax - imin + 1);
 			row_ranges[y >> 1] |= (imin <= imax? (uint(imin) | (uint(imax) << 6)) : 0x3f) << ((y & 1) * 12);
 		}
 
-		// 0x1c71c7 is equal to 4 empty rows (each row encoded in 2 * 3 bits)
-		if(frag_counts > 0) {
+		if(row_ranges[0] != 0x03f03f || row_ranges[1] != 0x03f03f) {
 			uint roffset = atomicAdd(s_block_row_tri_counts[by], 1);
 			g_scratch[soffset + roffset] = uvec2(row_ranges[0] | (tri_idx << 24),
 												 row_ranges[1] | ((tri_idx & 0xff00) << 16));
-			atomicAdd(s_block_row_frag_counts[by], frag_counts);
 		}
 		soffset += MAX_BLOCK_ROW_TRIS;
 	}
@@ -138,8 +141,6 @@ void generateTriGroups(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, int min_by
 // instead precompute them directly when sampling; We would have to somehow group those triangles together
 void storeTriangle(uint local_tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, uint v0, uint v1, uint v2, uint instance_id)
 {
-	if(local_tri_idx >= MAX_SCRATCH_TRIS)
-		return;
 	uint toffset = gl_WorkGroupID.x * WORKGROUP_SCRATCH_SIZE + SCRATCH_TRI_OFFSET + local_tri_idx * 8;
 
 	vec3 normal = cross(tri0 - tri2, tri1 - tri0);
@@ -218,41 +219,96 @@ void generateRows() {
 		
 		// TODO: store only if samples were generated
 		// TODO: do triangle storing later
-		//storeTriangle(tile_tri_idx, tri0, tri1, tri2, v0, v1, v2, instance_id);
+		storeTriangle(LIX, tri0, tri1, tri2, v0, v1, v2, instance_id);
 		generateTriGroups(LIX, tri0, tri1, tri2, min_by, max_by);
 	}
 }
 
 // TODO: optimize
-void loadBlockRowSamples(uint by) {
+void loadRowSamples(int by, int y, int ystep) {
+	ystep--;
+	y += int(LIX & ystep);
+
 	uint soffset = gl_WorkGroupID.x * WORKGROUP_SCRATCH_SIZE + by * MAX_BLOCK_ROW_TRIS;
 	uint tri_count = s_block_row_tri_counts[by];
-	uint y = LIX & 3, shift = (y & 1) * 12;
+	int shift = (y & 1) * 12;
+	uint ystep_shift = ystep == 3? 2 : ystep;
 
-	for(uint i = LIX >> 2; i < tri_count; i += LSIZE / 4) {
+	for(uint i = LIX >> ystep_shift, istep = LSIZE >> ystep_shift; i < tri_count; i += istep) {
 		uvec2 row = g_scratch[soffset + i];
-		int row_range = int(((y > 1? row.y : row.x) >> shift) & 0xfff);
+		int row_range = int((row[y >> 1] >> shift) & 0xfff);
 		if(row_range == 0x3f)
 			continue;
 
 		uint bin_tri_idx = (row.x >> 24) | ((row.y & 0xff000000) >> 16);
 		int minx = row_range & 0x3f, maxx = (row_range >> 6) & 0x3f;
 		int num_samples = maxx - minx + 1;
-		uint sample_value = (y * 64 + minx) | (bin_tri_idx << 16);
+		uint sample_value = (bin_tri_idx << 16) | ((LIX & ystep) << 6) | minx;
 		// Note: we're assuming that all samples will fit in s_buffer
 		int sample_offset = atomicAdd(s_sample_count, num_samples);
+		num_samples = min(num_samples, MAX_SAMPLES - sample_offset);
 
-		atomicAdd(s_pixel_counts[y * 64 + minx], 1);
-		if(maxx < 63)
-			atomicAdd(s_pixel_counts[y * 64 + maxx + 1], -1);
-		//for(int j = 0; j < num_samples; j++)
-			//s_buffer[sample_offset++] = sample_value++;
+		// TODO: divide this further
+		for(int j = 0; j < num_samples; j++)
+			s_buffer[sample_offset++] = sample_value++;
 	}
 }
 
-void computePixelOffsets()
+void reduceRowSamples(int by, int y, int ystep)
 {
+	// TODO: optimize
+	if(LIX < BIN_SIZE * ystep) {
+		y += int(LIX >> BIN_SHIFT);
+		uint x = LIX & (BIN_SIZE - 1);
+		ivec2 pixel_pos = s_bin_pos + ivec2(x, by * 4 + y);
+
+		uint pixel_counter = s_pixel_counts[y * BIN_SIZE + x];
+		int num_samples = int(pixel_counter & 0xffff);
+		int sample_offset = int(pixel_counter >> 16) - num_samples * 2;
+		
+		uint enc_color = 0;
+		float depth = 1.0 / 0.0;
+		for(int i = 0; i < num_samples; i++) {
+			float sdepth = s_fbuffer[sample_offset + i];
+			if(sdepth < depth) {
+				depth = sdepth;
+				enc_color = s_buffer[sample_offset + i];
+			}
+		}
+
+		if(s_sample_count > MAX_SAMPLES)
+			enc_color = 0xff0000ff;
+		imageStore(final_raster, pixel_pos, uvec4(enc_color, 0, 0, 0));
+	}
+}
+
+// Computes pixel counts for all rows within block-row
+// Computes offsets within rows
+void computeBlockRowPixelCounts(uint by)
+{
+	uint soffset = gl_WorkGroupID.x * WORKGROUP_SCRATCH_SIZE + by * MAX_BLOCK_ROW_TRIS;
+	uint tri_count = s_block_row_tri_counts[by];
+	uint y = LIX & 3, shift = (y & 1) * 12;
+		
+	for(uint i = LIX; i < BIN_SIZE * BLOCK_SIZE; i += LSIZE)
+		s_pixel_counts[LIX] = 0;
+	barrier();
+
+	for(uint i = LIX >> 2; i < tri_count; i += LSIZE / 4) {
+		uint row_range = (g_scratch[soffset + i][y >> 1] >> shift) & 0xfff;
+		if(row_range == 0x3f)
+			continue;
+
+		int minx = int(row_range & 0x3f), maxx = int((row_range >> 6) & 0x3f);
+		// Storing +1 at the beginning and -1 after the end of each row
+		atomicAdd(s_pixel_counts[y * 64 + minx], 1);
+		if(maxx < 63)
+			atomicAdd(s_pixel_counts[y * 64 + maxx + 1], -1);
+	}
+	barrier();
+
 #ifdef VENDOR_NVIDIA
+	// Computing actual pixel values
 	if(LIX < BIN_SIZE * BLOCK_SIZE) {
 		int value = s_pixel_counts[LIX], temp;
 		temp = shuffleUpNV(value,  1, 32); if((LIX & 31) >=  1) value += temp;
@@ -267,9 +323,113 @@ void computePixelOffsets()
 		uint y = LIX >> 5, x = LIX & 31;
 		s_pixel_counts[y * 64 + x + 32] += s_pixel_counts[y * 64 + 31];
 	}
+	barrier();
+
+	// Computing prefix sums for each row (storing in higher 16-bits)
+	if(LIX < BIN_SIZE * BLOCK_SIZE) {
+		int value = s_pixel_counts[LIX], temp;
+		value += (value << 16);
+		temp = shuffleUpNV(value,  1, 32); if((LIX & 31) >=  1) value += temp & 0xffff0000;
+		temp = shuffleUpNV(value,  2, 32); if((LIX & 31) >=  2) value += temp & 0xffff0000;
+		temp = shuffleUpNV(value,  4, 32); if((LIX & 31) >=  4) value += temp & 0xffff0000;
+		temp = shuffleUpNV(value,  8, 32); if((LIX & 31) >=  8) value += temp & 0xffff0000;
+		temp = shuffleUpNV(value, 16, 32); if((LIX & 31) >= 16) value += temp & 0xffff0000;
+		s_pixel_counts[LIX] = value;
+	}
+	barrier();
+	if(LIX < BIN_SIZE * BLOCK_SIZE / 2) {
+		uint y = LIX >> 5, x = LIX & 31;
+		s_pixel_counts[y * 64 + x + 32] += s_pixel_counts[y * 64 + 31] & 0xffff0000;
+	}
 #else
 #error write me please
 #endif
+}
+
+// Shading 2 samples at once didn't help:
+// - decreased computation cost is not worth it because of increased register pressure
+// - it seems that it does not help at all with loading vertex attribs; it makes sense:
+//   if they are in the cache then it's not a problem...
+//
+// Can we improve speed of loading vertex data?
+void shadeSample(ivec2 bin_pixel_pos, uint local_tri_idx, out uint out_color, out float out_depth)
+{
+	vec3 ray_dir = s_bin_ray_dir0 + frustum.ws_dirx * bin_pixel_pos.x
+								  + frustum.ws_diry * bin_pixel_pos.y;
+
+	vec3 normal, params, edge0, edge1;
+	uint instance_id, instance_flags;
+	getTriangleParams(local_tri_idx, normal, params, edge0, edge1, instance_id);
+	instance_flags = g_instances[instance_id].flags;
+
+	float ray_pos = params[0] / dot(normal, ray_dir);
+	vec2 bary = vec2(dot(edge0, ray_dir), dot(edge1, ray_dir)) * ray_pos;
+
+	vec2 bary_dx, bary_dy;
+	if((instance_flags & INST_HAS_TEXTURE) != 0) {
+		vec3 ray_dirx = ray_dir + frustum.ws_dirx;
+		vec3 ray_diry = ray_dir + frustum.ws_diry;
+
+		float ray_posx = params[0] / dot(normal, ray_dirx);
+		float ray_posy = params[0] / dot(normal, ray_diry);
+
+		bary_dx = vec2(dot(edge0, ray_dirx), dot(edge1, ray_dirx)) * ray_posx - bary;
+		bary_dy = vec2(dot(edge0, ray_diry), dot(edge1, ray_diry)) * ray_posy - bary;
+	}
+	bary -= vec2(params[1], params[2]);
+	// params, edge0 & edge1 no longer needed!
+
+	uint v0, v1, v2;
+	if((instance_flags & (INST_HAS_VERTEX_COLORS | INST_HAS_TEXTURE | INST_HAS_VERTEX_NORMALS)) != 0)
+		getTriangleVerts(local_tri_idx, v0, v1, v2);
+
+	// 0.5ms on Sponza!!!
+	vec4 color = decodeRGBA8(g_instances[instance_id].color);
+	if((instance_flags & INST_HAS_VERTEX_COLORS) != 0) {
+		vec4 col0 = decodeRGBA8(g_colors[v0]);
+		vec4 col1 = decodeRGBA8(g_colors[v1]);
+		vec4 col2 = decodeRGBA8(g_colors[v2]);
+		color *= (1.0 - bary[0] - bary[1]) * col0 + bary[0] * col1 + bary[1] * col2;
+	}
+
+	// ~2ms on Sponza (mostly loading g_ data)
+	if((instance_flags & INST_HAS_TEXTURE) != 0) {
+		vec2 tex0 = g_tex_coords[v0];
+		vec2 tex1 = g_tex_coords[v1];
+		vec2 tex2 = g_tex_coords[v2];
+		tex1 -= tex0, tex2 -= tex0;
+
+		vec2 tex_coord = tex0 + bary[0] * tex1 + bary[1] * tex2;
+		vec2 tex_dx = bary_dx[0] * tex1 + bary_dx[1] * tex2;
+		vec2 tex_dy = bary_dy[0] * tex1 + bary_dy[1] * tex2;
+
+		// 0.8ms to load uv_rect on Sponza
+		if((instance_flags & INST_HAS_UV_RECT) != 0) {
+			vec4 uv_rect = g_uv_rects[instance_id];
+			tex_coord = uv_rect.xy + uv_rect.zw * fract(tex_coord);
+			tex_dx *= uv_rect.zw, tex_dy *= uv_rect.zw;
+		}
+
+		if((instance_flags & INST_TEX_OPAQUE) != 0)
+			color.xyz *= textureGrad(opaque_texture, tex_coord, tex_dx, tex_dy).xyz;
+		else
+			color *= textureGrad(transparent_texture, tex_coord, tex_dx, tex_dy);
+	}
+
+	// 0.75 ms on Sponza
+	if((instance_flags & INST_HAS_VERTEX_NORMALS) != 0) {
+		vec3 nrm0 = decodeNormalUint(g_normals[v0]);
+		vec3 nrm1 = decodeNormalUint(g_normals[v1]);
+		vec3 nrm2 = decodeNormalUint(g_normals[v2]);
+		nrm1 -= nrm0; nrm2 -= nrm0;
+		normal = nrm0 + bary[0] * nrm1 + bary[1] * nrm2;
+	}
+
+	float light_value = max(0.0, dot(-lighting.sun_dir, normal) * 0.7 + 0.3);
+	color.rgb = min(finalShading(color.rgb, light_value), vec3(1.0, 1.0, 1.0));
+
+	out_depth = ray_pos;
+	out_color = encodeRGBA8(color);
 }
 
 void rasterInvalidBlockRow(int by, vec3 color)
@@ -286,8 +446,10 @@ void rasterFragmentCounts(int by)
 {
 	for(uint i = LIX; i < BIN_SIZE * BLOCK_SIZE; i += LSIZE) {
 		ivec2 pixel_pos = ivec2(i & (BIN_SIZE - 1), by * 4 + (i >> BIN_SHIFT));
-		uint count = s_pixel_counts[i];
-		vec4 color = vec4(vec3(float(count) / 64.0), 1.0);
+		uint count = s_pixel_counts[i] & 0xffff;
+		count = s_pixel_counts[i] >> 16;
+
+		vec4 color = vec4(vec3(float(count) / 4096.0), 1.0);
 		uint enc_col = encodeRGBA8(color);
 		imageStore(final_raster, s_bin_pos + pixel_pos, uvec4(enc_col, 0, 0, 0));
 	}
@@ -296,33 +458,98 @@ void rasterFragmentCounts(int by)
 void rasterBin(int bin_id) {
 	if(LIX < BLOCK_ROW_COUNT) {
 		if(LIX == 0) {
-			s_bin_pos = ivec2(bin_id % BIN_COUNT_X, bin_id / BIN_COUNT_X) * BIN_SIZE;
+			ivec2 bin_pos = ivec2(bin_id % BIN_COUNT_X, bin_id / BIN_COUNT_X) * BIN_SIZE;
+			s_bin_pos = bin_pos;
 			s_bin_quad_count = g_bins.bin_quad_counts[bin_id];
 			s_bin_quad_offset = g_bins.bin_quad_offsets[bin_id];
+			s_bin_ray_dir0 = frustum.ws_dir0 + frustum.ws_dirx * (bin_pos.x + 0.5)
+											 + frustum.ws_diry * (bin_pos.y + 0.5);
 		}
 
 		s_block_row_tri_counts[LIX] = 0;
-		s_block_row_frag_counts[LIX] = 0;
 	}
 	barrier();
 	generateRows();
+	groupMemoryBarrier();
+
 	for(int by = 0; by < BLOCK_ROW_COUNT; by++) {
 		barrier();
-		if(s_block_row_frag_counts[by] > MAX_SAMPLES * 4) {
+		computeBlockRowPixelCounts(by);
+		// iterujemy po liniach?
+		barrier();
+		// TODO: precompute row counts?
+		// once we know that row counts are OK, we can compute pixel counts
+		// during loading row samples?
+		int row_num_samples[4] = {
+			s_pixel_counts[0 * 64 + 63] >> 16, s_pixel_counts[1 * 64 + 63] >> 16,
+			s_pixel_counts[2 * 64 + 63] >> 16, s_pixel_counts[3 * 64 + 63] >> 16 };
+		uint max01 = max(row_num_samples[0], row_num_samples[1]);
+		uint max23 = max(row_num_samples[2], row_num_samples[3]);
+		uint max0123 = max(max01, max23);
+
+		if(max0123 > MAX_SAMPLES) {
 			rasterInvalidBlockRow(by, vec3(1.0, 0.0, 0.0));
 			continue;
 		}
+		
+		uint sum01 = row_num_samples[0] + row_num_samples[1];
+		uint sum23 = row_num_samples[2] + row_num_samples[3];
+		int ystep = sum01 + sum23 <= MAX_SAMPLES? 4 : max(sum01, sum23) <= MAX_SAMPLES? 2 : 1;
 
-		if(LIX == 0)
-			s_sample_count = 0;
-		for(uint i = LIX; i < BIN_SIZE * BLOCK_SIZE; i += LSIZE)
-			s_pixel_counts[LIX] = 0;
 		barrier();
-		loadBlockRowSamples(by);
+		// Accumulating prefix sums from 2 rows
+		if(ystep >= 2) {
+			if(LIX < BIN_SIZE * 2) {
+				uint y = (LIX >> BIN_SHIFT) * 2 + 1, x = LIX & (BIN_SIZE - 1);
+				s_pixel_counts[y * BIN_SIZE + x] += row_num_samples[y - 1] << 16;
+			}
+		}
 		barrier();
-		computePixelOffsets();
+		// Accumulating prefix sums from 4 rows
+		if(ystep == 4) {
+			if(LIX < BIN_SIZE * 2) {
+				uint y = 2 + (LIX >> BIN_SHIFT), x = LIX & (BIN_SIZE - 1);
+				s_pixel_counts[y * BIN_SIZE + x] += (row_num_samples[0] + row_num_samples[1]) << 16;
+			}
+		}
 		barrier();
-		rasterFragmentCounts(by);
+
+		for(int y = 0; y < 4; y += ystep) {
+			barrier();
+			if(LIX == 0)
+				s_sample_count = 0;
+			barrier();
+			loadRowSamples(by, y, ystep);
+			barrier();
+			// Selecting samples
+			uint samples[SAMPLES_PER_THREAD];
+			for(int i = 0; i < SAMPLES_PER_THREAD; i++) {
+				uint sample_idx = LSIZE * i + LIX;
+				samples[i] = sample_idx < s_sample_count? s_buffer[sample_idx] : ~0u;
+			}
+			barrier();
+			// Shading samples & storing them ordered by pixel pos
+			for(int i = 0; i < SAMPLES_PER_THREAD; i++)
+				if(samples[i] != ~0u) {
+					uint pixel_id = samples[i] & 0xfff;
+					ivec2 bin_pixel_pos = ivec2(pixel_id & 63, (by * 4 + y) + (pixel_id >> 6));
+					uint bin_tri_idx = samples[i] >> 16;
+
+					uint sample_color;
+					float sample_depth;
+					shadeSample(bin_pixel_pos, bin_tri_idx, sample_color, sample_depth);
+					uint pixel_counter = atomicAdd(s_pixel_counts[y * 64 + pixel_id], 0x10000);
+					uint sample_idx = (pixel_counter >> 16) - (pixel_counter & 0xffff);
+					if(sample_idx < MAX_SAMPLES) {
+						s_buffer[sample_idx] = sample_color;
+						s_fbuffer[sample_idx] = sample_depth;
+					}
+				}
+			barrier();
+			reduceRowSamples(by, y, ystep);
+			barrier();
+		}
+		//rasterFragmentCounts(by);
 	}
 }
 

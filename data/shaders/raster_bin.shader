@@ -18,7 +18,6 @@ layout(std430, binding = 4) readonly buffer buf4_ { uint g_colors[]; };
 layout(std430, binding = 5) readonly buffer buf5_ { uint g_normals[]; };
 
 layout(std430, binding = 6) buffer buf6_ { BinCounters g_bins; };
-layout(std430, binding = 7) buffer buf7_ { TileCounters g_tiles; };
 
 layout(std430, binding = 8) buffer buf8_ { uint g_bin_quads[]; };
 layout(std430, binding = 9) coherent buffer buf9_ { uvec2 g_scratch[]; };
@@ -565,7 +564,7 @@ shared int s_num_bins, s_bin_id;
 
 int loadNextBin() {
 	if(LIX == 0) {
-		uint bin_idx = atomicAdd(g_tiles.small_bin_counter, 1);
+		uint bin_idx = atomicAdd(g_bins.small_bin_counter, 1);
 		s_bin_id = bin_idx < s_num_bins? g_bins.small_bins[bin_idx] : -1;
 	}
 	barrier();

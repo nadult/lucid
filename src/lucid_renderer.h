@@ -89,6 +89,7 @@ class LucidRenderer {
 	void sortMasks(const Context &);
 	void rasterizeFinal(const Context &);
 	void bindRaster(const Context &);
+	void rasterEmpty(const Context &);
 	void rasterBin(const Context &);
 	void rasterTile(const Context &);
 	void rasterBlock(const Context &);
@@ -116,7 +117,7 @@ class LucidRenderer {
 	Program bin_estimator_program, bin_dispatcher_program, tile_dispatcher_program;
 	Program bin_categorizer_program;
 	Program final_raster_program, mask_raster_program, sort_program;
-	Program raster_bin_program, raster_tile_program, raster_block_program;
+	Program raster_empty_program, raster_bin_program, raster_tile_program, raster_block_program;
 	Program compose_program, dummy_program;
 
 	PTexture m_raster_image;

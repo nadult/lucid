@@ -7,12 +7,14 @@
 layout(local_size_x = LSIZE) in;
 layout(std430, binding = 1) buffer buf1_ { BinCounters g_bins; };
 
-shared int s_num_small_bins, s_num_medium_bins, s_num_big_bins, s_num_tiled_bins;
+shared int s_num_empty_bins, s_num_small_bins, s_num_medium_bins;
+shared int s_num_big_bins, s_num_tiled_bins;
 
 uniform bool tile_all_bins;
 
 void main() {
 	if(LIX == 0) {
+		s_num_empty_bins = 0;
 		s_num_small_bins = 0;
 		s_num_medium_bins = 0;
 		s_num_big_bins = 0;
@@ -28,7 +30,12 @@ void main() {
 		
 		// TODO: we need accurate count :(
 		int num_tris = num_quads * 2;
-		if(num_tris < 1024) {
+		if(num_tris == 0) {
+			g_bins.empty_bins[atomicAdd(s_num_empty_bins, 1)] = int(i);
+			if(tile_all_bins)
+				g_bins.tiled_bins[atomicAdd(s_num_tiled_bins, 1)] = int(i);
+		}
+		else if(num_tris < 1024) {
 			g_bins.small_bins[atomicAdd(s_num_small_bins, 1)] = int(i);
 			if(tile_all_bins)
 				g_bins.tiled_bins[atomicAdd(s_num_tiled_bins, 1)] = int(i);
@@ -45,6 +52,7 @@ void main() {
 
 	barrier();
 	if(LIX == 0) {
+		g_bins.num_empty_bins = s_num_empty_bins;
 		g_bins.num_small_bins = s_num_small_bins;
 		g_bins.num_medium_bins = s_num_medium_bins;
 		g_bins.num_big_bins = s_num_big_bins;

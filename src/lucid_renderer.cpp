@@ -183,6 +183,7 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	final_raster_program = EX_PASS(Program::makeCompute("final_raster", defs));
 	mask_raster_program = EX_PASS(Program::makeCompute(
 		"mask_raster", defs, mask(m_opts & Opt::debug_masks, ProgramOpt::debug)));
+	raster_empty_program = EX_PASS(Program::makeCompute("raster_empty", defs));
 	raster_bin_program = EX_PASS(Program::makeCompute(
 		"raster_bin", defs, mask(m_opts & Opt::debug_raster, ProgramOpt::debug)));
 	raster_tile_program = EX_PASS(Program::makeCompute(
@@ -226,6 +227,7 @@ void LucidRenderer::render(const Context &ctx) {
 
 	if(m_opts & Opt::new_raster) {
 		bindRaster(ctx);
+		rasterEmpty(ctx);
 		rasterBin(ctx);
 		rasterTile(ctx);
 		rasterBlock(ctx);
@@ -1427,6 +1429,12 @@ void LucidRenderer::rasterTile(const Context &ctx) {
 				print("%\n", record);
 		}
 	}
+}
+
+void LucidRenderer::rasterEmpty(const Context &ctx) {
+	PERF_GPU_SCOPE();
+	raster_empty_program.use();
+	glDispatchCompute(64, 1, 1);
 }
 
 void LucidRenderer::rasterBin(const Context &ctx) {

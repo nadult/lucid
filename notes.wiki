@@ -53,6 +53,11 @@
                     === Rasteryzacja wszystkich sampli na raz ===
 -----------------------------------------------------------------------------------------
 
+* *Następny krok: sortowanie sampli!*
+
+  Sortowanie sampli jest mega wolne!!! Musimy najpierw sortować trójkąty (tak jak wcześniej) a
+  potem robić ew. post-sortowanie (w razie faila możemy zawsze odpalić pełny sort).
+
 * *Nie encoduj wielkości ekranu w shaderach: recompute przy resize*
 
 * Trzymanie danych cieniowania dla każdego tróəkąta oddzielnie (i przeliczenie tego w setupie)

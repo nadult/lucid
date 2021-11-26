@@ -61,8 +61,87 @@ shared uint s_bin_quad_count, s_bin_quad_offset;
 shared int s_pixel_counts[BIN_SIZE * BLOCK_SIZE];
 
 shared int s_sample_count;
-shared uint s_buffer[MAX_SAMPLES + 1];
-shared float s_fbuffer[MAX_SAMPLES + 1];
+shared uvec2 s_buffer[MAX_SAMPLES + 1];
+
+#ifdef VENDOR_NVIDIA
+uvec2 swap(uvec2 x, int mask, uint dir)
+{
+	uvec2 y = shuffleXorNV(x, mask, 32);
+	return x.x != y.x && (x.x < y.x) == (dir != 0) ? y : x;
+}
+
+uint bitExtract(uint value, int boffset) 
+{
+	return (value >> boffset) & 1;
+}
+
+uint xorBits(uint value, int bit0, int bit1)
+{
+	return ((value >> bit0) ^ (value >> bit1)) & 1;
+}
+#endif
+
+void sortBuffer(uint N)
+{
+	uint TN = max(32, (N & (N - 1)) == 0? N : (2 << findMSB(N)));
+	for(uint i = LIX + N; i < TN; i += LSIZE)
+		s_buffer[i].x = 0xffffffff;
+	barrier();
+
+#ifdef VENDOR_NVIDIA
+	for(uint i = LIX; i < TN; i += LSIZE) {
+		uvec2 value = s_buffer[i];
+		value = swap(value, 0x01, xorBits(LIX, 1, 0)); // K = 2
+		value = swap(value, 0x02, xorBits(LIX, 2, 1)); // K = 4
+		value = swap(value, 0x01, xorBits(LIX, 2, 0));
+		value = swap(value, 0x04, xorBits(LIX, 3, 2)); // K = 8
+		value = swap(value, 0x02, xorBits(LIX, 3, 1));
+		value = swap(value, 0x01, xorBits(LIX, 3, 0));
+		value = swap(value, 0x08, xorBits(LIX, 4, 3)); // K = 16
+		value = swap(value, 0x04, xorBits(LIX, 4, 2));
+		value = swap(value, 0x02, xorBits(LIX, 4, 1));
+		value = swap(value, 0x01, xorBits(LIX, 4, 0));
+		value = swap(value, 0x10, xorBits(LIX, 5, 4)); // K = 32
+		value = swap(value, 0x08, xorBits(LIX, 5, 3));
+		value = swap(value, 0x04, xorBits(LIX, 5, 2));
+		value = swap(value, 0x02, xorBits(LIX, 5, 1));
+		value = swap(value, 0x01, xorBits(LIX, 5, 0));
+		s_buffer[i] = value;
+	}
+	barrier();
+	int start_k = 64, end_j = 32;
+#else
+	int start_k = 2, end_j = 1;
+#endif
+
+	for(uint k = start_k; k <= TN; k = 2 * k) {
+		for(uint j = k >> 1; j >= end_j; j = j >> 1) {
+			for(uint i = LIX; i < TN; i += LSIZE * 2) {
+				uint idx = (i & j) != 0? i + LSIZE - j : i;
+				uvec2 lvalue = s_buffer[idx];
+				uvec2 rvalue = s_buffer[idx + j];
+				if( ((idx & k) != 0) == (lvalue.x < rvalue.x) ) {
+					s_buffer[idx] = rvalue;
+					s_buffer[idx + j] = lvalue;
+				}
+			}
+			barrier();
+		}
+#ifdef VENDOR_NVIDIA
+		for(uint i = LIX; i < TN; i += LSIZE) {
+			uint bit = (i & k) == 0? 0 : 1;
+			uvec2 value = s_buffer[i];
+			value = swap(value, 0x10, bit ^ bitExtract(LIX, 4));
+			value = swap(value, 0x08, bit ^ bitExtract(LIX, 3));
+			value = swap(value, 0x04, bit ^ bitExtract(LIX, 2));
+			value = swap(value, 0x02, bit ^ bitExtract(LIX, 1));
+			value = swap(value, 0x01, bit ^ bitExtract(LIX, 0));
+			s_buffer[i] = value;
+		}
+		barrier();
+#endif
+	}
+}
 
 // TODO: add synthetic test: 256 planes one after another
 
@@ -262,8 +341,6 @@ void getTriangleVertexTexCoords(uint tri_idx, out vec2 tex0, out vec2 tex1, out 
 	tex2 = uintBitsToFloat(val2);
 }
 
-#undef TRI_SCRATCH
-
 void generateRows() {
 	// TODO: optimization: in many cases all rows may very well fit in SMEM,
 	// maybe it would be worth it not to use scratch at all then?
@@ -307,6 +384,9 @@ void loadRowSamples(int by, int y, int ystep) {
 	int shift = (y & 1) * 12;
 	uint ystep_shift = ystep == 3? 2 : ystep;
 
+	// TODO: more precomputation here
+	vec3 ray_dir_base = s_bin_ray_dir0 + (by * 4 + y) * frustum.ws_diry;
+
 	for(uint i = LIX >> ystep_shift, istep = LSIZE >> ystep_shift; i < tri_count; i += istep) {
 		uvec2 row = g_scratch[soffset + i];
 		int row_range = int((row[y >> 1] >> shift) & 0xfff);
@@ -316,14 +396,30 @@ void loadRowSamples(int by, int y, int ystep) {
 		uint bin_tri_idx = (row.x >> 24) | ((row.y & 0xff000000) >> 16);
 		int minx = row_range & 0x3f, maxx = (row_range >> 6) & 0x3f;
 		int num_samples = maxx - minx + 1;
-		uint sample_value = (bin_tri_idx << 16) | (y << 6) | minx;
+		
+		uint toffset = scratchTriOffset(bin_tri_idx);
+		vec2 val0 = uintBitsToFloat(TRI_SCRATCH(0));
+		vec2 val1 = uintBitsToFloat(TRI_SCRATCH(1));
+		vec3 normal = vec3(val0.x, val0.y, val1.x);
+		float param0 = val1.y; //TODO: mul by normal
+
+		uint pixel_id = (y << 6) | minx;
 		// Note: we're assuming that all samples will fit in s_buffer
 		int sample_offset = atomicAdd(s_sample_count, num_samples);
 		num_samples = min(num_samples, MAX_SAMPLES - sample_offset);
 
-		// TODO: divide this further
-		for(int j = 0; j < num_samples; j++)
-			s_buffer[sample_offset++] = sample_value++;
+		for(int j = 0; j < num_samples; j++) {
+			vec3 ray_dir = ray_dir_base + frustum.ws_dirx * (minx + j);
+			float ray_pos = param0 / dot(normal, ray_dir);
+			float depth = float(0xfffffe) / (1.0 + ray_pos);
+
+			uint key = uint(depth) | (pixel_id << 24);
+			uint value = (bin_tri_idx << 16) | sample_offset;
+			uint pix_offset = atomicAdd(s_pixel_counts[pixel_id], 0x10000) >> 16;
+			s_buffer[pix_offset] = uvec2(key, value);
+			sample_offset++;
+			pixel_id++;
+		}
 	}
 }
 
@@ -339,16 +435,17 @@ void reduceRowSamples(int by, int y, int ystep)
 		int num_samples = int(pixel_counter & 0xffff);
 		int sample_offset = int(pixel_counter >> 16) - num_samples;
 		
-		uint enc_color = 0;
-		float depth = 1.0 / 0.0;
+		vec3 color = vec3(0);
+		float neg_alpha = 1.0;
 		for(int i = 0; i < num_samples; i++) {
-			float sdepth = s_fbuffer[sample_offset + i];
-			if(sdepth < depth) {
-				depth = sdepth;
-				enc_color = s_buffer[sample_offset + i];
-			}
+			vec4 cur_color = decodeRGBA8(s_buffer[sample_offset + i].x);
+			float cur_neg_alpha = 1.0 - cur_color.a;
+			color.rgb = color.rgb * cur_neg_alpha + cur_color.rgb * cur_color.a;
+			neg_alpha *= cur_neg_alpha;
 		}
 
+		color = min(color, vec3(1.0));
+		uint enc_color = encodeRGBA8(vec4(color, 1.0 - neg_alpha));
 		if(s_sample_count > MAX_SAMPLES)
 			enc_color = 0xff0000ff;
 		imageStore(final_raster, pixel_pos, uvec4(enc_color, 0, 0, 0));
@@ -427,7 +524,7 @@ void computeBlockRowPixelCounts(uint by)
 //   if they are in the cache then it's not a problem...
 //
 // Can we improve speed of loading vertex data?
-void shadeSample(ivec2 bin_pixel_pos, uint local_tri_idx, out uint out_color, out float out_depth)
+uint shadeSample(ivec2 bin_pixel_pos, uint local_tri_idx)
 {
 	vec3 ray_dir = s_bin_ray_dir0 + frustum.ws_dirx * bin_pixel_pos.x
 								  + frustum.ws_diry * bin_pixel_pos.y;
@@ -489,9 +586,7 @@ void shadeSample(ivec2 bin_pixel_pos, uint local_tri_idx, out uint out_color, ou
 
 	float light_value = max(0.0, dot(-lighting.sun_dir, normal) * 0.7 + 0.3);
 	color.rgb = min(finalShading(color.rgb, light_value), vec3(1.0, 1.0, 1.0));
-
-	out_depth = ray_pos;
-	out_color = encodeRGBA8(color);
+	return encodeRGBA8(color);
 }
 
 void rasterInvalidBlockRow(int by, vec3 color)
@@ -581,29 +676,18 @@ void rasterBin(int bin_id) {
 			barrier();
 			loadRowSamples(by, y, ystep);
 			barrier();
-			// Selecting samples
-			uint samples[SAMPLES_PER_THREAD];
-			for(int i = 0; i < SAMPLES_PER_THREAD; i++) {
-				uint sample_idx = LSIZE * i + LIX;
-				samples[i] = sample_idx < s_sample_count? s_buffer[sample_idx] : ~0u;
-			}
+			sortBuffer(s_sample_count);
 			barrier();
-			// Shading samples & storing them ordered by pixel pos
-			for(int i = 0; i < SAMPLES_PER_THREAD; i++)
-				if(samples[i] != ~0u) {
-					uint pixel_id = samples[i] & 0xfff;
-					ivec2 bin_pixel_pos = ivec2(pixel_id & (BIN_SIZE - 1), (by * 4) + (pixel_id >> 6));
-					uint bin_tri_idx = samples[i] >> 16;
+			// TODO: reorder samples to increase coherency during sampling
 
-					uint sample_color;
-					float sample_depth;
-					shadeSample(bin_pixel_pos, bin_tri_idx, sample_color, sample_depth);
-					uint sample_idx = atomicAdd(s_pixel_counts[pixel_id], 0x10000) >> 16;
-					if(sample_idx < MAX_SAMPLES) {
-						s_buffer[sample_idx] = sample_color;
-						s_fbuffer[sample_idx] = sample_depth;
-					}
-				}
+			// Shading samples & storing them ordered by pixel pos
+			for(uint i = LIX; i < s_sample_count; i += LSIZE) {
+				uvec2 value = s_buffer[i];
+				uint pixel_id = value.x >> 24;
+				uint bin_tri_idx = value.y >> 16;
+				ivec2 bin_pixel_pos = ivec2(pixel_id & (BIN_SIZE - 1), (by * 4) + (pixel_id >> 6));
+				s_buffer[i].x = shadeSample(bin_pixel_pos, bin_tri_idx);
+			}
 			barrier();
 			reduceRowSamples(by, y, ystep);
 			barrier();

@@ -395,20 +395,34 @@ void loadRowSamples(int by, int y, int ystep) {
 	// TODO: more precomputation here
 	vec3 ray_dir = s_bin_ray_dir0 + (by * 4 + y) * frustum.ws_diry + x * frustum.ws_dirx;
 
+	// TODO: move depth generation out of here
 	for(uint i = 0; i < row_count; i += 32) {
 		uint sub_count = min(32, row_count - i);
-		uint bitmask;
+		int sel_tri_minx = 31337, sel_tri_maxx;
+		uint bitmask, sel_tri_idx = 0;
+		vec3 sel_tri_normal;
 		{
-			uint row_id = i + (LIX & 31);
 			bool in_range = false;
-			if(row_id < row_count) {
-				int row_range = int((g_scratch[soffset + row_id][y >> 1] >> ((y & 1) * 12)) & 0xfff);
-				int minx = row_range & 0x3f, maxx = (row_range >> 6) & 0x3f;
-				in_range = (LIX & 32) == 0? minx < 32 : maxx >= 32;
+			if((LIX & 31) < sub_count) {
+				uvec2 row = g_scratch[soffset + i + (LIX & 31)];
+				sel_tri_idx = (row.x >> 24) | ((row.y & 0xff000000) >> 16);
+				int row_range = int(row[y >> 1] >> ((y & 1) * 12));
+				sel_tri_minx = row_range & 0x3f;
+				sel_tri_maxx = (row_range >> 6) & 0x3f;
+
+				uint toffset = scratchTriOffset(sel_tri_idx);
+				vec2 val0 = uintBitsToFloat(TRI_SCRATCH(0));
+				vec2 val1 = uintBitsToFloat(TRI_SCRATCH(1));
+				vec3 normal = vec3(val0.x, val0.y, val1.x);
+				float param0 = val1.y; //TODO: mul by normal
+				sel_tri_normal = normal / param0;
+
+				in_range = (LIX & 32) == 0? sel_tri_minx < 32 : sel_tri_maxx >= 32;
 			}
 			bitmask = uint(ballotARB(in_range));
 		}
 
+		// TODO: sometimes raster_bin (I guess) hangs; noticable when moving camera around sponza
 		for(uint j = 0; j < sub_count; j++) {
 			int bit_pos = findLSB(bitmask);
 			if(bit_pos == -1)
@@ -416,23 +430,16 @@ void loadRowSamples(int by, int y, int ystep) {
 			j += bit_pos;
 			bitmask >>= bit_pos + 1;
 
-			uvec2 row = g_scratch[soffset + i + j];
-			int row_range = int((row[y >> 1] >> ((y & 1) * 12)) & 0xfff);
-			int minx = row_range & 0x3f, maxx = (row_range >> 6) & 0x3f;
+			int minx = shuffleNV(sel_tri_minx, j, 32);
+			int maxx = shuffleNV(sel_tri_maxx, j, 32);
+			uint bin_tri_idx = shuffleNV(sel_tri_idx, j, 32);
+			vec3 normal = shuffleNV(sel_tri_normal, j, 32);
 			if(x < minx || x > maxx)
 				continue;
 
 			num_samples++;
-
-			uint bin_tri_idx = (row.x >> 24) | ((row.y & 0xff000000) >> 16);
-			uint toffset = scratchTriOffset(bin_tri_idx);
-			vec2 val0 = uintBitsToFloat(TRI_SCRATCH(0));
-			vec2 val1 = uintBitsToFloat(TRI_SCRATCH(1));
-			vec3 normal = vec3(val0.x, val0.y, val1.x);
-			float param0 = val1.y; //TODO: mul by normal
-
-			float ray_pos = param0 / dot(normal, ray_dir);
-			float depth = float(0xfffffe) / (64.0 + ray_pos);
+			float ray_pos = 1.0 / dot(normal, ray_dir);
+			float depth = float(0xfffffe) / (1.0 + ray_pos);
 
 			uint key = uint(depth) | (pixel_id << 24);
 			uint value = (bin_tri_idx << 16) | pix_offset;

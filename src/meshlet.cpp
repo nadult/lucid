@@ -3,7 +3,7 @@
 #include "quad_generator.h"
 #include "scene.h"
 #include <fwk/geom/graph.h>
-#include <fwk/gfx/investigate.h>
+#include <fwk/gfx/investigator3.h>
 #include <fwk/gfx/visualizer3.h>
 #include <fwk/heap.h>
 #include <fwk/math/interval.h>
@@ -272,7 +272,8 @@ void visualizeMeshPartitions(const Scene &scene, CSpan<MeshPartition> partitions
 		return "";
 	};
 
-	investigate(vis_func, DBox(scene.bounding_box), InvestigatorOpt::exit_with_space);
+	Investigator3 investigator(vis_func,  InvestigatorOpt::exit_with_space, {DBox(scene.bounding_box), none, 0.1f});
+	investigator.run();
 }
 
 void meshletTest(const Scene &scene, float square_weight) {

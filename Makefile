@@ -2,6 +2,7 @@ all: programs
 
 FWK_DIR        = libfwk/
 FWK_MODE      ?= devel
+FWK_GEOM      := disabled
 
 CFLAGS        := -Isrc/
 CFLAGS_linux  := -fopenmp

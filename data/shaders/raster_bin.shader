@@ -378,7 +378,7 @@ void generateRows() {
 // TODO: optimize
 void loadRowSamples(int by, int y, int ystep) {
 	uint soffset = gl_WorkGroupID.x * WORKGROUP_SCRATCH_SIZE + by * MAX_BLOCK_ROW_TRIS;
-	uint tri_count = s_block_row_tri_counts[by];
+	uint row_count = s_block_row_tri_counts[by];
 	int x = int(LIX & (BIN_SIZE - 1));
 	int local_y = int(LIX >> BIN_SHIFT);
 	// TODO: share pixels between threads for ystep < 4?
@@ -390,34 +390,60 @@ void loadRowSamples(int by, int y, int ystep) {
 	uint pix_offset = s_pixel_counts[pixel_id] >> 16;
 	int num_samples = 0;
 	
+#ifdef VENDOR_NVIDIA
+	// TODO: WARP_SIZE?
 	// TODO: more precomputation here
 	vec3 ray_dir = s_bin_ray_dir0 + (by * 4 + y) * frustum.ws_diry + x * frustum.ws_dirx;
 
-	for(int i = 0; i < tri_count; i++) {
-		uvec2 row = g_scratch[soffset + i];
-		int row_range = int((row[y >> 1] >> ((y & 1) * 12)) & 0xfff);
-		int minx = row_range & 0x3f, maxx = (row_range >> 6) & 0x3f;
-		if(x < minx || x > maxx)
-			continue;
+	for(uint i = 0; i < row_count; i += 32) {
+		uint sub_count = min(32, row_count - i);
+		uint bitmask;
+		{
+			uint row_id = i + (LIX & 31);
+			bool in_range = false;
+			if(row_id < row_count) {
+				int row_range = int((g_scratch[soffset + row_id][y >> 1] >> ((y & 1) * 12)) & 0xfff);
+				int minx = row_range & 0x3f, maxx = (row_range >> 6) & 0x3f;
+				in_range = (LIX & 32) == 0? minx < 32 : maxx >= 32;
+			}
+			bitmask = uint(ballotARB(in_range));
+		}
 
-		num_samples++;
+		for(uint j = 0; j < sub_count; j++) {
+			int bit_pos = findLSB(bitmask);
+			if(bit_pos == -1)
+				break;
+			j += bit_pos;
+			bitmask >>= bit_pos + 1;
 
-		uint bin_tri_idx = (row.x >> 24) | ((row.y & 0xff000000) >> 16);
-		uint toffset = scratchTriOffset(bin_tri_idx);
-		vec2 val0 = uintBitsToFloat(TRI_SCRATCH(0));
-		vec2 val1 = uintBitsToFloat(TRI_SCRATCH(1));
-		vec3 normal = vec3(val0.x, val0.y, val1.x);
-		float param0 = val1.y; //TODO: mul by normal
+			uvec2 row = g_scratch[soffset + i + j];
+			int row_range = int((row[y >> 1] >> ((y & 1) * 12)) & 0xfff);
+			int minx = row_range & 0x3f, maxx = (row_range >> 6) & 0x3f;
+			if(x < minx || x > maxx)
+				continue;
 
-		float ray_pos = param0 / dot(normal, ray_dir);
-		float depth = float(0xfffffe) / (64.0 + ray_pos);
+			num_samples++;
 
-		uint key = uint(depth) | (pixel_id << 24);
-		uint value = (bin_tri_idx << 16) | pix_offset;
-		s_buffer[pix_offset++] = uvec2(key, value);
+			uint bin_tri_idx = (row.x >> 24) | ((row.y & 0xff000000) >> 16);
+			uint toffset = scratchTriOffset(bin_tri_idx);
+			vec2 val0 = uintBitsToFloat(TRI_SCRATCH(0));
+			vec2 val1 = uintBitsToFloat(TRI_SCRATCH(1));
+			vec3 normal = vec3(val0.x, val0.y, val1.x);
+			float param0 = val1.y; //TODO: mul by normal
+
+			float ray_pos = param0 / dot(normal, ray_dir);
+			float depth = float(0xfffffe) / (64.0 + ray_pos);
+
+			uint key = uint(depth) | (pixel_id << 24);
+			uint value = (bin_tri_idx << 16) | pix_offset;
+			s_buffer[pix_offset++] = uvec2(key, value);
+		}
 	}
 
 	atomicAdd(s_sample_count, num_samples);
+#else
+#error write me please
+#endif
 }
 			
 void postSortSamples(int by, int y, int ystep) {

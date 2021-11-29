@@ -419,6 +419,29 @@ void loadRowSamples(int by, int y, int ystep) {
 
 	atomicAdd(s_sample_count, num_samples);
 }
+			
+void postSortSamples(int by, int y, int ystep) {
+	int sample_count = s_sample_count;
+	for(uint i = LIX + 1; i < sample_count; i += LSIZE) {
+		uint cur_key = s_buffer[i].x, prev_key = s_buffer[i - 1].x;
+		if(cur_key >= prev_key)
+			continue;
+
+		uint cur_pixel = cur_key >> 24;
+		uint cur_value = cur_key & 0xffffff;
+
+		uvec2 temp = s_buffer[i];
+		s_buffer[i] = s_buffer[i - 1];
+		s_buffer[i - 1] = temp;
+	}
+
+	barrier();
+	for(uint i = LIX + 1; i < sample_count; i += LSIZE) {
+		uint cur_key = s_buffer[i].x;
+		if(cur_key < s_buffer[i - 1].x)
+			s_pixel_counts[cur_key >> 24] = int(~0u);
+	}
+}
 
 void reduceRowSamples(int by, int y, int ystep)
 {
@@ -434,17 +457,23 @@ void reduceRowSamples(int by, int y, int ystep)
 		
 		vec3 color = vec3(0);
 		float neg_alpha = 1.0;
-		for(int i = 0; i < num_samples; i++) {
-			vec4 cur_color = decodeRGBA8(s_buffer[sample_offset + i].x);
-			float cur_neg_alpha = 1.0 - cur_color.a;
-			color.rgb = color.rgb * cur_neg_alpha + cur_color.rgb * cur_color.a;
-			neg_alpha *= cur_neg_alpha;
+
+		if(pixel_counter == ~0u || s_sample_count > MAX_SAMPLES) {
+			color = vec3(1.0, 0.0, 0.0);
+			neg_alpha = 0.0;
+		}
+		else {
+			for(int i = 0; i < num_samples; i++) {
+				vec4 cur_color = decodeRGBA8(s_buffer[sample_offset + i].x);
+				float cur_neg_alpha = 1.0 - cur_color.a;
+				color.rgb = color.rgb * cur_neg_alpha + cur_color.rgb * cur_color.a;
+				neg_alpha *= cur_neg_alpha;
+			}
+
+			color = min(color, vec3(1.0));
 		}
 
-		color = min(color, vec3(1.0));
 		uint enc_color = encodeRGBA8(vec4(color, 1.0 - neg_alpha));
-		if(s_sample_count > MAX_SAMPLES)
-			enc_color = 0xff0000ff;
 		imageStore(final_raster, pixel_pos, uvec4(enc_color, 0, 0, 0));
 	}
 }
@@ -727,6 +756,7 @@ void rasterBin(int bin_id) {
 			barrier();
 			loadRowSamples(by, y, ystep);
 			barrier();
+			postSortSamples(by, y, ystep);
 			//sortBuffer(s_sample_count);
 			barrier();
 			// TODO: reorder samples to increase coherency during shading
@@ -734,6 +764,9 @@ void rasterBin(int bin_id) {
 			// Shading samples & storing them ordered by pixel pos
 			for(uint i = LIX; i < s_sample_count; i += LSIZE) {
 				uvec2 value = s_buffer[i];
+				if(value.x == ~0u)
+					continue;
+
 				uint pixel_id = value.x >> 24;
 				uint bin_tri_idx = value.y >> 16;
 				ivec2 bin_pixel_pos = ivec2(pixel_id & (BIN_SIZE - 1), (by * 4) + (pixel_id >> 6));

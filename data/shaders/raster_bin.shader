@@ -31,15 +31,16 @@ layout(binding = 1) uniform sampler2D transparent_texture;
 #define WORKGROUP_SCRATCH_SIZE	(64 * 1024)
 #define WORKGROUP_SCRATCH_SHIFT	16
 
-#define MAX_BLOCK_ROW_TRIS		(2 * 1024)
-#define MAX_SCRATCH_TRIS		(1 * 1024)
+#define SAMPLES_PER_THREAD		4
+#define MAX_SAMPLES				(LSIZE * SAMPLES_PER_THREAD)
+
+// TODO: there is no need to check that, no of input tris is <= this
+#define MAX_BLOCK_ROW_TRIS		MAX_SAMPLES
+#define MAX_SCRATCH_TRIS		1024
 #define MAX_SCRATCH_TRIS_SHIFT  10
 
 #define SCRATCH_TRI_OFFSET		(MAX_BLOCK_ROW_TRIS * BLOCK_ROW_COUNT)
 #define BLOCK_ROW_COUNT			16
-
-#define SAMPLES_PER_THREAD		4
-#define MAX_SAMPLES				(LSIZE * SAMPLES_PER_THREAD)
 
 shared ivec2 s_bin_pos;
 shared vec3 s_bin_ray_dir0;
@@ -376,51 +377,47 @@ void generateRows() {
 
 // TODO: optimize
 void loadRowSamples(int by, int y, int ystep) {
-	ystep--;
-	y += int(LIX & ystep);
-
 	uint soffset = gl_WorkGroupID.x * WORKGROUP_SCRATCH_SIZE + by * MAX_BLOCK_ROW_TRIS;
 	uint tri_count = s_block_row_tri_counts[by];
-	int shift = (y & 1) * 12;
-	uint ystep_shift = ystep == 3? 2 : ystep;
-
+	int x = int(LIX & (BIN_SIZE - 1));
+	int local_y = int(LIX >> BIN_SHIFT);
+	// TODO: share pixels between threads for ystep < 4?
+	if(local_y >= ystep)
+		return;
+	y += local_y;
+	
+	uint pixel_id = (y << 6) | x;
+	uint pix_offset = s_pixel_counts[pixel_id] >> 16;
+	int num_samples = 0;
+	
 	// TODO: more precomputation here
-	vec3 ray_dir_base = s_bin_ray_dir0 + (by * 4 + y) * frustum.ws_diry;
+	vec3 ray_dir = s_bin_ray_dir0 + (by * 4 + y) * frustum.ws_diry + x * frustum.ws_dirx;
 
-	for(uint i = LIX >> ystep_shift, istep = LSIZE >> ystep_shift; i < tri_count; i += istep) {
+	for(int i = 0; i < tri_count; i++) {
 		uvec2 row = g_scratch[soffset + i];
-		int row_range = int((row[y >> 1] >> shift) & 0xfff);
-		if(row_range == 0x3f)
+		int row_range = int((row[y >> 1] >> ((y & 1) * 12)) & 0xfff);
+		int minx = row_range & 0x3f, maxx = (row_range >> 6) & 0x3f;
+		if(x < minx || x > maxx)
 			continue;
 
+		num_samples++;
+
 		uint bin_tri_idx = (row.x >> 24) | ((row.y & 0xff000000) >> 16);
-		int minx = row_range & 0x3f, maxx = (row_range >> 6) & 0x3f;
-		int num_samples = maxx - minx + 1;
-		
 		uint toffset = scratchTriOffset(bin_tri_idx);
 		vec2 val0 = uintBitsToFloat(TRI_SCRATCH(0));
 		vec2 val1 = uintBitsToFloat(TRI_SCRATCH(1));
 		vec3 normal = vec3(val0.x, val0.y, val1.x);
 		float param0 = val1.y; //TODO: mul by normal
 
-		uint pixel_id = (y << 6) | minx;
-		// Note: we're assuming that all samples will fit in s_buffer
-		int sample_offset = atomicAdd(s_sample_count, num_samples);
-		num_samples = min(num_samples, MAX_SAMPLES - sample_offset);
+		float ray_pos = param0 / dot(normal, ray_dir);
+		float depth = float(0xfffffe) / (64.0 + ray_pos);
 
-		for(int j = 0; j < num_samples; j++) {
-			vec3 ray_dir = ray_dir_base + frustum.ws_dirx * (minx + j);
-			float ray_pos = param0 / dot(normal, ray_dir);
-			float depth = float(0xfffffe) / (1.0 + ray_pos);
-
-			uint key = uint(depth) | (pixel_id << 24);
-			uint value = (bin_tri_idx << 16) | sample_offset;
-			uint pix_offset = atomicAdd(s_pixel_counts[pixel_id], 0x10000) >> 16;
-			s_buffer[pix_offset] = uvec2(key, value);
-			sample_offset++;
-			pixel_id++;
-		}
+		uint key = uint(depth) | (pixel_id << 24);
+		uint value = (bin_tri_idx << 16) | pix_offset;
+		s_buffer[pix_offset++] = uvec2(key, value);
 	}
+
+	atomicAdd(s_sample_count, num_samples);
 }
 
 void reduceRowSamples(int by, int y, int ystep)
@@ -433,7 +430,7 @@ void reduceRowSamples(int by, int y, int ystep)
 
 		uint pixel_counter = s_pixel_counts[y * BIN_SIZE + x];
 		int num_samples = int(pixel_counter & 0xffff);
-		int sample_offset = int(pixel_counter >> 16) - num_samples;
+		int sample_offset = int(pixel_counter >> 16);
 		
 		vec3 color = vec3(0);
 		float neg_alpha = 1.0;
@@ -450,6 +447,54 @@ void reduceRowSamples(int by, int y, int ystep)
 			enc_color = 0xff0000ff;
 		imageStore(final_raster, pixel_pos, uvec4(enc_color, 0, 0, 0));
 	}
+}
+
+void sortBlockRow(int by)
+{
+	uint soffset = gl_WorkGroupID.x * WORKGROUP_SCRATCH_SIZE + by * MAX_BLOCK_ROW_TRIS;
+	uint tri_count = s_block_row_tri_counts[by];
+
+	for(uint i = LIX; i < tri_count; i += LSIZE) {
+		uvec2 row = g_scratch[soffset + i];
+
+		vec2 cpos = vec2(0, 0);
+		float weight = 0.0;
+
+		for(int y = 0; y < 4; y++) {
+			uint row_range = row[y >> 1] >> ((y & 1) * 12);
+			if(row_range == 0x3f)
+				continue;
+			int minx = int(row_range & 0x3f), maxx = int((row_range >> 6) & 0x3f);
+			int count = maxx - minx + 1;
+			cpos += vec2(float(maxx + minx + 1) * 0.5, y + 0.5) * count;
+			weight += count;
+		}
+
+		cpos /= weight;
+		cpos.y += by * 4;
+
+		uint bin_tri_idx = (row.x >> 24) | ((row.y & 0xff000000) >> 16);
+
+		uint toffset = scratchTriOffset(bin_tri_idx);
+		vec2 val0 = uintBitsToFloat(TRI_SCRATCH(0));
+		vec2 val1 = uintBitsToFloat(TRI_SCRATCH(1));
+		vec3 normal = vec3(val0.x, val0.y, val1.x);
+		float param0 = val1.y; //TODO: mul by normal
+
+		vec3 ray_dir = s_bin_ray_dir0 + cpos.x * frustum.ws_dirx + cpos.y * frustum.ws_diry;
+		float ray_pos = param0 / dot(normal, ray_dir);
+		float depth = float(0x7ffffffe) / (1.0 + ray_pos);
+
+		s_buffer[i] = uvec2(uint(depth), uint(i));
+	}
+	barrier();
+	sortBuffer(tri_count);
+	barrier();
+	for(uint i = LIX; i < tri_count; i += LSIZE)
+		s_buffer[i] = g_scratch[soffset + s_buffer[i].y];
+	barrier();
+	for(uint i = LIX; i < tri_count; i += LSIZE)
+		g_scratch[soffset + i] = s_buffer[i];
 }
 
 // Computes pixel counts for all rows within block-row
@@ -639,14 +684,19 @@ void rasterBin(int bin_id) {
 
 	for(int by = 0; by < BLOCK_ROW_COUNT; by++) {
 		barrier();
-		computeBlockRowPixelCounts(by);
-		// iterujemy po liniach?
-		barrier();
+		if(s_block_row_tri_counts[by] > MAX_BLOCK_ROW_TRIS) {
+			rasterInvalidBlockRow(by, vec3(0.5, 0.0, 0.0));
+			continue;
+		}
 		if(s_block_row_max_frag_counts[by] > MAX_SAMPLES) {
 			rasterInvalidBlockRow(by, vec3(1.0, 0.0, 0.0));
 			continue;
 		}
-		
+
+		computeBlockRowPixelCounts(by);
+		sortBlockRow(by);
+		barrier();
+
 		uint frag_count01 = s_row2_frag_counts[by * 2 + 0];
 		uint frag_count23 = s_row2_frag_counts[by * 2 + 1];
 
@@ -668,6 +718,7 @@ void rasterBin(int bin_id) {
 				s_pixel_counts[y * BIN_SIZE + x] += int(frag_count01 << 16);
 			}
 		}
+		barrier();
 
 		for(int y = 0; y < 4; y += ystep) {
 			barrier();
@@ -676,9 +727,9 @@ void rasterBin(int bin_id) {
 			barrier();
 			loadRowSamples(by, y, ystep);
 			barrier();
-			sortBuffer(s_sample_count);
+			//sortBuffer(s_sample_count);
 			barrier();
-			// TODO: reorder samples to increase coherency during sampling
+			// TODO: reorder samples to increase coherency during shading
 
 			// Shading samples & storing them ordered by pixel pos
 			for(uint i = LIX; i < s_sample_count; i += LSIZE) {

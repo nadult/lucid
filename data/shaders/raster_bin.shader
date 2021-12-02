@@ -545,7 +545,7 @@ void sortBlockRow(int by)
 
 		vec3 ray_dir = s_bin_ray_dir0 + cpos.x * frustum.ws_dirx + cpos.y * frustum.ws_diry;
 		float ray_pos = param0 / dot(normal, ray_dir);
-		float depth = float(0x7ffffffe) / (1.0 + ray_pos);
+		float depth = float(0x7fffffff) / (1.0 + max(0.0, ray_pos));
 
 		s_buffer[i] = uvec2(uint(depth), uint(i));
 	}
@@ -757,6 +757,7 @@ void rasterBin(int bin_id) {
 
 		computeBlockRowPixelCounts(by);
 		sortBlockRow(by);
+		groupMemoryBarrier();
 		barrier();
 
 		uint frag_count01 = s_row2_frag_counts[by * 2 + 0];

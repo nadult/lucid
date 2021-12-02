@@ -613,6 +613,32 @@ void sortBlockRow(int by)
 		g_scratch[soffset + i] = s_buffer[i];
 }
 
+void binPixels(int by) {
+/*	// Binning pixels by sample counts
+	for(uint i = LIX; i < BIN_SIZE * BLOCK_SIZE; i += LSIZE) {
+		uint sample_count = min(s_pixel_counts[i], 31);
+		atomicAdd(s_buffer[sample_count].x, 1);
+	}
+	barrier(); 
+	if(LIX < 32) {
+		uint value = s_buffer[LIX].x, temp;
+		temp = shuffleUpNV(value,  1, 32); if((LIX & 31) >=  1) value += temp;
+		temp = shuffleUpNV(value,  2, 32); if((LIX & 31) >=  2) value += temp;
+		temp = shuffleUpNV(value,  4, 32); if((LIX & 31) >=  4) value += temp;
+		temp = shuffleUpNV(value,  8, 32); if((LIX & 31) >=  8) value += temp;
+		temp = shuffleUpNV(value, 16, 32); if((LIX & 31) >= 16) value += temp;
+		s_buffer[LIX].y = value - s_buffer[LIX].x;
+	}
+	if(LIX < BIN_SIZE)
+		s_pixel_order[LIX] = 0;
+	barrier(); 
+	for(uint i = LIX; i < BIN_SIZE * BLOCK_SIZE; i += LSIZE) {
+		uint sample_count = min(s_pixel_counts[i], 31);
+		uint target_index = atomicAdd(s_buffer[sample_count].y, 1);
+		atomicOr(s_pixel_order[target_index >> 2], i << ((target_index & 3) * 8));
+	}*/
+}
+
 // Computes pixel counts for all rows within block-row
 // Computes offsets within rows
 void computeBlockRowPixelCounts(uint by)

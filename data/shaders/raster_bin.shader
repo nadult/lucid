@@ -385,28 +385,9 @@ void loadRowSamples(int by, int y, int ystep) {
 	
 #ifdef VENDOR_NVIDIA
 	// TODO: WARP_SIZE?
-
-	// Moglibyśmy tutaj dodać sortowanie K sampli: jeśli byśmy tutaj posortowali, to nie
-	// musielibyśmy potem przechowywać głębokości; Głębokość mogłaby być tylko trzymana w rejstrach!
-	//
-	// Tylko, że czasami potem trzeba jeszcze posortować w pełni i do tego już potrzebuję zapisanych głębokości
-	//
-	// Tylko, że co w sytuacji, gdy mamy mało pikseli do cieniowania, bo per-pixel jest dużo sampli?
-	// muszę jakoś podzielić jeden piksel między 2 albo 4 wątki?
-	//
-	// Mam tutaj też problem z różną ilością sampli per pixel!
-	//
-	// Raczej konieczne jest grupowanie sampli do cieniowania po materiałach; bez tego to będzie bezużyteczne
-	// u mnie to działa nieźle bo tak naprawdę w każdej scenie jest jeden materiał; brak koherencji boli tylko
-	// przy teksturowaniu
-	//
-	// Spróbujmy inaczej:
-	// - najpierw generujemy jeden po drugim sample w kolejności tróəkątów
-	// - jak z czegoś takiego wyliczyć pozycje po pikselach?
-
-	// TODO: move depth generation out of here
 	if(local_y < ystep) {
 		y += local_y;
+		uint pixel_bit = 1u << (x & 31);
 		uint pixel_id = (y << 6) | x;
 		uint pix_offset = s_pixel_counts[pixel_id] >> 16;
 		vec3 ray_dir = s_bin_ray_dir0 + (by * 4 + y) * frustum.ws_diry + x * frustum.ws_dirx;
@@ -414,7 +395,7 @@ void loadRowSamples(int by, int y, int ystep) {
 		float prev_depths[4] = {-1.0, -1.0, -1.0, -1.0};
 		for(uint i = 0; i < row_count; i += 32) {
 			uint sub_count = min(32, row_count - i);
-			int sel_tri_minx = 31337, sel_tri_maxx;
+			uint sel_tri_bitmask = 0;
 			vec3 sel_normal;
 			uint bitmask, sel_tri_idx = 0;
 			{
@@ -423,17 +404,16 @@ void loadRowSamples(int by, int y, int ystep) {
 					uvec2 row = g_scratch[soffset + i + (LIX & 31)];
 					sel_tri_idx = (row.x >> 24) | ((row.y & 0xff000000) >> 16);
 					int row_range = int(row[y >> 1] >> ((y & 1) * 12));
-					sel_tri_minx = row_range & 0x3f;
-					sel_tri_maxx = (row_range >> 6) & 0x3f;
-
+					int minx = row_range & 0x3f, maxx = (row_range >> 6) & 0x3f;
+					uint64_t bmask = (~uint64_t(0) << minx) & (~uint64_t(0) >> 63 - maxx);
+					sel_tri_bitmask = uint(bmask >> (LIX & 32));
 					uint toffset = scratchTriOffset(sel_tri_idx);
 					vec2 val0 = uintBitsToFloat(TRI_SCRATCH(0));
 					vec2 val1 = uintBitsToFloat(TRI_SCRATCH(1));
 					vec3 normal = vec3(val0.x, val0.y, val1.x);
 					float param0 = val1.y; //TODO: mul by normal
 					sel_normal = normal * (1.0 / param0);
-
-					in_range = (LIX & 32) == 0? sel_tri_minx < 32 : sel_tri_maxx >= 32;
+					in_range = sel_tri_bitmask != 0;
 				}
 				bitmask = uint(ballotARB(in_range));
 			}
@@ -446,16 +426,15 @@ void loadRowSamples(int by, int y, int ystep) {
 				bitmask >>= bit_pos + 1;
 
 				// TODO: bitmask instead of min/max ?
-				int minx = shuffleNV(sel_tri_minx, j, 32);
-				int maxx = shuffleNV(sel_tri_maxx, j, 32);
+				uint tri_bitmask = shuffleNV(sel_tri_bitmask, j, 32);
 				uint bin_tri_idx = shuffleNV(sel_tri_idx, j, 32);
 				vec3 normal = shuffleNV(sel_normal, j, 32);
-				if(x < minx || x > maxx)
+				if((tri_bitmask & pixel_bit) == 0)
 					continue;
 
 				// TODO: sample offset
 				uint value = (pixel_id << 24) | bin_tri_idx;
-				float depth = 1.0 / (1.0 + max(0, 1.0 / dot(normal, ray_dir)));
+				float depth = dot(normal, ray_dir);
 
 #define SWAP_UINT(v1, v2) { uint temp = v1; v1 = v2; v2 = temp; }
 #define SWAP_FLOAT(v1, v2) { float temp = v1; v1 = v2; v2 = temp; }

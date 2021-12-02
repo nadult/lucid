@@ -409,10 +409,13 @@ void loadRowSamples(int by, int y, int ystep) {
 		y += local_y;
 		uint pixel_id = (y << 6) | x;
 		uint pix_offset = s_pixel_counts[pixel_id] >> 16;
+		vec3 ray_dir = s_bin_ray_dir0 + (by * 4 + y) * frustum.ws_diry + x * frustum.ws_dirx;
 
+		float prev_depths[4] = {-1.0, -1.0, -1.0, -1.0};
 		for(uint i = 0; i < row_count; i += 32) {
 			uint sub_count = min(32, row_count - i);
 			int sel_tri_minx = 31337, sel_tri_maxx;
+			vec3 sel_normal;
 			uint bitmask, sel_tri_idx = 0;
 			{
 				bool in_range = false;
@@ -422,6 +425,13 @@ void loadRowSamples(int by, int y, int ystep) {
 					int row_range = int(row[y >> 1] >> ((y & 1) * 12));
 					sel_tri_minx = row_range & 0x3f;
 					sel_tri_maxx = (row_range >> 6) & 0x3f;
+
+					uint toffset = scratchTriOffset(sel_tri_idx);
+					vec2 val0 = uintBitsToFloat(TRI_SCRATCH(0));
+					vec2 val1 = uintBitsToFloat(TRI_SCRATCH(1));
+					vec3 normal = vec3(val0.x, val0.y, val1.x);
+					float param0 = val1.y; //TODO: mul by normal
+					sel_normal = normal * (1.0 / param0);
 
 					in_range = (LIX & 32) == 0? sel_tri_minx < 32 : sel_tri_maxx >= 32;
 				}
@@ -439,45 +449,49 @@ void loadRowSamples(int by, int y, int ystep) {
 				int minx = shuffleNV(sel_tri_minx, j, 32);
 				int maxx = shuffleNV(sel_tri_maxx, j, 32);
 				uint bin_tri_idx = shuffleNV(sel_tri_idx, j, 32);
+				vec3 normal = shuffleNV(sel_normal, j, 32);
 				if(x < minx || x > maxx)
 					continue;
 
 				// TODO: sample offset
 				uint value = (pixel_id << 24) | bin_tri_idx;
-				s_buffer[pix_offset++] = uvec2(0, value);
+				float depth = 1.0 / (1.0 + max(0, 1.0 / dot(normal, ray_dir)));
+
+#define SWAP_UINT(v1, v2) { uint temp = v1; v1 = v2; v2 = temp; }
+#define SWAP_FLOAT(v1, v2) { float temp = v1; v1 = v2; v2 = temp; }
+
+				if(depth < prev_depths[0]) {
+					SWAP_UINT(s_buffer[pix_offset - 1].y, value);
+					SWAP_FLOAT(depth, prev_depths[0]);
+					if(prev_depths[0] < prev_depths[1]) {
+						SWAP_UINT(s_buffer[pix_offset - 2].y, s_buffer[pix_offset - 1].y);
+						SWAP_FLOAT(prev_depths[1], prev_depths[0]);
+						if(prev_depths[1] < prev_depths[2]) {
+							SWAP_UINT(s_buffer[pix_offset - 3].y, s_buffer[pix_offset - 2].y);
+							SWAP_FLOAT(prev_depths[2], prev_depths[1]);
+							if(prev_depths[2] < prev_depths[3])
+								s_pixel_counts[pixel_id] = int(~0u);
+						}
+					}
+				}
+
+				s_buffer[pix_offset++].y = value;
+				prev_depths[3] = prev_depths[2];
+				prev_depths[2] = prev_depths[1];
+				prev_depths[1] = prev_depths[0];
+				prev_depths[0] = depth;
 			}
 		}
 	}
 		
 	barrier();
-
-
-	vec3 ray_dir_base = s_bin_ray_dir0 + by * 4 * frustum.ws_diry;
-
-	for(uint i = LIX, sample_count = s_sample_count; i < sample_count; i += LSIZE) {
-		uint sample_id = s_buffer[i].y;
-		uint bin_tri_idx = sample_id & 0xffff;
-		uint pixel_id = sample_id >> 24;
-
-		uint toffset = scratchTriOffset(bin_tri_idx);
-		vec2 val0 = uintBitsToFloat(TRI_SCRATCH(0));
-		vec2 val1 = uintBitsToFloat(TRI_SCRATCH(1));
-		vec3 normal = vec3(val0.x, val0.y, val1.x);
-		float param0 = val1.y; //TODO: mul by normal
-
-		// TODO: more precomputation possible
-		vec3 ray_dir = ray_dir_base + (pixel_id >> 6) * frustum.ws_diry + (pixel_id & 0x3f) * frustum.ws_dirx;
-		float ray_pos = param0 / dot(normal, ray_dir);
-		float depth = float(0xfffffe) / (1.0 + ray_pos);
-		s_buffer[i].x = (sample_id & 0xff000000) | uint(depth);
-	}
-
 #else
 #error write me please
 #endif
 }
 
-
+// TODO: This is slow, because it is not adaptive; if there is almost nothing to sort, it still does
+// the same amount of work...
 void postSortSamples(int by, int y, int ystep) {
 	int sample_count = s_sample_count;
 	int sample_count32 = ((sample_count + 31) / 32) * 32;
@@ -854,7 +868,7 @@ void rasterBin(int bin_id) {
 			barrier();
 			loadRowSamples(by, y, ystep);
 			barrier();
-			postSortSamples(by, y, ystep);
+			//postSortSamples(by, y, ystep);
 			//sortBuffer(s_sample_count);
 			barrier();
 			// TODO: reorder samples to increase coherency during shading
@@ -862,8 +876,6 @@ void rasterBin(int bin_id) {
 			// Shading samples & storing them ordered by pixel pos
 			for(uint i = LIX; i < s_sample_count; i += LSIZE) {
 				uvec2 value = s_buffer[i];
-				if(value.x == ~0u)
-					continue;
 
 				uint pixel_id = value.y >> 24;
 				uint bin_tri_idx = value.y & 0xffff;

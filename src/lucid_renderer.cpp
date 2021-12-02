@@ -1452,9 +1452,23 @@ void LucidRenderer::rasterBin(const Context &ctx) {
 	raster_bin_program.setShadows(ctx.shadows.matrix, ctx.shadows.enable);
 	ctx.lighting.setUniforms(raster_bin_program.glProgram());
 
+	if(m_opts & Opt::debug_raster)
+		shaderDebugUseBuffer(m_errors);
+
 	glDispatchCompute(128, 1, 1);
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 	m_tile_tris->bindIndex(8);
+
+	if(m_opts & Opt::debug_raster) {
+		auto source_ranges = raster_tile_program.sourceRanges();
+		auto records = shaderDebugRecords(m_errors, {256, 1, 1}, {128, 1, 1}, 256, source_ranges);
+		if(records) {
+			makeSorted(records);
+			print("raster_bin shader debug messages reported:\n");
+			for(auto &record : records)
+				print("%\n", record);
+		}
+	}
 }
 
 void LucidRenderer::rasterizeFinal(const Context &ctx) {

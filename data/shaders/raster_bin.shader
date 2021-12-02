@@ -382,92 +382,153 @@ void loadRowSamples(int by, int y, int ystep) {
 	int x = int(LIX & (BIN_SIZE - 1));
 	int local_y = int(LIX >> BIN_SHIFT);
 	// TODO: share pixels between threads for ystep < 4?
-	if(local_y >= ystep)
-		return;
-	y += local_y;
-	
-	uint pixel_id = (y << 6) | x;
-	uint pix_offset = s_pixel_counts[pixel_id] >> 16;
-	int num_samples = 0;
 	
 #ifdef VENDOR_NVIDIA
 	// TODO: WARP_SIZE?
-	// TODO: more precomputation here
-	vec3 ray_dir = s_bin_ray_dir0 + (by * 4 + y) * frustum.ws_diry + x * frustum.ws_dirx;
+
+	// Moglibyśmy tutaj dodać sortowanie K sampli: jeśli byśmy tutaj posortowali, to nie
+	// musielibyśmy potem przechowywać głębokości; Głębokość mogłaby być tylko trzymana w rejstrach!
+	//
+	// Tylko, że czasami potem trzeba jeszcze posortować w pełni i do tego już potrzebuję zapisanych głębokości
+	//
+	// Tylko, że co w sytuacji, gdy mamy mało pikseli do cieniowania, bo per-pixel jest dużo sampli?
+	// muszę jakoś podzielić jeden piksel między 2 albo 4 wątki?
+	//
+	// Mam tutaj też problem z różną ilością sampli per pixel!
+	//
+	// Raczej konieczne jest grupowanie sampli do cieniowania po materiałach; bez tego to będzie bezużyteczne
+	// u mnie to działa nieźle bo tak naprawdę w każdej scenie jest jeden materiał; brak koherencji boli tylko
+	// przy teksturowaniu
+	//
+	// Spróbujmy inaczej:
+	// - najpierw generujemy jeden po drugim sample w kolejności tróəkątów
+	// - jak z czegoś takiego wyliczyć pozycje po pikselach?
 
 	// TODO: move depth generation out of here
-	for(uint i = 0; i < row_count; i += 32) {
-		uint sub_count = min(32, row_count - i);
-		int sel_tri_minx = 31337, sel_tri_maxx;
-		uint bitmask, sel_tri_idx = 0;
-		vec3 sel_tri_normal;
-		{
-			bool in_range = false;
-			if((LIX & 31) < sub_count) {
-				uvec2 row = g_scratch[soffset + i + (LIX & 31)];
-				sel_tri_idx = (row.x >> 24) | ((row.y & 0xff000000) >> 16);
-				int row_range = int(row[y >> 1] >> ((y & 1) * 12));
-				sel_tri_minx = row_range & 0x3f;
-				sel_tri_maxx = (row_range >> 6) & 0x3f;
+	if(local_y < ystep) {
+		y += local_y;
+		uint pixel_id = (y << 6) | x;
+		uint pix_offset = s_pixel_counts[pixel_id] >> 16;
 
-				uint toffset = scratchTriOffset(sel_tri_idx);
-				vec2 val0 = uintBitsToFloat(TRI_SCRATCH(0));
-				vec2 val1 = uintBitsToFloat(TRI_SCRATCH(1));
-				vec3 normal = vec3(val0.x, val0.y, val1.x);
-				float param0 = val1.y; //TODO: mul by normal
-				sel_tri_normal = normal / param0;
+		for(uint i = 0; i < row_count; i += 32) {
+			uint sub_count = min(32, row_count - i);
+			int sel_tri_minx = 31337, sel_tri_maxx;
+			uint bitmask, sel_tri_idx = 0;
+			{
+				bool in_range = false;
+				if((LIX & 31) < sub_count) {
+					uvec2 row = g_scratch[soffset + i + (LIX & 31)];
+					sel_tri_idx = (row.x >> 24) | ((row.y & 0xff000000) >> 16);
+					int row_range = int(row[y >> 1] >> ((y & 1) * 12));
+					sel_tri_minx = row_range & 0x3f;
+					sel_tri_maxx = (row_range >> 6) & 0x3f;
 
-				in_range = (LIX & 32) == 0? sel_tri_minx < 32 : sel_tri_maxx >= 32;
+					in_range = (LIX & 32) == 0? sel_tri_minx < 32 : sel_tri_maxx >= 32;
+				}
+				bitmask = uint(ballotARB(in_range));
 			}
-			bitmask = uint(ballotARB(in_range));
-		}
 
-		// TODO: sometimes raster_bin (I guess) hangs; noticable when moving camera around sponza
-		for(uint j = 0; j < sub_count; j++) {
-			int bit_pos = findLSB(bitmask);
-			if(bit_pos == -1)
-				break;
-			j += bit_pos;
-			bitmask >>= bit_pos + 1;
+			for(uint j = 0; j < sub_count; j++) {
+				int bit_pos = findLSB(bitmask);
+				if(bit_pos == -1)
+					break;
+				j += bit_pos;
+				bitmask >>= bit_pos + 1;
 
-			int minx = shuffleNV(sel_tri_minx, j, 32);
-			int maxx = shuffleNV(sel_tri_maxx, j, 32);
-			uint bin_tri_idx = shuffleNV(sel_tri_idx, j, 32);
-			vec3 normal = shuffleNV(sel_tri_normal, j, 32);
-			if(x < minx || x > maxx)
-				continue;
+				// TODO: bitmask instead of min/max ?
+				int minx = shuffleNV(sel_tri_minx, j, 32);
+				int maxx = shuffleNV(sel_tri_maxx, j, 32);
+				uint bin_tri_idx = shuffleNV(sel_tri_idx, j, 32);
+				if(x < minx || x > maxx)
+					continue;
 
-			num_samples++;
-			float ray_pos = 1.0 / dot(normal, ray_dir);
-			float depth = float(0xfffffe) / (1.0 + ray_pos);
-
-			uint key = uint(depth) | (pixel_id << 24);
-			uint value = (bin_tri_idx << 16) | pix_offset;
-			s_buffer[pix_offset++] = uvec2(key, value);
+				// TODO: sample offset
+				uint value = (pixel_id << 24) | bin_tri_idx;
+				s_buffer[pix_offset++] = uvec2(0, value);
+			}
 		}
 	}
+		
+	barrier();
 
-	atomicAdd(s_sample_count, num_samples);
+
+	vec3 ray_dir_base = s_bin_ray_dir0 + by * 4 * frustum.ws_diry;
+
+	for(uint i = LIX, sample_count = s_sample_count; i < sample_count; i += LSIZE) {
+		uint sample_id = s_buffer[i].y;
+		uint bin_tri_idx = sample_id & 0xffff;
+		uint pixel_id = sample_id >> 24;
+
+		uint toffset = scratchTriOffset(bin_tri_idx);
+		vec2 val0 = uintBitsToFloat(TRI_SCRATCH(0));
+		vec2 val1 = uintBitsToFloat(TRI_SCRATCH(1));
+		vec3 normal = vec3(val0.x, val0.y, val1.x);
+		float param0 = val1.y; //TODO: mul by normal
+
+		// TODO: more precomputation possible
+		vec3 ray_dir = ray_dir_base + (pixel_id >> 6) * frustum.ws_diry + (pixel_id & 0x3f) * frustum.ws_dirx;
+		float ray_pos = param0 / dot(normal, ray_dir);
+		float depth = float(0xfffffe) / (1.0 + ray_pos);
+		s_buffer[i].x = (sample_id & 0xff000000) | uint(depth);
+	}
+
 #else
 #error write me please
 #endif
 }
-			
+
+
 void postSortSamples(int by, int y, int ystep) {
 	int sample_count = s_sample_count;
-	for(uint i = LIX + 1; i < sample_count; i += LSIZE) {
-		uint cur_key = s_buffer[i].x, prev_key = s_buffer[i - 1].x;
-		if(cur_key >= prev_key)
-			continue;
+	int sample_count32 = ((sample_count + 31) / 32) * 32;
+	if(LIX < sample_count32 - sample_count)
+		s_buffer[sample_count + LIX].x = 0xffffffff;
+	barrier();
 
-		uint cur_pixel = cur_key >> 24;
-		uint cur_value = cur_key & 0xffffff;
+#define SWAP(v0, v1) { uvec2 temp = v0; v0 = v1; v1 = temp; }
 
-		uvec2 temp = s_buffer[i];
-		s_buffer[i] = s_buffer[i - 1];
-		s_buffer[i - 1] = temp;
+	for(uint i = LIX; i < sample_count32; i += LSIZE) {
+		uvec2 value = s_buffer[i];
+		value = swap(value, 0x01, xorBits(LIX, 1, 0)); // K = 2
+		value = swap(value, 0x02, xorBits(LIX, 2, 1)); // K = 4
+		value = swap(value, 0x01, xorBits(LIX, 2, 0));
+		value = swap(value, 0x04, xorBits(LIX, 3, 2)); // K = 8
+		value = swap(value, 0x02, xorBits(LIX, 3, 1));
+		value = swap(value, 0x01, xorBits(LIX, 3, 0));
+		value = swap(value, 0x08, LIX & 8); // K = 16
+		value = swap(value, 0x04, LIX & 4);
+		value = swap(value, 0x02, LIX & 2);
+		value = swap(value, 0x01, LIX & 1);
+		s_buffer[i] = value;
+	}
+	
+	barrier();
+
+	uint num_16_pairs = max(0, sample_count32 / 16 - 1);
+	for(uint i = LIX; i < num_16_pairs; i += LSIZE) {
+		uint cur_offset = i * 16 + 12;
+		uvec2 lvalues[4], rvalues[4];
+		for(int k = 0; k < 4; k++) {
+			lvalues[k] = s_buffer[cur_offset + k];
+			rvalues[k] = s_buffer[cur_offset + k + 4];
+		}
+		int lpos = 0, rpos = 0;
+		for(int j = 0; j < 4; j++)
+			s_buffer[cur_offset + j] = lvalues[lpos].x < rvalues[rpos].x?
+									   lvalues[lpos++] : rvalues[rpos++];
+
+		// TODO: unroll ?
+		for(int j = 4; j < 8; j++) {
+			uvec2 cur_value;
+			if((lpos < 4 || rpos >= 4) && lvalues[lpos].x < rvalues[rpos].x)
+				cur_value = lvalues[lpos++];
+			else
+				cur_value = rvalues[rpos++];
+			s_buffer[cur_offset + j] = cur_value;
+		}
 	}
 
+#undef SWAP
 	barrier();
 	for(uint i = LIX + 1; i < sample_count; i += LSIZE) {
 		uint cur_key = s_buffer[i].x;
@@ -785,8 +846,11 @@ void rasterBin(int bin_id) {
 
 		for(int y = 0; y < 4; y += ystep) {
 			barrier();
-			if(LIX == 0)
-				s_sample_count = 0;
+			if(LIX == 0) {
+				uint last_pixel = s_pixel_counts[(y + ystep - 1) * 64 + 63];
+				uint first_pixel = s_pixel_counts[y * 64];
+				s_sample_count = int((last_pixel >> 16) + (last_pixel & 0xffff) - (first_pixel >> 16));
+			}
 			barrier();
 			loadRowSamples(by, y, ystep);
 			barrier();
@@ -801,8 +865,8 @@ void rasterBin(int bin_id) {
 				if(value.x == ~0u)
 					continue;
 
-				uint pixel_id = value.x >> 24;
-				uint bin_tri_idx = value.y >> 16;
+				uint pixel_id = value.y >> 24;
+				uint bin_tri_idx = value.y & 0xffff;
 				ivec2 bin_pixel_pos = ivec2(pixel_id & (BIN_SIZE - 1), (by * 4) + (pixel_id >> 6));
 				s_buffer[i].x = shadeSample(bin_pixel_pos, bin_tri_idx);
 			}

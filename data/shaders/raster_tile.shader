@@ -512,6 +512,9 @@ void rasterBins(int bin_id) {
 			rasterInvalidTile(vec3(1.0, 0.0, 0.5));
 			continue;
 		}
+		
+		rasterInvalidTile(vec3(0.5, 0.5, 0.5));
+		continue;
 
 		for(int gid = 0; gid < 4; gid++) {
 			uint sample_count = s_group_fragment_counts[gid];

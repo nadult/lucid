@@ -53,10 +53,43 @@
                     === Rasteryzacja wszystkich sampli na raz ===
 -----------------------------------------------------------------------------------------
 
-* *Następny krok: sortowanie sampli!*
+* *TODO w narwi: SPIRV*
 
-  Sortowanie sampli jest mega wolne!!! Musimy najpierw sortować trójkąty (tak jak wcześniej) a
-  potem robić ew. post-sortowanie (w razie faila możemy zawsze odpalić pełny sort).
+* *Zabij proces jeśli klatka zajmuje więcej niż 1sec*
+
+* *lepsze grupowanie danych trójkątów: zamiast rzędów kwadraty*
+
+  Rasteryzujemy bin 64x64. Jakie mamy opcje?
+  
+  - Aktualnie mamy dane trójkątów w blokach 64x4 (16 bloków max)
+    każdy blok to 64 bity. Pełny tróəkąt: 32 * 32 bit, mini trójkąt: 2 * 32 bit
+  
+  - Kawałki 8x8:   2 * 32 bity na kawałek; Full: 128 * 32 bit, Mini: 2 * 32 bit
+  - Kawałki 32x8:  3 * 32 bity na kawałek; Full:  48 * 32 bit, Mini: 3 * 32 bit
+
+  - Kawałek 16x16 na chama: 256 bitów + 16 bitów na tróəkąt, 128 bitów na trójkąt w rzędach (+16)
+
+  Kawałki 16x16 odnoszą się do rzędów:
+  - 10 bitów na indeks trójkąta, 16 bitów na offset rzędów danego trójkąta, 4 bity na ilość
+	rzędów (albo 4-ek); offset może wskazywać od razu na docelową grupę rzędów (4-kę)
+
+
+  A może zwiększyć liczbę wątków do 512? i przetwarzać na raz 64x8 pikseli?
+  Co nam to da? docelowo byśmy chcieli 16x16, a mozę nawet 8x8... żeby sortowanie trisów miało jakiś sens
+  
+  Ale cały czas możemy to robić
+
+
+* *Problem: będą też sytuacje gdzie sample nie będą poprawnie posortowane po zastosowaniu filtra*
+  W takiej sytuacji będziemy musieli robić pełny sort? Będziemy musieli go w każdym razie
+  lepiej zoptymalizować, żeby nie wykonywać aż tyle kroków; na pewno się da, tylko wymaga
+  wysiłku
+  Dodatkowo trzeba będzie generować głębokości;
+  Problem: jeśli w s_bufferze będziemy mieli po 8 sampli na piksel, to nie zmieszczą się tam
+  dane głębi...
+
+  W takiej sytuacji generujemy sample od nowa?
+  
 
 * *Nie encoduj wielkości ekranu w shaderach: recompute przy resize*
 

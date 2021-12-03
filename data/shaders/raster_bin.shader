@@ -6,6 +6,12 @@
 #define LSIZE 256
 #define LSHIFT 8
 
+#define MAX_ROWS		(LSIZE / 64)
+#define MAX_BLOCK_ROWS	(LSIZE / 256)
+
+#define BLOCK_ROW_SIZE	(64 * 4)
+#define BLOCK_ROW_MASK	(BLOCK_ROW_SIZE - 1)
+
 layout(local_size_x = LSIZE) in;
 layout(binding = 0, r32ui) uniform uimage2D final_raster;
 
@@ -52,14 +58,21 @@ shared uint s_block_row_tri_counts[BLOCK_ROW_COUNT];
 // we have to somehow estimate max# of samples during categorization?
 
 // TODO: 16-bit (it speeds up by about 1%...)
-shared uint s_row_frag_counts[BIN_SIZE];
-shared uint s_row2_frag_counts[BIN_SIZE / 2];
-shared uint s_block_row_frag_counts[BLOCK_ROW_COUNT];
-shared uint s_block_row_max_frag_counts[BLOCK_ROW_COUNT];
+// TODO: merge into single buffer
+shared uint s_row_frag_counts    [BIN_SIZE * 2];
+shared uint s_row_max_frag_counts[BIN_SIZE];
+
+#define  ROW_FRAG_COUNT(y )	s_row_frag_counts[                   (y )]
+#define ROW2_FRAG_COUNT(y2)	s_row_frag_counts[BIN_SIZE         + (y2)]
+#define ROW4_FRAG_COUNT(y4)	s_row_frag_counts[BIN_SIZE * 3 / 2 + (y4)]
+#define ROW8_FRAG_COUNT(y8)	s_row_frag_counts[BIN_SIZE * 7 / 4 + (y8)]
+
+#define ROW2_MAX_FRAG_COUNT(y2)	s_row_max_frag_counts[                   (y2)]
+#define ROW4_MAX_FRAG_COUNT(y4)	s_row_max_frag_counts[BIN_SIZE / 2     + (y4)]
+#define ROW8_MAX_FRAG_COUNT(y8)	s_row_max_frag_counts[BIN_SIZE * 3 / 4 + (y8)]
 
 shared uint s_bin_quad_count, s_bin_quad_offset;
-
-shared int s_pixel_counts[BIN_SIZE * BLOCK_SIZE];
+shared int s_pixel_counts[BIN_SIZE * MAX_ROWS];
 
 #define SBUFFER_GET_PAIR(i) uvec2(s_buffer[(i) * 2], s_buffer[(i) * 2 + 1])
 #define SBUFFER_SET_PAIR(i, v) { s_buffer[(i) * 2] = v.x; s_buffer[(i) * 2 + 1] = v.y; }
@@ -152,10 +165,14 @@ void sortBuffer(uint N)
 
 void computeRowFragCounts() {
 	if(LIX < BIN_SIZE) {
-		uint value = s_row_frag_counts[LIX];
-		atomicAdd(s_block_row_frag_counts[LIX >> 2], value);
-		atomicMax(s_block_row_max_frag_counts[LIX >> 2], value);
-		atomicAdd(s_row2_frag_counts[LIX >> 1], value);
+		uint value = ROW_FRAG_COUNT(LIX);
+		atomicAdd(ROW2_FRAG_COUNT(LIX >> 1), value);
+		atomicAdd(ROW4_FRAG_COUNT(LIX >> 2), value);
+		atomicAdd(ROW8_FRAG_COUNT(LIX >> 3), value);
+		
+		atomicMax(ROW2_MAX_FRAG_COUNT(LIX >> 1), value);
+		atomicMax(ROW4_MAX_FRAG_COUNT(LIX >> 2), value);
+		atomicMax(ROW8_MAX_FRAG_COUNT(LIX >> 3), value);
 	}
 }
 
@@ -214,7 +231,7 @@ void generateTriGroups(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, int min_by
 			
 			// TODO: use floor/ceil?
 			int imin = int(xmin), imax = int(xmax) - 1;
-			atomicAdd(s_row_frag_counts[by * 4 + y], uint(max(0, imax - imin + 1)));
+			atomicAdd(ROW_FRAG_COUNT(by * 4 + y), uint(max(0, imax - imin + 1)));
 			row_ranges[y >> 1] |= (imin <= imax? (uint(imin) | (uint(imax) << 6)) : 0x3f) << ((y & 1) * 12);
 		}
 
@@ -381,98 +398,99 @@ void generateRows() {
 
 // TODO: optimize
 void loadRowSamples(int by, int y, int ystep) {
-	uint soffset = gl_WorkGroupID.x * WORKGROUP_SCRATCH_SIZE + by * MAX_BLOCK_ROW_TRIS;
-	uint row_count = s_block_row_tri_counts[by];
 	int x = int(LIX & (BIN_SIZE - 1));
 	int local_y = int(LIX >> BIN_SHIFT);
+	if(local_y >= ystep)
+		return;
+	y += local_y;
+	uint pixel_id = (y << 6) | x;
+	by += (y >> 2);
+	y &= 3;
+
+	uint soffset = gl_WorkGroupID.x * WORKGROUP_SCRATCH_SIZE + by * MAX_BLOCK_ROW_TRIS;
+	uint row_count = s_block_row_tri_counts[by];
 	// TODO: share pixels between threads for ystep < 4?
 	
 #ifdef VENDOR_NVIDIA
 	// TODO: WARP_SIZE?
-	if(local_y < ystep) {
-		y += local_y;
-		uint pixel_bit = 1u << (x & 31);
-		uint pixel_id = (y << 6) | x;
-		uint pix_offset = s_pixel_counts[pixel_id] >> 16;
-		vec3 ray_dir = s_bin_ray_dir0 + (by * 4 + y) * frustum.ws_diry + x * frustum.ws_dirx;
+	uint pixel_bit = 1u << (x & 31);
+	uint pix_offset = s_pixel_counts[pixel_id] >> 16;
+	vec3 ray_dir = s_bin_ray_dir0 + (by * 4 + y) * frustum.ws_diry + x * frustum.ws_dirx;
 
-		float prev_depths[5] = {-1.0, -1.0, -1.0, -1.0, -1.0};
-		for(uint i = 0; i < row_count; i += 32) {
-			uint sub_count = min(32, row_count - i);
-			uint sel_tri_bitmask = 0;
-			vec3 sel_normal;
-			uint bitmask, sel_tri_idx = 0;
-			{
-				bool in_range = false;
-				if((LIX & 31) < sub_count) {
-					uvec2 row = g_scratch[soffset + i + (LIX & 31)];
-					sel_tri_idx = (row.x >> 24) | ((row.y & 0xff000000) >> 16);
-					int row_range = int(row[y >> 1] >> ((y & 1) * 12));
-					int minx = row_range & 0x3f, maxx = (row_range >> 6) & 0x3f;
-					uint64_t bmask = (~uint64_t(0) << minx) & (~uint64_t(0) >> 63 - maxx);
-					sel_tri_bitmask = uint(bmask >> (LIX & 32));
-					uint toffset = scratchTriOffset(sel_tri_idx);
-					vec2 val0 = uintBitsToFloat(TRI_SCRATCH(0));
-					vec2 val1 = uintBitsToFloat(TRI_SCRATCH(1));
-					vec3 normal = vec3(val0.x, val0.y, val1.x);
-					float param0 = val1.y; //TODO: mul by normal
-					sel_normal = normal * (1.0 / param0);
-					in_range = sel_tri_bitmask != 0;
-				}
-				bitmask = uint(ballotARB(in_range));
+	float prev_depths[5] = {-1.0, -1.0, -1.0, -1.0, -1.0};
+	for(uint i = 0; i < row_count; i += 32) {
+		uint sub_count = min(32, row_count - i);
+		uint sel_tri_bitmask = 0;
+		vec3 sel_normal;
+		uint bitmask, sel_tri_idx = 0;
+		{
+			bool in_range = false;
+			if((LIX & 31) < sub_count) {
+				uvec2 row = g_scratch[soffset + i + (LIX & 31)];
+				sel_tri_idx = (row.x >> 24) | ((row.y & 0xff000000) >> 16);
+				int row_range = int(row[y >> 1] >> ((y & 1) * 12));
+				int minx = row_range & 0x3f, maxx = (row_range >> 6) & 0x3f;
+				uint64_t bmask = (~uint64_t(0) << minx) & (~uint64_t(0) >> 63 - maxx);
+				sel_tri_bitmask = uint(bmask >> (LIX & 32));
+				uint toffset = scratchTriOffset(sel_tri_idx);
+				vec2 val0 = uintBitsToFloat(TRI_SCRATCH(0));
+				vec2 val1 = uintBitsToFloat(TRI_SCRATCH(1));
+				vec3 normal = vec3(val0.x, val0.y, val1.x);
+				float param0 = val1.y; //TODO: mul by normal
+				sel_normal = normal * (1.0 / param0);
+				in_range = sel_tri_bitmask != 0;
 			}
+			bitmask = uint(ballotARB(in_range));
+		}
 
-			for(uint j = 0; j < sub_count; j++) {
-				int bit_pos = findLSB(bitmask);
-				if(bit_pos == -1)
-					break;
-				j += bit_pos;
-				bitmask >>= bit_pos + 1;
+		for(uint j = 0; j < sub_count; j++) {
+			int bit_pos = findLSB(bitmask);
+			if(bit_pos == -1)
+				break;
+			j += bit_pos;
+			bitmask >>= bit_pos + 1;
 
-				// TODO: bitmask instead of min/max ?
-				uint tri_bitmask = shuffleNV(sel_tri_bitmask, j, 32);
-				uint bin_tri_idx = shuffleNV(sel_tri_idx, j, 32);
-				vec3 normal = shuffleNV(sel_normal, j, 32);
-				if((tri_bitmask & pixel_bit) == 0)
-					continue;
+			// TODO: bitmask instead of min/max ?
+			uint tri_bitmask = shuffleNV(sel_tri_bitmask, j, 32);
+			uint bin_tri_idx = shuffleNV(sel_tri_idx, j, 32);
+			vec3 normal = shuffleNV(sel_normal, j, 32);
+			if((tri_bitmask & pixel_bit) == 0)
+				continue;
 
-				// TODO: sample offset
-				uint value = (pixel_id << 24) | bin_tri_idx;
-				float depth = dot(normal, ray_dir);
+			// TODO: sample offset
+			uint value = (pixel_id << 20) | bin_tri_idx;
+			float depth = dot(normal, ray_dir);
 
 #define SWAP_UINT(v1, v2) { uint temp = v1; v1 = v2; v2 = temp; }
 #define SWAP_FLOAT(v1, v2) { float temp = v1; v1 = v2; v2 = temp; }
 
-				if(depth < prev_depths[0]) {
-					SWAP_UINT(s_buffer[pix_offset - 1], value);
-					SWAP_FLOAT(depth, prev_depths[0]);
-					if(prev_depths[0] < prev_depths[1]) {
-						SWAP_UINT(s_buffer[pix_offset - 2], s_buffer[pix_offset - 1]);
-						SWAP_FLOAT(prev_depths[1], prev_depths[0]);
-						if(prev_depths[1] < prev_depths[2]) {
-							SWAP_UINT(s_buffer[pix_offset - 3], s_buffer[pix_offset - 2]);
-							SWAP_FLOAT(prev_depths[2], prev_depths[1]);
-							if(prev_depths[2] < prev_depths[3]) {
-								SWAP_UINT(s_buffer[pix_offset - 4], s_buffer[pix_offset - 3]);
-								SWAP_FLOAT(prev_depths[3], prev_depths[2]);
-								if(prev_depths[3] < prev_depths[4])
-									s_pixel_counts[pixel_id] = int(~0u);
-							}
+			if(depth < prev_depths[0]) {
+				SWAP_UINT(s_buffer[pix_offset - 1], value);
+				SWAP_FLOAT(depth, prev_depths[0]);
+				if(prev_depths[0] < prev_depths[1]) {
+					SWAP_UINT(s_buffer[pix_offset - 2], s_buffer[pix_offset - 1]);
+					SWAP_FLOAT(prev_depths[1], prev_depths[0]);
+					if(prev_depths[1] < prev_depths[2]) {
+						SWAP_UINT(s_buffer[pix_offset - 3], s_buffer[pix_offset - 2]);
+						SWAP_FLOAT(prev_depths[2], prev_depths[1]);
+						if(prev_depths[2] < prev_depths[3]) {
+							SWAP_UINT(s_buffer[pix_offset - 4], s_buffer[pix_offset - 3]);
+							SWAP_FLOAT(prev_depths[3], prev_depths[2]);
+							if(prev_depths[3] < prev_depths[4])
+								s_pixel_counts[pixel_id] = int(~0u);
 						}
 					}
 				}
-
-				s_buffer[pix_offset++] = value;
-				prev_depths[4] = prev_depths[3];
-				prev_depths[3] = prev_depths[2];
-				prev_depths[2] = prev_depths[1];
-				prev_depths[1] = prev_depths[0];
-				prev_depths[0] = depth;
 			}
+
+			s_buffer[pix_offset++] = value;
+			prev_depths[4] = prev_depths[3];
+			prev_depths[3] = prev_depths[2];
+			prev_depths[2] = prev_depths[1];
+			prev_depths[1] = prev_depths[0];
+			prev_depths[0] = depth;
 		}
 	}
-		
-	barrier();
 #else
 #error write me please
 #endif
@@ -562,6 +580,7 @@ void sortBlockRow(int by)
 	barrier();
 	for(uint i = LIX; i < tri_count; i += LSIZE)
 		g_scratch[soffset + i] = SBUFFER_GET_PAIR(i);
+	barrier();
 }
 
 void binPixels(int by) {
@@ -590,34 +609,37 @@ void binPixels(int by) {
 	}*/
 }
 
-// Computes pixel counts for all rows within block-row
+// Computes pixel counts for all processed rows
 // Computes offsets within rows
-void computeBlockRowPixelCounts(uint by)
+void computeCurrentPixelCounts(uint by)
 {
+	uint sub_block_row = LIX >> (LSHIFT - MAX_BLOCK_ROWS + 1);
+	by += sub_block_row;
 	uint soffset = gl_WorkGroupID.x * WORKGROUP_SCRATCH_SIZE + by * MAX_BLOCK_ROW_TRIS;
 	uint tri_count = s_block_row_tri_counts[by];
 	uint y = LIX & 3, shift = (y & 1) * 12;
+	uint row_offset = (y + sub_block_row * 4) * 64;
 		
-	for(uint i = LIX; i < BIN_SIZE * BLOCK_SIZE; i += LSIZE)
+	for(uint i = LIX; i < BIN_SIZE * MAX_ROWS; i += LSIZE)
 		s_pixel_counts[LIX] = 0;
 	barrier();
 
-	for(uint i = LIX >> 2; i < tri_count; i += LSIZE / 4) {
+	for(uint i = (LIX & BLOCK_ROW_MASK) >> 2; i < tri_count; i += BLOCK_ROW_SIZE / 4) {
 		uint row_range = (g_scratch[soffset + i][y >> 1] >> shift) & 0xfff;
 		if(row_range == 0x3f)
 			continue;
 
 		int minx = int(row_range & 0x3f), maxx = int((row_range >> 6) & 0x3f);
 		// Storing +1 at the beginning and -1 after the end of each row
-		atomicAdd(s_pixel_counts[y * 64 + minx], 1);
+		atomicAdd(s_pixel_counts[row_offset + minx], 1);
 		if(maxx < 63)
-			atomicAdd(s_pixel_counts[y * 64 + maxx + 1], -1);
+			atomicAdd(s_pixel_counts[row_offset + maxx + 1], -1);
 	}
 	barrier();
 
 #ifdef VENDOR_NVIDIA
 	// Computing actual pixel values
-	if(LIX < BIN_SIZE * BLOCK_SIZE) {
+	if(LIX < BIN_SIZE * MAX_ROWS) {
 		int value = s_pixel_counts[LIX], temp;
 		temp = shuffleUpNV(value,  1, 32); if((LIX & 31) >=  1) value += temp;
 		temp = shuffleUpNV(value,  2, 32); if((LIX & 31) >=  2) value += temp;
@@ -627,14 +649,14 @@ void computeBlockRowPixelCounts(uint by)
 		s_pixel_counts[LIX] = value;
 	}
 	barrier();
-	if(LIX < BIN_SIZE * BLOCK_SIZE / 2) {
+	if(LIX < BIN_SIZE * MAX_ROWS / 2) {
 		uint y = LIX >> 5, x = LIX & 31;
 		s_pixel_counts[y * 64 + x + 32] += s_pixel_counts[y * 64 + 31];
 	}
 	barrier();
 
 	// Computing prefix sums for each row (storing in higher 16-bits)
-	if(LIX < BIN_SIZE * BLOCK_SIZE) {
+	if(LIX < BIN_SIZE * MAX_ROWS) {
 		int value = s_pixel_counts[LIX], temp;
 		value += (value << 16);
 		temp = shuffleUpNV(value,  1, 32); if((LIX & 31) >=  1) value += temp & 0xffff0000;
@@ -646,7 +668,7 @@ void computeBlockRowPixelCounts(uint by)
 	}
 	barrier();
 	// Summing prefix sums from two 32-pixel columns
-	if(LIX < BIN_SIZE * BLOCK_SIZE / 2) {
+	if(LIX < BIN_SIZE * MAX_ROWS / 2) {
 		uint y = LIX >> 5, x = LIX & 31;
 		int value = s_pixel_counts[y * 64 + 31];
 		s_pixel_counts[y * 64 + x + 32] += (value & 0xffff0000) + (value << 16);
@@ -739,17 +761,21 @@ void rasterInvalidBlockRow(int by, vec3 color)
 
 void rasterFragmentCounts(int by)
 {
-	for(uint i = LIX; i < BIN_SIZE * BLOCK_SIZE; i += LSIZE) {
+	for(uint i = LIX; i < BIN_SIZE * MAX_ROWS; i += LSIZE) {
 		ivec2 pixel_pos = ivec2(i & (BIN_SIZE - 1), by * 4 + (i >> BIN_SHIFT));
-		uint count = s_pixel_counts[i] & 0xffff;
+		uint count = s_pixel_counts[i] & 0xffff; float scale = 1.0 / 32;
+		//uint count = s_pixel_counts[i] >> 16; float scale = 1.0 / 4096;
 
-		vec4 color = vec4(vec3(float(count) / 32.0), 1.0);
+		vec4 color = vec4(count == 0xffff? vec3(1.0, 0.0, 0.0) : vec3(float(count) * scale), 1.0);
+		color = min(color, vec4(1.0));
 		uint enc_col = encodeRGBA8(color);
 		imageStore(final_raster, s_bin_pos + pixel_pos, uvec4(enc_col, 0, 0, 0));
 	}
 }
 
 void rasterBin(int bin_id) {
+	if(LIX < BIN_SIZE * 2)
+		s_row_frag_counts[LIX] = 0;
 	if(LIX < BIN_SIZE) {
 		if(LIX < BLOCK_ROW_COUNT) {
 			if(LIX == 0) {
@@ -762,12 +788,8 @@ void rasterBin(int bin_id) {
 			}
 
 			s_block_row_tri_counts[LIX] = 0;
-			s_block_row_max_frag_counts[LIX] = 0;
-			s_block_row_frag_counts[LIX] = 0;
 		}
-		s_row_frag_counts[LIX] = 0;
-		if(LIX < BIN_SIZE / 2)
-			s_row2_frag_counts[LIX] = 0;
+		s_row_max_frag_counts[LIX] = 0;
 	}
 	barrier();
 	generateRows();
@@ -775,46 +797,67 @@ void rasterBin(int bin_id) {
 	barrier();
 	computeRowFragCounts();
 
-	for(int by = 0; by < BLOCK_ROW_COUNT; by++) {
+	for(int by = 0; by < BLOCK_ROW_COUNT; by += MAX_BLOCK_ROWS) {
 		barrier();
-		if(s_block_row_tri_counts[by] > MAX_BLOCK_ROW_TRIS) {
-			rasterInvalidBlockRow(by, vec3(0.5, 0.0, 0.0));
-			continue;
-		}
-		if(s_block_row_max_frag_counts[by] > MAX_SAMPLES) {
-			rasterInvalidBlockRow(by, vec3(1.0, 0.0, 0.0));
-			continue;
+		{
+			uint sub_block_row = (LIX & (MAX_BLOCK_ROWS - 1));
+			bool too_many_frags = ROW4_MAX_FRAG_COUNT(by + sub_block_row) > MAX_SAMPLES;
+			if(anyInvocationARB(too_many_frags)) {
+				rasterInvalidBlockRow(by, vec3(1.0, 0.0, 0.0));
+				continue;
+			}
 		}
 
-		computeBlockRowPixelCounts(by);
-		sortBlockRow(by);
+		computeCurrentPixelCounts(by);
+		// TODO: sort multiple rows at once if they fit into sbuffer
+		for(int iby = 0; iby < MAX_BLOCK_ROWS; iby++)
+			sortBlockRow(by + iby);
 		groupMemoryBarrier();
 		barrier();
 
-		uint frag_count01 = s_row2_frag_counts[by * 2 + 0];
-		uint frag_count23 = s_row2_frag_counts[by * 2 + 1];
+#if MAX_BLOCK_ROWS == 2
+		// How many rows can we rasterize in single step?
+		int ystep = 8;
+		if(ROW8_FRAG_COUNT(by >> 1) > MAX_SAMPLES) {
+			uint frag_count0123 = ROW4_FRAG_COUNT(by + 0);
+			uint frag_count4567 = ROW4_FRAG_COUNT(by + 1);
+			ystep = 4;
+			if(max(frag_count0123, frag_count4567) > MAX_SAMPLES) {
+				ystep = 2;
+				uint frag_count01 = ROW2_FRAG_COUNT(by * 2 + 0);
+				uint frag_count23 = ROW2_FRAG_COUNT(by * 2 + 1);
+				uint frag_count45 = ROW2_FRAG_COUNT(by * 2 + 2);
+				uint frag_count67 = ROW2_FRAG_COUNT(by * 2 + 3);
+				if(max(max(frag_count01, frag_count23), max(frag_count45, frag_count67)) > MAX_SAMPLES)
+					ystep = 1;
+			}
+		}
+#elif MAX_BLOCK_ROWS == 1
+		uint frag_count01 = ROW2_FRAG_COUNT(by * 2 + 0);
+		uint frag_count23 = ROW2_FRAG_COUNT(by * 2 + 1);
 
 		// How many rows can we rasterize in single step?
-		int ystep = frag_count01 + frag_count23 <= MAX_SAMPLES? 4 : max(frag_count01, frag_count23) <= MAX_SAMPLES? 2 : 1;
+		int ystep = frag_count01 + frag_count23 <= MAX_SAMPLES? 4 :
+				max(frag_count01, frag_count23) <= MAX_SAMPLES? 2 : 1;
+#else
+#error Please write me
+#endif
 
-		// Accumulating prefix sums from 2 rows
-		if(ystep >= 2) {
-			if(LIX < BIN_SIZE * 2) {
-				uint y = (LIX >> BIN_SHIFT) * 2 + 1, x = LIX & (BIN_SIZE - 1);
-				s_pixel_counts[y * BIN_SIZE + x] += int(s_row_frag_counts[by * 4 + y - 1] << 16);
-			}
+		if(LIX < BIN_SIZE * MAX_ROWS) {
+			uint y = LIX >> BIN_SHIFT, x = LIX & (BIN_SIZE - 1);
+			uint bin_y = by * 4 + y;
+			uint value = 0;
+			if(ystep >= 2 && (y & 1) != 0)
+				value +=  ROW_FRAG_COUNT(bin_y - 1);
+			if(ystep >= 4 && (y & 2) != 0)
+				value += ROW2_FRAG_COUNT(bin_y / 2 - 1);
+			if(MAX_BLOCK_ROWS >= 2 && ystep >= 8 && (y & 4) != 0)
+				value += ROW4_FRAG_COUNT(bin_y / 4 - 1);
+			s_pixel_counts[y * BIN_SIZE + x] += int(value << 16);
 		}
 		barrier();
-		// Accumulating prefix sums from 4 rows
-		if(ystep == 4) {
-			if(LIX < BIN_SIZE * 2) {
-				uint y = 2 + (LIX >> BIN_SHIFT), x = LIX & (BIN_SIZE - 1);
-				s_pixel_counts[y * BIN_SIZE + x] += int(frag_count01 << 16);
-			}
-		}
-		barrier();
 
-		for(int y = 0; y < 4; y += ystep) {
+		for(int y = 0; y < MAX_ROWS; y += ystep) {
 			barrier();
 			if(LIX == 0) {
 				uint last_pixel = s_pixel_counts[(y + ystep - 1) * 64 + 63];
@@ -826,12 +869,19 @@ void rasterBin(int bin_id) {
 			barrier();
 			//sortBuffer(s_sample_count);
 			barrier();
+
 			// TODO: reorder samples to increase coherency during shading
+			// - najpierw przy generacji sampli w kolejności pikselowej, dla każdego sampla zapisujemy też indeks
+			//   w kolejności trójkątówej
+			// - odwracamy kolejność, zachowując indeksy pikselowe
+			// - cieniujemy i zapisujemy od razu pod indeks pikselowy
+			//
+			// - indeksy pikselowe musimy sobie zachować; dla 8 indeksów 11-bitowych wystarczą 3 uinty
 
 			// Shading samples & storing them ordered by pixel pos
 			for(uint i = LIX; i < s_sample_count; i += LSIZE) {
 				uint value = s_buffer[i];
-				uint pixel_id = value >> 24;
+				uint pixel_id = value >> 20;
 				uint bin_tri_idx = value & 0xffff;
 				ivec2 bin_pixel_pos = ivec2(pixel_id & (BIN_SIZE - 1), (by * 4) + (pixel_id >> 6));
 				s_buffer[i] = shadeSample(bin_pixel_pos, bin_tri_idx);

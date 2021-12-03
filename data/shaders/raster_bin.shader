@@ -396,7 +396,7 @@ void loadRowSamples(int by, int y, int ystep) {
 		uint pix_offset = s_pixel_counts[pixel_id] >> 16;
 		vec3 ray_dir = s_bin_ray_dir0 + (by * 4 + y) * frustum.ws_diry + x * frustum.ws_dirx;
 
-		float prev_depths[4] = {-1.0, -1.0, -1.0, -1.0};
+		float prev_depths[5] = {-1.0, -1.0, -1.0, -1.0, -1.0};
 		for(uint i = 0; i < row_count; i += 32) {
 			uint sub_count = min(32, row_count - i);
 			uint sel_tri_bitmask = 0;
@@ -452,13 +452,18 @@ void loadRowSamples(int by, int y, int ystep) {
 						if(prev_depths[1] < prev_depths[2]) {
 							SWAP_UINT(s_buffer[pix_offset - 3], s_buffer[pix_offset - 2]);
 							SWAP_FLOAT(prev_depths[2], prev_depths[1]);
-							if(prev_depths[2] < prev_depths[3])
-								s_pixel_counts[pixel_id] = int(~0u);
+							if(prev_depths[2] < prev_depths[3]) {
+								SWAP_UINT(s_buffer[pix_offset - 4], s_buffer[pix_offset - 3]);
+								SWAP_FLOAT(prev_depths[3], prev_depths[2]);
+								if(prev_depths[3] < prev_depths[4])
+									s_pixel_counts[pixel_id] = int(~0u);
+							}
 						}
 					}
 				}
 
 				s_buffer[pix_offset++] = value;
+				prev_depths[4] = prev_depths[3];
 				prev_depths[3] = prev_depths[2];
 				prev_depths[2] = prev_depths[1];
 				prev_depths[1] = prev_depths[0];

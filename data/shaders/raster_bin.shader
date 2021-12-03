@@ -31,11 +31,11 @@ layout(binding = 1) uniform sampler2D transparent_texture;
 #define WORKGROUP_SCRATCH_SIZE	(64 * 1024)
 #define WORKGROUP_SCRATCH_SHIFT	16
 
-#define SAMPLES_PER_THREAD		4
+#define SAMPLES_PER_THREAD		8
 #define MAX_SAMPLES				(LSIZE * SAMPLES_PER_THREAD)
 
 // TODO: there is no need to check that, no of input tris is <= this
-#define MAX_BLOCK_ROW_TRIS		MAX_SAMPLES
+#define MAX_BLOCK_ROW_TRIS		1024
 #define MAX_SCRATCH_TRIS		1024
 #define MAX_SCRATCH_TRIS_SHIFT  10
 
@@ -61,8 +61,11 @@ shared uint s_bin_quad_count, s_bin_quad_offset;
 
 shared int s_pixel_counts[BIN_SIZE * BLOCK_SIZE];
 
+#define SBUFFER_GET_PAIR(i) uvec2(s_buffer[(i) * 2], s_buffer[(i) * 2 + 1])
+#define SBUFFER_SET_PAIR(i, v) { s_buffer[(i) * 2] = v.x; s_buffer[(i) * 2 + 1] = v.y; }
+
 shared int s_sample_count;
-shared uvec2 s_buffer[MAX_SAMPLES + 1];
+shared uint s_buffer[MAX_SAMPLES + 1];
 
 #ifdef VENDOR_NVIDIA
 uvec2 swap(uvec2 x, int mask, uint dir)
@@ -86,12 +89,13 @@ void sortBuffer(uint N)
 {
 	uint TN = max(32, (N & (N - 1)) == 0? N : (2 << findMSB(N)));
 	for(uint i = LIX + N; i < TN; i += LSIZE)
-		s_buffer[i].x = 0xffffffff;
+		s_buffer[i * 2] = 0xffffffff;
 	barrier();
+
 
 #ifdef VENDOR_NVIDIA
 	for(uint i = LIX; i < TN; i += LSIZE) {
-		uvec2 value = s_buffer[i];
+		uvec2 value = SBUFFER_GET_PAIR(i);
 		value = swap(value, 0x01, xorBits(LIX, 1, 0)); // K = 2
 		value = swap(value, 0x02, xorBits(LIX, 2, 1)); // K = 4
 		value = swap(value, 0x01, xorBits(LIX, 2, 0));
@@ -107,7 +111,7 @@ void sortBuffer(uint N)
 		value = swap(value, 0x04, xorBits(LIX, 5, 2));
 		value = swap(value, 0x02, xorBits(LIX, 5, 1));
 		value = swap(value, 0x01, xorBits(LIX, 5, 0));
-		s_buffer[i] = value;
+		SBUFFER_SET_PAIR(i, value);
 	}
 	barrier();
 	int start_k = 64, end_j = 32;
@@ -119,11 +123,11 @@ void sortBuffer(uint N)
 		for(uint j = k >> 1; j >= end_j; j = j >> 1) {
 			for(uint i = LIX; i < TN; i += LSIZE * 2) {
 				uint idx = (i & j) != 0? i + LSIZE - j : i;
-				uvec2 lvalue = s_buffer[idx];
-				uvec2 rvalue = s_buffer[idx + j];
+				uvec2 lvalue = SBUFFER_GET_PAIR(idx);
+				uvec2 rvalue = SBUFFER_GET_PAIR(idx + j);
 				if( ((idx & k) != 0) == (lvalue.x < rvalue.x) ) {
-					s_buffer[idx] = rvalue;
-					s_buffer[idx + j] = lvalue;
+					SBUFFER_SET_PAIR(idx, rvalue);
+					SBUFFER_SET_PAIR(idx + j, lvalue);
 				}
 			}
 			barrier();
@@ -131,13 +135,13 @@ void sortBuffer(uint N)
 #ifdef VENDOR_NVIDIA
 		for(uint i = LIX; i < TN; i += LSIZE) {
 			uint bit = (i & k) == 0? 0 : 1;
-			uvec2 value = s_buffer[i];
+			uvec2 value = SBUFFER_GET_PAIR(i);
 			value = swap(value, 0x10, bit ^ bitExtract(LIX, 4));
 			value = swap(value, 0x08, bit ^ bitExtract(LIX, 3));
 			value = swap(value, 0x04, bit ^ bitExtract(LIX, 2));
 			value = swap(value, 0x02, bit ^ bitExtract(LIX, 1));
 			value = swap(value, 0x01, bit ^ bitExtract(LIX, 0));
-			s_buffer[i] = value;
+			SBUFFER_SET_PAIR(i, value);
 		}
 		barrier();
 #endif
@@ -440,13 +444,13 @@ void loadRowSamples(int by, int y, int ystep) {
 #define SWAP_FLOAT(v1, v2) { float temp = v1; v1 = v2; v2 = temp; }
 
 				if(depth < prev_depths[0]) {
-					SWAP_UINT(s_buffer[pix_offset - 1].y, value);
+					SWAP_UINT(s_buffer[pix_offset - 1], value);
 					SWAP_FLOAT(depth, prev_depths[0]);
 					if(prev_depths[0] < prev_depths[1]) {
-						SWAP_UINT(s_buffer[pix_offset - 2].y, s_buffer[pix_offset - 1].y);
+						SWAP_UINT(s_buffer[pix_offset - 2], s_buffer[pix_offset - 1]);
 						SWAP_FLOAT(prev_depths[1], prev_depths[0]);
 						if(prev_depths[1] < prev_depths[2]) {
-							SWAP_UINT(s_buffer[pix_offset - 3].y, s_buffer[pix_offset - 2].y);
+							SWAP_UINT(s_buffer[pix_offset - 3], s_buffer[pix_offset - 2]);
 							SWAP_FLOAT(prev_depths[2], prev_depths[1]);
 							if(prev_depths[2] < prev_depths[3])
 								s_pixel_counts[pixel_id] = int(~0u);
@@ -454,7 +458,7 @@ void loadRowSamples(int by, int y, int ystep) {
 					}
 				}
 
-				s_buffer[pix_offset++].y = value;
+				s_buffer[pix_offset++] = value;
 				prev_depths[3] = prev_depths[2];
 				prev_depths[2] = prev_depths[1];
 				prev_depths[1] = prev_depths[0];
@@ -469,67 +473,7 @@ void loadRowSamples(int by, int y, int ystep) {
 #endif
 }
 
-// TODO: This is slow, because it is not adaptive; if there is almost nothing to sort, it still does
-// the same amount of work...
-void postSortSamples(int by, int y, int ystep) {
-	int sample_count = s_sample_count;
-	int sample_count32 = ((sample_count + 31) / 32) * 32;
-	if(LIX < sample_count32 - sample_count)
-		s_buffer[sample_count + LIX].x = 0xffffffff;
-	barrier();
-
-#define SWAP(v0, v1) { uvec2 temp = v0; v0 = v1; v1 = temp; }
-
-	for(uint i = LIX; i < sample_count32; i += LSIZE) {
-		uvec2 value = s_buffer[i];
-		value = swap(value, 0x01, xorBits(LIX, 1, 0)); // K = 2
-		value = swap(value, 0x02, xorBits(LIX, 2, 1)); // K = 4
-		value = swap(value, 0x01, xorBits(LIX, 2, 0));
-		value = swap(value, 0x04, xorBits(LIX, 3, 2)); // K = 8
-		value = swap(value, 0x02, xorBits(LIX, 3, 1));
-		value = swap(value, 0x01, xorBits(LIX, 3, 0));
-		value = swap(value, 0x08, LIX & 8); // K = 16
-		value = swap(value, 0x04, LIX & 4);
-		value = swap(value, 0x02, LIX & 2);
-		value = swap(value, 0x01, LIX & 1);
-		s_buffer[i] = value;
-	}
-	
-	barrier();
-
-	uint num_16_pairs = max(0, sample_count32 / 16 - 1);
-	for(uint i = LIX; i < num_16_pairs; i += LSIZE) {
-		uint cur_offset = i * 16 + 12;
-		uvec2 lvalues[4], rvalues[4];
-		for(int k = 0; k < 4; k++) {
-			lvalues[k] = s_buffer[cur_offset + k];
-			rvalues[k] = s_buffer[cur_offset + k + 4];
-		}
-		int lpos = 0, rpos = 0;
-		for(int j = 0; j < 4; j++)
-			s_buffer[cur_offset + j] = lvalues[lpos].x < rvalues[rpos].x?
-									   lvalues[lpos++] : rvalues[rpos++];
-
-		// TODO: unroll ?
-		for(int j = 4; j < 8; j++) {
-			uvec2 cur_value;
-			if((lpos < 4 || rpos >= 4) && lvalues[lpos].x < rvalues[rpos].x)
-				cur_value = lvalues[lpos++];
-			else
-				cur_value = rvalues[rpos++];
-			s_buffer[cur_offset + j] = cur_value;
-		}
-	}
-
-#undef SWAP
-	barrier();
-	for(uint i = LIX + 1; i < sample_count; i += LSIZE) {
-		uint cur_key = s_buffer[i].x;
-		if(cur_key < s_buffer[i - 1].x)
-			s_pixel_counts[cur_key >> 24] = int(~0u);
-	}
-}
-
+// TODO: with s_buffer based on uints, reduce somehow became slower... why?
 void reduceRowSamples(int by, int y, int ystep)
 {
 	// TODO: optimize
@@ -551,7 +495,7 @@ void reduceRowSamples(int by, int y, int ystep)
 		}
 		else {
 			for(int i = 0; i < num_samples; i++) {
-				vec4 cur_color = decodeRGBA8(s_buffer[sample_offset + i].x);
+				vec4 cur_color = decodeRGBA8(s_buffer[sample_offset + i]);
 				float cur_neg_alpha = 1.0 - cur_color.a;
 				color.rgb = color.rgb * cur_neg_alpha + cur_color.rgb * cur_color.a;
 				neg_alpha *= cur_neg_alpha;
@@ -601,16 +545,18 @@ void sortBlockRow(int by)
 		float ray_pos = param0 / dot(normal, ray_dir);
 		float depth = float(0x7fffffff) / (1.0 + max(0.0, ray_pos));
 
-		s_buffer[i] = uvec2(uint(depth), uint(i));
+		SBUFFER_SET_PAIR(i, uvec2(uint(depth), uint(i)));
 	}
 	barrier();
 	sortBuffer(tri_count);
 	barrier();
-	for(uint i = LIX; i < tri_count; i += LSIZE)
-		s_buffer[i] = g_scratch[soffset + s_buffer[i].y];
+	for(uint i = LIX; i < tri_count; i += LSIZE) {
+		uint idx = s_buffer[i * 2 + 1];
+		SBUFFER_SET_PAIR(i, g_scratch[soffset + idx]);
+	}
 	barrier();
 	for(uint i = LIX; i < tri_count; i += LSIZE)
-		g_scratch[soffset + i] = s_buffer[i];
+		g_scratch[soffset + i] = SBUFFER_GET_PAIR(i);
 }
 
 void binPixels(int by) {
@@ -873,19 +819,17 @@ void rasterBin(int bin_id) {
 			barrier();
 			loadRowSamples(by, y, ystep);
 			barrier();
-			//postSortSamples(by, y, ystep);
 			//sortBuffer(s_sample_count);
 			barrier();
 			// TODO: reorder samples to increase coherency during shading
 
 			// Shading samples & storing them ordered by pixel pos
 			for(uint i = LIX; i < s_sample_count; i += LSIZE) {
-				uvec2 value = s_buffer[i];
-
-				uint pixel_id = value.y >> 24;
-				uint bin_tri_idx = value.y & 0xffff;
+				uint value = s_buffer[i];
+				uint pixel_id = value >> 24;
+				uint bin_tri_idx = value & 0xffff;
 				ivec2 bin_pixel_pos = ivec2(pixel_id & (BIN_SIZE - 1), (by * 4) + (pixel_id >> 6));
-				s_buffer[i].x = shadeSample(bin_pixel_pos, bin_tri_idx);
+				s_buffer[i] = shadeSample(bin_pixel_pos, bin_tri_idx);
 			}
 			barrier();
 			reduceRowSamples(by, y, ystep);

@@ -105,7 +105,6 @@ void sortBuffer(uint N)
 		s_buffer[i * 2] = 0xffffffff;
 	barrier();
 
-
 #ifdef VENDOR_NVIDIA
 	for(uint i = LIX; i < TN; i += LSIZE) {
 		uvec2 value = SBUFFER_GET_PAIR(i);
@@ -396,6 +395,9 @@ void generateRows() {
 	}
 }
 
+shared uint s_group_bitmasks[LSIZE];
+shared uint s_group_counts[LSIZE / 16];
+
 // TODO: optimize
 void loadRowSamples(int by, int y, int ystep) {
 	int x = int(LIX & (BIN_SIZE - 1));
@@ -411,13 +413,13 @@ void loadRowSamples(int by, int y, int ystep) {
 	uint row_count = s_block_row_tri_counts[by];
 	// TODO: share pixels between threads for ystep < 4?
 	
-#ifdef VENDOR_NVIDIA
 	// TODO: WARP_SIZE?
 	uint pixel_bit = 1u << (x & 31);
 	uint pix_offset = s_pixel_counts[pixel_id] >> 16;
 	vec3 ray_dir = s_bin_ray_dir0 + (by * 4 + y) * frustum.ws_diry + x * frustum.ws_dirx;
 
 	float prev_depths[5] = {-1.0, -1.0, -1.0, -1.0, -1.0};
+#ifdef VENDOR_NVIDIA
 	for(uint i = 0; i < row_count; i += 32) {
 		uint sub_count = min(32, row_count - i);
 		uint sel_tri_bitmask = 0;
@@ -457,8 +459,60 @@ void loadRowSamples(int by, int y, int ystep) {
 			if((tri_bitmask & pixel_bit) == 0)
 				continue;
 
+#else
+	/*
+	for(uint i = 0; i < row_count; i += 16) {
+		uint sub_count = min(16, row_count - i);
+		uint group_id = LIX >> 4;
+
+		if((LIX & 15) == 0)
+			s_group_counts[LIX >> 4] = 0;
+		if((LIX & 15) < sub_count) {
+			uvec2 row = g_scratch[soffset + i + (LIX & 15)];
+			uint tri_idx = (row.x >> 24) | ((row.y & 0xff000000) >> 16);
+			int row_range = int(row[y >> 1] >> ((y & 1) * 12));
+			int minx = row_range & 0x3f, maxx = (row_range >> 6) & 0x3f;
+			minx = max(0, minx - int(LIX & 48)); maxx = min(maxx - int(LIX & 48), 15);
+			uint tri_bitmask = (0xffff << minx) & (0xffff >> (15 - maxx));
+			if(tri_bitmask != 0)
+				s_group_bitmasks[group_id * 16 + atomicAdd(s_group_counts[group_id], 1)] = tri_idx | (tri_bitmask << 16);
+		}
+
+		for(uint j = 0; j < s_group_counts[group_id]; j++) {
+			uint bitmask = s_group_bitmasks[group_id * 16 + j];
+			uint tri_idx = bitmask & 0xffff;
+			bitmask >>= 16;
+			if( (bitmask & (1 << (LIX & 15))) == 0)
+				continue;
+				
+			// TODO: encode toffset in bitmask
+			uint toffset = scratchTriOffset(tri_idx);
+			vec2 val0 = uintBitsToFloat(TRI_SCRATCH(0));
+			vec2 val1 = uintBitsToFloat(TRI_SCRATCH(1));
+			vec3 normal = vec3(val0.x, val0.y, val1.x);
+			float param0 = val1.y; //TODO: mul by normal
+			normal *= 1.0 / param0;*/
+
+	{
+		for(uint i = 0; i < row_count; i ++) {
+			uvec2 row = g_scratch[soffset + i];
+			uint tri_idx = (row.x >> 24) | ((row.y & 0xff000000) >> 16);
+			int row_range = int(row[y >> 1] >> ((y & 1) * 12));
+			int minx = row_range & 0x3f, maxx = (row_range >> 6) & 0x3f;
+			if(x < minx || x > maxx)
+				continue;
+					
+			// TODO: encode toffset in bitmask
+			uint toffset = scratchTriOffset(tri_idx);
+			vec2 val0 = uintBitsToFloat(TRI_SCRATCH(0));
+			vec2 val1 = uintBitsToFloat(TRI_SCRATCH(1));
+			vec3 normal = vec3(val0.x, val0.y, val1.x);
+			float param0 = val1.y; //TODO: mul by normal
+			normal *= 1.0 / param0;
+#endif
+
 			// TODO: sample offset
-			uint value = (pixel_id << 20) | bin_tri_idx;
+			uint value = (pixel_id << 20) | tri_idx;
 			float depth = dot(normal, ray_dir);
 
 #define SWAP_UINT(v1, v2) { uint temp = v1; v1 = v2; v2 = temp; }
@@ -491,9 +545,6 @@ void loadRowSamples(int by, int y, int ystep) {
 			prev_depths[0] = depth;
 		}
 	}
-#else
-#error write me please
-#endif
 }
 
 // TODO: with s_buffer based on uints, reduce somehow became slower... why?
@@ -637,9 +688,9 @@ void computeCurrentPixelCounts(uint by)
 	}
 	barrier();
 
-#ifdef VENDOR_NVIDIA
 	// Computing actual pixel values
-	if(LIX < BIN_SIZE * MAX_ROWS) {
+	{
+#ifdef VENDOR_NVIDIA
 		int value = s_pixel_counts[LIX], temp;
 		temp = shuffleUpNV(value,  1, 32); if((LIX & 31) >=  1) value += temp;
 		temp = shuffleUpNV(value,  2, 32); if((LIX & 31) >=  2) value += temp;
@@ -647,6 +698,19 @@ void computeCurrentPixelCounts(uint by)
 		temp = shuffleUpNV(value,  8, 32); if((LIX & 31) >=  8) value += temp;
 		temp = shuffleUpNV(value, 16, 32); if((LIX & 31) >= 16) value += temp;
 		s_pixel_counts[LIX] = value;
+#else
+		if((LIX & 15) >=  1) s_pixel_counts[LIX] += s_pixel_counts[LIX - 1];
+		if((LIX & 15) >=  2) s_pixel_counts[LIX] += s_pixel_counts[LIX - 2];
+		if((LIX & 15) >=  4) s_pixel_counts[LIX] += s_pixel_counts[LIX - 4];
+		if((LIX & 15) >=  8) s_pixel_counts[LIX] += s_pixel_counts[LIX - 8];
+		barrier();
+		if(LIX < BIN_SIZE * MAX_ROWS / 2) {
+			uint y = LIX >> 5, x = LIX & 31;
+			x = x < 16? x + 48 : x;
+			s_pixel_counts[y * 64 + x] += s_pixel_counts[y * 64 + (x & ~15) - 1];
+		}
+		barrier();
+#endif
 	}
 	barrier();
 	if(LIX < BIN_SIZE * MAX_ROWS / 2) {
@@ -656,7 +720,8 @@ void computeCurrentPixelCounts(uint by)
 	barrier();
 
 	// Computing prefix sums for each row (storing in higher 16-bits)
-	if(LIX < BIN_SIZE * MAX_ROWS) {
+	{
+#ifdef VENDOR_NVIDIA
 		int value = s_pixel_counts[LIX], temp;
 		value += (value << 16);
 		temp = shuffleUpNV(value,  1, 32); if((LIX & 31) >=  1) value += temp & 0xffff0000;
@@ -665,6 +730,22 @@ void computeCurrentPixelCounts(uint by)
 		temp = shuffleUpNV(value,  8, 32); if((LIX & 31) >=  8) value += temp & 0xffff0000;
 		temp = shuffleUpNV(value, 16, 32); if((LIX & 31) >= 16) value += temp & 0xffff0000;
 		s_pixel_counts[LIX] = value - (value << 16);
+#else
+		s_pixel_counts[LIX] += s_pixel_counts[LIX] << 16;
+		if((LIX & 15) >=  1) s_pixel_counts[LIX] += s_pixel_counts[LIX - 1] & 0xffff0000;
+		if((LIX & 15) >=  2) s_pixel_counts[LIX] += s_pixel_counts[LIX - 2] & 0xffff0000;
+		if((LIX & 15) >=  4) s_pixel_counts[LIX] += s_pixel_counts[LIX - 4] & 0xffff0000;
+		if((LIX & 15) >=  8) s_pixel_counts[LIX] += s_pixel_counts[LIX - 8] & 0xffff0000;
+		barrier();
+		if(LIX < BIN_SIZE * MAX_ROWS / 2) {
+			uint y = LIX >> 5, x = LIX & 31;
+			x = x < 16? x + 48 : x;
+			s_pixel_counts[y * 64 + x] += s_pixel_counts[y * 64 + (x & ~15) - 1] & 0xffff0000;
+		}
+		barrier();
+		s_pixel_counts[LIX] -= s_pixel_counts[LIX] << 16;
+		barrier();
+#endif
 	}
 	barrier();
 	// Summing prefix sums from two 32-pixel columns
@@ -673,9 +754,6 @@ void computeCurrentPixelCounts(uint by)
 		int value = s_pixel_counts[y * 64 + 31];
 		s_pixel_counts[y * 64 + x + 32] += (value & 0xffff0000) + (value << 16);
 	}
-#else
-#error write me please
-#endif
 }
 
 // Shading 2 samples at once didn't help:
@@ -763,8 +841,9 @@ void rasterFragmentCounts(int by)
 {
 	for(uint i = LIX; i < BIN_SIZE * MAX_ROWS; i += LSIZE) {
 		ivec2 pixel_pos = ivec2(i & (BIN_SIZE - 1), by * 4 + (i >> BIN_SHIFT));
-		uint count = s_pixel_counts[i] & 0xffff; float scale = 1.0 / 32;
-		//uint count = s_pixel_counts[i] >> 16; float scale = 1.0 / 4096;
+		//uint count = s_pixel_counts[i] & 0xffff; float scale = 1.0 / 32;
+		uint count = s_pixel_counts[i] >> 16; float scale = 1.0 / 4096;
+		//uint count = ROW_FRAG_COUNT(pixel_pos.y); float scale = 1.0 / 4096;
 
 		vec4 color = vec4(count == 0xffff? vec3(1.0, 0.0, 0.0) : vec3(float(count) * scale), 1.0);
 		color = min(color, vec4(1.0));

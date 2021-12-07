@@ -99,7 +99,11 @@ Ex<Program> Program::makeCompute(Str name, string defs, Opts opts) {
 	if(gl_info->features & GlFeature::shader_ballot)
 		header << "#extension GL_ARB_shader_ballot : enable\n#define BALLOT_ENABLED\n";
 	if(gl_info->vendor == GlVendor::nvidia)
-		header << "#define VENDOR_NVIDIA\n";
+		header << "#define VENDOR_NVIDIA\n#define WARP_SIZE 32\n";
+	else if(gl_info->vendor == GlVendor::intel)
+		header << "#define VENDOR_INTEL\n#define WARP_SIZE 16\n";
+	else if(gl_info->vendor == GlVendor::amd)
+		header << "#define VENDOR_AMD\n#define WARP_SIZE 64\n";
 	if(!defs.empty())
 		header << defs << "\n";
 	header << shaderDebugDefs(opts & ProgramOpt::debug);

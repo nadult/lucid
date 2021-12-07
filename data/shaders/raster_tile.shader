@@ -312,7 +312,7 @@ void computePixelOffsets()
 		s_pixel_counts[LIX + 32] = value1 - (value1 << 16) + half_offset;
 	}
 #else
-#error write me please
+//#error write me please
 #endif
 }
 

@@ -1486,14 +1486,13 @@ void LucidRenderer::rasterizeFinal(const Context &ctx) {
 	if(auto nrm_vb = vbuffers[3])
 		nrm_vb->bindIndexAs(5, BufferType::shader_storage);
 
-	m_bin_counters->bindIndex(6);
-	m_tile_counters->bindIndex(7);
-	m_block_counts->bindIndex(8);
-	m_block_offsets->bindIndex(9);
+	m_tile_counters->bindIndex(6);
+	m_block_counts->bindIndex(7);
+	m_block_offsets->bindIndex(8);
 
-	m_tile_tris->bindIndex(10);
-	m_block_tris->bindIndex(11);
-	m_uv_rects->bindIndex(12);
+	m_tile_tris->bindIndex(9);
+	m_block_tris->bindIndex(10);
+	m_uv_rects->bindIndex(11);
 
 	m_raster_image->bindImage(0, AccessMode::write_only);
 	final_raster_program.use();

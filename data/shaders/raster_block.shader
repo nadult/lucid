@@ -316,7 +316,7 @@ void sumPixelCounts()
 		s_pixel_counts[row_id][col_id] = value;
 	}
 #else
-#error write me please
+//#error write me please
 #endif
 }
 

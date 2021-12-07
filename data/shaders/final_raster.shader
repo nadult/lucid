@@ -36,14 +36,13 @@ layout(std430, binding = 3) readonly buffer buf3_ { vec2 g_tex_coords[]; };
 layout(std430, binding = 4) readonly buffer buf4_ { uint g_colors[]; };
 layout(std430, binding = 5) readonly buffer buf5_ { uint g_normals[]; };
 
-layout(std430, binding = 6) buffer buf6_ { BinCounters g_bins; };
-layout(std430, binding = 7) buffer buf7_ { TileCounters g_tiles; };
-layout(std430, binding = 8) buffer buf8_ { uint g_block_counts[]; }; // TODO: 16-bits?
-layout(std430, binding = 9) buffer buf9_ { uint g_block_offsets[]; };
+layout(std430, binding = 6) buffer buf6_ { TileCounters g_tiles; };
+layout(std430, binding = 7) buffer buf7_ { uint g_block_counts[]; }; // TODO: 16-bits?
+layout(std430, binding = 8) buffer buf8_ { uint g_block_offsets[]; };
 
-layout(std430, binding = 10) readonly buffer buf10_ { uint g_tile_tris[]; };
-layout(std430, binding = 11) readonly buffer buf11_ { uint g_block_tris[]; };
-layout(std430, binding = 12) readonly buffer buf12_ { vec4 g_uv_rects[]; };
+layout(std430, binding = 9) readonly buffer buf9_ { uint g_tile_tris[]; };
+layout(std430, binding = 10) readonly buffer buf10_ { uint g_block_tris[]; };
+layout(std430, binding = 11) readonly buffer buf11_ { vec4 g_uv_rects[]; };
 
 shared int s_tile_tri_counts [TILES_PER_BIN];
 shared int s_tile_tri_offsets[TILES_PER_BIN];

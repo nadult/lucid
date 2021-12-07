@@ -1,6 +1,10 @@
  
  *Skupiamy się na wydajnym renderingu przezroczystości; Chcemy szybko zamknąć ten temat*
-
+ 
+ czy jest sens bawic sie w vulkan teraz? docelowo i tak musoalbym to chyba zrobic, zeby
+ bylo bardziej portowalne?
+ - może lepiej nie, zrobmy najpierw cos dzialajacego i nie inwestujmy w to za duzo czasu!
+ 
 *Simple 1280x1024 (full alpha)*
              normal  msaa4x  msaa16x
 	 dragon:   900    1010    1100
@@ -54,6 +58,7 @@
 -----------------------------------------------------------------------------------------
 
 * *TODO w narwi: SPIRV*
+* obawiam się, że trzebaby zrobić vulkan, zeby dzialalo na haswellu...
 
 * *Zabij proces jeśli klatka zajmuje więcej niż 1sec*
 

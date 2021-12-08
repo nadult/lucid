@@ -454,7 +454,7 @@ void loadRowSamples(int by, int y, int ystep) {
 
 			// TODO: bitmask instead of min/max ?
 			uint tri_bitmask = shuffleNV(sel_tri_bitmask, j, 32);
-			uint bin_tri_idx = shuffleNV(sel_tri_idx, j, 32);
+			uint tri_idx = shuffleNV(sel_tri_idx, j, 32);
 			vec3 normal = shuffleNV(sel_normal, j, 32);
 			if((tri_bitmask & pixel_bit) == 0)
 				continue;

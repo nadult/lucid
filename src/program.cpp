@@ -9,6 +9,41 @@
 #include <fwk/math/ray.h>
 #include <fwk/sys/on_fail.h>
 
+/*
+#include <shaderc/shaderc.hpp>
+
+static const char *shaderc_compilation_status_names[] = {
+	"success",			"invalid_stage",		"compilation_error",
+	"internal_error",	"null_result_object",	"invalid_assembly",
+	"validation_error", "transformation_error", "configuration_error",
+};
+
+Ex<> compileSpirV(ZStr source, Str name) {
+	shaderc::Compiler compiler;
+	shaderc::CompileOptions options;
+	options.SetOptimizationLevel(shaderc_optimization_level_performance);
+
+	auto result = compiler.CompileGlslToSpv(source.c_str(), source.size(),
+											shaderc_shader_kind::shaderc_glsl_compute_shader,
+											"compute", options);
+	auto status = result.GetCompilationStatus();
+	if(status != shaderc_compilation_status_success) {
+		const char *cs_name = status >= 0 && status < arraySize(shaderc_compilation_status_names)
+								  ? shaderc_compilation_status_names[status]
+								  : "unknown";
+
+		saveFile(format("%.compute", name), source).check();
+
+		TextFormatter error;
+		error("Spir-v compilation failed: %\nCompilation status: %\n%\n", name, cs_name,
+			  result.GetErrorMessage());
+		return ERROR("%", error.c_str());
+	}
+
+	vector<u32> spirv_code(result.cbegin(), result.cend());
+	return saveFile(format("%.spirv", name), cspan(spirv_code).reinterpret<i8>());
+}*/
+
 static Dynamic<ShaderCombiner> s_combiner;
 
 // TODO: move ti libfwk

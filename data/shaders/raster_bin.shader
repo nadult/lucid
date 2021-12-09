@@ -37,7 +37,7 @@ layout(binding = 1) uniform sampler2D transparent_texture;
 #define WORKGROUP_SCRATCH_SIZE	(64 * 1024)
 #define WORKGROUP_SCRATCH_SHIFT	16
 
-#define SAMPLES_PER_THREAD		8
+#define SAMPLES_PER_THREAD		12
 #define MAX_SAMPLES				(LSIZE * SAMPLES_PER_THREAD)
 
 // TODO: there is no need to check that, no of input tris is <= this
@@ -421,7 +421,7 @@ void loadRowSamples(int by, int y, int ystep) {
 		uint sub_count = min(32, row_count - i);
 		uint sel_tri_bitmask = 0;
 		vec3 sel_normal;
-		uint bitmask, sel_tri_idx = 0;
+		uint tris_bitmask, sel_tri_idx = 0;
 		{
 			bool in_range = false;
 			if((LIX & 31) < sub_count) {
@@ -439,23 +439,18 @@ void loadRowSamples(int by, int y, int ystep) {
 				sel_normal = normal * (1.0 / param0);
 				in_range = sel_tri_bitmask != 0;
 			}
-			bitmask = uint(ballotARB(in_range));
+			tris_bitmask = uint(ballotARB(in_range));
 		}
 
-		for(uint j = 0; j < sub_count; j++) {
-			int bit_pos = findLSB(bitmask);
-			if(bit_pos == -1)
-				break;
-			j += bit_pos;
-			bitmask >>= bit_pos + 1;
-
-			// TODO: bitmask instead of min/max ?
+		int j = findLSB(tris_bitmask);
+		while(j != -1) {
 			uint tri_bitmask = shuffleNV(sel_tri_bitmask, j, 32);
 			uint tri_idx = shuffleNV(sel_tri_idx, j, 32);
 			vec3 normal = shuffleNV(sel_normal, j, 32);
+			tris_bitmask &= ~(1 << j);
+			j = findLSB(tris_bitmask);
 			if((tri_bitmask & pixel_bit) == 0)
 				continue;
-
 #else
 	{
 		for(uint i = 0; i < row_count; i ++) {

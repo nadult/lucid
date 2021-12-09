@@ -78,7 +78,6 @@
   - 10 bitów na indeks trójkąta, 16 bitów na offset rzędów danego trójkąta, 4 bity na ilość
 	rzędów (albo 4-ek); offset może wskazywać od razu na docelową grupę rzędów (4-kę)
 
-
   A może zwiększyć liczbę wątków do 512? i przetwarzać na raz 64x8 pikseli?
   Co nam to da? docelowo byśmy chcieli 16x16, a mozę nawet 8x8... żeby sortowanie trisów miało jakiś sens
   
@@ -94,7 +93,6 @@
   dane głębi...
 
   W takiej sytuacji generujemy sample od nowa?
-  
 
 * *Nie encoduj wielkości ekranu w shaderach: recompute przy resize*
 

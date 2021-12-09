@@ -200,7 +200,7 @@ void generateTriGroups(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, int min_by
 	// Inspired by Nanite scanline rasterizer
 	vec3 scan_min, scan_max, scan_step;
 	{
-		float sx = s_bin_pos.x - 0.5f; // TODO: why -0.5? it's correct though
+		float sx = s_bin_pos.x - 0.5f;
 		float sy = s_bin_pos.y + min_by * 4 + 0.5f;
 
 		vec3 scan_base;
@@ -395,9 +395,6 @@ void generateRows() {
 	}
 }
 
-shared uint s_group_bitmasks[LSIZE];
-shared uint s_group_counts[LSIZE / 16];
-
 // TODO: optimize
 void loadRowSamples(int by, int y, int ystep) {
 	int x = int(LIX & (BIN_SIZE - 1));
@@ -460,39 +457,6 @@ void loadRowSamples(int by, int y, int ystep) {
 				continue;
 
 #else
-	/*
-	for(uint i = 0; i < row_count; i += 16) {
-		uint sub_count = min(16, row_count - i);
-		uint group_id = LIX >> 4;
-
-		if((LIX & 15) == 0)
-			s_group_counts[LIX >> 4] = 0;
-		if((LIX & 15) < sub_count) {
-			uvec2 row = g_scratch[soffset + i + (LIX & 15)];
-			uint tri_idx = (row.x >> 24) | ((row.y & 0xff000000) >> 16);
-			int row_range = int(row[y >> 1] >> ((y & 1) * 12));
-			int minx = row_range & 0x3f, maxx = (row_range >> 6) & 0x3f;
-			minx = max(0, minx - int(LIX & 48)); maxx = min(maxx - int(LIX & 48), 15);
-			uint tri_bitmask = (0xffff << minx) & (0xffff >> (15 - maxx));
-			if(tri_bitmask != 0)
-				s_group_bitmasks[group_id * 16 + atomicAdd(s_group_counts[group_id], 1)] = tri_idx | (tri_bitmask << 16);
-		}
-
-		for(uint j = 0; j < s_group_counts[group_id]; j++) {
-			uint bitmask = s_group_bitmasks[group_id * 16 + j];
-			uint tri_idx = bitmask & 0xffff;
-			bitmask >>= 16;
-			if( (bitmask & (1 << (LIX & 15))) == 0)
-				continue;
-				
-			// TODO: encode toffset in bitmask
-			uint toffset = scratchTriOffset(tri_idx);
-			vec2 val0 = uintBitsToFloat(TRI_SCRATCH(0));
-			vec2 val1 = uintBitsToFloat(TRI_SCRATCH(1));
-			vec3 normal = vec3(val0.x, val0.y, val1.x);
-			float param0 = val1.y; //TODO: mul by normal
-			normal *= 1.0 / param0;*/
-
 	{
 		for(uint i = 0; i < row_count; i ++) {
 			uvec2 row = g_scratch[soffset + i];

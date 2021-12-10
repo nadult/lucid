@@ -7,7 +7,6 @@
 #define LSHIFT 9
 
 #define MAX_ROWS		(LSIZE / 64)
-#define MAX_BLOCK_ROWS	(LSIZE / 512)
 
 #define BLOCK_ROW_SIZE	(64 * 8)
 #define BLOCK_ROW_MASK	(BLOCK_ROW_SIZE - 1)
@@ -47,15 +46,19 @@ layout(binding = 1) uniform sampler2D transparent_texture;
 #define MAX_SCRATCH_TRIS_SHIFT  10
 
 #define SCRATCH_TRI_OFFSET		(48 * 1024)
-#define BLOCK_ROW_COUNT			8
-#define BLOCKS_IN_ROW_COUNT		8
+#define BLOCK_COUNT				8
+
+// Note: in the context of this shader, block size is 8x8, not 4x4
 
 shared ivec2 s_bin_pos;
 shared vec3 s_bin_ray_dir0;
 
-shared uint s_block_row_tri_counts[BLOCK_ROW_COUNT];
-shared uint s_block_tri_counts[BLOCKS_IN_ROW_COUNT * 2];
-shared uint s_block_frag_counts[BLOCKS_IN_ROW_COUNT * 2];
+shared uint s_block_row_tri_counts[BLOCK_COUNT];
+shared uint s_block_tri_counts[BLOCK_COUNT * BLOCK_COUNT];
+shared uint s_block_frag_counts[BLOCK_COUNT * 2];
+shared uint s_max_block_tri_counts[BLOCK_COUNT];
+
+shared uint s_curblock_tri_counts[BLOCK_COUNT];
 
 #define BLOCK1_FRAG_COUNT(bx)	s_block_frag_counts[(bx)]
 #define BLOCK2_FRAG_COUNT(bx2)	s_block_frag_counts[8 + (bx2)]
@@ -65,20 +68,6 @@ shared uint s_block_frag_counts[BLOCKS_IN_ROW_COUNT * 2];
 // TODO: add protection from too big number of samples:
 // maximum per row for raster_bin = min(4 * LSIZE, 32768) ?
 // we have to somehow estimate max# of samples during categorization?
-
-// TODO: 16-bit (it speeds up by about 1%...)
-// TODO: merge into single buffer
-shared uint s_row_frag_counts    [BIN_SIZE * 2];
-shared uint s_row_max_frag_counts[BIN_SIZE];
-
-#define  ROW_FRAG_COUNT(y )	s_row_frag_counts[                   (y )]
-#define ROW2_FRAG_COUNT(y2)	s_row_frag_counts[BIN_SIZE         + (y2)]
-#define ROW4_FRAG_COUNT(y4)	s_row_frag_counts[BIN_SIZE * 3 / 2 + (y4)]
-#define ROW8_FRAG_COUNT(y8)	s_row_frag_counts[BIN_SIZE * 7 / 4 + (y8)]
-
-#define ROW2_MAX_FRAG_COUNT(y2)	s_row_max_frag_counts[                   (y2)]
-#define ROW4_MAX_FRAG_COUNT(y4)	s_row_max_frag_counts[BIN_SIZE / 2     + (y4)]
-#define ROW8_MAX_FRAG_COUNT(y8)	s_row_max_frag_counts[BIN_SIZE * 3 / 4 + (y8)]
 
 shared uint s_bin_quad_count, s_bin_quad_offset;
 shared int s_pixel_counts[BIN_SIZE * MAX_ROWS];
@@ -171,16 +160,15 @@ void sortBuffer(uint N)
 
 // TODO: add synthetic test: 256 planes one after another
 
-void computeRowFragCounts() {
-	if(LIX < BIN_SIZE) {
-		uint value = ROW_FRAG_COUNT(LIX);
-		atomicAdd(ROW2_FRAG_COUNT(LIX >> 1), value);
-		atomicAdd(ROW4_FRAG_COUNT(LIX >> 2), value);
-		atomicAdd(ROW8_FRAG_COUNT(LIX >> 3), value);
-		
-		atomicMax(ROW2_MAX_FRAG_COUNT(LIX >> 1), value);
-		atomicMax(ROW4_MAX_FRAG_COUNT(LIX >> 2), value);
-		atomicMax(ROW8_MAX_FRAG_COUNT(LIX >> 3), value);
+void computeBlockCounts() {
+	if(LIX < BLOCK_COUNT * BLOCK_COUNT) {
+		uint x = LIX & 7;
+		uint value = s_block_tri_counts[LIX], temp;
+		atomicMax(s_max_block_tri_counts[LIX >> 3], value);
+		temp = shuffleUpNV(value,  1, 8); if(x >= 1) value += temp;
+		temp = shuffleUpNV(value,  2, 8); if(x >= 2) value += temp;
+		temp = shuffleUpNV(value,  4, 8); if(x >= 4) value += temp;
+		s_block_tri_counts[LIX] += value << 16;
 	}
 }
 
@@ -229,6 +217,7 @@ void generateTriGroups(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, int min_by
 	uint soffset = gl_WorkGroupID.x * WORKGROUP_SCRATCH_SIZE + min_by * MAX_BLOCK_ROW_TRIS * 2;
 	for(int by = min_by; by <= max_by; by++) {
 		uint row_ranges[4] = {0, 0, 0, 0};
+		uint bmin = 63, bmax = 0;
 
 		for(int y = 0; y < 8; y++) {
 			float xmin = max(max(scan_min[0], scan_min[1]), max(scan_min[2], 0.0));
@@ -239,15 +228,23 @@ void generateTriGroups(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, int min_by
 			
 			// TODO: use floor/ceil?
 			int imin = int(xmin), imax = int(xmax) - 1;
-			atomicAdd(ROW_FRAG_COUNT(by * 8 + y), uint(max(0, imax - imin + 1)));
+			if(imin <= imax) {
+				bmin = min(bmin, imin);
+				bmax = max(bmax, imax);
+			}
 			row_ranges[y >> 1] |= (imin <= imax? (uint(imin) | (uint(imax) << 6)) : 0x3f) << ((y & 1) * 12);
 		}
 
-		if(row_ranges[0] != 0x03f03f || row_ranges[1] != 0x03f03f || row_ranges[2] != 0x03f03f || row_ranges[3] != 0x03f03f) {
+		if(bmin <= bmax) {
 			uint roffset = atomicAdd(s_block_row_tri_counts[by], 1) * 2;
 			g_scratch[soffset + roffset] = uvec2(row_ranges[0] | (tri_idx << 24),
 												 row_ranges[1] | ((tri_idx & 0xff00) << 16));
 			g_scratch[soffset + roffset + 1] = uvec2(row_ranges[2], row_ranges[3]);
+
+			bmin >>= 3; bmax >>= 3;
+			// TODO: count block frag counts here ?
+			for(uint b = bmin; b <= bmax; b++)
+				atomicAdd(s_block_tri_counts[by * BLOCK_COUNT + b], 1);
 		}
 		soffset += MAX_BLOCK_ROW_TRIS * 2;
 	}
@@ -497,10 +494,10 @@ void generateBlocks(uint by)
 	uint doffset = gl_WorkGroupID.x * WORKGROUP_SCRATCH_SIZE + 32768 + bx * MAX_BLOCK_ROW_TRIS;
 	uint tri_count = s_block_row_tri_counts[by];
 	uint y = LIX & 7, shift = (y & 1) * 12;
-	if(LIX < BLOCKS_IN_ROW_COUNT * 2) {
-		s_block_tri_counts[LIX] = 0;
+	if(LIX < BLOCK_COUNT)
+		s_curblock_tri_counts[LIX] = 0;
+	if(LIX < BLOCK_COUNT * 2)
 		s_block_frag_counts[LIX] = 0;
-	}
 	barrier();
 	
 	int min_bx = int(bx * 8);
@@ -531,7 +528,7 @@ void generateBlocks(uint by)
 			block_rows[0] |= (tri_idx & 0xff) << 24;
 			block_rows[1] |= (tri_idx & 0xff00) << 16;
 
-			uint block_idx = atomicAdd(s_block_tri_counts[bx], 1);
+			uint block_idx = atomicAdd(s_curblock_tri_counts[bx], 1);
 			atomicAdd(BLOCK1_FRAG_COUNT(bx), num_frags);
 			g_scratch[doffset + block_idx] = uvec2(block_rows[0], block_rows[1]);
 		}
@@ -549,7 +546,7 @@ void generateBlocks(uint by)
 void sortBlocks(int bx, int by)
 {
 	uint soffset = gl_WorkGroupID.x * WORKGROUP_SCRATCH_SIZE + 32768 + bx * MAX_BLOCK_ROW_TRIS;
-	uint tri_count = s_block_tri_counts[bx];
+	uint tri_count = s_curblock_tri_counts[bx];
 
 	for(uint i = LIX; i < tri_count; i += LSIZE) {
 		uvec2 rows = g_scratch[soffset + i];
@@ -581,7 +578,8 @@ void sortBlocks(int bx, int by)
 
 		vec3 ray_dir = s_bin_ray_dir0 + cpos.x * frustum.ws_dirx + cpos.y * frustum.ws_diry;
 		float ray_pos = param0 / dot(normal, ray_dir);
-		float depth = float(0x7fffffff) / (1.0 + max(0.0, ray_pos));
+		float depth = float(0x7ffff) / (1.0 + max(0.0, ray_pos)); // 19 bits is enough
+		// TODO: we can fit everything in 32 bits
 
 		SBUFFER_SET_PAIR(i, uvec2(uint(depth), uint(i)));
 	}
@@ -604,7 +602,7 @@ void loadSamples(int by, int ystep) {
 	uint pixel_id = (y << 6) | x;
 
 	uint soffset = gl_WorkGroupID.x * WORKGROUP_SCRATCH_SIZE + 32768 + bx * MAX_BLOCK_ROW_TRIS;
-	uint tri_count = s_block_tri_counts[bx];
+	uint tri_count = s_curblock_tri_counts[bx];
 
 	// TODO: share pixels between threads for ystep < 4?
 	// TODO: WARP_SIZE?
@@ -834,7 +832,6 @@ void rasterFragmentCounts(int by)
 		uint count = s_pixel_counts[i] & 0xffff; float scale = 1.0 / 32;
 		//uint count = s_pixel_counts[i] >> 16; float scale = 1.0 / 4096;
 		//uint count = BLOCK1_FRAG_COUNT(pixel_pos.x / 8); float scale = 1.0 / 1024;
-		//uint count = ROW_FRAG_COUNT(pixel_pos.y); float scale = 1.0 / 4096;
 		//uint count = s_sample_count; float scale = 1.0 / 4096;
 
 		vec4 color = vec4(count == 0xffff? vec3(1.0, 0.0, 0.0) : vec3(float(count) * scale), 1.0);
@@ -845,10 +842,8 @@ void rasterFragmentCounts(int by)
 }
 
 void rasterBin(int bin_id) {
-	if(LIX < BIN_SIZE * 2)
-		s_row_frag_counts[LIX] = 0;
 	if(LIX < BIN_SIZE) {
-		if(LIX < BLOCK_ROW_COUNT) {
+		if(LIX < BLOCK_COUNT) {
 			if(LIX == 0) {
 				ivec2 bin_pos = ivec2(bin_id % BIN_COUNT_X, bin_id / BIN_COUNT_X) * BIN_SIZE;
 				s_bin_pos = bin_pos;
@@ -860,23 +855,22 @@ void rasterBin(int bin_id) {
 
 			s_block_row_tri_counts[LIX] = 0;
 		}
-		s_row_max_frag_counts[LIX] = 0;
 	}
+	if(LIX < BLOCK_COUNT * BLOCK_COUNT)
+		s_block_tri_counts[LIX] = 0;
+	if(LIX < BLOCK_COUNT)
+		s_max_block_tri_counts[LIX] = 0;
 	barrier();
 	generateRows();
 	groupMemoryBarrier();
 	barrier();
-	computeRowFragCounts();
+	computeBlockCounts();
 
-	for(int by = 0; by < BLOCK_ROW_COUNT; by += MAX_BLOCK_ROWS) {
+	for(int by = 0; by < BLOCK_COUNT; by ++) {
 		barrier();
-		{
-			uint sub_block_row = (LIX & (MAX_BLOCK_ROWS - 1));
-			bool too_many_frags = ROW8_MAX_FRAG_COUNT(by + sub_block_row) > MAX_SAMPLES;
-			if(anyInvocationARB(too_many_frags)) {
-				rasterInvalidBlockRow(by, vec3(1.0, 0.0, 0.0));
-				continue;
-			}
+		if(s_max_block_tri_counts[by] > MAX_SAMPLES / 16) {
+			rasterInvalidBlockRow(by, vec3(1.0, 0.5, 0.5));
+			continue;
 		}
 
 		computeCurrentPixelCounts(by);
@@ -890,28 +884,13 @@ void rasterBin(int bin_id) {
 		groupMemoryBarrier();
 		barrier();
 		
-#if MAX_BLOCK_ROWS == 1
 		// How many rows can we rasterize in single step?
 		int ystep = 8;
-		if(ROW8_FRAG_COUNT(by) > MAX_SAMPLES) {
+		if(BLOCK8_FRAG_COUNT() > MAX_SAMPLES) {
+			// TODO: handle this case
 			rasterInvalidBlockRow(by, vec3(1.0, 0.2, 0.0));
 			continue;
-/*			uint frag_count0123 = ROW4_FRAG_COUNT(by * 2 + 0);
-			uint frag_count4567 = ROW4_FRAG_COUNT(by * 2 + 1);
-			ystep = 4;
-			if(max(frag_count0123, frag_count4567) > MAX_SAMPLES) {
-				ystep = 2;
-				uint frag_count01 = ROW2_FRAG_COUNT(by * 4 + 0);
-				uint frag_count23 = ROW2_FRAG_COUNT(by * 4 + 1);
-				uint frag_count45 = ROW2_FRAG_COUNT(by * 4 + 2);
-				uint frag_count67 = ROW2_FRAG_COUNT(by * 4 + 3);
-				if(max(max(frag_count01, frag_count23), max(frag_count45, frag_count67)) > MAX_SAMPLES)
-					ystep = 1;
-			}*/
 		}
-#else
-#error Please write me
-#endif
 
 		{
 			uint bx = LIX >> 6, x = (LIX & 7) + bx * 8, y = (LIX >> 3) & 7;

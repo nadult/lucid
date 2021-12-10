@@ -36,7 +36,7 @@ layout(binding = 1) uniform sampler2D transparent_texture;
 #define WORKGROUP_SCRATCH_SHIFT	16
 
 // TODO: does that mean that occupancy is so low?
-#define SAMPLES_PER_THREAD		16
+#define SAMPLES_PER_THREAD		8
 #define MAX_SAMPLES				(LSIZE * SAMPLES_PER_THREAD)
 
 // TODO: there is no need to check that, no of input tris is <= this
@@ -114,13 +114,15 @@ void sortBuffer8()
 	uint lid = LIX & (LSIZE / 8 - 1);
 	uint goffset = gid * (MAX_SAMPLES / 8);
 	uint N = s_curblock_tri_counts[gid];
-	uint TN = s_max_group_tn;
-	for(uint i = lid + N; i < TN; i += LSIZE / 8)
+	// TODO: max_TN is only needed for barriers, computations should be performed up to TN
+	// But it seems, that using TN directly is actually a bit slower... (Sponza)
+	uint max_TN = s_max_group_tn;
+	for(uint i = lid + N; i < max_TN; i += LSIZE / 8)
 		s_buffer[goffset + i] = 0xffffffff;
 	barrier();
 
 #ifdef VENDOR_NVIDIA
-	for(uint i = lid; i < TN; i += LSIZE / 8) {
+	for(uint i = lid; i < max_TN; i += LSIZE / 8) {
 		uint value = s_buffer[goffset + i];
 		value = swap(value, 0x01, xorBits(lid, 1, 0)); // K = 2
 		value = swap(value, 0x02, xorBits(lid, 2, 1)); // K = 4
@@ -144,9 +146,9 @@ void sortBuffer8()
 #else
 	int start_k = 2, end_j = 1;
 #endif
-	for(uint k = start_k; k <= TN; k = 2 * k) {
+	for(uint k = start_k; k <= max_TN; k = 2 * k) {
 		for(uint j = k >> 1; j >= end_j; j = j >> 1) {
-			for(uint i = lid; i < TN; i += (LSIZE / 8) * 2) {
+			for(uint i = lid; i < max_TN; i += (LSIZE / 8) * 2) {
 				uint idx = (i & j) != 0? i + (LSIZE / 8) - j : i;
 				uint lvalue = s_buffer[goffset + idx];
 				uint rvalue = s_buffer[goffset + idx + j];
@@ -158,7 +160,7 @@ void sortBuffer8()
 			barrier();
 		}
 #ifdef VENDOR_NVIDIA
-		for(uint i = lid; i < TN; i += LSIZE / 8) {
+		for(uint i = lid; i < max_TN; i += LSIZE / 8) {
 			uint bit = (i & k) == 0? 0 : 1;
 			uint value = s_buffer[goffset + i];
 			value = swap(value, 0x10, bit ^ bitExtract(lid, 4));
@@ -562,8 +564,8 @@ void generateBlocks(uint by)
 	}
 
 	barrier();
-	tri_count = s_curblock_tri_counts[bx];
 	sortBuffer8();
+	tri_count = s_curblock_tri_counts[bx];
 	barrier();
 
 	for(uint i = LIX >> 3; i < tri_count; i += LSIZE / 8) {
@@ -608,14 +610,18 @@ void generateBlocks(uint by)
 }
 
 // TODO: optimize
-void loadSamples(int by, int ystep) {
-	int bx = int(LIX >> 6), x = int(LIX & 7) + bx * 8, y = int((LIX >> 3) & 7);
+void loadSamples(int bx, int by, int bx_step) {
+	if(LIX >= bx_step * BIN_SIZE)
+		return;
+
+	bx += int(LIX >> 6);
+	int x = int(LIX & 7) + bx * 8, y = int((LIX >> 3) & 7);
 	uint pixel_id = (y << 6) | x;
 
 	uint soffset = gl_WorkGroupID.x * WORKGROUP_SCRATCH_SIZE + 32768 + bx * MAX_BLOCK_ROW_TRIS;
 	uint tri_count = s_curblock_tri_counts[bx];
 
-	// TODO: share pixels between threads for ystep < 4?
+	// TODO: share pixels between threads for bx_step <= 4?
 	// TODO: WARP_SIZE?
 
 	uint pixel_bit = 1u << (x & 7);
@@ -694,11 +700,12 @@ void loadSamples(int by, int ystep) {
 }
 
 // TODO: with s_buffer based on uints, reduce somehow became slower... why?
-void reduceSamples(int by, int ystep)
+void reduceSamples(int bx, int by, int bx_step)
 {
 	// TODO: optimize
-	if(LIX < BIN_SIZE * ystep) {
-		uint x = LIX & (BIN_SIZE - 1), y = LIX >> BIN_SHIFT;
+	if(LIX < BIN_SIZE * bx_step) {
+		uint cur_width = 8 * bx_step;
+		uint x = bx * 8 + (LIX & (cur_width - 1)), y = LIX / cur_width;
 		ivec2 pixel_pos = s_bin_pos + ivec2(x, by * 8 + y);
 
 		uint pixel_counter = s_pixel_counts[y * BIN_SIZE + x];
@@ -841,9 +848,9 @@ void rasterFragmentCounts(int by)
 	for(uint i = LIX; i < BIN_SIZE * MAX_ROWS; i += LSIZE) {
 		ivec2 pixel_pos = ivec2(i & (BIN_SIZE - 1), by * 8 + (i >> BIN_SHIFT));
 		//uint count = s_pixel_counts[i] & 0xffff; float scale = 1.0 / 32;
-		//uint count = s_pixel_counts[i] >> 16; float scale = 1.0 / 4096;
+		uint count = s_pixel_counts[i] >> 16; float scale = 1.0 / 4096;
 		//uint count = s_sample_count; float scale = 1.0 / 4096;
-		uint count = BLOCK1_FRAG_COUNT(pixel_pos.x / 8); float scale = 1.0 / 1024;
+		//uint count = BLOCK1_FRAG_COUNT(pixel_pos.x / 8); float scale = 1.0 / 1024;
 
 		vec4 color = vec4(count == 0xffff? vec3(1.0, 0.0, 0.0) : vec3(float(count) * scale), 1.0);
 		color = min(color, vec4(1.0));
@@ -890,36 +897,40 @@ void rasterBin(int bin_id) {
 		barrier();
 		
 		// How many rows can we rasterize in single step?
-		int ystep = 8;
+		int bx_step = 8;
+		// TODO: compute this on first warp only
 		if(BLOCK8_FRAG_COUNT() > MAX_SAMPLES) {
-			// TODO: handle this case
-			rasterInvalidBlockRow(by, vec3(1.0, 0.2, 0.0));
-			continue;
+			bool fail4 = anyInvocationARB(BLOCK4_FRAG_COUNT(LIX & 1) > MAX_SAMPLES);
+			bool fail2 = anyInvocationARB(BLOCK2_FRAG_COUNT(LIX & 3) > MAX_SAMPLES);
+			bool fail1 = anyInvocationARB(BLOCK1_FRAG_COUNT(LIX & 7) > MAX_SAMPLES);
+			if(fail1) {
+				rasterInvalidBlockRow(by, vec3(0.5, 0.0, 0.0));
+				continue;
+			}
+			bx_step = fail2? 1 : fail4? 2 : 4;
 		}
 
 		{
 			uint bx = LIX >> 6, x = (LIX & 7) + bx * 8, y = (LIX >> 3) & 7;
 			uint value = 0;
-			if(ystep >= 2 && (bx & 1) != 0)
+			if(bx_step >= 2 && (bx & 1) != 0)
 				value += BLOCK1_FRAG_COUNT(bx - 1);
-			if(ystep >= 4 && (bx & 2) != 0)
+			if(bx_step >= 4 && (bx & 2) != 0)
 				value += BLOCK2_FRAG_COUNT(bx / 2 - 1);
-			if(ystep >= 8 && (bx & 4) != 0)
+			if(bx_step >= 8 && (bx & 4) != 0)
 				value += BLOCK4_FRAG_COUNT(bx / 4 - 1);
 			s_pixel_counts[y * BIN_SIZE + x] += int(value << 16);
 		}
 		barrier();
 
-		for(int y = 0; y < MAX_ROWS; y += ystep) {
+		for(int bx = 0; bx < BLOCK_COUNT; bx += bx_step) {
 			barrier();
 			if(LIX == 0) {
-				//uint last_pixel = s_pixel_counts[(y + ystep - 1) * 64 + 63];
-				//uint first_pixel = s_pixel_counts[y * 64];
-				//s_sample_count = int((last_pixel >> 16) + (last_pixel & 0xffff) - (first_pixel >> 16));
-				s_sample_count = int(BLOCK8_FRAG_COUNT());
+				uint count = uint(s_pixel_counts[7 * BIN_SIZE + (bx + bx_step) * 8 - 1]);
+				s_sample_count = int((count >> 16) + (count & 0xffff));
 			}
 			barrier();
-			loadSamples(by, ystep);
+			loadSamples(bx, by, bx_step);
 			barrier();
 			//sortBuffer(s_sample_count);
 			barrier();
@@ -941,7 +952,7 @@ void rasterBin(int bin_id) {
 				s_buffer[i] = shadeSample(bin_pixel_pos, bin_tri_idx);
 			}
 			barrier();
-			reduceSamples(by, ystep);
+			reduceSamples(bx, by, bx_step);
 			barrier();
 		}
 		//rasterFragmentCounts(by);

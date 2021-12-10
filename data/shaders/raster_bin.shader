@@ -523,33 +523,36 @@ void generateBlocks(uint by)
 	
 	int min_bx = int(bx * 8);
 		
-	// TODO: better centroid?
-	vec2 cpos = vec2(bx, by) * 8 + vec2(4, 4);
-	vec3 ray_dir = s_bin_ray_dir0 + cpos.x * frustum.ws_dirx + cpos.y * frustum.ws_diry;
-	
-	/*vec2 cpos = vec2(0, 0);
-	float weight = 0.0;
-	for(int y = 0; y < 8; y++) {
-		uint row_range = (rows[y >> 2] >> ((y & 3) * 6)) & 0x3f;
-		if(row_range == 0x07)
-			continue;
-		int minx = int(row_range & 0x7), maxx = int((row_range >> 3) & 0x7);
-		int count = maxx - minx + 1;
-		cpos += vec2(float(maxx + minx + 1) * 0.5, y + 0.5) * count;
-		weight += count;
-	}
-	cpos /= weight;
-	cpos += vec2(bx, by) * 8;*/
-
+	vec3 ray_dir_base = s_bin_ray_dir0 + (bx * 8) * frustum.ws_dirx + (by * 8) * frustum.ws_diry;
 	for(uint i = LIX >> 3; i < tri_count; i += LSIZE / 8) {
+		uint full_rows[4] = {
+			g_scratch[src_offset + i * 2 + 0].x, g_scratch[src_offset + i * 2 + 0].y,
+			g_scratch[src_offset + i * 2 + 1].x, g_scratch[src_offset + i * 2 + 1].y };
+
 		// TODO: load range data in groups
-		uint bmask = g_scratch[src_offset + i * 2 + 1].x >> 24;
+		uint bmask = full_rows[2] >> 24;
 		if((bmask & (1 << bx)) == 0)
 			continue;
 
 		// TODO: keep tri_idx & bmask in one place
-		uint tri_idx = (g_scratch[src_offset + i * 2 + 0].x >> 24) |
-					   ((g_scratch[src_offset + i * 2 + 0].y >> 16) & 0xff00);
+		uint tri_idx = (full_rows[0] >> 24) | ((full_rows[1] >> 16) & 0xff00);
+
+		vec2 cpos = vec2(0, 0);
+		float weight = 0.0;
+		for(int j = 0; j < 4; j++) {
+			int row0 = int(full_rows[j] & 0xfff), row1 = int((full_rows[j] >> 12) & 0xfff);
+			// TODO: these are computed twice
+			int minx0 = max((row0 & 0x3f) - min_bx, 0), maxx0 = min(((row0 >> 6) & 0x3f) - min_bx, 7);
+			int minx1 = max((row1 & 0x3f) - min_bx, 0), maxx1 = min(((row1 >> 6) & 0x3f) - min_bx, 7);
+
+			int count0 = max(0, maxx0 - minx0 + 1);
+			int count1 = max(0, maxx1 - minx1 + 1);
+			cpos += vec2(float(maxx0 + minx0 + 1) * 0.5, j * 2 + 0 + 0.5) * count0;
+			cpos += vec2(float(maxx1 + minx1 + 1) * 0.5, j * 2 + 1 + 0.5) * count1;
+			weight += count0 + count1;
+		}
+		cpos /= weight;
+		vec3 ray_dir = ray_dir_base + cpos.x * frustum.ws_dirx + cpos.y * frustum.ws_diry;
 
 		uint toffset = scratchTriOffset(tri_idx);
 		vec2 val0 = uintBitsToFloat(TRI_SCRATCH(0));

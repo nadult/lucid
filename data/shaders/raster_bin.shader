@@ -634,40 +634,40 @@ void loadSamples(int bx, int by, int bx_step) {
 	float prev_depths[6] = {-1.0, -1.0, -1.0, -1.0, -1.0, -1.0};
 	for(uint i = 0; i < tri_count; i += 8) {
 		uint sub_count = min(8, tri_count - i);
-		uint sel_tri_bitmask = 0, sel_tri_idx = 0;
+		uint sel_tri = 0;
 		vec3 sel_normal;
 		uint tris_bitmask;
 		{
 			bool in_range = false;
 			if((LIX & 7) < sub_count) {
 				uvec2 row = g_scratch[soffset + i + (LIX & 7)];
-				sel_tri_idx = (row.x >> 24) | ((row.y & 0xff000000) >> 16);
+				uint tri_idx = (row.x >> 24) | ((row.y & 0xff000000) >> 16);
 				int row_range = int(row[y >> 2] >> ((y & 3) * 6));
 				int minx = row_range & 0x7, maxx = (row_range >> 3) & 0x7;
-				sel_tri_bitmask = (0xffu << minx) & (0xffu >> (7 - maxx));
-				uint toffset = scratchTriOffset(sel_tri_idx);
+				uint tri_bitmask = (0xffu << minx) & (0xffu >> (7 - maxx));
+				uint toffset = scratchTriOffset(tri_idx);
 				vec2 val0 = uintBitsToFloat(TRI_SCRATCH(0));
 				vec2 val1 = uintBitsToFloat(TRI_SCRATCH(1));
 				vec3 normal = vec3(val0.x, val0.y, val1.x);
 				float param0 = val1.y; //TODO: mul by normal
 				sel_normal = normal * (1.0 / param0);
-				in_range = sel_tri_bitmask != 0;
+				in_range = tri_bitmask != 0;
+				sel_tri = tri_bitmask | tri_idx << 16;
 			}
 			tris_bitmask = (uint(ballotARB(in_range)) >> ((y & 3) * 8)) & 0xff;
 		}
 
 		int j = findLSB(tris_bitmask);
 		while(j != -1) {
-			uint tri_bitmask = shuffleNV(sel_tri_bitmask, j, 8);
-			uint tri_idx = shuffleNV(sel_tri_idx, j, 8);
+			uint tri = shuffleNV(sel_tri, j, 8);
 			vec3 normal = shuffleNV(sel_normal, j, 8);
 			tris_bitmask &= ~(1 << j);
 			j = findLSB(tris_bitmask);
-			if((tri_bitmask & pixel_bit) == 0)
+			if((tri & pixel_bit) == 0)
 				continue;
 
 			// TODO: sample offset
-			uint value = (pixel_id << 20) | tri_idx;
+			uint value = (pixel_id << 20) | (tri >> 16);
 			float depth = dot(normal, ray_dir);
 
 #define SWAP_UINT(v1, v2) { uint temp = v1; v1 = v2; v2 = temp; }

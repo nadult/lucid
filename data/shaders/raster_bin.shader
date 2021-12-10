@@ -9,7 +9,6 @@
 #define MAX_ROWS		(LSIZE / 64)
 
 #define BLOCK_ROW_SIZE	(64 * 8)
-#define BLOCK_ROW_MASK	(BLOCK_ROW_SIZE - 1)
 
 layout(local_size_x = LSIZE) in;
 layout(binding = 0, r32ui) uniform uimage2D final_raster;
@@ -55,15 +54,15 @@ shared vec3 s_bin_ray_dir0;
 
 shared uint s_block_row_tri_counts[BLOCK_COUNT];
 shared uint s_block_tri_counts[BLOCK_COUNT * BLOCK_COUNT];
-shared uint s_block_frag_counts[BLOCK_COUNT * 2];
 shared uint s_max_block_tri_counts[BLOCK_COUNT];
 
 shared uint s_curblock_tri_counts[BLOCK_COUNT];
+shared uint s_curblock_frag_counts[BLOCK_COUNT * 2];
 
-#define BLOCK1_FRAG_COUNT(bx)	s_block_frag_counts[(bx)]
-#define BLOCK2_FRAG_COUNT(bx2)	s_block_frag_counts[8 + (bx2)]
-#define BLOCK4_FRAG_COUNT(bx4)	s_block_frag_counts[12 + (bx4)]
-#define BLOCK8_FRAG_COUNT()		s_block_frag_counts[15]
+#define BLOCK1_FRAG_COUNT(bx)	s_curblock_frag_counts[(bx)]
+#define BLOCK2_FRAG_COUNT(bx2)	s_curblock_frag_counts[8 + (bx2)]
+#define BLOCK4_FRAG_COUNT(bx4)	s_curblock_frag_counts[12 + (bx4)]
+#define BLOCK8_FRAG_COUNT()		s_curblock_frag_counts[15]
 
 // TODO: add protection from too big number of samples:
 // maximum per row for raster_bin = min(4 * LSIZE, 32768) ?
@@ -79,10 +78,11 @@ shared int s_sample_count;
 shared uint s_buffer[MAX_SAMPLES + 1];
 
 #ifdef VENDOR_NVIDIA
-uvec2 swap(uvec2 x, int mask, uint dir)
+uint swap(uint x, int mask, uint dir)
 {
-	uvec2 y = shuffleXorNV(x, mask, 32);
-	return x.x != y.x && (x.x < y.x) == (dir != 0) ? y : x;
+	uint y = shuffleXorNV(x, mask, 32);
+	// TODO: equality test shouldnt be needed
+	return x != y && (x < y) == (dir != 0) ? y : x;
 }
 
 uint bitExtract(uint value, int boffset) 
@@ -96,62 +96,77 @@ uint xorBits(uint value, int bit0, int bit1)
 }
 #endif
 
-void sortBuffer(uint N)
+// TODO: naming
+shared uint s_max_group_tn;
+
+void sortBuffer8()
 {
-	uint TN = max(32, (N & (N - 1)) == 0? N : (2 << findMSB(N)));
-	for(uint i = LIX + N; i < TN; i += LSIZE)
-		s_buffer[i * 2] = 0xffffffff;
+	if(LIX < 8) {
+		uint N = s_curblock_tri_counts[LIX];
+		uint TN = max(32, (N & (N - 1)) == 0? N : (2 << findMSB(N)));
+		if(LIX == 0)
+			s_max_group_tn = 0;
+		atomicMax(s_max_group_tn, TN);
+	}
+	barrier();
+
+	uint gid = LIX >> (LSHIFT - 3);
+	uint lid = LIX & (LSIZE / 8 - 1);
+	uint goffset = gid * (MAX_SAMPLES / 8);
+	uint N = s_curblock_tri_counts[gid];
+	uint TN = s_max_group_tn;
+	for(uint i = lid + N; i < TN; i += LSIZE / 8)
+		s_buffer[goffset + i] = 0xffffffff;
 	barrier();
 
 #ifdef VENDOR_NVIDIA
-	for(uint i = LIX; i < TN; i += LSIZE) {
-		uvec2 value = SBUFFER_GET_PAIR(i);
-		value = swap(value, 0x01, xorBits(LIX, 1, 0)); // K = 2
-		value = swap(value, 0x02, xorBits(LIX, 2, 1)); // K = 4
-		value = swap(value, 0x01, xorBits(LIX, 2, 0));
-		value = swap(value, 0x04, xorBits(LIX, 3, 2)); // K = 8
-		value = swap(value, 0x02, xorBits(LIX, 3, 1));
-		value = swap(value, 0x01, xorBits(LIX, 3, 0));
-		value = swap(value, 0x08, xorBits(LIX, 4, 3)); // K = 16
-		value = swap(value, 0x04, xorBits(LIX, 4, 2));
-		value = swap(value, 0x02, xorBits(LIX, 4, 1));
-		value = swap(value, 0x01, xorBits(LIX, 4, 0));
-		value = swap(value, 0x10, xorBits(LIX, 5, 4)); // K = 32
-		value = swap(value, 0x08, xorBits(LIX, 5, 3));
-		value = swap(value, 0x04, xorBits(LIX, 5, 2));
-		value = swap(value, 0x02, xorBits(LIX, 5, 1));
-		value = swap(value, 0x01, xorBits(LIX, 5, 0));
-		SBUFFER_SET_PAIR(i, value);
+	for(uint i = lid; i < TN; i += LSIZE / 8) {
+		uint value = s_buffer[goffset + i];
+		value = swap(value, 0x01, xorBits(lid, 1, 0)); // K = 2
+		value = swap(value, 0x02, xorBits(lid, 2, 1)); // K = 4
+		value = swap(value, 0x01, xorBits(lid, 2, 0));
+		value = swap(value, 0x04, xorBits(lid, 3, 2)); // K = 8
+		value = swap(value, 0x02, xorBits(lid, 3, 1));
+		value = swap(value, 0x01, xorBits(lid, 3, 0));
+		value = swap(value, 0x08, xorBits(lid, 4, 3)); // K = 16
+		value = swap(value, 0x04, xorBits(lid, 4, 2));
+		value = swap(value, 0x02, xorBits(lid, 4, 1));
+		value = swap(value, 0x01, xorBits(lid, 4, 0));
+		value = swap(value, 0x10, xorBits(lid, 5, 4)); // K = 32
+		value = swap(value, 0x08, xorBits(lid, 5, 3));
+		value = swap(value, 0x04, xorBits(lid, 5, 2));
+		value = swap(value, 0x02, xorBits(lid, 5, 1));
+		value = swap(value, 0x01, xorBits(lid, 5, 0));
+		s_buffer[goffset + i] = value;
 	}
 	barrier();
 	int start_k = 64, end_j = 32;
 #else
 	int start_k = 2, end_j = 1;
 #endif
-
 	for(uint k = start_k; k <= TN; k = 2 * k) {
 		for(uint j = k >> 1; j >= end_j; j = j >> 1) {
-			for(uint i = LIX; i < TN; i += LSIZE * 2) {
-				uint idx = (i & j) != 0? i + LSIZE - j : i;
-				uvec2 lvalue = SBUFFER_GET_PAIR(idx);
-				uvec2 rvalue = SBUFFER_GET_PAIR(idx + j);
+			for(uint i = lid; i < TN; i += (LSIZE / 8) * 2) {
+				uint idx = (i & j) != 0? i + (LSIZE / 8) - j : i;
+				uint lvalue = s_buffer[goffset + idx];
+				uint rvalue = s_buffer[goffset + idx + j];
 				if( ((idx & k) != 0) == (lvalue.x < rvalue.x) ) {
-					SBUFFER_SET_PAIR(idx, rvalue);
-					SBUFFER_SET_PAIR(idx + j, lvalue);
+					s_buffer[goffset + idx] = rvalue;
+					s_buffer[goffset + idx + j] = lvalue;
 				}
 			}
 			barrier();
 		}
 #ifdef VENDOR_NVIDIA
-		for(uint i = LIX; i < TN; i += LSIZE) {
+		for(uint i = lid; i < TN; i += LSIZE / 8) {
 			uint bit = (i & k) == 0? 0 : 1;
-			uvec2 value = SBUFFER_GET_PAIR(i);
-			value = swap(value, 0x10, bit ^ bitExtract(LIX, 4));
-			value = swap(value, 0x08, bit ^ bitExtract(LIX, 3));
-			value = swap(value, 0x04, bit ^ bitExtract(LIX, 2));
-			value = swap(value, 0x02, bit ^ bitExtract(LIX, 1));
-			value = swap(value, 0x01, bit ^ bitExtract(LIX, 0));
-			SBUFFER_SET_PAIR(i, value);
+			uint value = s_buffer[goffset + i];
+			value = swap(value, 0x10, bit ^ bitExtract(lid, 4));
+			value = swap(value, 0x08, bit ^ bitExtract(lid, 3));
+			value = swap(value, 0x04, bit ^ bitExtract(lid, 2));
+			value = swap(value, 0x02, bit ^ bitExtract(lid, 1));
+			value = swap(value, 0x01, bit ^ bitExtract(lid, 0));
+			s_buffer[goffset + i] = value;
 		}
 		barrier();
 #endif
@@ -217,7 +232,7 @@ void generateTriGroups(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, int min_by
 	uint soffset = gl_WorkGroupID.x * WORKGROUP_SCRATCH_SIZE + min_by * MAX_BLOCK_ROW_TRIS * 2;
 	for(int by = min_by; by <= max_by; by++) {
 		uint row_ranges[4] = {0, 0, 0, 0};
-		uint bmin = 63, bmax = 0;
+		uint bmask = 0;
 
 		for(int y = 0; y < 8; y++) {
 			float xmin = max(max(scan_min[0], scan_min[1]), max(scan_min[2], 0.0));
@@ -229,22 +244,24 @@ void generateTriGroups(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, int min_by
 			// TODO: use floor/ceil?
 			int imin = int(xmin), imax = int(xmax) - 1;
 			if(imin <= imax) {
-				bmin = min(bmin, imin);
-				bmax = max(bmax, imax);
+				uint bmin = imin >> 3, bmax = imax >> 3;
+				bmask |= (0xff << bmin) & (0xff >> (7 - bmax));
 			}
 			row_ranges[y >> 1] |= (imin <= imax? (uint(imin) | (uint(imax) << 6)) : 0x3f) << ((y & 1) * 12);
 		}
 
-		if(bmin <= bmax) {
+		if(bmask != 0) {
 			uint roffset = atomicAdd(s_block_row_tri_counts[by], 1) * 2;
 			g_scratch[soffset + roffset] = uvec2(row_ranges[0] | (tri_idx << 24),
 												 row_ranges[1] | ((tri_idx & 0xff00) << 16));
-			g_scratch[soffset + roffset + 1] = uvec2(row_ranges[2], row_ranges[3]);
+			g_scratch[soffset + roffset + 1] = uvec2(row_ranges[2] | (bmask << 24), row_ranges[3]);
 
-			bmin >>= 3; bmax >>= 3;
-			// TODO: count block frag counts here ?
-			for(uint b = bmin; b <= bmax; b++)
+			uint b = findLSB(bmask);
+			while(b != -1) {
 				atomicAdd(s_block_tri_counts[by * BLOCK_COUNT + b], 1);
+				bmask &= ~(1 << b);
+				b = findLSB(bmask);
+			}
 		}
 		soffset += MAX_BLOCK_ROW_TRIS * 2;
 	}
@@ -415,7 +432,7 @@ void computeCurrentPixelCounts(uint by)
 		s_pixel_counts[LIX] = 0;
 	barrier();
 
-	for(uint i = (LIX & BLOCK_ROW_MASK) >> 3; i < tri_count; i += BLOCK_ROW_SIZE / 8) {
+	for(uint i = LIX >> 3; i < tri_count; i += LSIZE / 8) {
 		uint row_range = (g_scratch[soffset + i * 2 + (y >> 2)][(y >> 1) & 1] >> shift) & 0xfff;
 		if(row_range == 0x3f)
 			continue;
@@ -490,23 +507,72 @@ void computeCurrentPixelCounts(uint by)
 void generateBlocks(uint by)
 {
 	uint bx = LIX & 7;
-	uint soffset = gl_WorkGroupID.x * WORKGROUP_SCRATCH_SIZE + by * MAX_BLOCK_ROW_TRIS * 2;
-	uint doffset = gl_WorkGroupID.x * WORKGROUP_SCRATCH_SIZE + 32768 + bx * MAX_BLOCK_ROW_TRIS;
+	uint src_offset = gl_WorkGroupID.x * WORKGROUP_SCRATCH_SIZE + by * MAX_BLOCK_ROW_TRIS * 2;
+	uint dst_offset = gl_WorkGroupID.x * WORKGROUP_SCRATCH_SIZE + 32768 + bx * MAX_BLOCK_ROW_TRIS;
+	uint tmp_offset = bx * (MAX_SAMPLES / 8);
 	uint tri_count = s_block_row_tri_counts[by];
 	uint y = LIX & 7, shift = (y & 1) * 12;
+	barrier();
 	if(LIX < BLOCK_COUNT)
 		s_curblock_tri_counts[LIX] = 0;
 	if(LIX < BLOCK_COUNT * 2)
-		s_block_frag_counts[LIX] = 0;
+		s_curblock_frag_counts[LIX] = 0;
 	barrier();
 	
 	int min_bx = int(bx * 8);
+		
+	// TODO: better centroid?
+	vec2 cpos = vec2(bx, by) * 8 + vec2(4, 4);
+	vec3 ray_dir = s_bin_ray_dir0 + cpos.x * frustum.ws_dirx + cpos.y * frustum.ws_diry;
+	
+	/*vec2 cpos = vec2(0, 0);
+	float weight = 0.0;
+	for(int y = 0; y < 8; y++) {
+		uint row_range = (rows[y >> 2] >> ((y & 3) * 6)) & 0x3f;
+		if(row_range == 0x07)
+			continue;
+		int minx = int(row_range & 0x7), maxx = int((row_range >> 3) & 0x7);
+		int count = maxx - minx + 1;
+		cpos += vec2(float(maxx + minx + 1) * 0.5, y + 0.5) * count;
+		weight += count;
+	}
+	cpos /= weight;
+	cpos += vec2(bx, by) * 8;*/
 
-	for(uint i = (LIX & BLOCK_ROW_MASK) >> 3; i < tri_count; i += BLOCK_ROW_SIZE / 8) {
+	for(uint i = LIX >> 3; i < tri_count; i += LSIZE / 8) {
+		// TODO: load range data in groups
+		uint bmask = g_scratch[src_offset + i * 2 + 1].x >> 24;
+		if((bmask & (1 << bx)) == 0)
+			continue;
+
+		// TODO: keep tri_idx & bmask in one place
+		uint tri_idx = (g_scratch[src_offset + i * 2 + 0].x >> 24) |
+					   ((g_scratch[src_offset + i * 2 + 0].y >> 16) & 0xff00);
+
+		uint toffset = scratchTriOffset(tri_idx);
+		vec2 val0 = uintBitsToFloat(TRI_SCRATCH(0));
+		vec2 val1 = uintBitsToFloat(TRI_SCRATCH(1));
+		vec3 normal = vec3(val0.x, val0.y, val1.x);
+		float param0 = val1.y; //TODO: premul by normal
+		float ray_pos = param0 / dot(normal, ray_dir);
+		float depth = float(0x7ffff) / (1.0 + max(0.0, ray_pos)); // 19 bits is enough
+
+		uint block_idx = atomicAdd(s_curblock_tri_counts[bx], 1);
+		s_buffer[tmp_offset + block_idx] = i | (uint(depth) << 13);
+	}
+
+	barrier();
+	tri_count = s_curblock_tri_counts[bx];
+	sortBuffer8();
+	barrier();
+
+	for(uint i = LIX >> 3; i < tri_count; i += LSIZE / 8) {
+		uint idx = s_buffer[tmp_offset + i] & 0x1fff;
+
 		// TODO: load range data in groups
 		uint full_rows[4] = {
-			g_scratch[soffset + i * 2 + 0].x, g_scratch[soffset + i * 2 + 0].y,
-			g_scratch[soffset + i * 2 + 1].x, g_scratch[soffset + i * 2 + 1].y };
+			g_scratch[src_offset + idx * 2 + 0].x, g_scratch[src_offset + idx * 2 + 0].y,
+			g_scratch[src_offset + idx * 2 + 1].x, g_scratch[src_offset + idx * 2 + 1].y };
 		uint tri_idx = (full_rows[0] >> 24) | ((full_rows[1] >> 16) & 0xff00);
 		uint block_rows[2] = {0, 0};
 		uint num_frags = 0;
@@ -524,14 +590,12 @@ void generateBlocks(uint by)
 			block_rows[j >> 1] |= bits01 << ((j & 1) * 12);
 		}
 
-		if(num_frags != 0) {
-			block_rows[0] |= (tri_idx & 0xff) << 24;
-			block_rows[1] |= (tri_idx & 0xff00) << 16;
-
-			uint block_idx = atomicAdd(s_curblock_tri_counts[bx], 1);
-			atomicAdd(BLOCK1_FRAG_COUNT(bx), num_frags);
-			g_scratch[doffset + block_idx] = uvec2(block_rows[0], block_rows[1]);
-		}
+		if(num_frags == 0) // This means that bmasks are invalid
+			RECORD(0, 0, 0, 0);
+		block_rows[0] |= (tri_idx & 0xff) << 24;
+		block_rows[1] |= (tri_idx & 0xff00) << 16;
+		atomicAdd(BLOCK1_FRAG_COUNT(bx), num_frags);
+		g_scratch[dst_offset + i] = uvec2(block_rows[0], block_rows[1]);
 	}
 	barrier();
 	if(LIX < 8) {
@@ -540,59 +604,6 @@ void generateBlocks(uint by)
 		atomicAdd(BLOCK4_FRAG_COUNT(LIX >> 2), value);
 		atomicAdd(BLOCK8_FRAG_COUNT(), value);
 	}
-	barrier();
-}
-
-void sortBlocks(int bx, int by)
-{
-	uint soffset = gl_WorkGroupID.x * WORKGROUP_SCRATCH_SIZE + 32768 + bx * MAX_BLOCK_ROW_TRIS;
-	uint tri_count = s_curblock_tri_counts[bx];
-
-	for(uint i = LIX; i < tri_count; i += LSIZE) {
-		uvec2 rows = g_scratch[soffset + i];
-
-		vec2 cpos = vec2(0, 0);
-		float weight = 0.0;
-
-		for(int y = 0; y < 8; y++) {
-			uint row_range = (rows[y >> 2] >> ((y & 3) * 6)) & 0x3f;
-			if(row_range == 0x07)
-				continue;
-
-			int minx = int(row_range & 0x7), maxx = int((row_range >> 3) & 0x7);
-			int count = maxx - minx + 1;
-			cpos += vec2(float(maxx + minx + 1) * 0.5, y + 0.5) * count;
-			weight += count;
-		}
-
-		cpos /= weight;
-		cpos += vec2(bx, by) * 8;
-
-		uint bin_tri_idx = (rows.x >> 24) | ((rows.y & 0xff000000) >> 16);
-
-		uint toffset = scratchTriOffset(bin_tri_idx);
-		vec2 val0 = uintBitsToFloat(TRI_SCRATCH(0));
-		vec2 val1 = uintBitsToFloat(TRI_SCRATCH(1));
-		vec3 normal = vec3(val0.x, val0.y, val1.x);
-		float param0 = val1.y; //TODO: premul by normal
-
-		vec3 ray_dir = s_bin_ray_dir0 + cpos.x * frustum.ws_dirx + cpos.y * frustum.ws_diry;
-		float ray_pos = param0 / dot(normal, ray_dir);
-		float depth = float(0x7ffff) / (1.0 + max(0.0, ray_pos)); // 19 bits is enough
-		// TODO: we can fit everything in 32 bits
-
-		SBUFFER_SET_PAIR(i, uvec2(uint(depth), uint(i)));
-	}
-	barrier();
-	sortBuffer(tri_count);
-	barrier();
-	for(uint i = LIX; i < tri_count; i += LSIZE) {
-		uint idx = s_buffer[i * 2 + 1];
-		SBUFFER_SET_PAIR(i, g_scratch[soffset + idx]);
-	}
-	barrier();
-	for(uint i = LIX; i < tri_count; i += LSIZE)
-		g_scratch[soffset + i] = SBUFFER_GET_PAIR(i);
 	barrier();
 }
 
@@ -829,10 +840,10 @@ void rasterFragmentCounts(int by)
 {
 	for(uint i = LIX; i < BIN_SIZE * MAX_ROWS; i += LSIZE) {
 		ivec2 pixel_pos = ivec2(i & (BIN_SIZE - 1), by * 8 + (i >> BIN_SHIFT));
-		uint count = s_pixel_counts[i] & 0xffff; float scale = 1.0 / 32;
+		//uint count = s_pixel_counts[i] & 0xffff; float scale = 1.0 / 32;
 		//uint count = s_pixel_counts[i] >> 16; float scale = 1.0 / 4096;
-		//uint count = BLOCK1_FRAG_COUNT(pixel_pos.x / 8); float scale = 1.0 / 1024;
 		//uint count = s_sample_count; float scale = 1.0 / 4096;
+		uint count = BLOCK1_FRAG_COUNT(pixel_pos.x / 8); float scale = 1.0 / 1024;
 
 		vec4 color = vec4(count == 0xffff? vec3(1.0, 0.0, 0.0) : vec3(float(count) * scale), 1.0);
 		color = min(color, vec4(1.0));
@@ -877,12 +888,6 @@ void rasterBin(int bin_id) {
 		generateBlocks(by);
 		groupMemoryBarrier();
 		barrier();
-
-		// TODO: sort multiple rows at once if they fit into sbuffer
-		for(int bx = 0; bx < 8; bx++)
-			sortBlocks(bx, by);
-		groupMemoryBarrier();
-		barrier();
 		
 		// How many rows can we rasterize in single step?
 		int ystep = 8;
@@ -904,7 +909,6 @@ void rasterBin(int bin_id) {
 			s_pixel_counts[y * BIN_SIZE + x] += int(value << 16);
 		}
 		barrier();
-
 
 		for(int y = 0; y < MAX_ROWS; y += ystep) {
 			barrier();

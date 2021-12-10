@@ -912,7 +912,8 @@ void rasterBin(int bin_id) {
 			bool fail2 = anyInvocationARB(BLOCK2_FRAG_COUNT(LIX & 3) > MAX_SAMPLES);
 			bool fail1 = anyInvocationARB(BLOCK1_FRAG_COUNT(LIX & 7) > MAX_SAMPLES);
 			if(fail1) {
-				rasterInvalidBlockRow(by, vec3(0.5, 0.0, 0.0));
+				float value = fail1? 0.2 : fail2? 0.5 : fail4? 0.8 : 1.0;
+				rasterInvalidBlockRow(by, vec3(value, 0.0, 0.0));
 				continue;
 			}
 			bx_step = fail2? 1 : fail4? 2 : 4;
@@ -940,8 +941,11 @@ void rasterBin(int bin_id) {
 			barrier();
 			loadSamples(bx, by, bx_step);
 			barrier();
-			//sortBuffer(s_sample_count);
-			barrier();
+
+			// TODO: what's the best way to fix broken pixels?
+			// full sort ? recreate full depth values and sort pairs?
+			// sortBuffer(s_sample_count);
+			// barrier();
 
 			// TODO: reorder samples to increase coherency during shading
 			// - najpierw przy generacji sampli w kolejności pikselowej, dla każdego sampla zapisujemy też indeks

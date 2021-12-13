@@ -53,9 +53,36 @@
   white_oak: 9283   71     56    178    2252          6589
 *Resolution:* (1280, 1024)
 
+*Partial results (bins with > 1024 tris not rendered) (total time):*
+     bunny: 1352
+conference: 2604
+ scrubPine: 1633
+    sponza: 7426
+    teapot: 1306
+ white_oak: 19153
+
 -----------------------------------------------------------------------------------------
                     === Rasteryzacja wszystkich sampli na raz ===
 -----------------------------------------------------------------------------------------
+
+* *Nowy pomysł:*
+
+  - zamiast load samples od razu generujemy sample w kolejności trójkąta do SMEM
+  - następnie wykonujemy połączone loadSamples i reduce:
+    - iterujemy po pikselach i zgarniamy sample (stos kolorów podobnie jak głębię trzymając w rejestrach)
+	- równocześnie generujemy głębię dla każdego sampla i odpowiednio je porządkujemy
+	- najwyższa wartość ze stosu nie spada ale jest domergowywana do koloru docelowego
+	- bardzo łatwo jesteśmy w stanie wyliczyć dla danego sampla, jaka jest jego pozycja w SMEM
+	  w kolejności po trójkątach
+	na koniec kolor decelowy jest zapisywany do framebuffera
+
+* *Problem: cały czas wolne samplowanie...*
+  WhiteOak: 20ms vs 2.4ms ...
+  
+  Opcje:
+  - Cieniowanie 2x2, 4x4, 8x8 ? 
+  - Używanie SMEM do trzymania danych trójkąta ?
+  - Jeszcze więcej wątków ?
 
 * *Problem: będą też sytuacje gdzie sample nie będą poprawnie posortowane po zastosowaniu filtra*
   W takiej sytuacji będziemy musieli robić pełny sort? Będziemy musieli go w każdym razie

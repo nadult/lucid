@@ -338,6 +338,27 @@ void storeTriangle(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, uint v0, uint 
 	}
 }
 
+// 12 * 32 bit na parametry trójkąta (1x na trójkąt)
+//
+// 4 * 32 bit na parametry instancji (1X na quad)
+//
+// 6 * 32 bit na Vertex Color i normalne
+// 6 * 32 bit na UV 
+//
+// Per trójkąt: 28
+
+// Przechowywanie quadów: 
+//
+// Per quad: 24 + 4 + 8 + 8 = 44 (vs 56)
+// Nie-przetworzone dane wierzchołków: 32
+//
+// W SMEM mamy max 48KB
+//
+// Jeśli bym się ograniczył do 256 quadów na bin:
+// - 32 KB na nie-przetworzone dane wierzchołków dla 256 quadów
+// - zostaje mi 16 KB w SMEM...: max 10 bajtów na wątek...
+//   max 4096 sampli
+
 void getTriangleParams(uint tri_idx, out vec3 normal, out vec3 params, out vec3 edge0, out vec3 edge1,
 		out uint instance_id, out uint instance_flags, out uint instance_color) {
 	uint toffset = scratchTriOffset(tri_idx);
@@ -677,6 +698,9 @@ void loadSamples(int bx, int by, int bx_step) {
 	uint pix_offset = s_pixel_counts[pixel_id] >> 16;
 	vec3 ray_dir = s_bin_ray_dir0 + (by * 8 + y) * frustum.ws_diry + x * frustum.ws_dirx;
 
+	// TODO: merge it with reduce ?
+	// we would have to keep indices in registers just as depths
+	// and merge those which are the deepest
 	float prev_depths[6] = {-1.0, -1.0, -1.0, -1.0, -1.0, -1.0};
 	for(uint i = 0; i < tri_count; i += 8) {
 		uint sub_count = min(8, tri_count - i);

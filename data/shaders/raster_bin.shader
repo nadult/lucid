@@ -777,10 +777,12 @@ void binPixels(int by) {
 // Can we improve speed of loading vertex data?
 //
 // On WhiteOak modifying tex_dx, tex_dy makes really big perf difference!
-// Whole rendering for: 0.001: 24 ms, 0.1: 17 ms
+// Whole rendering for: 0.00001: 27.03 ms  0.001: 24.07 ms  0.1: 17.69 ms
+// Simple renderer for: 0.00001:  4.91 ms  0.001:  2.65 ms  0.1:  2.17 ms
 // It seems that memory is a problem
-//
 // Does that mean that i should use even more threads per bin ?
+//
+// Cache trashing...
 uint shadeSample(ivec2 bin_pixel_pos, uint local_tri_idx)
 {
 	vec3 ray_dir = s_bin_ray_dir0 + frustum.ws_dirx * bin_pixel_pos.x
@@ -814,7 +816,6 @@ uint shadeSample(ivec2 bin_pixel_pos, uint local_tri_idx)
 		color *= (1.0 - bary[0] - bary[1]) * col0 + bary[0] * col1 + bary[1] * col2;
 	}
 
-	// TODO: texkill for 0 alpha ?
 	if((instance_flags & INST_HAS_TEXTURE) != 0) {
 		vec2 tex0, tex1, tex2;
 		getTriangleVertexTexCoords(local_tri_idx, tex0, tex1, tex2);
@@ -829,11 +830,16 @@ uint shadeSample(ivec2 bin_pixel_pos, uint local_tri_idx)
 			tex_dx *= uv_rect.zw, tex_dy *= uv_rect.zw;
 		}
 
+		vec4 tex_col;
 		if((instance_flags & INST_TEX_OPAQUE) != 0)
-			color.xyz *= textureGrad(opaque_texture, tex_coord, tex_dx, tex_dy).xyz;
+			tex_col = vec4(textureGrad(opaque_texture, tex_coord, tex_dx, tex_dy).xyz, 1.0);
 		else
-			color *= textureGrad(transparent_texture, tex_coord, tex_dx, tex_dy);
+			tex_col = textureGrad(transparent_texture, tex_coord, tex_dx, tex_dy);
+		color *= tex_col;
 	}
+
+	if(color.a == 0.0)
+		return 0;
 
 	if((instance_flags & INST_HAS_VERTEX_NORMALS) != 0) {
 		vec3 nrm0, nrm1, nrm2;

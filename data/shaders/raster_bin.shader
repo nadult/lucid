@@ -6,7 +6,7 @@
 #define LSIZE 512
 #define LSHIFT 9
 
-#define MAX_ROWS		(LSIZE / 64)
+#define MAX_ROWS		8
 
 #define BLOCK_ROW_SIZE	(64 * 8)
 
@@ -452,7 +452,7 @@ void computeCurrentPixelCounts(uint by)
 	// może po prostu inaczej grupować dane źródłowe? ale trzeba uwazac na bank conflicty...
 
 	// Computing actual pixel values
-	{
+	if(LIX < BIN_SIZE * MAX_ROWS) {
 #ifdef VENDOR_NVIDIA
 		int value = s_pixel_counts[LIX], temp;
 		temp = shuffleUpNV(value,  1, 32); if((LIX & 31) >=  1) value += temp;
@@ -482,28 +482,27 @@ void computeCurrentPixelCounts(uint by)
 	}
 	barrier();
 
-	// Computing prefix sums for each 8x8 block (storing in higher 16-bits)
-	uint bx = LIX >> 6, x = (LIX & 7) + bx * 8;
-	y = (LIX >> 3) & 7;
-#ifdef VENDOR_NVIDIA
-	int value = s_pixel_counts[y * 64 + x], temp;
-	value += (value << 16);
-	temp = shuffleUpNV(value,  1, 32); if((LIX & 31) >=  1) value += temp & 0xffff0000;
-	temp = shuffleUpNV(value,  2, 32); if((LIX & 31) >=  2) value += temp & 0xffff0000;
-	temp = shuffleUpNV(value,  4, 32); if((LIX & 31) >=  4) value += temp & 0xffff0000;
-	temp = shuffleUpNV(value,  8, 32); if((LIX & 31) >=  8) value += temp & 0xffff0000;
-	temp = shuffleUpNV(value, 16, 32); if((LIX & 31) >= 16) value += temp & 0xffff0000;
-	s_pixel_counts[y * 64 + x] = value - (value << 16);
+	if(LIX < BIN_SIZE * MAX_ROWS) {
+		// Computing prefix sums for each 8x8 block (storing in higher 16-bits)
+		uint bx = LIX >> 6, x = (LIX & 7) + bx * 8;
+		y = (LIX >> 3) & 7;
+		int value = s_pixel_counts[y * 64 + x], temp;
+		value += (value << 16);
+		temp = shuffleUpNV(value,  1, 32); if((LIX & 31) >=  1) value += temp & 0xffff0000;
+		temp = shuffleUpNV(value,  2, 32); if((LIX & 31) >=  2) value += temp & 0xffff0000;
+		temp = shuffleUpNV(value,  4, 32); if((LIX & 31) >=  4) value += temp & 0xffff0000;
+		temp = shuffleUpNV(value,  8, 32); if((LIX & 31) >=  8) value += temp & 0xffff0000;
+		temp = shuffleUpNV(value, 16, 32); if((LIX & 31) >= 16) value += temp & 0xffff0000;
+		s_pixel_counts[y * 64 + x] = value - (value << 16);
+	}
 	barrier();
 
 	// Adding first half of 8x8 block to second half
-	if(y >= 4) {
-		int value = s_pixel_counts[bx * 8 + 7 + 3 * 64];
+	if(LIX < BIN_SIZE * MAX_ROWS / 2) {
+		uint y = 4 + (LIX >> 6), x = LIX & 63;
+		int value = s_pixel_counts[(x & ~7) + 7 + 3 * 64];
 		s_pixel_counts[y * 64 + x] += (value & 0xffff0000) + (value << 16);
 	}
-#else
-#error Write me
-#endif
 }
 
 void generateBlocks(uint by)
@@ -776,6 +775,12 @@ void binPixels(int by) {
 //   if they are in the cache then it's not a problem...
 //
 // Can we improve speed of loading vertex data?
+//
+// On WhiteOak modifying tex_dx, tex_dy makes really big perf difference!
+// Whole rendering for: 0.001: 24 ms, 0.1: 17 ms
+// It seems that memory is a problem
+//
+// Does that mean that i should use even more threads per bin ?
 uint shadeSample(ivec2 bin_pixel_pos, uint local_tri_idx)
 {
 	vec3 ray_dir = s_bin_ray_dir0 + frustum.ws_dirx * bin_pixel_pos.x
@@ -809,6 +814,7 @@ uint shadeSample(ivec2 bin_pixel_pos, uint local_tri_idx)
 		color *= (1.0 - bary[0] - bary[1]) * col0 + bary[0] * col1 + bary[1] * col2;
 	}
 
+	// TODO: texkill for 0 alpha ?
 	if((instance_flags & INST_HAS_TEXTURE) != 0) {
 		vec2 tex0, tex1, tex2;
 		getTriangleVertexTexCoords(local_tri_idx, tex0, tex1, tex2);
@@ -858,7 +864,7 @@ void rasterFragmentCounts(int by)
 		//uint count = s_pixel_counts[i] & 0xffff; float scale = 1.0 / 32;
 		uint count = s_pixel_counts[i] >> 16; float scale = 1.0 / 4096;
 		//uint count = s_sample_count; float scale = 1.0 / 4096;
-		//uint count = BLOCK1_FRAG_COUNT(pixel_pos.x / 8); float scale = 1.0 / 1024;
+		//uint count = BLOCK1_FRAG_COUNT(pixel_pos.x / 8); float scale = 1.0 / 2048;
 
 		vec4 color = vec4(count == 0xffff? vec3(1.0, 0.0, 0.0) : vec3(float(count) * scale), 1.0);
 		color = min(color, vec4(1.0));
@@ -919,7 +925,7 @@ void rasterBin(int bin_id) {
 			bx_step = fail2? 1 : fail4? 2 : 4;
 		}
 
-		{
+		if(LIX < BIN_SIZE * MAX_ROWS) {
 			uint bx = LIX >> 6, x = (LIX & 7) + bx * 8, y = (LIX >> 3) & 7;
 			uint value = 0;
 			if(bx_step >= 2 && (bx & 1) != 0)

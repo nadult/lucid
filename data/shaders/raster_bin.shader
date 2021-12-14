@@ -543,8 +543,6 @@ void generateBlocks(uint by)
 
 		if(num_frags == 0) // This means that bmasks are invalid
 			RECORD(0, 0, 0, 0);
-		// TODO: use tri offsets to estimate frag counts instead
-		atomicAdd(BLOCK1_FRAG_COUNT(bx), num_frags);
 
 		g_scratch[dst_offset + i] = uvec2(bits[0], bits[1]);
 		g_scratch[dst_offset + i + MAX_BLOCK_TRIS].x = tri_idx | (num_frags0123 << 16);
@@ -594,11 +592,11 @@ void generateBlocks(uint by)
 #endif
 
 	if(LIX < 8) {
-		uint value = BLOCK1_FRAG_COUNT(LIX);
 		uint num_tris = s_curblock_tri_counts[LIX];
 		uint max_offset = s_buffer[LIX * MAX_BLOCK_TRIS + num_tris - 1];
-		if(value != max_offset && num_tris > 0)
-			RECORD(value, max_offset, 0, num_tris);
+		uint value = num_tris == 0? 0 : max_offset;
+		BLOCK1_FRAG_COUNT(LIX) = value;
+
 		// TODO: we can do it with a single atomicAdd
 		atomicAdd(BLOCK2_FRAG_COUNT(LIX >> 1), value);
 		atomicAdd(BLOCK4_FRAG_COUNT(LIX >> 2), value);
@@ -635,9 +633,7 @@ void loadTriSamples(int bx, int by, int bx_step) {
 				RECORD(x, y, tri_offset, BLOCK1_FRAG_COUNT(bx));
 			uint pixel_id = (y << 6) | (bx * 8 + x++);
 			uint value = (pixel_id << 16) | tri_idx;
-
-			if(tri_offset < MAX_SAMPLES)
-				s_buffer[tri_offset++] = value;
+			s_buffer[tri_offset++] = value;
 		} while((tri_bitmask & (1 << x)) != 0);
 	}
 }
@@ -866,8 +862,7 @@ void rasterFragmentCounts(int by)
 {
 	for(uint i = LIX; i < BIN_SIZE * MAX_ROWS; i += LSIZE) {
 		ivec2 pixel_pos = ivec2(i & (BIN_SIZE - 1), by * 8 + (i >> BIN_SHIFT));
-		uint count = s_mini_buffer[pixel_pos.x / 8]; float scale = 1.0 / 4096;
-		//uint count = BLOCK1_FRAG_COUNT(pixel_pos.x / 8); float scale = 1.0 / 4096;
+		uint count = BLOCK1_FRAG_COUNT(pixel_pos.x / 8); float scale = 1.0 / 4096;
 
 		vec4 color = vec4(count == 0xffff? vec3(1.0, 0.0, 0.0) : vec3(float(count) * scale), 1.0);
 		color = min(color, vec4(1.0));

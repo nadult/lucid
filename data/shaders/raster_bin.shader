@@ -76,7 +76,11 @@ shared uint s_bin_quad_count, s_bin_quad_offset;
 shared int s_sample_count;
 shared uint s_buffer[MAX_SAMPLES + 1];
 
-shared uint s_mini_buffer[16 * 8];
+shared uint s_mini_buffer[16 * BLOCK_COUNT];
+shared uint s_block_frag_offsets[BLOCK_COUNT];
+		
+// How many rows can we rasterize in single step?
+shared int s_bx_step;
 
 #ifdef VENDOR_NVIDIA
 uint swap(uint x, int mask, uint dir)
@@ -591,16 +595,36 @@ void generateBlocks(uint by)
 	}
 #endif
 
-	if(LIX < 8) {
-		uint num_tris = s_curblock_tri_counts[LIX];
-		uint max_offset = s_buffer[LIX * MAX_BLOCK_TRIS + num_tris - 1];
+	if(LIX < BLOCK_COUNT) {
+		uint bx = LIX;
+		uint num_tris = s_curblock_tri_counts[bx];
+		uint max_offset = s_buffer[bx * MAX_BLOCK_TRIS + num_tris - 1];
 		uint value = num_tris == 0? 0 : max_offset;
-		BLOCK1_FRAG_COUNT(LIX) = value;
+		BLOCK1_FRAG_COUNT(bx) = value;
 
 		// TODO: we can do it with a single atomicAdd
-		atomicAdd(BLOCK2_FRAG_COUNT(LIX >> 1), value);
-		atomicAdd(BLOCK4_FRAG_COUNT(LIX >> 2), value);
+		atomicAdd(BLOCK2_FRAG_COUNT(bx >> 1), value);
+		atomicAdd(BLOCK4_FRAG_COUNT(bx >> 2), value);
 		atomicAdd(BLOCK8_FRAG_COUNT(), value);
+
+		int bx_step = 8;
+		// TODO: compute this on first warp only
+		if(BLOCK8_FRAG_COUNT() > MAX_SAMPLES) {
+			bool fail4 = anyInvocationARB(BLOCK4_FRAG_COUNT(bx & 1) > MAX_SAMPLES);
+			bool fail2 = anyInvocationARB(BLOCK2_FRAG_COUNT(bx & 3) > MAX_SAMPLES);
+			bool fail1 = anyInvocationARB(BLOCK1_FRAG_COUNT(bx & 7) > MAX_SAMPLES);
+			bx_step = fail1? 0 : fail2? 1 : fail4? 2 : 4;
+		}
+
+		value = 0;
+		if(bx_step >= 2 && (bx & 1) != 0)
+			value += BLOCK1_FRAG_COUNT(bx - 1);
+		if(bx_step >= 4 && (bx & 2) != 0)
+			value += BLOCK2_FRAG_COUNT(bx / 2 - 1);
+		if(bx_step >= 8 && (bx & 4) != 0)
+			value += BLOCK4_FRAG_COUNT(bx / 4 - 1);
+		s_block_frag_offsets[bx] = value;
+		s_bx_step = bx_step;
 	}
 	barrier();
 }
@@ -611,7 +635,7 @@ void loadTriSamples(int bx, int by, int bx_step) {
 
 	uint soffset = gl_WorkGroupID.x * WORKGROUP_SCRATCH_SIZE + 32768 + bx * MAX_BLOCK_TRIS * 2;
 	uint tri_count = s_curblock_tri_counts[bx];
-	uint block_offset = s_mini_buffer[bx]; // TODO: better place for that
+	uint block_offset = s_block_frag_offsets[bx];
 
 	// TODO: load tri data similarily as in loadSamples and use shuffles to extract
 	for(uint i = (LIX & (LSIZE / bx_step - 1)) >> 3, istep = (LSIZE / 8) / bx_step; i < tri_count; i += istep) {
@@ -650,7 +674,7 @@ void reduceSamples(int bx, int by, int bx_step) {
 	// TODO: add functions for computing scratch offsets
 	uint soffset = gl_WorkGroupID.x * WORKGROUP_SCRATCH_SIZE + 32768 + bx * MAX_BLOCK_TRIS * 2;
 	uint tri_count = s_curblock_tri_counts[bx];
-	int block_offset = int(s_mini_buffer[bx]); // TODO: better place for that
+	int block_offset = int(s_block_frag_offsets[bx]);
 
 	// TODO: share pixels between threads for bx_step <= 4?
 	// TODO: WARP_SIZE?
@@ -908,37 +932,18 @@ void rasterBin(int bin_id) {
 		barrier();
 
 		// How many rows can we rasterize in single step?
-		int bx_step = 8;
-		// TODO: compute this on first warp only
-		if(BLOCK8_FRAG_COUNT() > MAX_SAMPLES) {
-			bool fail4 = anyInvocationARB(BLOCK4_FRAG_COUNT(LIX & 1) > MAX_SAMPLES);
-			bool fail2 = anyInvocationARB(BLOCK2_FRAG_COUNT(LIX & 3) > MAX_SAMPLES);
-			bool fail1 = anyInvocationARB(BLOCK1_FRAG_COUNT(LIX & 7) > MAX_SAMPLES);
-			if(fail1) {
-				float value = fail1? 0.2 : fail2? 0.5 : fail4? 0.8 : 1.0;
-				rasterInvalidBlockRow(by, vec3(value, 0.0, 0.0));
-				continue;
-			}
-			bx_step = fail2? 1 : fail4? 2 : 4;
+		int bx_step = s_bx_step;
+		if(bx_step == 0) {
+			float value = bx_step == 0? 0.2 : bx_step == 1? 0.5 : bx_step == 2? 0.8 : 1.0;
+			rasterInvalidBlockRow(by, vec3(value, 0.0, 0.0));
+			continue;
 		}
-
-		if(LIX < BLOCK_COUNT) {
-			uint value = 0, bx = LIX;
-			if(bx_step >= 2 && (bx & 1) != 0)
-				value += BLOCK1_FRAG_COUNT(bx - 1);
-			if(bx_step >= 4 && (bx & 2) != 0)
-				value += BLOCK2_FRAG_COUNT(bx / 2 - 1);
-			if(bx_step >= 8 && (bx & 4) != 0)
-				value += BLOCK4_FRAG_COUNT(bx / 4 - 1);
-			s_mini_buffer[bx] = value;
-		}
-		barrier();
 
 		for(int bx = 0; bx < BLOCK_COUNT; bx += bx_step) {
 			barrier();
 			if(LIX == 0) {
 				uint last_bx = bx + bx_step - 1;
-				s_sample_count = int(BLOCK1_FRAG_COUNT(last_bx) + s_mini_buffer[last_bx]);
+				s_sample_count = int(BLOCK1_FRAG_COUNT(last_bx) + s_block_frag_offsets[last_bx]);
 			}
 			barrier();
 			loadTriSamples(bx, by, bx_step);

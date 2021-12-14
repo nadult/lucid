@@ -78,7 +78,7 @@ shared int s_pixel_counts[BIN_SIZE * MAX_ROWS];
 shared int s_sample_count;
 shared uint s_buffer[MAX_SAMPLES + 1];
 
-shared uint s_mini_buffer[32 * 8];
+shared uint s_mini_buffer[16 * 8];
 
 #ifdef VENDOR_NVIDIA
 uint swap(uint x, int mask, uint dir)
@@ -648,20 +648,20 @@ void generateBlocks(uint by)
 
 	// Computing offsets for each triangle within block
 	uint idx32 = (LIX & (LSIZE / 8 - 1)) * 32;
+	// Note: here we expect that idx32 < 32 * 16
 	if(idx32 < tri_count) {
 		uint value = s_buffer[buf_offset + idx32 + 31], temp;
 		temp = shuffleUpNV(value,  1, 32); if((LIX & 31) >=  1) value += temp;
 		temp = shuffleUpNV(value,  2, 32); if((LIX & 31) >=  2) value += temp;
 		temp = shuffleUpNV(value,  4, 32); if((LIX & 31) >=  4) value += temp;
 		temp = shuffleUpNV(value,  8, 32); if((LIX & 31) >=  8) value += temp;
-		temp = shuffleUpNV(value, 16, 32); if((LIX & 31) >= 16) value += temp;
-		s_mini_buffer[bx * 32 + (idx32 >> 5)] = value;
+		s_mini_buffer[bx * 16 + (idx32 >> 5)] = value;
 	}
 	barrier();
 	
 	// TODO: merge with next step
 	for(uint i = 32 + (LIX & (LSIZE / 8 - 1)); i < tri_count; i += LSIZE / 8)
-		s_buffer[buf_offset + i] += s_mini_buffer[bx * 32 + (i >> 5) - 1];
+		s_buffer[buf_offset + i] += s_mini_buffer[bx * 16 + (i >> 5) - 1];
 	barrier();
 
 	// Storing offsets to scratch mem
@@ -699,9 +699,10 @@ void loadTriSamples(int bx, int by, int bx_step) {
 
 	uint soffset = gl_WorkGroupID.x * WORKGROUP_SCRATCH_SIZE + 32768 + bx * MAX_BLOCK_TRIS * 2;
 	uint tri_count = s_curblock_tri_counts[bx];
+	uint block_offset = s_mini_buffer[bx]; // TODO: better place for that
 
 	// TODO: load tri data similarily as in loadSamples and use shuffles to extract
-	for(uint i = LIX >> 3, istep = (LSIZE / 8) / bx_step; i < tri_count; i += istep) {
+	for(uint i = (LIX & (LSIZE / bx_step - 1)) >> 3, istep = (LSIZE / 8) / bx_step; i < tri_count; i += istep) {
 		uvec2 bits = g_scratch[soffset + i];
 		uvec2 info = g_scratch[soffset + i + MAX_BLOCK_TRIS];
 
@@ -709,14 +710,12 @@ void loadTriSamples(int bx, int by, int bx_step) {
 		uint tri_bitmask = y < 4? bits.x : bits.y;
 		uint tri_offset = info.y + (y >= 4? info.x >> 16 : 0);
 		uint shift = (y & 3) * 8;
-		tri_offset += bitCount(tri_bitmask & ((1 << shift) - 1));
+		tri_offset += bitCount(tri_bitmask & ((1 << shift) - 1)) + block_offset;
 		tri_bitmask = (tri_bitmask >> shift) & 0xff;
 
 		if(tri_bitmask == 0)
 			continue;
 		int x = findLSB(tri_bitmask);
-		if(x == -1)
-			continue; // TODO: remove
 		do {
 			if(tri_offset >= MAX_SAMPLES)
 				RECORD(x, y, tri_offset, BLOCK1_FRAG_COUNT(bx));
@@ -741,6 +740,7 @@ void reduceSamples(int bx, int by, int bx_step) {
 	// TODO: add functions for computing scratch offsets
 	uint soffset = gl_WorkGroupID.x * WORKGROUP_SCRATCH_SIZE + 32768 + bx * MAX_BLOCK_TRIS * 2;
 	uint tri_count = s_curblock_tri_counts[bx];
+	int block_offset = int(s_mini_buffer[bx]); // TODO: better place for that
 
 	// TODO: share pixels between threads for bx_step <= 4?
 	// TODO: WARP_SIZE?
@@ -781,7 +781,7 @@ void reduceSamples(int bx, int by, int bx_step) {
 				sel_normal = normal * (1.0 / param0);
 				in_range = tri_bitmask != 0;
 				sel_tri = tri_bitmask | tri_idx << 16;
-				sel_tri_offset = int(tri_offset) - findLSB(tri_bitmask);
+				sel_tri_offset = int(tri_offset) - findLSB(tri_bitmask) + block_offset;
 			}
 			tris_bitmask = (uint(ballotARB(in_range)) >> ((y & 3) * 8)) & 0xff;
 		}
@@ -1000,7 +1000,7 @@ void rasterBin(int bin_id) {
 		generateBlocks(by);
 		groupMemoryBarrier();
 		barrier();
-		
+
 		// How many rows can we rasterize in single step?
 		int bx_step = 8;
 		// TODO: compute this on first warp only
@@ -1015,26 +1015,33 @@ void rasterBin(int bin_id) {
 			}
 			bx_step = fail2? 1 : fail4? 2 : 4;
 		}
-		bx_step = 1;
 
-		if(LIX < BIN_SIZE * MAX_ROWS) {
-			uint bx = LIX >> 6, x = (LIX & 7) + bx * 8, y = (LIX >> 3) & 7;
-			uint value = 0;
+		if(LIX < BLOCK_COUNT) {
+			uint value = 0, bx = LIX;
 			if(bx_step >= 2 && (bx & 1) != 0)
 				value += BLOCK1_FRAG_COUNT(bx - 1);
 			if(bx_step >= 4 && (bx & 2) != 0)
 				value += BLOCK2_FRAG_COUNT(bx / 2 - 1);
 			if(bx_step >= 8 && (bx & 4) != 0)
 				value += BLOCK4_FRAG_COUNT(bx / 4 - 1);
-			s_pixel_counts[y * BIN_SIZE + x] += int(value << 16);
+			s_mini_buffer[bx] = value;
+		}
+		barrier();
+		if(LIX < BIN_SIZE * MAX_ROWS) {
+			uint bx = LIX >> 6, x = (LIX & 7) + bx * 8, y = (LIX >> 3) & 7;
+			s_pixel_counts[y * BIN_SIZE + x] += int(s_mini_buffer[bx] << 16);
 		}
 		barrier();
 
 		for(int bx = 0; bx < BLOCK_COUNT; bx += bx_step) {
 			barrier();
 			if(LIX == 0) {
-				uint count = uint(s_pixel_counts[7 * BIN_SIZE + (bx + bx_step) * 8 - 1]);
-				s_sample_count = int((count >> 16) + (count & 0xffff));
+				uint count = 0;
+				for(int j = 0; j < bx_step; j++)
+					count += BLOCK1_FRAG_COUNT(bx + j);
+				//uint count = uint(s_pixel_counts[7 * BIN_SIZE + (bx + bx_step) * 8 - 1]);
+				//s_sample_count = int((count >> 16) + (count & 0xffff)); // TODO: compute differently
+				s_sample_count = int(count);
 			}
 			barrier();
 			loadTriSamples(bx, by, bx_step);
@@ -1042,18 +1049,9 @@ void rasterBin(int bin_id) {
 
 			// TODO: what's the best way to fix broken pixels?
 			// full sort ? recreate full depth values and sort pairs?
-			// sortBuffer(s_sample_count);
-			// barrier();
 
-			// TODO: reorder samples to increase coherency during shading
-			// - najpierw przy generacji sampli w kolejności pikselowej, dla każdego sampla zapisujemy też indeks
-			//   w kolejności trójkątówej
-			// - odwracamy kolejność, zachowując indeksy pikselowe
-			// - cieniujemy i zapisujemy od razu pod indeks pikselowy
-			//
-			// - indeksy pikselowe musimy sobie zachować; dla 8 indeksów 11-bitowych wystarczą 3 uinty
-
-			// Shading samples & storing them ordered by pixel pos
+			// Shading samples grouped by triangles
+			// TODO: how can we make sure that tris which generate >= 32 samples are all handles by single warp?
 			for(uint i = LIX; i < s_sample_count; i += LSIZE) {
 				uint value = s_buffer[i];
 				uint pixel_id = value >> 16;

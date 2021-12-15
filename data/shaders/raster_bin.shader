@@ -105,33 +105,33 @@ uint xorBits(uint value, int bit0, int bit1)
 }
 #endif
 
-// TODO: naming
-shared uint s_max_group_tn;
+shared uint s_sort_max_block_rcount;
 
-void sortBuffer8()
+void sortBlockTris()
 {
 	if(LIX < 8) {
-		uint N = BLOCK_TRI_COUNT(LIX);
-		uint TN = max(32, (N & (N - 1)) == 0? N : (2 << findMSB(N)));
+		uint count = BLOCK_TRI_COUNT(LIX);
+		// rcount: count rounded up to next power of 2
+		uint rcount = max(32, (count & (count - 1)) == 0? count : (2 << findMSB(count)));
 		if(LIX == 0)
-			s_max_group_tn = 0;
-		atomicMax(s_max_group_tn, TN);
+			s_sort_max_block_rcount = 0;
+		atomicMax(s_sort_max_block_rcount, rcount);
 	}
 	barrier();
 
 	uint gid = LIX >> (LSHIFT - 3);
 	uint lid = LIX & (LSIZE / 8 - 1);
 	uint goffset = gid * MAX_BLOCK_TRIS;
-	uint N = BLOCK_TRI_COUNT(gid);
-	// TODO: max_TN is only needed for barriers, computations should be performed up to TN
-	// But it seems, that using TN directly is actually a bit slower... (Sponza)
-	uint max_TN = s_max_group_tn;
-	for(uint i = lid + N; i < max_TN; i += LSIZE / 8)
+	uint count = BLOCK_TRI_COUNT(gid);
+	// TODO: max_rcount is only needed for barriers, computations should be performed up to rcount
+	// But it seems, that using rcount directly is actually a bit slower... (Sponza)
+	uint max_rcount = s_sort_max_block_rcount;
+	for(uint i = lid + count; i < max_rcount; i += LSIZE / 8)
 		s_buffer[goffset + i] = 0xffffffff;
 	barrier();
 
 #ifdef VENDOR_NVIDIA
-	for(uint i = lid; i < max_TN; i += LSIZE / 8) {
+	for(uint i = lid; i < max_rcount; i += LSIZE / 8) {
 		uint value = s_buffer[goffset + i];
 		value = swap(value, 0x01, xorBits(lid, 1, 0)); // K = 2
 		value = swap(value, 0x02, xorBits(lid, 2, 1)); // K = 4
@@ -155,9 +155,9 @@ void sortBuffer8()
 #else
 	int start_k = 2, end_j = 1;
 #endif
-	for(uint k = start_k; k <= max_TN; k = 2 * k) {
+	for(uint k = start_k; k <= max_rcount; k = 2 * k) {
 		for(uint j = k >> 1; j >= end_j; j = j >> 1) {
-			for(uint i = lid; i < max_TN; i += (LSIZE / 8) * 2) {
+			for(uint i = lid; i < max_rcount; i += (LSIZE / 8) * 2) {
 				uint idx = (i & j) != 0? i + (LSIZE / 8) - j : i;
 				uint lvalue = s_buffer[goffset + idx];
 				uint rvalue = s_buffer[goffset + idx + j];
@@ -169,7 +169,7 @@ void sortBuffer8()
 			barrier();
 		}
 #ifdef VENDOR_NVIDIA
-		for(uint i = lid; i < max_TN; i += LSIZE / 8) {
+		for(uint i = lid; i < max_rcount; i += LSIZE / 8) {
 			uint bit = (i & k) == 0? 0 : 1;
 			uint value = s_buffer[goffset + i];
 			value = swap(value, 0x10, bit ^ bitExtract(lid, 4));
@@ -508,7 +508,7 @@ void generateBlocks(uint by)
 	}
 
 	barrier();
-	sortBuffer8();
+	sortBlockTris();
 	barrier();
 	bx = LIX >> (LSHIFT - 3);
 	min_bx = int(bx * 8);
@@ -689,8 +689,8 @@ void reduceSamples(int bx, int by, int bx_step) {
 	float prev_depths[4] = {-1.0, -1.0, -1.0, -1.0};
 	uint prev_colors[3] = {0, 0, 0};
 
-	vec3 color = vec3(0);
-	float neg_alpha = 1.0; // TODO: transparency synonym ?
+	vec3 out_color = vec3(0);
+	float out_transparency = 1.0;
 
 	for(uint i = 0; i < tri_count; i += 32) {
 		uint sub_count = min(32, tri_count - i);
@@ -748,8 +748,8 @@ void reduceSamples(int bx, int by, int bx_step) {
 						SWAP_FLOAT(prev_depths[2], prev_depths[1]);
 						if(prev_depths[2] < prev_depths[3]) {
 							i = tri_count;
-							color = vec3(1.0, 0.0, 0.0);
-							neg_alpha = 0.0;
+							out_color = vec3(1.0, 0.0, 0.0);
+							out_transparency = 0.0;
 							break;
 						}
 					}
@@ -763,9 +763,9 @@ void reduceSamples(int bx, int by, int bx_step) {
 
 			if(prev_colors[2] != 0) {
 				vec4 cur_color = decodeRGBA8(prev_colors[2]);
-				float cur_neg_alpha = 1.0 - cur_color.a;
-				color = color * cur_neg_alpha + cur_color.rgb * cur_color.a;
-				neg_alpha *= cur_neg_alpha;
+				float cur_transparency = 1.0 - cur_color.a;
+				out_color = out_color * cur_transparency + cur_color.rgb * cur_color.a;
+				out_transparency *= cur_transparency;
 			}
 
 			prev_colors[2] = prev_colors[1];
@@ -776,13 +776,13 @@ void reduceSamples(int bx, int by, int bx_step) {
 
 	for(int i = 2; i >= 0; i--) if(prev_colors[i] != 0) {
 		vec4 cur_color = decodeRGBA8(prev_colors[i]);
-		float cur_neg_alpha = 1.0 - cur_color.a;
-		color = color * cur_neg_alpha + cur_color.rgb * cur_color.a;
-		neg_alpha *= cur_neg_alpha;
+		float cur_transparency = 1.0 - cur_color.a;
+		out_color = out_color * cur_transparency + cur_color.rgb * cur_color.a;
+		out_transparency *= cur_transparency;
 	}
 
 	ivec2 pixel_pos = s_bin_pos + ivec2(x, by * 8 + y);
-	uint enc_color = encodeRGBA8(vec4(color, 1.0 - neg_alpha));
+	uint enc_color = encodeRGBA8(vec4(out_color, 1.0 - out_transparency));
 	imageStore(final_raster, pixel_pos, uvec4(enc_color, 0, 0, 0));
 }
 

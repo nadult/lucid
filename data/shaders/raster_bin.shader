@@ -32,20 +32,34 @@ layout(std430, binding = 11) readonly buffer buf11_ { vec4 g_uv_rects[]; };
 layout(binding = 0) uniform sampler2D opaque_texture;
 layout(binding = 1) uniform sampler2D transparent_texture;
 
-#define WORKGROUP_SCRATCH_SIZE	(64 * 1024)
-#define WORKGROUP_SCRATCH_SHIFT	16
+#define WORKGROUP_SCRATCH_SIZE	(128 * 1024)
+#define WORKGROUP_SCRATCH_SHIFT	17
 
 // TODO: does that mean that occupancy is so low?
 #define SAMPLES_PER_THREAD		8
 #define MAX_SAMPLES				(LSIZE * SAMPLES_PER_THREAD)
 
-#define MAX_BLOCK_ROW_TRIS		1024
-#define MAX_BLOCK_TRIS			(MAX_SAMPLES / 8)
-#define MAX_SCRATCH_TRIS		1024
-#define MAX_SCRATCH_TRIS_SHIFT  10
-
-#define SCRATCH_TRI_OFFSET		(48 * 1024)
 #define BLOCK_COUNT				8
+
+#define MAX_BLOCK_ROW_TRIS		2048
+#define MAX_BLOCK_TRIS			(MAX_SAMPLES / BLOCK_COUNT)
+#define MAX_SCRATCH_TRIS		2048
+#define MAX_SCRATCH_TRIS_SHIFT  11
+
+#define TRI_SCRATCH(var_idx) \
+	g_scratch[scratch_tri_offset + (var_idx << MAX_SCRATCH_TRIS_SHIFT)]
+
+uint scratchBlockRowTrisOffset(uint by) {
+	return (gl_WorkGroupID.x << WORKGROUP_SCRATCH_SHIFT) + by * MAX_BLOCK_ROW_TRIS * 2;
+}
+
+uint scratchBlockTrisOffset(uint bx) {
+	return (gl_WorkGroupID.x << WORKGROUP_SCRATCH_SHIFT) + 32 * 1024 + bx * MAX_BLOCK_TRIS * 2;
+}
+
+uint scratchTriOffset(uint tri_idx) {
+	return (gl_WorkGroupID.x << WORKGROUP_SCRATCH_SHIFT) + 64 * 1024 + tri_idx;
+}
 
 // Note: in the context of this shader, block size is 8x8, not 4x4
 
@@ -75,13 +89,8 @@ shared int s_bx_step; // TODO: better name
 
 shared uint s_bin_quad_count, s_bin_quad_offset;
 
-#define SBUFFER_GET_PAIR(i) uvec2(s_buffer[(i) * 2], s_buffer[(i) * 2 + 1])
-#define SBUFFER_SET_PAIR(i, v) { s_buffer[(i) * 2] = v.x; s_buffer[(i) * 2 + 1] = v.y; }
-
 shared uint s_buffer[MAX_SAMPLES + 1];
-
 shared uint s_mini_buffer[16 * BLOCK_COUNT];
-		
 
 #ifdef VENDOR_NVIDIA
 uint swap(uint x, int mask, uint dir)
@@ -225,7 +234,7 @@ void generateTriGroups(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, int min_by
 				(sign_mask & 4) != 0? scan[2] : 1.0 / 0.0);
 	}
 
-	uint soffset = gl_WorkGroupID.x * WORKGROUP_SCRATCH_SIZE + min_by * MAX_BLOCK_ROW_TRIS * 2;
+	uint soffset = scratchBlockRowTrisOffset(min_by);
 	for(int by = min_by; by <= max_by; by++) {
 		uint row_ranges[4] = {0, 0, 0, 0};
 		uint bmask = 0;
@@ -261,16 +270,10 @@ void generateTriGroups(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, int min_by
 //
 // TODO: use scratch based on uints, not uvec2, maybe it will be a bit faster?
 
-#define TRI_SCRATCH(var_idx) \
-	g_scratch[toffset + (var_idx << MAX_SCRATCH_TRIS_SHIFT)]
-
-uint scratchTriOffset(uint tri_idx) {
-	return (gl_WorkGroupID.x << WORKGROUP_SCRATCH_SHIFT) + SCRATCH_TRI_OFFSET + tri_idx;
-}
 
 void storeTriangle(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, uint v0, uint v1, uint v2, uint instance_id)
 {
-	uint toffset = scratchTriOffset(tri_idx);
+	uint scratch_tri_offset = scratchTriOffset(tri_idx);
 	vec3 normal = cross(tri0 - tri2, tri1 - tri0);
 	float multiplier = 1.0 / length(normal);
 	normal *= multiplier;
@@ -348,7 +351,7 @@ void storeTriangle(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, uint v0, uint 
 
 void getTriangleParams(uint tri_idx, out vec3 normal, out vec3 params, out vec3 edge0, out vec3 edge1,
 		out uint instance_id, out uint instance_flags, out uint instance_color) {
-	uint toffset = scratchTriOffset(tri_idx);
+	uint scratch_tri_offset = scratchTriOffset(tri_idx);
 	{
 		uvec2 val0 = TRI_SCRATCH(0), val1 = TRI_SCRATCH(1), val2 = TRI_SCRATCH(2);
 		normal = vec3(uintBitsToFloat(val0[0]), uintBitsToFloat(val0[1]), uintBitsToFloat(val1[0]));
@@ -369,7 +372,7 @@ void getTriangleParams(uint tri_idx, out vec3 normal, out vec3 params, out vec3 
 }
 
 void getTriangleVertexColors(uint tri_idx, out vec4 color0, out vec4 color1, out vec4 color2) {
-	uint toffset = scratchTriOffset(tri_idx);
+	uint scratch_tri_offset = scratchTriOffset(tri_idx);
 	uvec2 val0 = TRI_SCRATCH(8);
 	uvec2 val1 = TRI_SCRATCH(9);
 	color0 = decodeRGBA8(val0[0]);
@@ -378,7 +381,7 @@ void getTriangleVertexColors(uint tri_idx, out vec4 color0, out vec4 color1, out
 }
 
 void getTriangleVertexNormals(uint tri_idx, out vec3 normal0, out vec3 normal1, out vec3 normal2) {
-	uint toffset = scratchTriOffset(tri_idx);
+	uint scratch_tri_offset = scratchTriOffset(tri_idx);
 	uvec2 val0 = TRI_SCRATCH(10);
 	uvec2 val1 = TRI_SCRATCH(9);
 	normal0 = decodeNormalUint(val0[0]);
@@ -387,7 +390,7 @@ void getTriangleVertexNormals(uint tri_idx, out vec3 normal0, out vec3 normal1, 
 }
 
 void getTriangleVertexTexCoords(uint tri_idx, out vec2 tex0, out vec2 tex1, out vec2 tex2) {
-	uint toffset = scratchTriOffset(tri_idx);
+	uint scratch_tri_offset = scratchTriOffset(tri_idx);
 	uvec2 val0 = TRI_SCRATCH(11);
 	uvec2 val1 = TRI_SCRATCH(12);
 	uvec2 val2 = TRI_SCRATCH(13);
@@ -433,7 +436,7 @@ void generateBlocks(uint by)
 {
 	// TODO: is this really the best order?
 	uint bx = LIX & 7;
-	uint src_offset = gl_WorkGroupID.x * WORKGROUP_SCRATCH_SIZE + by * MAX_BLOCK_ROW_TRIS * 2;
+	uint src_offset = scratchBlockRowTrisOffset(by);
 	uint buf_offset = bx * MAX_BLOCK_TRIS;
 	uint tri_count = s_block_row_tri_counts[by];
 	uint y = LIX & 7, shift = (y & 1) * 12;
@@ -473,7 +476,7 @@ void generateBlocks(uint by)
 		cpos /= weight;
 		vec3 ray_dir = ray_dir_base + cpos.x * frustum.ws_dirx + cpos.y * frustum.ws_diry;
 
-		uint toffset = scratchTriOffset(tri_idx);
+		uint scratch_tri_offset = scratchTriOffset(tri_idx);
 		vec2 val0 = uintBitsToFloat(TRI_SCRATCH(0));
 		vec2 val1 = uintBitsToFloat(TRI_SCRATCH(1));
 		vec3 normal = vec3(val0.x, val0.y, val1.x);
@@ -499,7 +502,7 @@ void generateBlocks(uint by)
 	min_bx = int(bx * 8);
 	buf_offset = bx * MAX_BLOCK_TRIS;
 	tri_count = BLOCK_TRI_COUNT(bx);
-	uint dst_offset = gl_WorkGroupID.x * WORKGROUP_SCRATCH_SIZE + 32768 + bx * MAX_BLOCK_TRIS * 2;
+	uint dst_offset = scratchBlockTrisOffset(bx);
 
 	for(uint i = LIX & (LSIZE / 8 - 1); i < tri_count; i += LSIZE / 8) {
 		uint idx = s_buffer[buf_offset + i] & 0x1fff;
@@ -620,7 +623,7 @@ void loadTriSamples(int bx, int by, int bx_step) {
 	bx += int(LIX / (LSIZE / bx_step)); // TODO: shift instead of div
 	int y = int(LIX & 7);
 
-	uint soffset = gl_WorkGroupID.x * WORKGROUP_SCRATCH_SIZE + 32768 + bx * MAX_BLOCK_TRIS * 2;
+	uint soffset = scratchBlockTrisOffset(bx);
 	uint tri_count = BLOCK_TRI_COUNT(bx);
 	uint block_offset = BLOCK_FRAG_OFFSET(bx);
 
@@ -658,8 +661,7 @@ void reduceSamples(int bx, int by, int bx_step) {
 	int x = int(LIX & 7) + bx * 8, y = int((LIX >> 3) & 7);
 	uint pixel_id = (y << 6) | x;
 
-	// TODO: add functions for computing scratch offsets
-	uint soffset = gl_WorkGroupID.x * WORKGROUP_SCRATCH_SIZE + 32768 + bx * MAX_BLOCK_TRIS * 2;
+	uint soffset = scratchBlockTrisOffset(bx);
 	uint tri_count = BLOCK_TRI_COUNT(bx);
 	int block_offset = int(BLOCK_FRAG_OFFSET(bx));
 
@@ -690,7 +692,7 @@ void reduceSamples(int bx, int by, int bx_step) {
 				sel_tri_bitmask = y < 4? bits.x : bits.y;
 
 				uint tri_idx = info.x & 0xffff;
-				uint toffset = scratchTriOffset(tri_idx);
+				uint scratch_tri_offset = scratchTriOffset(tri_idx);
 				vec2 val0 = uintBitsToFloat(TRI_SCRATCH(0));
 				vec2 val1 = uintBitsToFloat(TRI_SCRATCH(1));
 				vec3 normal = vec3(val0.x, val0.y, val1.x);

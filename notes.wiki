@@ -90,6 +90,20 @@ conference: 2590
                     === Rasteryzacja wszystkich sampli na raz ===
 -----------------------------------------------------------------------------------------
 
+* *TODO: raster quadów 2x2*
+
+	*Problem:* wyliczanie pochodnych za pomocą shuffli, prawie nic nie przyspiesza:
+             Na WhiteOak 12.80 -> 12.76 ...
+	// TODO: use dfdx/dfdy
+	vec2 bary_dx, bary_dy;
+	{
+		vec2 bary_nx = shuffleXorNV(bary, 1, 32);
+		vec2 bary_ny = shuffleXorNV(bary, 2, 32);
+		bary_dx = (bary_nx - bary) * ((LIX & 1) == 0? 1 : -1);
+		bary_dy = (bary_ny - bary) * ((LIX & 2) == 0? 1 : -1);
+	}
+    W takim razie problem jest gdzieś indziej...
+
 * *TODO: drobne błędy wciąż widoczne na powerplant*
 
 * *Problem: cały czas wolne samplowanie...*

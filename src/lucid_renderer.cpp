@@ -143,7 +143,7 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 						 BufferUsage::dynamic_read);
 	m_block_tri_keys.emplace(BufferType::shader_storage, max_block_tris * sizeof(u32));
 	m_scratch.emplace(BufferType::shader_storage,
-					  65536 * 256 * sizeof(u32)); // TODO: control size
+					  (128 * 1024) * 256 * sizeof(u32)); // TODO: control size
 
 	if(m_opts & (Opt::check_bins | Opt::check_tiles | Opt::debug_masks | Opt::debug_raster))
 		m_errors.emplace(BufferType::shader_storage, 1024 * 1024 * 4, BufferUsage::dynamic_read);

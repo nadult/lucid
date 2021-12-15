@@ -35,7 +35,7 @@ void main() {
 			if(tile_all_bins)
 				g_bins.tiled_bins[atomicAdd(s_num_tiled_bins, 1)] = int(i);
 		}
-		else if(num_tris < 1024) {
+		else if(num_tris < 1024) { // TODO: max: 2048
 			g_bins.small_bins[atomicAdd(s_num_small_bins, 1)] = int(i);
 			if(tile_all_bins)
 				g_bins.tiled_bins[atomicAdd(s_num_tiled_bins, 1)] = int(i);

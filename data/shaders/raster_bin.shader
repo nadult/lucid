@@ -53,9 +53,6 @@ shared ivec2 s_bin_pos;
 shared vec3 s_bin_ray_dir0;
 
 shared uint s_block_row_tri_counts[BLOCK_COUNT];
-shared uint s_block_tri_counts[BLOCK_COUNT * BLOCK_COUNT];
-shared uint s_max_block_tri_counts[BLOCK_COUNT];
-
 shared uint s_curblock_counters[BLOCK_COUNT * 4];
 
 void resetBlockCounters() {
@@ -186,18 +183,6 @@ void sortBlockTris()
 
 // TODO: add synthetic test: 256 planes one after another
 
-void computeBlockCounts() {
-	if(LIX < BLOCK_COUNT * BLOCK_COUNT) {
-		uint x = LIX & 7;
-		uint value = s_block_tri_counts[LIX], temp;
-		atomicMax(s_max_block_tri_counts[LIX >> 3], value);
-		temp = shuffleUpNV(value,  1, 8); if(x >= 1) value += temp;
-		temp = shuffleUpNV(value,  2, 8); if(x >= 2) value += temp;
-		temp = shuffleUpNV(value,  4, 8); if(x >= 4) value += temp;
-		s_block_tri_counts[LIX] += value << 16;
-	}
-}
-
 uint computeScanlineParams(vec3 tri0, vec3 tri1, vec3 tri2, out vec3 scan_base, out vec3 scan_step) {
 	vec3 nrm0 = cross(tri2, tri1 - tri2);
 	vec3 nrm1 = cross(tri0, tri2 - tri0);
@@ -266,13 +251,6 @@ void generateTriGroups(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, int min_by
 			g_scratch[soffset + roffset] = uvec2(row_ranges[0] | (tri_idx << 24),
 												 row_ranges[1] | ((tri_idx & 0xff00) << 16));
 			g_scratch[soffset + roffset + 1] = uvec2(row_ranges[2] | (bmask << 24), row_ranges[3]);
-
-			uint b = findLSB(bmask);
-			while(b != -1) {
-				atomicAdd(s_block_tri_counts[by * BLOCK_COUNT + b], 1);
-				bmask &= ~(1 << b);
-				b = findLSB(bmask);
-			}
 		}
 		soffset += MAX_BLOCK_ROW_TRIS * 2;
 	}
@@ -503,13 +481,20 @@ void generateBlocks(uint by)
 		float ray_pos = param0 / dot(normal, ray_dir);
 		float depth = float(0x7ffff) / (1.0 + max(0.0, ray_pos)); // 19 bits is enough
 
-		uint block_idx = atomicAdd(BLOCK_TRI_COUNT(bx), 1);
-		s_buffer[buf_offset + block_idx] = i | (uint(depth) << 13);
+		uint idx = atomicAdd(BLOCK_TRI_COUNT(bx), 1);
+		if(idx < MAX_BLOCK_TRIS)
+			s_buffer[buf_offset + idx] = i | (uint(depth) << 13);
 	}
 
 	barrier();
+	if(LIX < BLOCK_COUNT)
+		s_bx_step = anyInvocationARB(BLOCK_TRI_COUNT(LIX) > MAX_BLOCK_TRIS)? 0 : 1;
+	barrier();
+	if(s_bx_step == 0)
+		return;
 	sortBlockTris();
 	barrier();
+
 	bx = LIX >> (LSHIFT - 3);
 	min_bx = int(bx * 8);
 	buf_offset = bx * MAX_BLOCK_TRIS;
@@ -575,7 +560,6 @@ void generateBlocks(uint by)
 	}
 	barrier();
 	
-	// TODO: merge with next step
 	for(uint i = 32 + (LIX & (LSIZE / 8 - 1)); i < tri_count; i += LSIZE / 8)
 		s_buffer[buf_offset + i] += s_mini_buffer[bx * 16 + (i >> 5) - 1];
 	barrier();
@@ -908,23 +892,12 @@ void rasterBin(int bin_id) {
 			s_block_row_tri_counts[LIX] = 0;
 		}
 	}
-	if(LIX < BLOCK_COUNT * BLOCK_COUNT)
-		s_block_tri_counts[LIX] = 0;
-	if(LIX < BLOCK_COUNT)
-		s_max_block_tri_counts[LIX] = 0;
 	barrier();
 	generateRows();
 	groupMemoryBarrier();
-	barrier();
-	computeBlockCounts();
 
 	for(int by = 0; by < BLOCK_COUNT; by ++) {
 		barrier();
-		if(s_max_block_tri_counts[by] >= MAX_BLOCK_TRIS) {
-			rasterInvalidBlockRow(by, vec3(1.0, 0.5, 0.5));
-			continue;
-		}
-
 		generateBlocks(by);
 		groupMemoryBarrier();
 		barrier();

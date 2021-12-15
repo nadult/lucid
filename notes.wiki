@@ -78,6 +78,14 @@ conference: 2729
     teapot: 1349
  white_oak: 13502
 
+Removed s_bin_tri_counts:
+     bunny: 1385
+conference: 2590
+ scrubPine: 1509
+    sponza: 7088
+    teapot: 1339
+ white_oak: 13104
+
 -----------------------------------------------------------------------------------------
                     === Rasteryzacja wszystkich sampli na raz ===
 -----------------------------------------------------------------------------------------

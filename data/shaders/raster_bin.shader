@@ -351,9 +351,8 @@ void storeTriangle(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, uint v0, uint 
 // - zostaje mi 16 KB w SMEM...: max 10 bajtów na wątek...
 //   max 4096 sampli
 
-void getTriangleParams(uint tri_idx, out vec3 normal, out vec3 params, out vec3 edge0, out vec3 edge1,
+void getTriangleParams(uint scratch_tri_offset, out vec3 normal, out vec3 params, out vec3 edge0, out vec3 edge1,
 		out uint instance_id, out uint instance_flags, out uint instance_color) {
-	uint scratch_tri_offset = scratchTriOffset(tri_idx);
 	{
 		uvec2 val0 = TRI_SCRATCH(0), val1 = TRI_SCRATCH(1), val2 = TRI_SCRATCH(2);
 		normal = vec3(uintBitsToFloat(val0[0]), uintBitsToFloat(val0[1]), uintBitsToFloat(val1[0]));
@@ -373,8 +372,7 @@ void getTriangleParams(uint tri_idx, out vec3 normal, out vec3 params, out vec3 
 	}
 }
 
-void getTriangleVertexColors(uint tri_idx, out vec4 color0, out vec4 color1, out vec4 color2) {
-	uint scratch_tri_offset = scratchTriOffset(tri_idx);
+void getTriangleVertexColors(uint scratch_tri_offset, out vec4 color0, out vec4 color1, out vec4 color2) {
 	uvec2 val0 = TRI_SCRATCH(8);
 	uvec2 val1 = TRI_SCRATCH(9);
 	color0 = decodeRGBA8(val0[0]);
@@ -382,8 +380,7 @@ void getTriangleVertexColors(uint tri_idx, out vec4 color0, out vec4 color1, out
 	color2 = decodeRGBA8(val1[0]);
 }
 
-void getTriangleVertexNormals(uint tri_idx, out vec3 normal0, out vec3 normal1, out vec3 normal2) {
-	uint scratch_tri_offset = scratchTriOffset(tri_idx);
+void getTriangleVertexNormals(uint scratch_tri_offset, out vec3 normal0, out vec3 normal1, out vec3 normal2) {
 	uvec2 val0 = TRI_SCRATCH(10);
 	uvec2 val1 = TRI_SCRATCH(9);
 	normal0 = decodeNormalUint(val0[0]);
@@ -391,8 +388,7 @@ void getTriangleVertexNormals(uint tri_idx, out vec3 normal0, out vec3 normal1, 
 	normal2 = decodeNormalUint(val1[1]);
 }
 
-void getTriangleVertexTexCoords(uint tri_idx, out vec2 tex0, out vec2 tex1, out vec2 tex2) {
-	uint scratch_tri_offset = scratchTriOffset(tri_idx);
+void getTriangleVertexTexCoords(uint scratch_tri_offset, out vec2 tex0, out vec2 tex1, out vec2 tex2) {
 	uvec2 val0 = TRI_SCRATCH(11);
 	uvec2 val1 = TRI_SCRATCH(12);
 	uvec2 val2 = TRI_SCRATCH(13);
@@ -648,7 +644,7 @@ void loadTriSamples(int bx, int by, int bx_step) {
 			if(tri_offset >= MAX_SAMPLES)
 				RECORD(x, y, tri_offset, BLOCK_FRAG_COUNT(bx));
 			uint pixel_id = (y << 6) | (bx * 8 + x++);
-			uint value = (pixel_id << 16) | tri_idx;
+			uint value = (pixel_id << 23) | scratchTriOffset(tri_idx);
 			s_buffer[tri_offset++] = value;
 		} while((tri_bitmask & (1 << x)) != 0);
 	}
@@ -789,14 +785,14 @@ void reduceSamples(int bx, int by, int bx_step) {
 // Does that mean that i should use even more threads per bin ?
 //
 // Cache trashing...
-uint shadeSample(ivec2 bin_pixel_pos, uint local_tri_idx)
+uint shadeSample(ivec2 bin_pixel_pos, uint scratch_tri_offset)
 {
 	vec3 ray_dir = s_bin_ray_dir0 + frustum.ws_dirx * bin_pixel_pos.x
 								  + frustum.ws_diry * bin_pixel_pos.y;
 
 	vec3 normal, params, edge0, edge1;
 	uint instance_id, instance_flags, instance_color;
-	getTriangleParams(local_tri_idx, normal, params, edge0, edge1, instance_id, instance_flags, instance_color);
+	getTriangleParams(scratch_tri_offset, normal, params, edge0, edge1, instance_id, instance_flags, instance_color);
 
 	float ray_pos = params[0] / dot(normal, ray_dir);
 	vec2 bary = vec2(dot(edge0, ray_dir), dot(edge1, ray_dir)) * ray_pos;
@@ -818,13 +814,13 @@ uint shadeSample(ivec2 bin_pixel_pos, uint local_tri_idx)
 	vec4 color = decodeRGBA8(instance_color);
 	if((instance_flags & INST_HAS_VERTEX_COLORS) != 0) {
 		vec4 col0, col1, col2;
-		getTriangleVertexColors(local_tri_idx, col0, col1, col2);
+		getTriangleVertexColors(scratch_tri_offset, col0, col1, col2);
 		color *= (1.0 - bary[0] - bary[1]) * col0 + bary[0] * col1 + bary[1] * col2;
 	}
 
 	if((instance_flags & INST_HAS_TEXTURE) != 0) {
 		vec2 tex0, tex1, tex2;
-		getTriangleVertexTexCoords(local_tri_idx, tex0, tex1, tex2);
+		getTriangleVertexTexCoords(scratch_tri_offset, tex0, tex1, tex2);
 
 		vec2 tex_coord = tex0 + bary[0] * tex1 + bary[1] * tex2;
 		vec2 tex_dx = bary_dx[0] * tex1 + bary_dx[1] * tex2;
@@ -849,13 +845,13 @@ uint shadeSample(ivec2 bin_pixel_pos, uint local_tri_idx)
 
 	if((instance_flags & INST_HAS_VERTEX_NORMALS) != 0) {
 		vec3 nrm0, nrm1, nrm2;
-		getTriangleVertexNormals(local_tri_idx, nrm0, nrm1, nrm2);
+		getTriangleVertexNormals(scratch_tri_offset, nrm0, nrm1, nrm2);
 		nrm1 -= nrm0; nrm2 -= nrm0;
 		normal = nrm0 + bary[0] * nrm1 + bary[1] * nrm2;
 	}
 
 	float light_value = max(0.0, dot(-lighting.sun_dir, normal) * 0.7 + 0.3);
-	color.rgb = min(finalShading(color.rgb, light_value), vec3(1.0, 1.0, 1.0));
+	color.rgb = min(finalShading(color.rgb, light_value), vec3(1.0));
 	return encodeRGBA8(color);
 }
 
@@ -927,10 +923,10 @@ void rasterBin(int bin_id) {
 			uint sample_count = BLOCK_GROUP_FRAG_COUNT(bx);
 			for(uint i = LIX; i < sample_count; i += LSIZE) {
 				uint value = s_buffer[i];
-				uint pixel_id = value >> 16;
-				uint bin_tri_idx = value & 0xffff;
+				uint pixel_id = value >> 23;
+				uint scratch_tri_offset = value & ((1 << 23) - 1);
 				ivec2 bin_pixel_pos = ivec2(pixel_id & (BIN_SIZE - 1), (by * 8) + (pixel_id >> 6));
-				s_buffer[i] = shadeSample(bin_pixel_pos, bin_tri_idx);
+				s_buffer[i] = shadeSample(bin_pixel_pos, scratch_tri_offset);
 			}
 			barrier();
 			reduceSamples(bx, by, bx_step);

@@ -54,12 +54,29 @@
 *Resolution:* (1280, 1024)
 
 *Partial results (bins with > 1024 tris not rendered) (total time):*
+Before triangle ordering samples:
      bunny: 1352
 conference: 2604
  scrubPine: 1633
     sponza: 7426
     teapot: 1306
  white_oak: 19153
+
+Triangle ordered samples:
+     bunny: 1383
+conference: 2739
+ scrubPine: 1566
+    sponza: 7388
+    teapot: 1357
+ white_oak: 14300
+
+Optimized reduce (32 tris at a time):
+     bunny: 1396
+conference: 2729
+ scrubPine: 1547
+    sponza: 7224
+    teapot: 1349
+ white_oak: 13502
 
 -----------------------------------------------------------------------------------------
                     === Rasteryzacja wszystkich sampli na raz ===

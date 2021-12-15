@@ -682,58 +682,53 @@ void reduceSamples(int bx, int by, int bx_step) {
 	// TODO: share pixels between threads for bx_step <= 4?
 	// TODO: WARP_SIZE?
 
-	uint pixel_bit = 1u << (x & 7);
+	uint pixel_bit = 1u << ((y & 3) * 8 + (x & 7));
 	vec3 ray_dir = s_bin_ray_dir0 + (by * 8 + y) * frustum.ws_diry + x * frustum.ws_dirx;
 
 	// TODO: more ?
 	float prev_depths[4] = {-1.0, -1.0, -1.0, -1.0};
 	uint prev_colors[3] = {0, 0, 0};
-		
+
 	vec3 color = vec3(0);
 	float neg_alpha = 1.0; // TODO: transparency synonym ?
 
-	for(uint i = 0; i < tri_count; i += 8) {
-		uint sub_count = min(8, tri_count - i);
-		uint sel_tri = 0, tris_bitmask;
+	for(uint i = 0; i < tri_count; i += 32) {
+		uint sub_count = min(32, tri_count - i);
+		uint sel_tri_offset = 0, sel_tri_bitmask, tris_bitmask;
 		vec3 sel_normal;
-		int sel_tri_offset;
 		{
 			bool in_range = false;
-			if((LIX & 7) < sub_count) {
-				uvec2 bits = g_scratch[soffset + i + (LIX & 7)];
-				uvec2 info = g_scratch[soffset + i + (LIX & 7) + MAX_BLOCK_TRIS];
+			if((LIX & 31) < sub_count) {
+				uvec2 bits = g_scratch[soffset + i + (LIX & 31)];
+				uvec2 info = g_scratch[soffset + i + (LIX & 31) + MAX_BLOCK_TRIS];
+
+				sel_tri_offset = info.y + (y >= 4? info.x >> 16 : 0);
+				sel_tri_bitmask = y < 4? bits.x : bits.y;
 
 				uint tri_idx = info.x & 0xffff;
-				uint tri_bitmask = y < 4? bits.x : bits.y;
-				uint tri_offset = info.y + (y >= 4? info.x >> 16 : 0);
-				uint shift = (y & 3) * 8;
-				tri_offset += bitCount(tri_bitmask & ((1 << shift) - 1));
-				tri_bitmask = (tri_bitmask >> shift) & 0xff;
-
 				uint toffset = scratchTriOffset(tri_idx);
 				vec2 val0 = uintBitsToFloat(TRI_SCRATCH(0));
 				vec2 val1 = uintBitsToFloat(TRI_SCRATCH(1));
 				vec3 normal = vec3(val0.x, val0.y, val1.x);
 				float param0 = val1.y; //TODO: mul by normal
 				sel_normal = normal * (1.0 / param0);
-				in_range = tri_bitmask != 0;
-				sel_tri = tri_bitmask | tri_idx << 16;
-				sel_tri_offset = int(tri_offset) - findLSB(tri_bitmask) + block_offset;
+				in_range = sel_tri_bitmask != 0;
 			}
-			tris_bitmask = (uint(ballotARB(in_range)) >> ((y & 3) * 8)) & 0xff;
+			tris_bitmask = uint(ballotARB(in_range));
 		}
 
 		int j = findLSB(tris_bitmask);
 		while(j != -1) {
-			uint tri = shuffleNV(sel_tri, j, 8);
-			int tri_offset = shuffleNV(sel_tri_offset, j, 8);
-			vec3 normal = shuffleNV(sel_normal, j, 8);
+			uint tri_offset = shuffleNV(sel_tri_offset, j, 32);
+			uint tri_bitmask = shuffleNV(sel_tri_bitmask, j, 32);
+			vec3 normal = shuffleNV(sel_normal, j, 32);
 			tris_bitmask &= ~(1 << j);
 			j = findLSB(tris_bitmask);
-			if((tri & pixel_bit) == 0)
+			if((tri_bitmask & pixel_bit) == 0)
 				continue;
 
-			uint value = s_buffer[tri_offset + (x & 7)];
+			tri_offset += bitCount(tri_bitmask & (pixel_bit - 1)) + block_offset;
+			uint value = s_buffer[tri_offset];
 			if(value == 0)
 				continue;
 

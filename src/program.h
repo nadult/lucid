@@ -41,6 +41,8 @@ class Program {
 	void setShadows(Matrix4, bool is_enabled);
 	void setFrustum(const Camera &);
 
+	Maybe<string> getDisassembly() const;
+
 	CSpan<Pair<string, int>> sourceRanges() const { return m_source_ranges; }
 
   private:

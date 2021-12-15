@@ -2,6 +2,7 @@ build/*
 /scenes
 /lucid
 /lucid_config.xml
+/temp
 /*.cap
 /*.data
 /*.exe

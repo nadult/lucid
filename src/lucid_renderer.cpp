@@ -194,6 +194,11 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	//		"mask_sort", defs, mask(m_opts & Opt::debug_masks, ProgramOpt::debug)));
 	dummy_program = EX_PASS(Program::makeCompute("dummy", defs));
 
+	if(auto disas = raster_bin_program.getDisassembly()) {
+		mkdirRecursive("temp").ignore();
+		saveFile("temp/raster_bin.asm", *disas).ignore();
+	}
+
 	compose_program = EX_PASS(Program::make("compose", "", {"in_pos"}));
 	m_rect_vao = makeRectVao();
 

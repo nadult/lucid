@@ -66,6 +66,9 @@ conference: 2512
                     === Rasteryzacja wszystkich sampli na raz ===
 -----------------------------------------------------------------------------------------
 
+* *TODO: jeszcze lepsza kolejność sampli?*
+  Na przemian pary sampli z dwóch rzędów ?
+
 * *TODO: raster quadów 2x2*
 
 	*Problem:* wyliczanie pochodnych za pomocą shuffli, prawie nic nie przyspiesza:

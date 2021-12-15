@@ -152,6 +152,29 @@ Ex<Program> Program::makeCompute(Str name, string defs, Opts opts) {
 
 void Program::use() { m_ref->use(); }
 
+Maybe<string> Program::getDisassembly() const {
+	GLint length = 0;
+	GLenum binary_format = 0;
+	glGetProgramiv(m_ref->id(), GL_PROGRAM_BINARY_LENGTH, &length);
+	vector<u8> data(length);
+	glGetProgramBinary(m_ref->id(), data.size(), &length, &binary_format, data.data());
+
+	// !!NVcp5.0
+
+	auto *ptr = (const u8 *)memmem(data.data(), data.size(), "!!NVcp", 6);
+	uint text_offset = ptr ? ptr - data.data() : 0;
+	if(text_offset < 4)
+		return none;
+	u32 text_length = 0;
+	memcpy(&text_length, data.data() + text_offset - 4, sizeof(text_length));
+
+	if(text_length + text_offset > u32(data.size()))
+		return none;
+
+	string out(data.data() + text_offset, data.data() + text_offset + text_length);
+	return out;
+}
+
 // -------------------------------------------------------------------------------------------
 // ---  Program: functions for different shader pieces  --------------------------------------
 

@@ -1450,6 +1450,7 @@ void LucidRenderer::rasterBin(const Context &ctx) {
 	raster_bin_program.setFrustum(ctx.camera);
 	raster_bin_program.setViewport(ctx.camera, m_size);
 	raster_bin_program.setShadows(ctx.shadows.matrix, ctx.shadows.enable);
+	raster_bin_program["additive_blending"] = ctx.config.additive_blending;
 	ctx.lighting.setUniforms(raster_bin_program.glProgram());
 
 	if(m_opts & Opt::debug_raster)

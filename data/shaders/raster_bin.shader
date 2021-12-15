@@ -32,6 +32,8 @@ layout(std430, binding = 11) readonly buffer buf11_ { vec4 g_uv_rects[]; };
 layout(binding = 0) uniform sampler2D opaque_texture;
 layout(binding = 1) uniform sampler2D transparent_texture;
 
+uniform bool additive_blending;
+
 #define WORKGROUP_SCRATCH_SIZE	(128 * 1024)
 #define WORKGROUP_SCRATCH_SHIFT	17
 
@@ -750,7 +752,7 @@ void reduceSamples(int bx, int by, int bx_step) {
 			if(prev_colors[2] != 0) {
 				vec4 cur_color = decodeRGBA8(prev_colors[2]);
 				float cur_transparency = 1.0 - cur_color.a;
-				out_color = out_color * cur_transparency + cur_color.rgb * cur_color.a;
+				out_color = (additive_blending? out_color : out_color * cur_transparency) + cur_color.rgb * cur_color.a;
 				out_transparency *= cur_transparency;
 			}
 
@@ -763,11 +765,12 @@ void reduceSamples(int bx, int by, int bx_step) {
 	for(int i = 2; i >= 0; i--) if(prev_colors[i] != 0) {
 		vec4 cur_color = decodeRGBA8(prev_colors[i]);
 		float cur_transparency = 1.0 - cur_color.a;
-		out_color = out_color * cur_transparency + cur_color.rgb * cur_color.a;
+		out_color = (additive_blending? out_color : out_color * cur_transparency) + cur_color.rgb * cur_color.a;
 		out_transparency *= cur_transparency;
 	}
 
 	ivec2 pixel_pos = s_bin_pos + ivec2(x, by * 8 + y);
+	out_color = min(out_color, vec3(1.0));
 	uint enc_color = encodeRGBA8(vec4(out_color, 1.0 - out_transparency));
 	imageStore(final_raster, pixel_pos, uvec4(enc_color, 0, 0, 0));
 }

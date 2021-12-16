@@ -821,7 +821,7 @@ void reduceSamples(int bx, int by, int bx_step) {
 // - it seems that it does not help at all with loading vertex attribs; it makes sense:
 //   if they are in the cache then it's not a problem...
 // Can we improve speed of loading vertex data?
-uint shadeSample(ivec2 bin_pixel_pos, uint scratch_tri_offset)
+uint shadeSample(ivec2 bin_pixel_pos, uint scratch_tri_offset, bool fast_path)
 {
 	vec3 ray_dir = s_bin_ray_dir0 + frustum.ws_dirx * bin_pixel_pos.x
 								  + frustum.ws_diry * bin_pixel_pos.y;
@@ -832,48 +832,86 @@ uint shadeSample(ivec2 bin_pixel_pos, uint scratch_tri_offset)
 
 	float ray_pos = params[0] / dot(normal, ray_dir);
 	vec2 bary = vec2(dot(edge0, ray_dir), dot(edge1, ray_dir)) * ray_pos;
-
-	vec2 bary_dx, bary_dy;
-	if((instance_flags & INST_HAS_TEXTURE) != 0) {
-		vec3 ray_dirx = ray_dir + frustum.ws_dirx;
-		vec3 ray_diry = ray_dir + frustum.ws_diry;
-
-		float ray_posx = params[0] / dot(normal, ray_dirx);
-		float ray_posy = params[0] / dot(normal, ray_diry);
-
-		bary_dx = vec2(dot(edge0, ray_dirx), dot(edge1, ray_dirx)) * ray_posx - bary;
-		bary_dy = vec2(dot(edge0, ray_diry), dot(edge1, ray_diry)) * ray_posy - bary;
-	}
-	bary -= vec2(params[1], params[2]);
-	// params, edge0 & edge1 no longer needed!
-
 	vec4 color = decodeRGBA8(instance_color);
-	if((instance_flags & INST_HAS_VERTEX_COLORS) != 0) {
-		vec4 col0, col1, col2;
-		getTriangleVertexColors(scratch_tri_offset, col0, col1, col2);
-		color *= (1.0 - bary[0] - bary[1]) * col0 + bary[0] * col1 + bary[1] * col2;
-	}
 
-	if((instance_flags & INST_HAS_TEXTURE) != 0) {
-		vec2 tex0, tex1, tex2;
-		getTriangleVertexTexCoords(scratch_tri_offset, tex0, tex1, tex2);
+	if(allInvocationsARB(fast_path)) {
+		bary -= vec2(params[1], params[2]);
+		// params, edge0 & edge1 no longer needed!
 
-		vec2 tex_coord = tex0 + bary[0] * tex1 + bary[1] * tex2;
-		vec2 tex_dx = bary_dx[0] * tex1 + bary_dx[1] * tex2;
-		vec2 tex_dy = bary_dy[0] * tex1 + bary_dy[1] * tex2;
+		if((instance_flags & INST_HAS_TEXTURE) != 0) {
+			vec2 tex0, tex1, tex2;
+			getTriangleVertexTexCoords(scratch_tri_offset, tex0, tex1, tex2);
 
-		if((instance_flags & INST_HAS_UV_RECT) != 0) {
-			vec4 uv_rect = g_uv_rects[instance_id];
-			tex_coord = uv_rect.xy + uv_rect.zw * fract(tex_coord);
-			tex_dx *= uv_rect.zw, tex_dy *= uv_rect.zw;
+			vec2 tex_coord = tex0 + bary[0] * tex1 + bary[1] * tex2;
+			if((instance_flags & INST_HAS_UV_RECT) != 0) {
+				vec4 uv_rect = g_uv_rects[instance_id];
+				tex_coord = uv_rect.xy + uv_rect.zw * fract(tex_coord);
+			}
+
+			vec2 tex_dx, tex_dy;
+			vec2 tex_nx = shuffleXorNV(tex_coord, 1, 32);
+			vec2 tex_ny = shuffleXorNV(tex_coord, 2, 32);
+			tex_dx = (tex_nx - tex_coord) * ((LIX & 1) == 0? 1 : -1);
+			tex_dy = (tex_ny - tex_coord) * ((LIX & 2) == 0? 1 : -1);
+
+			vec4 tex_col;
+			if((instance_flags & INST_TEX_OPAQUE) != 0)
+				tex_col = vec4(textureGrad(opaque_texture, tex_coord, tex_dx, tex_dy).xyz, 1.0);
+			else
+				tex_col = textureGrad(transparent_texture, tex_coord, tex_dx, tex_dy);
+			color *= tex_col;
 		}
 
-		vec4 tex_col;
-		if((instance_flags & INST_TEX_OPAQUE) != 0)
-			tex_col = vec4(textureGrad(opaque_texture, tex_coord, tex_dx, tex_dy).xyz, 1.0);
-		else
-			tex_col = textureGrad(transparent_texture, tex_coord, tex_dx, tex_dy);
-		color *= tex_col;
+		if((instance_flags & INST_HAS_VERTEX_COLORS) != 0) {
+			vec4 col0, col1, col2;
+			getTriangleVertexColors(scratch_tri_offset, col0, col1, col2);
+			color *= (1.0 - bary[0] - bary[1]) * col0 + bary[0] * col1 + bary[1] * col2;
+		}
+
+	}
+	else {
+		vec2 bary_dx, bary_dy;
+		if((instance_flags & INST_HAS_TEXTURE) != 0) {
+			vec3 ray_dirx = ray_dir + frustum.ws_dirx;
+			vec3 ray_diry = ray_dir + frustum.ws_diry;
+
+			float ray_posx = params[0] / dot(normal, ray_dirx);
+			float ray_posy = params[0] / dot(normal, ray_diry);
+
+			bary_dx = vec2(dot(edge0, ray_dirx), dot(edge1, ray_dirx)) * ray_posx - bary;
+			bary_dy = vec2(dot(edge0, ray_diry), dot(edge1, ray_diry)) * ray_posy - bary;
+		}
+		bary -= vec2(params[1], params[2]);
+		// params, edge0 & edge1 no longer needed!
+
+		if((instance_flags & INST_HAS_TEXTURE) != 0) {
+			vec2 tex0, tex1, tex2;
+			getTriangleVertexTexCoords(scratch_tri_offset, tex0, tex1, tex2);
+
+			vec2 tex_coord = tex0 + bary[0] * tex1 + bary[1] * tex2;
+			vec2 tex_dx = bary_dx[0] * tex1 + bary_dx[1] * tex2;
+			vec2 tex_dy = bary_dy[0] * tex1 + bary_dy[1] * tex2;
+
+			if((instance_flags & INST_HAS_UV_RECT) != 0) {
+				vec4 uv_rect = g_uv_rects[instance_id];
+				tex_coord = uv_rect.xy + uv_rect.zw * fract(tex_coord);
+				tex_dx *= uv_rect.zw, tex_dy *= uv_rect.zw;
+			}
+
+			vec4 tex_col;
+			if((instance_flags & INST_TEX_OPAQUE) != 0)
+				tex_col = vec4(textureGrad(opaque_texture, tex_coord, tex_dx, tex_dy).xyz, 1.0);
+			else
+				tex_col = textureGrad(transparent_texture, tex_coord, tex_dx, tex_dy);
+			color *= tex_col;
+		}
+
+		if((instance_flags & INST_HAS_VERTEX_COLORS) != 0) {
+			vec4 col0, col1, col2;
+			getTriangleVertexColors(scratch_tri_offset, col0, col1, col2);
+			color *= (1.0 - bary[0] - bary[1]) * col0 + bary[0] * col1 + bary[1] * col2;
+		}
+
 	}
 
 	if(color.a == 0.0)
@@ -891,153 +929,43 @@ uint shadeSample(ivec2 bin_pixel_pos, uint scratch_tri_offset)
 	return encodeRGBA8(color);
 }
 
-void shadeSamples1x1(uint bx, uint by) {
+void shadeSamples(uint bx, uint by) {
 	// TODO: what's the best way to fix broken pixels?
 	// full sort ? recreate full depth values and sort pairs?
 
 	// Shading samples grouped by triangles
 	// TODO: how can we make sure that tris which generate >= 32 samples are all handles by single warp?
-	uint sample_count = BLOCK_GROUP_FRAG_COUNT(bx) & 0xffff;
-	uint sample_offset = BLOCK_GROUP_FRAG_COUNT(bx) >> 16;
+	uint count_1x1 = BLOCK_GROUP_FRAG_COUNT(bx) & 0xffff;
+	uint count_8x4 = BLOCK_GROUP_FRAG_COUNT(bx) >> 16;
+	uint full_count = count_1x1 + count_8x4;
 
-	for(uint i = LIX; i < sample_count; i += LSIZE) {
-		uint value = s_buffer[i + sample_offset];
-		uint pixel_id = value >> 23;
-		uint scratch_tri_offset = value & ((1 << 23) - 1);
-		ivec2 bin_pixel_pos = ivec2(pixel_id & (BIN_SIZE - 1), (by * 8) + (pixel_id >> 6));
-		s_buffer[i + sample_offset] = shadeSample(bin_pixel_pos, scratch_tri_offset);
-	}
-}
+	for(uint i = LIX; i < full_count; i += LSIZE) {
+		uint scratch_tri_offset;
+		ivec2 bin_pixel_pos;
+		uint tri_offset;
 
-void computeBarycentrics2x2(vec3 ray_dir, vec3 normal, vec3 params, vec3 edge0, vec3 edge1,
-							out vec2 bary[4]) {
-	float ray_pos[4] = {
-		params[0] / dot(normal, ray_dir),
-		params[0] / dot(normal, ray_dir + frustum.ws_dirx),
-		params[0] / dot(normal, ray_dir + frustum.ws_diry),
-		params[0] / dot(normal, ray_dir + frustum.ws_diry + frustum.ws_dirx),
-	};
+		if(i < count_8x4) {
+			tri_offset = (i & ~31);
+			int sub_x = int(i & 1), sub_y = int((i & 2) >> 1);
 
-	bary[0] = vec2(dot(edge0, ray_dir), dot(edge1, ray_dir));
-	vec2 bary_dx = vec2(dot(edge0, frustum.ws_dirx), dot(edge1, frustum.ws_dirx));
-	vec2 bary_dy = vec2(dot(edge0, frustum.ws_diry), dot(edge1, frustum.ws_diry));
+			ivec2 group_pos = ivec2(((i & 12) >> 1) + sub_x, ((i & 16) >> 3) + sub_y);
+			uint value = s_buffer[tri_offset];
+			tri_offset += group_pos.x + group_pos.y * 8;
 
-	bary[1] = bary[0] + bary_dx;
-	bary[2] = bary[0] + bary_dy;
-	bary[3] = bary[0] + bary_dy + bary_dx;
-	for(int i = 0; i < 4; i++)
-		bary[i] = bary[i] * ray_pos[i] - vec2(params[1], params[2]);
-}
-
-bool flagsSet(uint flags, uint test) {
-	return (flags & test) == test;
-}
-
-uint finalShade(vec3 normal, vec4 color) {
-	float light_value = max(0.0, dot(-lighting.sun_dir, normal) * 0.7 + 0.3);
-	color.rgb = min(finalShading(color.rgb, light_value), vec3(1.0));
-	return encodeRGBA8(color);
-}
-
-vec4 sampleTexture(vec2 tex_coord, vec2 tex_dx, vec2 tex_dy, uint instance_flags) {
-	if((instance_flags & INST_TEX_OPAQUE) != 0)
-		return vec4(textureGrad(opaque_texture, tex_coord, tex_dx, tex_dy).xyz, 1.0);
-	return textureGrad(transparent_texture, tex_coord, tex_dx, tex_dy);
-}
-
-// TODO: enable it only where it helps!
-uvec4 shadeSample2x2(ivec2 bin_pixel_pos, uint scratch_tri_offset)
-{
-	vec3 ray_dir = s_bin_ray_dir0 + frustum.ws_dirx * bin_pixel_pos.x
-								  + frustum.ws_diry * bin_pixel_pos.y;
-
-	vec3 normal, params, edge0, edge1;
-	uint instance_id, instance_flags, instance_color;
-	getTriangleParams(scratch_tri_offset, normal, params, edge0, edge1, instance_id, instance_flags, instance_color);
-
-	uvec4 out_color;
-	if(flagsSet(instance_flags, INST_HAS_TEXTURE)) {
-		vec2 tex0, tex1, tex2;
-		getTriangleVertexTexCoords(scratch_tri_offset, tex0, tex1, tex2);
-
-		vec2 bary[4];
-		computeBarycentrics2x2(ray_dir, normal, params, edge0, edge1, bary);
-
-		vec2 tex[4];
-		if((instance_flags & INST_HAS_UV_RECT) != 0) {
-			vec4 uv_rect = g_uv_rects[instance_id];
-			for(int i = 0; i < 4; i++) {
-				tex[i] = tex0 + bary[i][0] * tex1 + bary[i][1] * tex2;
-				tex[i] = uv_rect.xy + uv_rect.zw * fract(tex[i]);
-			}
+			uint pixel_id = value >> 23;
+			uint tri_idx = value & 0xffff;
+			scratch_tri_offset = value & ((1 << 23) - 1);
+			bin_pixel_pos = ivec2((pixel_id & (BIN_SIZE - 1)), (by * 8) + (pixel_id >> 6)) + group_pos;
 		}
 		else {
-			for(int i = 0; i < 4; i++)
-				tex[i] = tex0 + bary[i][0] * tex1 + bary[i][1] * tex2;
+			tri_offset = i;
+			uint value = s_buffer[i];
+			uint pixel_id = value >> 23;
+			scratch_tri_offset = value & ((1 << 23) - 1);
+			bin_pixel_pos = ivec2(pixel_id & (BIN_SIZE - 1), (by * 8) + (pixel_id >> 6));
 		}
 
-		vec4 inst_color = decodeRGBA8(instance_color);
-		if(flagsSet(instance_flags, INST_HAS_VERTEX_NORMALS)) {
-			vec3 nrm0, nrm1, nrm2;
-			getTriangleVertexNormals(scratch_tri_offset, nrm0, nrm1, nrm2);
-			nrm1 -= nrm0; nrm2 -= nrm0;
-			for(int i = 0; i < 4; i++) {
-				vec2 tex_dx = tex[i] - tex[i ^ 1], tex_dy = tex[i] - tex[i ^ 2];
-				vec3 normal = nrm0 + bary[i][0] * nrm1 + bary[i][1] * nrm2;
-				out_color[i] = finalShade(normal, inst_color * sampleTexture(tex[i], tex_dx, tex_dy, instance_flags));
-			}
-		}
-		else {
-			for(int i = 0; i < 4; i++) {
-				vec2 tex_dx = tex[i] - tex[i ^ 1], tex_dy = tex[i] - tex[i ^ 2];
-				out_color[i] = finalShade(normal, inst_color * sampleTexture(tex[i], tex_dx, tex_dy, instance_flags));
-			}
-		}
-	}
-	else {
-		vec4 inst_color = decodeRGBA8(instance_color);
-		if(flagsSet(instance_flags, INST_HAS_VERTEX_NORMALS)) {
-			vec3 nrm0, nrm1, nrm2;
-			getTriangleVertexNormals(scratch_tri_offset, nrm0, nrm1, nrm2);
-			nrm1 -= nrm0; nrm2 -= nrm0;
-			vec2 bary[4];
-			computeBarycentrics2x2(ray_dir, normal, params, edge0, edge1, bary);
-			for(int i = 0; i < 4; i++) {
-				vec3 normal = nrm0 + bary[i][0] * nrm1 + bary[i][1] * nrm2;
-				out_color[i] = finalShade(normal, inst_color);
-			}
-		}
-		else {
-			for(int i = 0; i < 4; i++)
-				out_color[i] = finalShade(normal, inst_color);
-		}
-	}
-
-	return out_color;
-}
-
-void shadeSamples2x2(uint bx, uint by) {
-	// TODO: what's the best way to fix broken pixels?
-	// full sort ? recreate full depth values and sort pairs?
-
-	// TODO: full samples should be grouped across all active blocks
-	uint sample_count_full = (BLOCK_GROUP_FRAG_COUNT(bx) >> 16) / 4;
-	for(uint i = LIX; i < sample_count_full; i += LSIZE) {
-		ivec2 group_pos = ivec2(i & 3, (i >> 2) & 1) * 2;
-		uint tri_offset = (i & ~7) * 4;
-		uint value = s_buffer[tri_offset];
-		tri_offset += group_pos.x + group_pos.y * 8;
-
-		uint pixel_id = value >> 23;
-		uint tri_idx = value & 0xffff;
-		ivec2 bin_pixel_pos = ivec2((pixel_id & (BIN_SIZE - 1)), (by * 8) + (pixel_id >> 6)) + group_pos;
-
-		uint scratch_tri_offset = scratchTriOffset(tri_idx);
-		uvec4 colors = shadeSample2x2(bin_pixel_pos, scratch_tri_offset);
-		s_buffer[tri_offset + 0] = colors[0];
-		s_buffer[tri_offset + 1] = colors[1];
-		s_buffer[tri_offset + 8] = colors[2];
-		s_buffer[tri_offset + 9] = colors[3];
+		s_buffer[tri_offset] = shadeSample(bin_pixel_pos, scratch_tri_offset, i < count_8x4);
 	}
 }
 
@@ -1106,8 +1034,7 @@ void rasterBin(int bin_id) {
 		for(int bx = 0; bx < BLOCK_COUNT; bx += bx_step) {
 			loadSamples(bx, by, bx_step);
 			barrier();
-			shadeSamples2x2(bx, by);
-			shadeSamples1x1(bx, by);
+			shadeSamples(bx, by);
 			barrier();
 			reduceSamples(bx, by, bx_step);
 			barrier();

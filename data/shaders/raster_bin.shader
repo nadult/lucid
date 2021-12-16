@@ -617,7 +617,7 @@ void generateBlocks(uint by)
 	barrier();
 }
 
-void loadTriSamples(int bx, int by, int bx_step) {
+void loadSamples1x1(int bx, int by, int bx_step) {
 	bx += int(LIX / (LSIZE / bx_step)); // TODO: shift instead of div
 	int y = int(LIX & 7);
 
@@ -773,16 +773,7 @@ void reduceSamples(int bx, int by, int bx_step) {
 // - decreased computation cost is not worth it because of increased register pressure
 // - it seems that it does not help at all with loading vertex attribs; it makes sense:
 //   if they are in the cache then it's not a problem...
-//
 // Can we improve speed of loading vertex data?
-//
-// On WhiteOak modifying tex_dx, tex_dy makes really big perf difference!
-// Whole rendering for: 0.00001: 27.03 ms  0.001: 24.07 ms  0.1: 17.69 ms
-// Simple renderer for: 0.00001:  4.91 ms  0.001:  2.65 ms  0.1:  2.17 ms
-// It seems that memory is a problem
-// Does that mean that i should use even more threads per bin ?
-//
-// Cache trashing...
 uint shadeSample(ivec2 bin_pixel_pos, uint scratch_tri_offset)
 {
 	vec3 ray_dir = s_bin_ray_dir0 + frustum.ws_dirx * bin_pixel_pos.x
@@ -853,6 +844,22 @@ uint shadeSample(ivec2 bin_pixel_pos, uint scratch_tri_offset)
 	return encodeRGBA8(color);
 }
 
+void shadeSamples1x1(uint bx, uint by) {
+	// TODO: what's the best way to fix broken pixels?
+	// full sort ? recreate full depth values and sort pairs?
+
+	// Shading samples grouped by triangles
+	// TODO: how can we make sure that tris which generate >= 32 samples are all handles by single warp?
+	uint sample_count = BLOCK_GROUP_FRAG_COUNT(bx);
+	for(uint i = LIX; i < sample_count; i += LSIZE) {
+		uint value = s_buffer[i];
+		uint pixel_id = value >> 23;
+		uint scratch_tri_offset = value & ((1 << 23) - 1);
+		ivec2 bin_pixel_pos = ivec2(pixel_id & (BIN_SIZE - 1), (by * 8) + (pixel_id >> 6));
+		s_buffer[i] = shadeSample(bin_pixel_pos, scratch_tri_offset);
+	}
+}
+
 void rasterInvalidBlockRow(int by, vec3 color)
 {
 	for(uint i = LIX; i < BIN_SIZE * MAX_ROWS; i += LSIZE) {
@@ -910,22 +917,9 @@ void rasterBin(int bin_id) {
 		}
 
 		for(int bx = 0; bx < BLOCK_COUNT; bx += bx_step) {
-			loadTriSamples(bx, by, bx_step);
+			loadSamples1x1(bx, by, bx_step);
 			barrier();
-
-			// TODO: what's the best way to fix broken pixels?
-			// full sort ? recreate full depth values and sort pairs?
-
-			// Shading samples grouped by triangles
-			// TODO: how can we make sure that tris which generate >= 32 samples are all handles by single warp?
-			uint sample_count = BLOCK_GROUP_FRAG_COUNT(bx);
-			for(uint i = LIX; i < sample_count; i += LSIZE) {
-				uint value = s_buffer[i];
-				uint pixel_id = value >> 23;
-				uint scratch_tri_offset = value & ((1 << 23) - 1);
-				ivec2 bin_pixel_pos = ivec2(pixel_id & (BIN_SIZE - 1), (by * 8) + (pixel_id >> 6));
-				s_buffer[i] = shadeSample(bin_pixel_pos, scratch_tri_offset);
-			}
+			shadeSamples1x1(bx, by);
 			barrier();
 			reduceSamples(bx, by, bx_step);
 			barrier();

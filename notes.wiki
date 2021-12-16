@@ -83,8 +83,6 @@ conference: 2512
 	}
     W takim razie problem jest gdzieś indziej...
 
-* *TODO: drobne błędy wciąż widoczne na powerplant*
-
 * *Problem: cały czas wolne samplowanie...*
   WhiteOak: 20ms vs 2.4ms ...
   

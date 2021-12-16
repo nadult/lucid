@@ -657,7 +657,6 @@ void reduceSamples(int bx, int by, int bx_step) {
 
 	bx += int(LIX >> 6);
 	int x = int(LIX & 7) + bx * 8, y = int((LIX >> 3) & 7);
-	uint pixel_id = (y << 6) | x;
 
 	uint soffset = scratchBlockTrisOffset(bx);
 	uint tri_count = BLOCK_TRI_COUNT(bx);
@@ -731,10 +730,9 @@ void reduceSamples(int bx, int by, int bx_step) {
 						SWAP_UINT(prev_colors[2], prev_colors[1]);
 						SWAP_FLOAT(prev_depths[2], prev_depths[1]);
 						if(prev_depths[2] < prev_depths[3]) {
-							i = tri_count;
-							out_color = vec3(1.0, 0.0, 0.0);
-							out_transparency = 0.0;
-							break;
+							prev_colors[0] = 0xff0000ff;
+							pixel_bit = 0;
+							continue;
 						}
 					}
 				}

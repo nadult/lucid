@@ -63,6 +63,10 @@ uint scratchTriOffset(uint tri_idx) {
 	return (gl_WorkGroupID.x << WORKGROUP_SCRATCH_SHIFT) + 64 * 1024 + tri_idx;
 }
 
+uint sumU16x2(uint pair) {
+	return (pair & 0xffff) + (pair >> 16);
+}
+
 // Note: in the context of this shader, block size is 8x8, not 4x4
 
 shared ivec2 s_bin_pos;
@@ -78,6 +82,8 @@ void resetBlockCounters() {
 
 // These functions work only within current block row
 #define BLOCK_TRI_COUNT(bx)		s_curblock_counters[bx]
+
+// TODO: more info
 #define BLOCK_FRAG_COUNT(bx)	s_curblock_counters[bx + BLOCK_COUNT]
 #define BLOCK_FRAG_OFFSET(bx)	s_curblock_counters[bx + BLOCK_COUNT * 2]
 #define BLOCK_GROUP_FRAG_COUNT(bx)	s_curblock_counters[bx + BLOCK_COUNT * 3]
@@ -88,6 +94,7 @@ shared int s_bx_step; // TODO: better name
 // TODO: add protection from too big number of samples:
 // maximum per row for raster_bin = min(4 * LSIZE, 32768) ?
 // we have to somehow estimate max# of samples during categorization?
+// max 512 tris per block -> max samples = 512 * 64: fits in 15 bits
 
 shared uint s_bin_quad_count, s_bin_quad_offset;
 
@@ -519,23 +526,33 @@ void generateBlocks(uint by)
 			int minx2 = max(((rows23 >>  0) & 0x3f) - min_bx, 0), maxx2 = min(((rows23 >>  6) & 0x3f) - min_bx, 7);
 			int minx3 = max(((rows23 >> 12) & 0x3f) - min_bx, 0), maxx3 = min(((rows23 >> 18) & 0x3f) - min_bx, 7);
 
-			// TODO: and at the end not needed?
-			uint bits0 = (minx0 <= 7 && maxx0 >= 0 && minx0 <= maxx0? 0x000000ff : 0) & (0x000000ffu << minx0) & (0x000000ffu >> (7 - maxx0));
-			uint bits1 = (minx1 <= 7 && maxx1 >= 0 && minx1 <= maxx1? 0x0000ff00 : 0) & (0x0000ff00u << minx1) & (0x0000ff00u >> (7 - maxx1));
-			uint bits2 = (minx2 <= 7 && maxx2 >= 0 && minx2 <= maxx2? 0x00ff0000 : 0) & (0x00ff0000u << minx2) & (0x00ff0000u >> (7 - maxx2));
-			uint bits3 = (minx3 <= 7 && maxx3 >= 0 && minx3 <= maxx3? 0xff000000 : 0) & (0xff000000u << minx3) & (0xff000000u >> (7 - maxx3));
+			uint mask0 = (minx0 <= maxx0? ~0u : 0);
+			uint mask1 = (minx1 <= maxx1? ~0u : 0);
+			uint mask2 = (minx2 <= maxx2? ~0u : 0);
+			uint mask3 = (minx3 <= maxx3? ~0u : 0);
+
+			uint bits0 = mask0 & (0x000000ffu << minx0) & (0x000000ffu >> (7 - maxx0));
+			uint bits1 = mask1 & (0x0000ff00u << minx1) & (0x0000ff00u >> (7 - maxx1));
+			uint bits2 = mask2 & (0x00ff0000u << minx2) & (0x00ff0000u >> (7 - maxx2));
+			uint bits3 = mask3 & (0xff000000u << minx3) & (0xff000000u >> (7 - maxx3));
+
 			bits[j] = bits0 | bits1 | bits2 | bits3;
 		}
 
 		uint num_frags0123 = bitCount(bits[0]);
 		uint num_frags4567 = bitCount(bits[1]);
-		uint num_frags = num_frags0123 + num_frags4567;
+		uint num_full_frags = 0;
+		uint second_part_offset = (num_frags4567 == 32) == (num_frags0123 == 32)? num_frags0123 : 0; // TODO: opt
+
+		if(num_frags0123 == 32) num_full_frags += 32, num_frags0123 = 0;
+		if(num_frags4567 == 32) num_full_frags += 32, num_frags4567 = 0;
+		uint num_frags = (num_frags0123 + num_frags4567) + (num_full_frags << 16);
 
 		if(num_frags == 0) // This means that bmasks are invalid
 			RECORD(0, 0, 0, 0);
 
 		g_scratch[dst_offset + i] = uvec2(bits[0], bits[1]);
-		g_scratch[dst_offset + i + MAX_BLOCK_TRIS].x = tri_idx | (num_frags0123 << 16);
+		g_scratch[dst_offset + i + MAX_BLOCK_TRIS].x = tri_idx | (second_part_offset << 16);
 
 		// Computing triangle-ordered sample offsets within each block
 		uint temp;
@@ -573,8 +590,8 @@ void generateBlocks(uint by)
 
 #ifdef SHADER_DEBUG
 	for(uint i = LIX & (LSIZE / 8 - 1); i < tri_count; i += LSIZE / 8) {
-		uint value = s_buffer[buf_offset + i];
-		uint prev_value = i == 0? 0 : s_buffer[buf_offset + i - 1];
+		uint value = s_buffer[buf_offset + i] & 0xffff;
+		uint prev_value = i == 0? 0 : s_buffer[buf_offset + i - 1] & 0xffff;
 		if(value <= prev_value)
 			RECORD(i, tri_count, prev_value, value);
 	}
@@ -583,8 +600,7 @@ void generateBlocks(uint by)
 	if(LIX < BLOCK_COUNT) {
 		uint bx = LIX;
 		uint num_tris = BLOCK_TRI_COUNT(bx);
-		uint max_offset = s_buffer[bx * MAX_BLOCK_TRIS + num_tris - 1];
-		uint frag_count1 = num_tris == 0? 0 : max_offset;
+		uint frag_count1 = num_tris == 0? 0 : s_buffer[bx * MAX_BLOCK_TRIS + num_tris - 1];
 		BLOCK_FRAG_COUNT(bx) = frag_count1;
 
 		uint frag_count2 = frag_count1 + shuffleXorNV(frag_count1, 1, 8);
@@ -593,49 +609,56 @@ void generateBlocks(uint by)
 
 		int bx_step = 8;
 		// TODO: compute this on first warp only
-		if(frag_count8 > MAX_SAMPLES) {
-			bool fail4 = anyInvocationARB(frag_count4 > MAX_SAMPLES);
-			bool fail2 = anyInvocationARB(frag_count2 > MAX_SAMPLES);
-			bool fail1 = anyInvocationARB(frag_count1 > MAX_SAMPLES);
+		if(sumU16x2(frag_count8) > MAX_SAMPLES) {
+			bool fail4 = anyInvocationARB(sumU16x2(frag_count4) > MAX_SAMPLES);
+			bool fail2 = anyInvocationARB(sumU16x2(frag_count2) > MAX_SAMPLES);
+			bool fail1 = anyInvocationARB(sumU16x2(frag_count1) > MAX_SAMPLES);
 			bx_step = fail1? 0 : fail2? 1 : fail4? 2 : 4;
 		}
-
-		uint value = 0;
-		uint temp1 = shuffleUpNV(frag_count1, 1, 8);
-		uint temp2 = shuffleUpNV(frag_count2, 2, 8);
-		uint temp4 = shuffleUpNV(frag_count4, 4, 8);
-		if(bx_step >= 2 && (bx & 1) != 0) value += temp1;
-		if(bx_step >= 4 && (bx & 2) != 0) value += temp2;
-		if(bx_step >= 8 && (bx & 4) != 0) value += temp4;
-		
-		BLOCK_FRAG_OFFSET(bx) = value;
 		s_bx_step = bx_step;
+
+		if(bx_step > 0) {
+			uint frag_offset = 0;
+			uint temp1 = shuffleUpNV(frag_count1, 1, 8);
+			uint temp2 = shuffleUpNV(frag_count2, 2, 8);
+			uint temp4 = shuffleUpNV(frag_count4, 4, 8);
+			if(bx_step >= 2 && (bx & 1) != 0) frag_offset += temp1;
+			if(bx_step >= 4 && (bx & 2) != 0) frag_offset += temp2;
+			if(bx_step >= 8 && (bx & 4) != 0) frag_offset += temp4;
+			
+			BLOCK_FRAG_OFFSET(bx) = frag_offset;
 		
-		uint last_bx = bx + bx_step - 1;
-		BLOCK_GROUP_FRAG_COUNT(bx) = int(BLOCK_FRAG_COUNT(last_bx) + BLOCK_FRAG_OFFSET(last_bx));
+			uint first_bx = bx & ~(bx_step - 1), last_bx = first_bx + bx_step - 1;
+			uint group_count = shuffleNV(frag_count1, last_bx, 8) + shuffleNV(frag_offset, last_bx, 8);
+			BLOCK_GROUP_FRAG_COUNT(bx) = group_count;
+			BLOCK_FRAG_OFFSET(bx) += group_count >> 16;
+		}
 	}
 	barrier();
 }
 
-void loadSamples1x1(int bx, int by, int bx_step) {
+void loadSamples(int bx, int by, int bx_step) {
 	bx += int(LIX / (LSIZE / bx_step)); // TODO: shift instead of div
-	int y = int(LIX & 7);
 
 	uint soffset = scratchBlockTrisOffset(bx);
 	uint tri_count = BLOCK_TRI_COUNT(bx);
-	uint block_offset = BLOCK_FRAG_OFFSET(bx);
+
+	uint block_offset_full = BLOCK_FRAG_OFFSET(bx) >> 16;
+	uint block_offset_partial = BLOCK_FRAG_OFFSET(bx) & 0xffff;
+	
+	int y = int(LIX & 7);
+	uint y_shift = (y & 3) * 8;
 
 	// TODO: load tri data similarily as in loadSamples and use shuffles to extract
 	for(uint i = (LIX & (LSIZE / bx_step - 1)) >> 3, istep = (LSIZE / 8) / bx_step; i < tri_count; i += istep) {
-		uvec2 bits = g_scratch[soffset + i];
+		uint tri_bitmask = g_scratch[soffset + i][y < 4? 0 : 1];
+		if(tri_bitmask == ~0u)
+			continue;
 		uvec2 info = g_scratch[soffset + i + MAX_BLOCK_TRIS];
-
 		uint tri_idx = info.x & 0xffff;
-		uint tri_bitmask = y < 4? bits.x : bits.y;
-		uint tri_offset = info.y + (y >= 4? info.x >> 16 : 0);
-		uint shift = (y & 3) * 8;
-		tri_offset += bitCount(tri_bitmask & ((1 << shift) - 1)) + block_offset;
-		tri_bitmask = (tri_bitmask >> shift) & 0xff;
+		uint tri_offset = (info.y & 0xffff) + (y >= 4? info.x >> 16 : 0);
+		tri_offset += bitCount(tri_bitmask & ((1 << y_shift) - 1)) + block_offset_partial;
+		tri_bitmask = (tri_bitmask >> y_shift) & 0xff;
 
 		if(tri_bitmask == 0)
 			continue;
@@ -647,6 +670,24 @@ void loadSamples1x1(int bx, int by, int bx_step) {
 			uint value = (pixel_id << 23) | scratchTriOffset(tri_idx);
 			s_buffer[tri_offset++] = value;
 		} while((tri_bitmask & (1 << x)) != 0);
+	}
+	
+	for(uint i = (LIX & (LSIZE / bx_step - 1)), istep = LSIZE / bx_step; i < tri_count; i += istep) {
+		uvec2 bits = g_scratch[soffset + i];
+		uvec2 info = g_scratch[soffset + i + MAX_BLOCK_TRIS];
+
+		uint tri_idx = info.x & 0xffff;
+		uint tri_offset = (info.y >> 16) + block_offset_full;
+
+		uint scratch_tri_offset = scratchTriOffset(tri_idx);
+		if(bits.x == ~0u) {
+			uint pixel_id = (0 << 6) | (bx * 8);
+			s_buffer[tri_offset] = (pixel_id << 23) | scratch_tri_offset;
+		}
+		if(bits.y == ~0u) {
+			uint pixel_id = (4 << 6) | (bx * 8);
+			s_buffer[tri_offset + (info.x >> 16)] = (pixel_id << 23) | scratch_tri_offset;
+		}
 	}
 }
 
@@ -660,7 +701,9 @@ void reduceSamples(int bx, int by, int bx_step) {
 
 	uint soffset = scratchBlockTrisOffset(bx);
 	uint tri_count = BLOCK_TRI_COUNT(bx);
-	int block_offset = int(BLOCK_FRAG_OFFSET(bx));
+	
+	uint block_offset_full = BLOCK_FRAG_OFFSET(bx) >> 16;
+	uint block_offset_partial = BLOCK_FRAG_OFFSET(bx) & 0xffff;
 
 	// TODO: share pixels between threads for bx_step <= 4?
 	// TODO: WARP_SIZE?
@@ -685,8 +728,12 @@ void reduceSamples(int bx, int by, int bx_step) {
 				uvec2 bits = g_scratch[soffset + i + (LIX & 31)];
 				uvec2 info = g_scratch[soffset + i + (LIX & 31) + MAX_BLOCK_TRIS];
 
-				sel_tri_offset = info.y + (y >= 4? info.x >> 16 : 0);
 				sel_tri_bitmask = y < 4? bits.x : bits.y;
+				if(sel_tri_bitmask == ~0u)
+					sel_tri_offset = block_offset_full + (info.y >> 16);
+				else
+					sel_tri_offset = block_offset_partial + (info.y & 0xffff);
+				sel_tri_offset += y >= 4? info.x >> 16 : 0;
 
 				uint tri_idx = info.x & 0xffff;
 				uint scratch_tri_offset = scratchTriOffset(tri_idx);
@@ -710,7 +757,7 @@ void reduceSamples(int bx, int by, int bx_step) {
 			if((tri_bitmask & pixel_bit) == 0)
 				continue;
 
-			tri_offset += bitCount(tri_bitmask & (pixel_bit - 1)) + block_offset;
+			tri_offset += bitCount(tri_bitmask & (pixel_bit - 1));
 			uint value = s_buffer[tri_offset];
 			if(value == 0)
 				continue;
@@ -850,13 +897,147 @@ void shadeSamples1x1(uint bx, uint by) {
 
 	// Shading samples grouped by triangles
 	// TODO: how can we make sure that tris which generate >= 32 samples are all handles by single warp?
-	uint sample_count = BLOCK_GROUP_FRAG_COUNT(bx);
+	uint sample_count = BLOCK_GROUP_FRAG_COUNT(bx) & 0xffff;
+	uint sample_offset = BLOCK_GROUP_FRAG_COUNT(bx) >> 16;
+
 	for(uint i = LIX; i < sample_count; i += LSIZE) {
-		uint value = s_buffer[i];
+		uint value = s_buffer[i + sample_offset];
 		uint pixel_id = value >> 23;
 		uint scratch_tri_offset = value & ((1 << 23) - 1);
 		ivec2 bin_pixel_pos = ivec2(pixel_id & (BIN_SIZE - 1), (by * 8) + (pixel_id >> 6));
-		s_buffer[i] = shadeSample(bin_pixel_pos, scratch_tri_offset);
+		s_buffer[i + sample_offset] = shadeSample(bin_pixel_pos, scratch_tri_offset);
+	}
+}
+
+void computeBarycentrics2x2(vec3 ray_dir, vec3 normal, vec3 params, vec3 edge0, vec3 edge1,
+							out vec2 bary[4]) {
+	float ray_pos[4] = {
+		params[0] / dot(normal, ray_dir),
+		params[0] / dot(normal, ray_dir + frustum.ws_dirx),
+		params[0] / dot(normal, ray_dir + frustum.ws_diry),
+		params[0] / dot(normal, ray_dir + frustum.ws_diry + frustum.ws_dirx),
+	};
+
+	bary[0] = vec2(dot(edge0, ray_dir), dot(edge1, ray_dir));
+	vec2 bary_dx = vec2(dot(edge0, frustum.ws_dirx), dot(edge1, frustum.ws_dirx));
+	vec2 bary_dy = vec2(dot(edge0, frustum.ws_diry), dot(edge1, frustum.ws_diry));
+
+	bary[1] = bary[0] + bary_dx;
+	bary[2] = bary[0] + bary_dy;
+	bary[3] = bary[0] + bary_dy + bary_dx;
+	for(int i = 0; i < 4; i++)
+		bary[i] = bary[i] * ray_pos[i] - vec2(params[1], params[2]);
+}
+
+bool flagsSet(uint flags, uint test) {
+	return (flags & test) == test;
+}
+
+uint finalShade(vec3 normal, vec4 color) {
+	float light_value = max(0.0, dot(-lighting.sun_dir, normal) * 0.7 + 0.3);
+	color.rgb = min(finalShading(color.rgb, light_value), vec3(1.0));
+	return encodeRGBA8(color);
+}
+
+vec4 sampleTexture(vec2 tex_coord, vec2 tex_dx, vec2 tex_dy, uint instance_flags) {
+	if((instance_flags & INST_TEX_OPAQUE) != 0)
+		return vec4(textureGrad(opaque_texture, tex_coord, tex_dx, tex_dy).xyz, 1.0);
+	return textureGrad(transparent_texture, tex_coord, tex_dx, tex_dy);
+}
+
+// TODO: enable it only where it helps!
+uvec4 shadeSample2x2(ivec2 bin_pixel_pos, uint scratch_tri_offset)
+{
+	vec3 ray_dir = s_bin_ray_dir0 + frustum.ws_dirx * bin_pixel_pos.x
+								  + frustum.ws_diry * bin_pixel_pos.y;
+
+	vec3 normal, params, edge0, edge1;
+	uint instance_id, instance_flags, instance_color;
+	getTriangleParams(scratch_tri_offset, normal, params, edge0, edge1, instance_id, instance_flags, instance_color);
+
+	uvec4 out_color;
+	if(flagsSet(instance_flags, INST_HAS_TEXTURE)) {
+		vec2 tex0, tex1, tex2;
+		getTriangleVertexTexCoords(scratch_tri_offset, tex0, tex1, tex2);
+
+		vec2 bary[4];
+		computeBarycentrics2x2(ray_dir, normal, params, edge0, edge1, bary);
+
+		vec2 tex[4];
+		if((instance_flags & INST_HAS_UV_RECT) != 0) {
+			vec4 uv_rect = g_uv_rects[instance_id];
+			for(int i = 0; i < 4; i++) {
+				tex[i] = tex0 + bary[i][0] * tex1 + bary[i][1] * tex2;
+				tex[i] = uv_rect.xy + uv_rect.zw * fract(tex[i]);
+			}
+		}
+		else {
+			for(int i = 0; i < 4; i++)
+				tex[i] = tex0 + bary[i][0] * tex1 + bary[i][1] * tex2;
+		}
+
+		vec4 inst_color = decodeRGBA8(instance_color);
+		if(flagsSet(instance_flags, INST_HAS_VERTEX_NORMALS)) {
+			vec3 nrm0, nrm1, nrm2;
+			getTriangleVertexNormals(scratch_tri_offset, nrm0, nrm1, nrm2);
+			nrm1 -= nrm0; nrm2 -= nrm0;
+			for(int i = 0; i < 4; i++) {
+				vec2 tex_dx = tex[i] - tex[i ^ 1], tex_dy = tex[i] - tex[i ^ 2];
+				vec3 normal = nrm0 + bary[i][0] * nrm1 + bary[i][1] * nrm2;
+				out_color[i] = finalShade(normal, inst_color * sampleTexture(tex[i], tex_dx, tex_dy, instance_flags));
+			}
+		}
+		else {
+			for(int i = 0; i < 4; i++) {
+				vec2 tex_dx = tex[i] - tex[i ^ 1], tex_dy = tex[i] - tex[i ^ 2];
+				out_color[i] = finalShade(normal, inst_color * sampleTexture(tex[i], tex_dx, tex_dy, instance_flags));
+			}
+		}
+	}
+	else {
+		vec4 inst_color = decodeRGBA8(instance_color);
+		if(flagsSet(instance_flags, INST_HAS_VERTEX_NORMALS)) {
+			vec3 nrm0, nrm1, nrm2;
+			getTriangleVertexNormals(scratch_tri_offset, nrm0, nrm1, nrm2);
+			nrm1 -= nrm0; nrm2 -= nrm0;
+			vec2 bary[4];
+			computeBarycentrics2x2(ray_dir, normal, params, edge0, edge1, bary);
+			for(int i = 0; i < 4; i++) {
+				vec3 normal = nrm0 + bary[i][0] * nrm1 + bary[i][1] * nrm2;
+				out_color[i] = finalShade(normal, inst_color);
+			}
+		}
+		else {
+			for(int i = 0; i < 4; i++)
+				out_color[i] = finalShade(normal, inst_color);
+		}
+	}
+
+	return out_color;
+}
+
+void shadeSamples2x2(uint bx, uint by) {
+	// TODO: what's the best way to fix broken pixels?
+	// full sort ? recreate full depth values and sort pairs?
+
+	// TODO: full samples should be grouped across all active blocks
+	uint sample_count_full = (BLOCK_GROUP_FRAG_COUNT(bx) >> 16) / 4;
+	for(uint i = LIX; i < sample_count_full; i += LSIZE) {
+		ivec2 group_pos = ivec2(i & 3, (i >> 2) & 1) * 2;
+		uint tri_offset = (i & ~7) * 4;
+		uint value = s_buffer[tri_offset];
+		tri_offset += group_pos.x + group_pos.y * 8;
+
+		uint pixel_id = value >> 23;
+		uint tri_idx = value & 0xffff;
+		ivec2 bin_pixel_pos = ivec2((pixel_id & (BIN_SIZE - 1)), (by * 8) + (pixel_id >> 6)) + group_pos;
+
+		uint scratch_tri_offset = scratchTriOffset(tri_idx);
+		uvec4 colors = shadeSample2x2(bin_pixel_pos, scratch_tri_offset);
+		s_buffer[tri_offset + 0] = colors[0];
+		s_buffer[tri_offset + 1] = colors[1];
+		s_buffer[tri_offset + 8] = colors[2];
+		s_buffer[tri_offset + 9] = colors[3];
 	}
 }
 
@@ -874,11 +1055,17 @@ void rasterFragmentCounts(int by)
 {
 	for(uint i = LIX; i < BIN_SIZE * MAX_ROWS; i += LSIZE) {
 		ivec2 pixel_pos = ivec2(i & (BIN_SIZE - 1), by * 8 + (i >> BIN_SHIFT));
-		uint count = BLOCK_FRAG_COUNT(pixel_pos.x / 8); float scale = 1.0 / 4096;
+		uint count0 = BLOCK_FRAG_COUNT(pixel_pos.x / 8) & 0xffff;
+		uint count1 = BLOCK_FRAG_COUNT(pixel_pos.x / 8) >> 16;
+		count0 = BLOCK_FRAG_OFFSET(pixel_pos.x / 8) & 0xffff;
+		count1 = BLOCK_FRAG_OFFSET(pixel_pos.x / 8) >> 16;
+		count0 = BLOCK_GROUP_FRAG_COUNT(pixel_pos.x / 8) & 0xffff;
+		count1 = BLOCK_GROUP_FRAG_COUNT(pixel_pos.x / 8) >> 16;
 
-		vec4 color = vec4(count == 0xffff? vec3(1.0, 0.0, 0.0) : vec3(float(count) * scale), 1.0);
-		color = min(color, vec4(1.0));
-		uint enc_col = encodeRGBA8(color);
+		vec3 color = vec3(count0, count1, 0) / 4096.0;
+		if(count0 == 0xffff)
+			color = vec3(1.0, 0.0, 0.0);
+		uint enc_col = encodeRGBA8(vec4(min(color, vec3(1.0)), 1.0));
 		imageStore(final_raster, s_bin_pos + pixel_pos, uvec4(enc_col, 0, 0, 0));
 	}
 }
@@ -917,8 +1104,9 @@ void rasterBin(int bin_id) {
 		}
 
 		for(int bx = 0; bx < BLOCK_COUNT; bx += bx_step) {
-			loadSamples1x1(bx, by, bx_step);
+			loadSamples(bx, by, bx_step);
 			barrier();
+			shadeSamples2x2(bx, by);
 			shadeSamples1x1(bx, by);
 			barrier();
 			reduceSamples(bx, by, bx_step);

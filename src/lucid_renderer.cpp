@@ -124,6 +124,8 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	uint max_tile_tris = max_quads * 3;
 	uint max_block_tris = max_quads * 2;
 
+	// TODO: LucidRenderer constructed 2x at the beginning
+
 	m_quad_indices.emplace(BufferType::shader_storage, max_quads * 4 * sizeof(u32));
 	m_quad_aabbs.emplace(BufferType::shader_storage, max_quads * sizeof(u32));
 	m_tri_aabbs.emplace(BufferType::shader_storage, max_quads * sizeof(int4));

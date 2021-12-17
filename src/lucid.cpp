@@ -41,6 +41,15 @@ int main(int argc, char **argv) {
 	gl_device.createWindow("Lucid rasterizer", resolution, gl_config);
 
 	print("OpenGL info:\n%\n", gl_info->toString());
+	if(gl_info->vendor == GlVendor::nvidia) {
+		// TODO: add it to libfwk, find similar for intel and amd ?
+		GLint warp_size, warps_per_sm, sm_count;
+		glGetIntegerv(GL_WARP_SIZE_NV, &warp_size);
+		glGetIntegerv(GL_WARPS_PER_SM_NV, &warps_per_sm);
+		glGetIntegerv(GL_SM_COUNT_NV, &sm_count);
+		print("NVIDIA OpenGL info:\n warp size:    %\n warps per SM: %\n SM count:     %\n",
+			  warp_size, warps_per_sm, sm_count);
+	}
 
 	if(config) {
 		if(auto *rect = config->get<IRect>("window_rect")) {

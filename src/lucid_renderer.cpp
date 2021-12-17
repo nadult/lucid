@@ -1614,6 +1614,18 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 	auto rejection_details = format("backface: %\nfrustum: %\nbetween-samples: %", num_rejected[1],
 									num_rejected[2], num_rejected[3]);
 
+	vector<StatsRow> timings;
+	Str timer_names[] = {"generate rows", "generate blocks", "load samples", "shade samples",
+						 "reduce samples"};
+	u64 total = 0;
+	for(int i : intRange(timer_names))
+		total += bin_counters[15 + i];
+	if(total)
+		for(int i : intRange(timer_names)) {
+			auto value = bin_counters[15 + i];
+			timings.emplace_back(timer_names[i], stdFormat("%.2f %%", double(value) / total * 100));
+		}
+
 	vector<StatsRow> basic_rows = {
 		{"input instances", toString(m_num_instances)},
 		{"input quads", toString(num_input_quads)},
@@ -1667,6 +1679,8 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 									float(num_invalid_tiles) / num_tiles * 100.0)},
 	};
 
+	if(timings)
+		out.emplace_back(move(timings), "", 130);
 	out.emplace_back(move(basic_rows), "", 130);
 	out.emplace_back(move(avg_rows), "Averages per non-empty bin/tile", 130);
 	out.emplace_back(move(max_rows), "", 130);

@@ -39,7 +39,9 @@ struct BinCounters {
 	uint empty_bin_counter;
 	uint small_bin_counter;
 
-	int temp[17];
+	uint timings[8];
+
+	int temp[9];
 
 	int bin_quad_counts[BIN_COUNT];
 	int bin_quad_offsets[BIN_COUNT];

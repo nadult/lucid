@@ -75,6 +75,25 @@ shared vec3 s_bin_ray_dir0;
 shared uint s_block_row_tri_counts[BLOCK_COUNT];
 shared uint s_curblock_counters[BLOCK_COUNT * 4];
 
+#define ENABLE_TIMINGS
+
+// Note: UPDATE_CLOCK should be called after a barrier
+#ifdef ENABLE_TIMINGS
+shared uint64_t s_timings[8];
+#define INIT_CLOCK()      uint64_t clock0 = clockARB();
+#define UPDATE_CLOCK(idx) if(LIX == 0) { uint64_t clock = clockARB(); s_timings[idx] += clock - clock0; clock0 = clock; }
+
+void initTimers() { if(LIX < 8) s_timings[LIX] = 0; }
+void commitTimers() { if(LIX < 8) atomicAdd(g_bins.timings[LIX], uint(s_timings[LIX])); }
+
+#else
+#define INIT_CLOCK()
+#define UPDATE_CLOCK(idx)
+
+void initTimers() { }
+void commitTimers() { }
+#endif
+
 void resetBlockCounters() {
 	if(LIX < BLOCK_COUNT)
 		s_curblock_counters[LIX] = 0;
@@ -999,6 +1018,8 @@ void rasterFragmentCounts(int by)
 }
 
 void rasterBin(int bin_id) {
+	INIT_CLOCK();
+
 	if(LIX < BIN_SIZE) {
 		if(LIX < BLOCK_COUNT) {
 			if(LIX == 0) {
@@ -1016,12 +1037,15 @@ void rasterBin(int bin_id) {
 	barrier();
 	generateRows();
 	groupMemoryBarrier();
+	barrier();
+	UPDATE_CLOCK(0);
 
 	for(int by = 0; by < BLOCK_COUNT; by ++) {
 		barrier();
 		generateBlocks(by);
 		groupMemoryBarrier();
 		barrier();
+		UPDATE_CLOCK(1);
 
 		// How many rows can we rasterize in single step?
 		int bx_step = s_bx_step;
@@ -1032,15 +1056,22 @@ void rasterBin(int bin_id) {
 		}
 
 		for(int bx = 0; bx < BLOCK_COUNT; bx += bx_step) {
+			barrier();
 			loadSamples(bx, by, bx_step);
 			barrier();
+			UPDATE_CLOCK(2);
+
 			shadeSamples(bx, by);
 			barrier();
+			UPDATE_CLOCK(3);
+
 			reduceSamples(bx, by, bx_step);
 			barrier();
+			UPDATE_CLOCK(4);
 		}
 		//rasterFragmentCounts(by);
 	}
+
 }
 
 shared int s_num_bins, s_bin_id;
@@ -1055,12 +1086,15 @@ int loadNextBin() {
 }
 
 void main() {
+	initTimers();
 	if(LIX == 0)
 		s_num_bins = g_bins.num_small_bins;
+
 	int bin_id = loadNextBin();
 	while(bin_id != -1) {
 		barrier();
 		rasterBin(bin_id);
 		bin_id = loadNextBin();
 	}
+	commitTimers();
 }

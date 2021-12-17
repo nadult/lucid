@@ -127,6 +127,7 @@ Ex<Program> Program::makeCompute(Str name, string defs, Opts opts) {
 	header << "#version 430\n";
 	header << "#extension GL_ARB_shader_draw_parameters: enable\n";
 	header << "#extension GL_ARB_shader_group_vote : enable\n";
+	header << "#extension GL_ARB_shader_clock : enable\n";
 	if(gl_info->vendor == GlVendor::nvidia) {
 		// TODO: check if shuffle is actually available
 		header << "#extension GL_NV_shader_thread_shuffle : enable\n";

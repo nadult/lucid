@@ -924,6 +924,35 @@ void rasterFragmentCounts(int by)
 	}
 }
 
+// TODO: nowy plan:
+//
+// 1. generacja offsetów do segmentów:
+//
+// Dla każdej połowki bloku 8x8 generujemy listę 16/32 segmentów;
+// Każdy segment to 32 sample które mogą być wygenerowane przez jeden warp
+// offsety to pary id-trójkąta (11 bitów) i offset w ramach trójkąta (5 bitów)
+//
+// Czyli powinniśmy mieć 8 * 2 listy po 16/32 segmentów; Każdy można wyznaczyć niezależnie
+// za pomocą 256/512 wątków pod koniec generateBlocks
+//
+// 2.  Mając segmenty możemy generować sample. Każdy warp operuje niezależnie na jednej połówce
+//     bloku 8x8. Każdy wątek odpowiada za 4 różne rzędy po 8 sampli albo za 4 różne sample (2 wątki w rzędzie).
+//
+//     Każdy wątek generuje offsety sampli, i jeśli offset zawiera się w danym segmencie to jest dodawany do odpowiedniej
+//     listy. Dodatkowo, każdy wątek wyznacza kolejność sampli dla odpowiednich pikseli (8 lub 4).
+//
+//     Każdy piksel ma listę sampli: na id-k w liście wystarczy 5 bitów (bo tyle jest maksymalnie sampli w segmencie).
+//     W sumie na jeden sampel wystarczy 16 bitów: 5 bitów na id piksela, 5 bitów na id-k w liście sampli w danym pikselu
+//     i 5 bitów na id-k trójkąta (dlatego że w danym segmencie może być maksymalnie 32 trójkąty).
+//
+//     Na raz generujemy sample do 4 albo 8 segmentów.
+//
+// 3. Mając sample w segmentach, warpy na zmianę operują po jednym segmencie: cieniują 32 sample a następnie od razu
+//    przeprowadzają jego redukcję. Filtr głębokości trzymamy w rejestrach.
+//
+// Dodatkowo możemy trzymać mały bufor na dane trójkątów w SMEM (np. 6 trójkątów na jeden warp). Przed cieniowaniem
+// danego segmentu bufor jest update-owany nowymi trójkątami. Ładowanie danych trójkąta można rozdzielić między kilka wątków (np. 4).
+
 void rasterBin(int bin_id) {
 	INIT_CLOCK();
 

@@ -189,7 +189,6 @@ wtedy sync nie jest potrzebny
 	- możemy użyć do tego offsetów trójkątów; nie muszą być sumowane między blokami
 
   Schemat działania:
-  - wywalenie podziału na pełne i częściowe trójkąty
   - generowanie offsetów segmentów: dla każdego segmentu para: id pierwszego tróəkąta i offset
 	w ramach tróəkąta
   - generowanie  sampli z użyciem offsetów (raczej 8 wątków na trójkąt)

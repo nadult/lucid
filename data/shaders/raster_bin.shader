@@ -560,8 +560,7 @@ void generateBlocks(uint by)
 
 		uint num_frags0123 = bitCount(bits[0]);
 		uint num_frags4567 = bitCount(bits[1]);
-		uint num_frags = num_frags0123 + num_frags4567;
-
+		uint num_frags = num_frags0123 + (num_frags4567 << 16);
 		if(num_frags == 0) // This means that bmasks are invalid
 			RECORD(0, 0, 0, 0);
 
@@ -616,6 +615,7 @@ void generateBlocks(uint by)
 		uint num_tris = BLOCK_TRI_COUNT(bx);
 		uint frag_count1 = num_tris == 0? 0 : s_buffer[bx * MAX_BLOCK_TRIS + num_tris - 1];
 		BLOCK_FRAG_COUNT(bx) = frag_count1;
+		frag_count1 = sumU16x2(frag_count1);
 
 		uint frag_count2 = frag_count1 + shuffleXorNV(frag_count1, 1, 8);
 		uint frag_count4 = frag_count2 + shuffleXorNV(frag_count2, 2, 8);
@@ -623,10 +623,10 @@ void generateBlocks(uint by)
 
 		int bx_step = 8;
 		// TODO: compute this on first warp only
-		if(sumU16x2(frag_count8) > MAX_SAMPLES) {
-			bool fail4 = anyInvocationARB(sumU16x2(frag_count4) > MAX_SAMPLES);
-			bool fail2 = anyInvocationARB(sumU16x2(frag_count2) > MAX_SAMPLES);
-			bool fail1 = anyInvocationARB(sumU16x2(frag_count1) > MAX_SAMPLES);
+		if(frag_count8 > MAX_SAMPLES) {
+			bool fail4 = anyInvocationARB(frag_count4 > MAX_SAMPLES);
+			bool fail2 = anyInvocationARB(frag_count2 > MAX_SAMPLES);
+			bool fail1 = anyInvocationARB(frag_count1 > MAX_SAMPLES);
 			bx_step = fail1? 0 : fail2? 1 : fail4? 2 : 4;
 		}
 		s_bx_step = bx_step;
@@ -639,7 +639,7 @@ void generateBlocks(uint by)
 			if(bx_step >= 2 && (bx & 1) != 0) frag_offset += temp1;
 			if(bx_step >= 4 && (bx & 2) != 0) frag_offset += temp2;
 			if(bx_step >= 8 && (bx & 4) != 0) frag_offset += temp4;
-			
+
 			BLOCK_FRAG_OFFSET(bx) = frag_offset;
 		
 			uint first_bx = bx & ~(bx_step - 1), last_bx = first_bx + bx_step - 1;
@@ -658,7 +658,7 @@ void loadSamples(int bx, int by, int bx_step) {
 	uint tri_count = BLOCK_TRI_COUNT(bx);
 
 	uint block_offset = BLOCK_FRAG_OFFSET(bx) & 0xffff;
-	
+
 	int y = int(LIX & 7);
 	uint y_shift = (y & 3) * 8;
 
@@ -667,8 +667,8 @@ void loadSamples(int bx, int by, int bx_step) {
 		uint tri_bitmask = g_scratch[soffset + i][y < 4? 0 : 1];
 		uvec2 info = g_scratch[soffset + i + MAX_BLOCK_TRIS];
 		uint tri_idx = info.x & 0xffff;
-		uint tri_offset = (info.y & 0xffff) + (y >= 4? info.x >> 16 : 0);
-		tri_offset += bitCount(tri_bitmask & ((1 << y_shift) - 1)) + block_offset;
+		uint tri_offset = block_offset + sumU16x2(info.y) + (y >= 4? info.x >> 16 : 0);
+		tri_offset += bitCount(tri_bitmask & ((1 << y_shift) - 1));
 		tri_bitmask = (tri_bitmask >> y_shift) & 0xff;
 
 		if(tri_bitmask == 0)
@@ -721,8 +721,7 @@ void reduceSamples(int bx, int by, int bx_step) {
 				uvec2 info = g_scratch[soffset + i + (LIX & 31) + MAX_BLOCK_TRIS];
 
 				sel_tri_bitmask = y < 4? bits.x : bits.y;
-				sel_tri_offset = block_offset + (info.y & 0xffff);
-				sel_tri_offset += y >= 4? info.x >> 16 : 0;
+				sel_tri_offset = block_offset + sumU16x2(info.y) + (y >= 4? info.x >> 16 : 0);
 
 				uint tri_idx = info.x & 0xffff;
 				uint scratch_tri_offset = scratchTriOffset(tri_idx);
@@ -914,10 +913,8 @@ void rasterFragmentCounts(int by)
 		ivec2 pixel_pos = ivec2(i & (BIN_SIZE - 1), by * 8 + (i >> BIN_SHIFT));
 		uint count0 = BLOCK_FRAG_COUNT(pixel_pos.x / 8) & 0xffff;
 		uint count1 = BLOCK_FRAG_COUNT(pixel_pos.x / 8) >> 16;
-		count0 = BLOCK_FRAG_OFFSET(pixel_pos.x / 8) & 0xffff;
-		count1 = BLOCK_FRAG_OFFSET(pixel_pos.x / 8) >> 16;
-		count0 = BLOCK_GROUP_FRAG_COUNT(pixel_pos.x / 8) & 0xffff;
-		count1 = BLOCK_GROUP_FRAG_COUNT(pixel_pos.x / 8) >> 16;
+		count0 = BLOCK_FRAG_OFFSET(pixel_pos.x / 8);
+		count1 = BLOCK_GROUP_FRAG_COUNT(pixel_pos.x / 8);
 
 		vec3 color = vec3(count0, count1, 0) / 4096.0;
 		if(count0 == 0xffff)

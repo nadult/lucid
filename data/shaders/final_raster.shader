@@ -168,16 +168,16 @@ void rasterizeTri(const ivec2 pixel_pos, uint tri_idx) {
 	normal *= multiplier;
 	float plane_dist = dot(normal, tri0);
 
-	vec3 edge0 = (tri0 - tri2) * multiplier;
-	vec3 edge1 = (tri1 - tri0) * multiplier;
+	vec3 edge0 = cross(normal, (tri0 - tri2) * multiplier);
+	vec3 edge1 = cross(normal, (tri1 - tri0) * multiplier);
 
 	float ray_pos0 = -(dot(frustum.ws_shared_origin, normal) - plane_dist);
 	float ray_pos = ray_pos0 / dot(normal, ray_dir);
 	vec3 hitpoint = frustum.ws_shared_origin + ray_pos * ray_dir;
 
 	vec3 diff = hitpoint - tri0;
-	float v = dot(cross(edge0, diff), normal);
-	float w = dot(cross(edge1, diff), normal);
+	float v = dot(edge0, diff);
+	float w = dot(edge1, diff);
 	vec3 bary = vec3(1.0 - v - w, v, w);
 
 	uint instance_id = s_instance_ids[tri_idx];
@@ -209,8 +209,8 @@ void rasterizeTri(const ivec2 pixel_pos, uint tri_idx) {
 		vec3 hitpointy = frustum.ws_shared_origin + ray_posy * ray_diry;
 		vec3 diffy = hitpointy - tri0;
 
-		vec2 bary_dx = vec2(dot(cross(edge0, diffx), normal), dot(cross(edge1, diffx), normal));
-		vec2 bary_dy = vec2(dot(cross(edge0, diffy), normal), dot(cross(edge1, diffy), normal));
+		vec2 bary_dx = vec2(dot(edge0, diffx), dot(edge1, diffx));
+		vec2 bary_dy = vec2(dot(edge0, diffy), dot(edge1, diffy));
 
 		vec2 tex_coord = bary[1] * tex1 + bary[2] * tex2;
 		vec2 tex_dx = (bary_dx.x * tex1 + bary_dx.y * tex2 - tex_coord);

@@ -66,6 +66,134 @@ conference: 2512
                     === Rasteryzacja wszystkich sampli na raz ===
 -----------------------------------------------------------------------------------------
 
+* *Co dalej?*
+
+Jaka strategia byłaby najlepsza ?
+
+Raczej na pewno chcemy oddzielić redukcję od cieniowania ?
+- kolejność sampli po trójkątach robi dużo jeśli mamy oteksturowane trójkąty
+- możemy zrobić dużo lepszy load balancing niż w final_raster (odpalamy dokładnie tyle wywołań
+  ile jest sampli)
+
+Może dałoby się wygenerować małą ilość sampli (a nie zawalać cały SMEM) i od razu je zredukować?
+
+Z drugiej strony jeśli ilość sampli per piksel jest podobna i nie używamy tekstur (Dragon) to
+strategia taka jak w final_raster może być lepsza, bo nie przekazujemy sampli przez SMEM ale od
+razu redukujemy.
+
+Ale wciąż jest zbyt wolne:
+- ładowanie atrybutów
+- redukcja (szczególnie jeśli mamy mniej pikseli niż wątków)
+
+Problem:
+- 64x8 = 512
+- filtr głębokości wielkości 8: 4 x 32 bit na kolor + 4 x 32 bit na głębię + kolor docelowy ?
+
+
+To może tak:
+- dużo mniej sampli na wątek (np. max 2)
+- efektywna redukcja (ale jak) ? jeśli miałbym sample ułożone po pikselach, to wtedy by się
+  dało zrobić redukcję efektywniej. dodatkowym problemem jest to, że połączenie sampli nie jest
+  oczywiste, bo ja ich nie sklejam, ale tak naprawdę sortuję...
+
+Fakt jest taki, że jeśli chciałbym całościowo wykonać redukcję niezależnie na rejestrach, to
+musiałbym mieć wygenerowane wszystkie sample dla danych pikseli.
+To też oznacza, że to się będzie słabo skalowało na bardziej głębokie piksele.
+
+
+CHyba, że da się przyspieszyć redukcję, żeby działała szybko niezaleznie od ilości pikseli...
+ALE JAK?!?
+
+
+Wykonywanie redukcji na zmianę z cieniowaniem ?
+- kolor docelowy + stos głębi trzymany w rejestrach (każdy wątek odpowiada za inny piksel)
+- muszę być w stanie szybko identyfikować sample dla danego piksela
+
+  - indeks pierwszego sampla dla danego piksela
+  - indeks ostatniego sampla dla danego piksela
+  - indeks kolejnego sampla dla danego sampla
+
+ 
+ 
+ Ile trójkątów mogę załadować ?
+ 8 na 32 wątki ?
+ Jeśli będę miał < 4 sample na trójkąt to będzie słabo!
+
+
+ Jeden trójkąt: 28 * 32 bit / 4 = 7 * 32 bit
+ Za dużo... max 1 tróəkąt na 8 wątków
+- to oznacza, że jeśli mam średnio mniej niż 8 sampli na tróəkąt, to jest problem
+  chyba, że w tej sytuacji ładujemy z GMEM ? to chyba lepsze niż słaby load balancing ?
+
+Jeśli się zmieścimy w 16KB, to można by zmieścić 3 bloki? chyba nie: używamy za dużo rejestrów...
+
+
+Jak zrobić dla każdego piksela listę sampli ?
+
+loadSamples nie będzie w stanie tego zrobić bez sychronizacji ? Chyba, że bym odpowiednio
+podzielił przetwarzane trójkąty ?
+Mógłbym w loadSamples przetwarzać każdy rząd innym wątkiem:
+- 8 wątków na trójkąt 
+wtedy sync nie jest potrzebny
+
+
+ Chyba, że bym trzymał quady, ale wcale nie jest pewne, że będę trafiał!
+
+
+
+* *Nowy algorytm:*
+  - ogólny pomysł: generujemy małe ilości sampli i od razu je redukujemy
+  - podczas ładowania sampli generujemy od razu listy sampli per piksel
+  - dla załadowanych sampli ładujemy też dane trójkątów do SMEM (max 8)
+  - każdy wątek cieniuje jedną próbkę, zapisuje ją w rejestrze (głębia + kolor)
+  - następnie każdy wątek redukuje sample z listy; indeks bierze z SMEM a wartość głębi koloru
+	za pomocą shuffli
+
+
+  32 sample (z połówki bloku 8x8) wymagają:
+  - indeksy headów dla pikseli (8 bitów na indeks = 8 * 32 bit)
+  - indeksy sampli (pixel_id : 9 bitów, triangle_id: 11 bitów,
+  -                 indeks następnego sampla w danym pikselu: 8 bitów) = 32 * 32 bit
+
+
+  max 32 pikseli, max 32 tróəkąty, max 32 sample na segment
+  indeksy sampli: pixel_id: 5 bitów, tri_id: 5 bitów, pixel_tri_id: 5 bitów
+  32 sample = 16 * 32 bit
+  
+  - indeksy headów: 5 bitów na indeks = 6 * 32 bit
+ 
+  22 * 32 bit na segment = 1408 bajtów na 512 wątków, 1 segment / warp = 5.5KB na 4 segmenty / warp
+  11kb na 8 segmentów
+  
+  Czy jest sens na siłę wciskać te obliczenia do jednego warpa?
+  Chyba warto uniknąć barier, żeby warpy mogły faktycznie niezależnie pracować
+  Może nawet mógłbym warpa który skończył pracę oddelegować ko kolejnych bloków ?
+  z barierami byłoby pod tym względem ciężej
+
+  Problem kiedy mielibyśmy mało trójkątów
+  
+  *Generowanie indeksów sampli:*
+  - Musimy to generować w paczkach po 32 sample
+  - za każdym razem zaczynamy z jakiegoś offseta (zawsze jest podzielny przez 32); problemem
+	jest zamiana offseta na parę (id tróəkąta, offset w ramach trójkąta)
+
+  - jak to zrobić wydajnie ?
+
+  - kilka opcji: jeden trójkąt obsługiwany przez 4 (8x pix), 8 (4x pix) wątków na raz
+    różne grupy wątków generują sample z różnych segmentów;
+	mogą więc operować na tych samych tróəkątach ?
+	
+	każdy wątek leci po jednym trójkącie na raz
+    najpierw musielibyśmy wyznaczyć offsety na początki każdego segmentu:
+	- 11 bitów na id trójkąta, 5 bitów na id sampla
+	- możemy użyć do tego offsetów trójkątów; nie muszą być sumowane między blokami
+
+  Schemat działania:
+  - wywalenie podziału na pełne i częściowe trójkąty
+  - generowanie offsetów segmentów: dla każdego segmentu para: id pierwszego tróəkąta i offset
+	w ramach tróəkąta
+  - generowanie  sampli z użyciem offsetów (raczej 8 wątków na trójkąt)
+
 * *TODO: jeszcze lepsza kolejność sampli?*
   Na przemian pary sampli z dwóch rzędów ?
 

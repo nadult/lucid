@@ -31,7 +31,7 @@
 #include <fwk/perf/manager.h>
 #include <fwk/sys/input.h>
 
-#include <fwk/gfx/investigate.h>
+#include <fwk/gfx/investigator3.h>
 #include <fwk/gfx/visualizer3.h>
 
 // TODO: save imgui settings
@@ -600,7 +600,11 @@ static void visualizeBlockTris(const RasterTileInfo &tile, const RasterBlockInfo
 		fmt("Tile-tris: %\nBlock-tris: %\n", tile.tris.size(), countIf(block.selected_tile_tris));
 		return fmt.text();
 	};
-	investigate(vis_func, none, InvestigatorOpt::exit_with_space);
+
+	Investigator3::Config config;
+	config.move_speed_multiplier = 0.01;
+	Investigator3 rutkowski(vis_func, InvestigatorOpt::exit_with_space, config);
+	rutkowski.run();
 }
 
 bool LucidApp::mainLoop(GlDevice &device) {

@@ -66,6 +66,18 @@ conference: 2512
                     === Rasteryzacja wszystkich sampli na raz ===
 -----------------------------------------------------------------------------------------
 
+
+* *Inne podejście: generujemy nie-precinające się warstwy sampli*
+
+
+  - po posortowaniu trójkątów porównujemy t©óəkąty które pokrywają się ze sobą wartościami
+	głębi
+  - dla każdej takiej pary próbujemy znaleźć przecięcie: sprawdzamy które sample z trójkąta A
+	są pod a które nad trójkątem B. Sample rozrzucamy do dwóch nowych kawałków
+
+  Problem: przecięć może być dużo; Jak zrobić, żeby nie wymagało to więcej pracy niż zwykłe
+  porównywanie sampli ?
+
 * *Co dalej?*
 
 Jaka strategia byłaby najlepsza ?
@@ -150,11 +162,23 @@ wtedy sync nie jest potrzebny
 	za pomocą shuffli
 
 
+* *Problem:* jeśli będę generować sample w ramach bloków 8x4 (32) to w sytuacjach gdy różne
+  warstwy są z różnych materiałów to będę miał bardzo słabą koherencję. Najlepiej by było
+  generować sample pogrupowane po materiałach. Ale czy da się tak sensownie zrobić?
+
+* *Problem 2:* nie mogę zapominać, że muszę też obsłużyć piksele z błędną kolejnością
+
+  Czy da się generować sample koherentnie z różnych bloków 8x8? Chciałbym je generować w
+  kolejności materiałów a następnie redukować w kolejności docelowej
+  A może po prostu ograniczyć się do bloku 8x8 ? nie ma opcji, żeby trzymać w jednym wątku
+  filtr dla dwóch pikseli
+
+  możemy na razie olać problem wielu materiałów...
+
   32 sample (z połówki bloku 8x8) wymagają:
   - indeksy headów dla pikseli (8 bitów na indeks = 8 * 32 bit)
   - indeksy sampli (pixel_id : 9 bitów, triangle_id: 11 bitów,
   -                 indeks następnego sampla w danym pikselu: 8 bitów) = 32 * 32 bit
-
 
   max 32 pikseli, max 32 tróəkąty, max 32 sample na segment
   indeksy sampli: pixel_id: 5 bitów, tri_id: 5 bitów, pixel_tri_id: 5 bitów

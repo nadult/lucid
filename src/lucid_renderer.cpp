@@ -89,13 +89,6 @@
   dragon (800K):  21600,  1756 |  5260,  670 | 1080,   540 |   64,  107
 */
 
-PVertexArray makeRectVao() {
-	float3 rect_verts[] = {float3(0, 1, 0), float3(0, 0, 0), float3(1, 1, 0), float3(1, 0, 0)};
-	return RenderList::makeVao(rect_verts, {});
-}
-
-void drawRect(PVertexArray rect_vao) { rect_vao->draw(PrimitiveType::triangle_strip, 4, 0); }
-
 void setupView(const IRect &viewport, PFramebuffer fbo) {
 	if(fbo)
 		DASSERT(fbo->size().x >= viewport.width() && fbo->size().y >= viewport.height());
@@ -185,7 +178,6 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	final_raster_program = EX_PASS(Program::makeCompute("final_raster", defs));
 	mask_raster_program = EX_PASS(Program::makeCompute(
 		"mask_raster", defs, mask(m_opts & Opt::debug_masks, ProgramOpt::debug)));
-	raster_empty_program = EX_PASS(Program::makeCompute("raster_empty", defs));
 	raster_bin_program = EX_PASS(Program::makeCompute(
 		"raster_bin", defs, mask(m_opts & Opt::debug_raster, ProgramOpt::debug)));
 	raster_tile_program = EX_PASS(Program::makeCompute(
@@ -202,7 +194,23 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	}
 
 	compose_program = EX_PASS(Program::make("compose", "", {"in_pos"}));
-	m_rect_vao = makeRectVao();
+
+	vector<u16> indices(bin_count * 6);
+	DASSERT(bin_count * 4 * 4 <= 64 * 1024);
+	for(int i = 0; i < bin_count; i++) {
+		int offsets[6] = {0, 1, 2, 0, 2, 3};
+		for(int j = 0; j < 6; j++) {
+			int value = offsets[j] + i * 4;
+			indices[i * 6 + j] = offsets[j] + i * 4;
+		}
+	}
+	auto ibuffer = GlBuffer::make(BufferType::element_array, indices);
+	m_compose_quads =
+		GlBuffer::make(BufferType::array, bin_count * 4 * sizeof(float2), ImmBufferFlags());
+
+	m_compose_quads_vao = GlVertexArray::make();
+	m_compose_quads_vao->set({m_compose_quads}, defaultVertexAttribs<float2>(), ibuffer,
+							 IndexType::uint16);
 
 	return {};
 }
@@ -234,7 +242,6 @@ void LucidRenderer::render(const Context &ctx) {
 
 	if(m_opts & Opt::new_raster) {
 		bindRaster(ctx);
-		rasterEmpty(ctx);
 		rasterBin(ctx);
 		rasterTile(ctx);
 		rasterBlock(ctx);
@@ -389,6 +396,9 @@ void LucidRenderer::computeBins(const Context &ctx) {
 	PERF_SIBLING_SCOPE("bin categorizing phase");
 	bin_categorizer_program.use();
 	bin_categorizer_program["tile_all_bins"] = !(m_opts & Opt::new_raster);
+	bin_categorizer_program["bin_counts"] = m_bin_counts;
+	bin_categorizer_program["bin_scale"] = float2(bin_size) / float2(m_size);
+	m_compose_quads->bindIndexAs(2, BufferType::shader_storage);
 	glDispatchCompute(1, 1, 1);
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 }
@@ -1438,12 +1448,6 @@ void LucidRenderer::rasterTile(const Context &ctx) {
 	}
 }
 
-void LucidRenderer::rasterEmpty(const Context &ctx) {
-	PERF_GPU_SCOPE();
-	raster_empty_program.use();
-	glDispatchCompute(64, 1, 1);
-}
-
 void LucidRenderer::rasterBin(const Context &ctx) {
 	PERF_GPU_SCOPE();
 
@@ -1540,7 +1544,7 @@ void LucidRenderer::compose(const Context &ctx) {
 	GlTexture::bind({m_raster_image});
 	compose_program.setFullscreenRect();
 	compose_program.use();
-	drawRect(m_rect_vao);
+	m_compose_quads_vao->draw(PrimitiveType::triangles, m_bin_counts.x * m_bin_counts.y * 6);
 	glDisable(GL_BLEND);
 }
 

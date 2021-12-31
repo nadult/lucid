@@ -129,8 +129,7 @@ shared uint s_mini_buffer[16 * BLOCK_COUNT];
 uint swap(uint x, int mask, uint dir)
 {
 	uint y = shuffleXorNV(x, mask, 32);
-	// TODO: equality test shouldnt be needed
-	return x != y && (x < y) == (dir != 0) ? y : x;
+	return uint(x < y) == dir ? y : x;
 }
 
 uint bitExtract(uint value, int boffset) 
@@ -172,6 +171,7 @@ void sortBlockTris()
 #ifdef VENDOR_NVIDIA
 	for(uint i = lid; i < max_rcount; i += LSIZE / 8) {
 		uint value = s_buffer[goffset + i];
+		// TODO: register sort could be faster
 		value = swap(value, 0x01, xorBits(lid, 1, 0)); // K = 2
 		value = swap(value, 0x02, xorBits(lid, 2, 1)); // K = 4
 		value = swap(value, 0x01, xorBits(lid, 2, 0));

@@ -26,7 +26,6 @@
 uniform float fog_multiplier;
 
 layout(local_size_x = TILE_SIZE, local_size_y = TILE_SIZE) in;
-layout(binding = 0, r32ui) uniform uimage2D final_raster;
 //layout(binding = 0) uniform DEPTH_BUFFER_SAMPLER depth_buffer;
 
 layout(std430, binding = 0) readonly buffer buf0_ { InstanceData g_instances[]; };
@@ -43,10 +42,12 @@ layout(std430, binding = 8) buffer buf8_ { uint g_block_offsets[]; };
 layout(std430, binding = 9) readonly buffer buf9_ { uint g_tile_tris[]; };
 layout(std430, binding = 10) readonly buffer buf10_ { uint g_block_tris[]; };
 layout(std430, binding = 11) readonly buffer buf11_ { vec4 g_uv_rects[]; };
+layout(std430, binding = 12) writeonly buffer buf12_ { uint g_raster_image[]; };
 
 shared int s_tile_tri_counts [TILES_PER_BIN];
 shared int s_tile_tri_offsets[TILES_PER_BIN];
-shared int s_tile_tri_count, s_tile_tri_offset;
+shared int s_tile_raster_offsets[TILES_PER_BIN];
+shared int s_tile_tri_count, s_tile_tri_offset, s_tile_raster_offset;
 
 shared int s_block_tri_counts [BLOCKS_PER_TILE];
 shared int s_block_tri_offsets[BLOCKS_PER_TILE];
@@ -59,6 +60,10 @@ shared uint s_max_fragment_count_per_pixel;
 
 layout(binding = 0) uniform sampler2D opaque_texture;
 layout(binding = 1) uniform sampler2D transparent_texture;
+
+void outputPixel(ivec2 pixel_pos, uint color) {
+	g_raster_image[s_tile_raster_offset + pixel_pos.x + (pixel_pos.y << BIN_SHIFT)] = color;
+}
 
 // TODO: better name
 // TODO: unrolled filter is a bit faster
@@ -317,7 +322,7 @@ void rasterizeBlocks(ivec2 tile_pos) {
 	if((s_invalid_block_mask & (1 << LID.y)) != 0)
 		result = result * 0.5 + vec3(0.5, 0.0, 0.0);
 	uint col = encodeRGBA8(vec4(result, 1.0f - result_neg_alpha));
-	imageStore(final_raster, pixel_pos, uvec4(col, 0, 0, 0));
+	outputPixel(pixel_pos - tile_pos, col);
 }
 
 void rasterizeBin(int bin_id) {
@@ -325,12 +330,14 @@ void rasterizeBin(int bin_id) {
 	if(LIX < TILES_PER_BIN) {
 		s_tile_tri_counts [LIX] = int(g_tiles.tile_tri_counts[bin_id][LIX]);
 		s_tile_tri_offsets[LIX] = int(g_tiles.tile_tri_offsets[bin_id][LIX]);
+		ivec2 tile_pos = ivec2(LIX & 3, LIX >> 2) * TILE_SIZE;
+		s_tile_raster_offsets[LIX] = (bin_id << (BIN_SHIFT * 2)) + tile_pos.x + (tile_pos.y << BIN_SHIFT);
 	}
 	barrier();
 
 	for(int tile_id = 0; tile_id < TILES_PER_BIN; tile_id++) {
-		const ivec2 tile_pos = bin_pos * BIN_SIZE + ivec2(tile_id & 3, tile_id >> 2) * TILE_SIZE;
 		if(LIX == 0) {
+			s_tile_raster_offset = s_tile_raster_offsets[tile_id];
 			s_block_max_tri_count = 0;
 			s_invalid_block_mask = 0;
 			s_fragment_count = 0;
@@ -347,6 +354,7 @@ void rasterizeBin(int bin_id) {
 			}
 		}
 		barrier();
+		const ivec2 tile_pos = bin_pos * BIN_SIZE + ivec2(tile_id & 3, tile_id >> 2) * TILE_SIZE;
 		rasterizeBlocks(tile_pos);
 		barrier();
 		if(LIX == 0 && s_invalid_block_mask != 0) {
@@ -356,27 +364,6 @@ void rasterizeBin(int bin_id) {
 		if(LIX == 0) {
 			atomicAdd(s_total_fragment_count, s_fragment_count);
 			atomicMax(s_max_fragment_count, s_fragment_count);
-		}
-	}
-}
-
-void visualizeTileTriCounts(int bin_id) {
-	const ivec2 bin_pos = ivec2(bin_id % BIN_COUNT_X, bin_id / BIN_COUNT_X);
-	if(LIX < TILES_PER_BIN)
-		s_tile_tri_counts[LIX] = int(g_tiles.tile_tri_counts[bin_id][LIX]);
-	barrier();
-
-	for(int ty = 0; ty < XTILES_PER_BIN; ty++) {
-		for(int tx = 0; tx < XTILES_PER_BIN; tx++) {
-			int tile_id = tx + ty * XTILES_PER_BIN;
-			int tris_per_pixel = int(s_tile_tri_counts[tile_id]);
-
-			const ivec2 tile_pos = bin_pos * BIN_SIZE + ivec2(tx, ty) * TILE_SIZE;
-			ivec2 pixel_pos = ivec2(LID.x, LID.y) + tile_pos;
-			float alpha = tris_per_pixel > 0? 1.0f : 0.0f;
-			vec4 color = vec4(float(tris_per_pixel) / 4096.0f, float(tris_per_pixel) / 256.0f, float(tris_per_pixel) / 32.0f, alpha);
-			uint col = encodeRGBA8(min(color, vec4(1.0, 1.0, 1.0, 1.0)));
-			imageStore(final_raster, pixel_pos, uvec4(col, 0, 0, 0));
 		}
 	}
 }
@@ -400,7 +387,6 @@ void main() {
 	int bin_id = loadNextBin();
 	while(bin_id < BIN_COUNT) {
 		barrier();
-		//visualizeTileTriCounts(bin_id);
 		rasterizeBin(bin_id);
 		bin_id = loadNextBin();
 	}

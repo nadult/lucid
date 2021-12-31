@@ -32,7 +32,6 @@
 // jak zapisujemy indeksy tróəkątów? na razie tak jak wcześniej (używamy tile trisów)
 
 layout(local_size_x = LSIZE) in;
-layout(binding = 0, r32ui) uniform uimage2D final_raster;
 
 layout(std430, binding = 0) buffer buf0_ { uvec4 g_tri_aabbs[]; };
 layout(std430, binding = 1) buffer buf1_ { uint g_quad_indices[]; };
@@ -50,6 +49,7 @@ layout(std430, binding = 9) coherent buffer buf9_ { uvec2 g_scratch[]; };
 
 layout(std430, binding = 10) readonly buffer buf10_ { InstanceData g_instances[]; };
 layout(std430, binding = 11) readonly buffer buf11_ { vec4 g_uv_rects[]; };
+layout(std430, binding = 12) writeonly buffer buf12_ { uint g_raster_image[]; };
 
 layout(binding = 0) uniform sampler2D opaque_texture;
 layout(binding = 1) uniform sampler2D transparent_texture;
@@ -57,7 +57,7 @@ layout(binding = 1) uniform sampler2D transparent_texture;
 shared int s_tile_tri_counts [TILES_PER_BIN];
 shared int s_tile_tri_offsets[TILES_PER_BIN];
 shared vec3 s_tile_ray_dirs0[TILES_PER_BIN];
-shared int s_tile_tri_count, s_tile_tri_offset;
+shared int s_tile_tri_count, s_tile_tri_offset, s_tile_raster_offset;
 shared ivec2 s_bin_pos, s_tile_pos;
 shared vec3 s_tile_ray_dir0;
 
@@ -74,6 +74,10 @@ shared uint s_buffer[MAX_SAMPLES + 1];
 shared float s_fbuffer[MAX_SAMPLES + 1];
 
 shared uint s_mini_buffer[32];
+
+void outputPixel(ivec2 pixel_pos, uint color) {
+	g_raster_image[s_tile_raster_offset + pixel_pos.x + (pixel_pos.y << BIN_SHIFT)] = color;
+}
 
 uint computeScanlineParams(vec3 tri0, vec3 tri1, vec3 tri2, out vec3 scan_base, out vec3 scan_step) {
 	vec3 nrm0 = cross(tri2, tri1 - tri2);
@@ -435,7 +439,7 @@ void reduceSamples(int y)
 		}
 
 		//enc_color = encodeRGBA8(vec4(vec3(float(sample_offset) / MAX_SAMPLES), 1.0));
-		imageStore(final_raster, s_tile_pos + ivec2(col_id, row_id), uvec4(enc_color, 0, 0, 0));
+		outputPixel(ivec2(col_id, row_id), enc_color);
 	}
 }
 
@@ -455,7 +459,7 @@ void rasterPixelCounts()
 
 		color = min(color, vec4(1.0));
 		uint enc_col = encodeRGBA8(color);
-		imageStore(final_raster, s_tile_pos + pixel_pos, uvec4(enc_col, 0, 0, 0));
+		outputPixel(pixel_pos, enc_col);
 	}
 }
 
@@ -465,7 +469,7 @@ void rasterInvalidTile(vec3 color)
 		ivec2 pixel_pos = ivec2(i & (TILE_SIZE - 1), i >> TILE_SHIFT);
 		vec4 color = vec4(color, 1.0);
 		uint enc_col = encodeRGBA8(color);
-		imageStore(final_raster, s_tile_pos + pixel_pos, uvec4(enc_col, 0, 0, 0));
+		outputPixel(pixel_pos, enc_col);
 	}
 }
 
@@ -542,7 +546,9 @@ void rasterBins(int bin_id) {
 			if(LIX == 0) {
 				s_tile_tri_count  = s_tile_tri_counts[tile_id];
 				s_tile_tri_offset = s_tile_tri_offsets[tile_id];
-				s_tile_pos = s_bin_pos + ivec2(tile_id & 3, tile_id >> 2) * TILE_SIZE;
+				ivec2 tile_pos = ivec2(tile_id & 3, tile_id >> 2) * TILE_SIZE;
+				s_tile_raster_offset = (bin_id << (BIN_SHIFT * 2)) + tile_pos.x + (tile_pos.y << BIN_SHIFT);
+				s_tile_pos = tile_pos + s_bin_pos;
 				s_tile_ray_dir0 = s_tile_ray_dirs0[tile_id];
 				s_sample_count = 0;
 			}

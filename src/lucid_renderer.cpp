@@ -139,12 +139,10 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	m_block_tri_keys.emplace(BufferType::shader_storage, max_block_tris * sizeof(u32));
 	m_scratch.emplace(BufferType::shader_storage,
 					  (128 * 1024) * 256 * sizeof(u32)); // TODO: control size
+	m_raster_image.emplace(BufferType::shader_storage, bin_count * square(bin_size) * sizeof(u32));
 
 	if(m_opts & (Opt::check_bins | Opt::check_tiles | Opt::debug_masks | Opt::debug_raster))
 		m_errors.emplace(BufferType::shader_storage, 1024 * 1024 * 4, BufferUsage::dynamic_read);
-
-	m_raster_image.emplace(GlFormat::r32ui, view_size, 1);
-	m_raster_image->setFiltering(TextureFilterOpt::nearest);
 
 	ShaderDefs defs;
 	defs["VIEWPORT_SIZE_X"] = view_size.x;
@@ -206,10 +204,10 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	}
 	auto ibuffer = GlBuffer::make(BufferType::element_array, indices);
 	m_compose_quads =
-		GlBuffer::make(BufferType::array, bin_count * 4 * sizeof(float2), ImmBufferFlags());
+		GlBuffer::make(BufferType::array, bin_count * 4 * sizeof(uint), ImmBufferFlags());
 
 	m_compose_quads_vao = GlVertexArray::make();
-	m_compose_quads_vao->set({m_compose_quads}, defaultVertexAttribs<float2>(), ibuffer,
+	m_compose_quads_vao->set({m_compose_quads}, defaultVertexAttribs<uint>(), ibuffer,
 							 IndexType::uint16);
 
 	return {};
@@ -396,8 +394,6 @@ void LucidRenderer::computeBins(const Context &ctx) {
 	PERF_SIBLING_SCOPE("bin categorizing phase");
 	bin_categorizer_program.use();
 	bin_categorizer_program["tile_all_bins"] = !(m_opts & Opt::new_raster);
-	bin_categorizer_program["bin_counts"] = m_bin_counts;
-	bin_categorizer_program["bin_scale"] = float2(bin_size) / float2(m_size);
 	m_compose_quads->bindIndexAs(2, BufferType::shader_storage);
 	glDispatchCompute(1, 1, 1);
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
@@ -1390,8 +1386,7 @@ void LucidRenderer::bindRaster(const Context &ctx) {
 	m_scratch->bindIndex(9);
 	m_instance_data->bindIndex(10);
 	m_uv_rects->bindIndex(11);
-
-	m_raster_image->bindImage(0, AccessMode::write_only);
+	m_raster_image->bindIndex(12); // TODO: too many bindings
 }
 
 void LucidRenderer::rasterBlock(const Context &ctx) {
@@ -1505,8 +1500,7 @@ void LucidRenderer::rasterizeFinal(const Context &ctx) {
 	m_tile_tris->bindIndex(9);
 	m_block_tris->bindIndex(10);
 	m_uv_rects->bindIndex(11);
-
-	m_raster_image->bindImage(0, AccessMode::write_only);
+	m_raster_image->bindIndex(12);
 	final_raster_program.use();
 
 	GlTexture::bind({ctx.opaque_tex, ctx.trans_tex});
@@ -1541,9 +1535,11 @@ void LucidRenderer::compose(const Context &ctx) {
 	glDisable(GL_CULL_FACE);
 	glDepthMask(0);
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-	GlTexture::bind({m_raster_image});
 	compose_program.setFullscreenRect();
 	compose_program.use();
+	compose_program["bin_counts"] = m_bin_counts;
+	compose_program["screen_scale"] = float2(1.0) / float2(m_size);
+	m_raster_image->bindIndex(0);
 	m_compose_quads_vao->draw(PrimitiveType::triangles, m_bin_counts.x * m_bin_counts.y * 6);
 	glDisable(GL_BLEND);
 }

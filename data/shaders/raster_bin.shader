@@ -11,7 +11,6 @@
 #define BLOCK_ROW_SIZE	(64 * 8)
 
 layout(local_size_x = LSIZE) in;
-layout(binding = 0, r32ui) uniform uimage2D final_raster;
 
 layout(std430, binding = 0) buffer buf0_ { uvec4 g_tri_aabbs[]; };
 layout(std430, binding = 1) buffer buf1_ { uint g_quad_indices[]; };
@@ -26,8 +25,9 @@ layout(std430, binding = 6) buffer buf6_ { BinCounters g_bins; };
 layout(std430, binding = 8) buffer buf8_ { uint g_bin_quads[]; };
 layout(std430, binding = 9) coherent buffer buf9_ { uvec2 g_scratch[]; };
 
-layout(std430, binding = 10) readonly buffer buf10_ { InstanceData g_instances[]; };
-layout(std430, binding = 11) readonly buffer buf11_ { vec4 g_uv_rects[]; };
+layout(std430, binding = 10) readonly  buffer buf10_ { InstanceData g_instances[]; };
+layout(std430, binding = 11) readonly  buffer buf11_ { vec4 g_uv_rects[]; };
+layout(std430, binding = 12) writeonly buffer buf12_ { uint g_raster_image[]; };
 
 layout(binding = 0) uniform sampler2D opaque_texture;
 layout(binding = 1) uniform sampler2D transparent_texture;
@@ -69,11 +69,16 @@ uint sumU16x2(uint pair) {
 
 // Note: in the context of this shader, block size is 8x8, not 4x4
 
+shared int s_num_bins, s_bin_id, s_bin_raster_offset;
 shared ivec2 s_bin_pos;
 shared vec3 s_bin_ray_dir0;
 
 shared uint s_block_row_tri_counts[BLOCK_COUNT];
 shared uint s_curblock_counters[BLOCK_COUNT * 4];
+
+void outputPixel(ivec2 pixel_pos, uint color) {
+	g_raster_image[s_bin_raster_offset + pixel_pos.x + (pixel_pos.y << BIN_SHIFT)] = color;
+}
 
 //#define ENABLE_TIMINGS
 
@@ -798,10 +803,9 @@ void reduceSamples(int bx, int by, int bx_step) {
 		out_transparency *= cur_transparency;
 	}
 
-	ivec2 pixel_pos = s_bin_pos + ivec2(x, by * 8 + y);
 	out_color = min(out_color, vec3(1.0));
 	uint enc_color = encodeRGBA8(vec4(out_color, 1.0 - out_transparency));
-	imageStore(final_raster, pixel_pos, uvec4(enc_color, 0, 0, 0));
+	outputPixel(ivec2(x, by * 8 + y), enc_color);
 }
 
 // Shading 2 samples at once didn't help:
@@ -903,7 +907,7 @@ void rasterInvalidBlockRow(int by, vec3 color)
 		ivec2 pixel_pos = ivec2(i & (BIN_SIZE - 1), by * 8 + (i >> BIN_SHIFT));
 		vec4 color = vec4(color, 1.0);
 		uint enc_col = encodeRGBA8(color);
-		imageStore(final_raster, s_bin_pos + pixel_pos, uvec4(enc_col, 0, 0, 0));
+		outputPixel(pixel_pos, enc_col);
 	}
 }
 
@@ -920,7 +924,7 @@ void rasterFragmentCounts(int by)
 		if(count0 == 0xffff)
 			color = vec3(1.0, 0.0, 0.0);
 		uint enc_col = encodeRGBA8(vec4(min(color, vec3(1.0)), 1.0));
-		imageStore(final_raster, s_bin_pos + pixel_pos, uvec4(enc_col, 0, 0, 0));
+		outputPixel(pixel_pos, enc_col);
 	}
 }
 
@@ -1010,12 +1014,11 @@ void rasterBin(int bin_id) {
 
 }
 
-shared int s_num_bins, s_bin_id;
-
 int loadNextBin() {
 	if(LIX == 0) {
 		uint bin_idx = atomicAdd(g_bins.small_bin_counter, 1);
 		s_bin_id = bin_idx < s_num_bins? g_bins.small_bins[bin_idx] : -1;
+		s_bin_raster_offset = s_bin_id << (BIN_SHIFT * 2);
 	}
 	barrier();
 	return s_bin_id;

@@ -6,14 +6,12 @@
 
 layout(local_size_x = LSIZE) in;
 layout(std430, binding = 1) buffer buf1_ { BinCounters g_bins; };
-layout(std430, binding = 2) buffer buf2_ { vec2 g_bin_quads[]; };
+layout(std430, binding = 2) buffer buf2_ { uint g_bin_quads[]; };
 
 shared int s_num_empty_bins, s_num_small_bins, s_num_medium_bins;
 shared int s_num_big_bins, s_num_tiled_bins;
 
 uniform bool tile_all_bins;
-uniform ivec2 bin_counts;
-uniform vec2 bin_scale;
 
 void main() {
 	if(LIX == 0) {
@@ -29,9 +27,6 @@ void main() {
 	//       da się to jakoś oszacować? co najmniej w tile dispatcherze...
 	for(uint i = LIX; i < BIN_COUNT; i += LSIZE) {
 		int num_quads = g_bins.bin_quad_counts[i];
-
-		int bin_y = int(i / bin_counts.x);
-		int bin_x = int(i - bin_y * bin_counts.x);
 		
 		// TODO: we need accurate count :(
 		int num_tris = num_quads * 2;
@@ -54,11 +49,12 @@ void main() {
 			g_bins.tiled_bins[atomicAdd(s_num_tiled_bins, 1)] = int(i);
 		}
 
-		vec2 bin_pos = (num_tris == 0? vec2(-100, -100) : vec2(bin_x, bin_y)) * bin_scale;
-		g_bin_quads[i * 4 + 0] = bin_pos;
-		g_bin_quads[i * 4 + 1] = bin_pos + vec2(0.0, bin_scale.y);
-		g_bin_quads[i * 4 + 2] = bin_pos + bin_scale;
-		g_bin_quads[i * 4 + 3] = bin_pos + vec2(bin_scale.x, 0.0);
+		uint bin_id = i << 16;
+		uint mask = num_tris == 0? 0 : 0xffffffff;
+		g_bin_quads[i * 4 + 0] = mask & (bin_id);
+		g_bin_quads[i * 4 + 1] = mask & (bin_id + (BIN_SIZE << 8));
+		g_bin_quads[i * 4 + 2] = mask & (bin_id + BIN_SIZE + (BIN_SIZE << 8));
+		g_bin_quads[i * 4 + 3] = mask & (bin_id + BIN_SIZE);
 	}
 
 	barrier();

@@ -119,12 +119,10 @@ class LucidRenderer {
 	Program raster_bin_program, raster_tile_program, raster_block_program;
 	Program compose_program, dummy_program;
 
-	PTexture m_raster_image;
-
 	PBuffer m_errors, m_scratch, m_instance_data, m_uv_rects;
 	PBuffer m_quad_indices, m_quad_aabbs, m_tri_aabbs;
 	PBuffer m_bin_counters, m_tile_counters, m_block_counts, m_block_offsets;
-	PBuffer m_bin_quads, m_tile_tris, m_block_tris, m_block_tri_keys;
+	PBuffer m_bin_quads, m_tile_tris, m_block_tris, m_block_tri_keys, m_raster_image;
 	array<Pair<PBuffer>, 3> m_old_counters;
 
 	PFramebuffer m_initial_fbo;

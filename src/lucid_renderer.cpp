@@ -113,8 +113,8 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	m_opts = opts;
 	m_size = view_size;
 	m_bin_counts = (view_size + int2(bin_size - 1)) / bin_size;
-	int bin_counts = m_bin_counts.x * m_bin_counts.y;
-	int tile_counts = bin_counts * tiles_per_bin;
+	int bin_count = m_bin_counts.x * m_bin_counts.y;
+	int tile_count = bin_count * tiles_per_bin;
 
 	// TODO: this takes a lot of memory
 	// TODO: what should we do when quads won't fit?
@@ -130,13 +130,13 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	m_quad_aabbs.emplace(BufferType::shader_storage, max_quads * sizeof(u32));
 	m_tri_aabbs.emplace(BufferType::shader_storage, max_quads * sizeof(int4));
 
-	uint bin_counters_size = (bin_counts * 8 + 256) * sizeof(u32);
-	uint tile_counters_size = (bin_counts * 16 * 4 + 256) * sizeof(u32);
+	uint bin_counters_size = (bin_count * 8 + 256) * sizeof(u32);
+	uint tile_counters_size = (bin_count * 16 * 4 + 256) * sizeof(u32);
 	m_bin_counters.emplace(BufferType::shader_storage, bin_counters_size);
 	m_tile_counters.emplace(BufferType::shader_storage, tile_counters_size);
 
-	m_block_counts.emplace(BufferType::shader_storage, tile_counts * 16 * sizeof(u32));
-	m_block_offsets.emplace(BufferType::shader_storage, tile_counts * 16 * sizeof(u32));
+	m_block_counts.emplace(BufferType::shader_storage, tile_count * 16 * sizeof(u32));
+	m_block_offsets.emplace(BufferType::shader_storage, tile_count * 16 * sizeof(u32));
 
 	m_bin_quads.emplace(BufferType::shader_storage, max_bin_quads * sizeof(u32));
 	m_tile_tris.emplace(BufferType::shader_storage, max_tile_tris * sizeof(u32),
@@ -156,7 +156,7 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	ShaderDefs defs;
 	defs["VIEWPORT_SIZE_X"] = view_size.x;
 	defs["VIEWPORT_SIZE_Y"] = view_size.y;
-	defs["BIN_COUNT"] = bin_counts;
+	defs["BIN_COUNT"] = bin_count;
 	defs["BIN_COUNT_X"] = m_bin_counts.x;
 	defs["BIN_COUNT_Y"] = m_bin_counts.y;
 	defs["BIN_SIZE"] = bin_size;
@@ -422,16 +422,16 @@ void LucidRenderer::computeTiles(const Context &ctx) {
 void LucidRenderer::checkBins() {
 	vector<int> bin_quad_counts, bin_quad_offsets, bin_quad_offsets2;
 	int num_binned_quads, num_input_quads;
-	int bin_counts = m_bin_counts.x * m_bin_counts.y;
+	int bin_count = m_bin_counts.x * m_bin_counts.y;
 
 	{
 		auto vals = m_bin_counters->map<int>(AccessMode::read_only);
 		num_input_quads = vals[1];
 		num_binned_quads = vals[2];
 		vals = vals.subSpan(32);
-		bin_quad_counts = vals.subSpan(bin_counts * 0, bin_counts * 1);
-		bin_quad_offsets = vals.subSpan(bin_counts * 1, bin_counts * 2);
-		bin_quad_offsets2 = vals.subSpan(bin_counts * 2, bin_counts * 3);
+		bin_quad_counts = vals.subSpan(bin_count * 0, bin_count * 1);
+		bin_quad_offsets = vals.subSpan(bin_count * 1, bin_count * 2);
+		bin_quad_offsets2 = vals.subSpan(bin_count * 2, bin_count * 3);
 		m_bin_counters->unmap();
 	}
 
@@ -469,12 +469,12 @@ void LucidRenderer::checkBins() {
 }
 
 void LucidRenderer::checkTiles() {
-	int bin_counts = m_bin_counts.x * m_bin_counts.y;
+	int bin_count = m_bin_counts.x * m_bin_counts.y;
 	vector<int> tile_tri_counts;
 	{
 		auto vals = m_tile_counters->map<int>(AccessMode::read_only);
 		vals = vals.subSpan(32);
-		tile_tri_counts = vals.subSpan(0, bin_counts * tiles_per_bin);
+		tile_tri_counts = vals.subSpan(0, bin_count * tiles_per_bin);
 		m_tile_counters->unmap();
 	}
 
@@ -1567,10 +1567,10 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 		return out;
 
 	// TODO: double/triple buffering to avoid stall
-	int bin_counts = m_bin_counts.x * m_bin_counts.y;
+	int bin_count = m_bin_counts.x * m_bin_counts.y;
 	auto bin_counters = m_old_counters.back().first->download<u32>();
 	auto tile_counters =
-		m_old_counters.back().second->download<u32>(32 + bin_counts * tiles_per_bin);
+		m_old_counters.back().second->download<u32>(32 + bin_count * tiles_per_bin);
 
 	int num_pixels = m_size.x * m_size.y;
 	int num_tiles =
@@ -1589,7 +1589,7 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 
 	int num_tile_tris = 0, num_nonempty_tiles = 0, num_nonempty_bins = 0;
 	int max_quads_per_bin = 0, num_bin_quads = 0;
-	for(int b = 0; b < bin_counts; b++) {
+	for(int b = 0; b < bin_count; b++) {
 		bool empty = true;
 		for(int t = 0; t < 16; t++) {
 			int count = tile_counters[32 + b * tiles_per_bin + t];

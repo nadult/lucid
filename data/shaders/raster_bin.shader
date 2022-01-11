@@ -41,7 +41,10 @@ uniform bool additive_blending;
 #define SAMPLES_PER_THREAD		8
 #define MAX_SAMPLES				(LSIZE * SAMPLES_PER_THREAD)
 
+#undef BLOCK_SHIFT
+#define BLOCK_SHIFT				3
 #define BLOCK_COUNT				8
+#define BLOCK_COUNT_SQ			64
 
 #define MAX_BLOCK_ROW_TRIS		2048
 #define MAX_BLOCK_TRIS			(MAX_SAMPLES / BLOCK_COUNT)
@@ -55,12 +58,12 @@ uint scratchBlockRowTrisOffset(uint by) {
 	return (gl_WorkGroupID.x << WORKGROUP_SCRATCH_SHIFT) + by * MAX_BLOCK_ROW_TRIS * 2;
 }
 
-uint scratchBlockTrisOffset(uint bx) {
-	return (gl_WorkGroupID.x << WORKGROUP_SCRATCH_SHIFT) + 32 * 1024 + bx * MAX_BLOCK_TRIS * 2;
+uint scratchBlockTrisOffset(uint bx, uint by) {
+	return (gl_WorkGroupID.x << WORKGROUP_SCRATCH_SHIFT) + 32 * 1024 + (bx + by * 8) * MAX_BLOCK_TRIS * 2;
 }
 
 uint scratchTriOffset(uint tri_idx) {
-	return (gl_WorkGroupID.x << WORKGROUP_SCRATCH_SHIFT) + 64 * 1024 + tri_idx;
+	return (gl_WorkGroupID.x << WORKGROUP_SCRATCH_SHIFT) + 96 * 1024 + tri_idx;
 }
 
 uint sumU16x2(uint pair) {
@@ -74,7 +77,7 @@ shared ivec2 s_bin_pos;
 shared vec3 s_bin_ray_dir0;
 
 shared uint s_block_row_tri_counts[BLOCK_COUNT];
-shared uint s_curblock_counters[BLOCK_COUNT * 4];
+shared uint s_block_counters[BLOCK_COUNT * BLOCK_COUNT * 4];
 
 void outputPixel(ivec2 pixel_pos, uint color) {
 	g_raster_image[s_bin_raster_offset + pixel_pos.x + (pixel_pos.y << BIN_SHIFT)] = color;
@@ -100,20 +103,20 @@ void commitTimers() { }
 #endif
 
 void resetBlockCounters() {
-	if(LIX < BLOCK_COUNT)
-		s_curblock_counters[LIX] = 0;
+	if(LIX < BLOCK_COUNT_SQ)
+		s_block_counters[LIX] = 0;
 }
 
 // These functions work only within current block row
-#define BLOCK_TRI_COUNT(bx)		s_curblock_counters[bx]
+#define BLOCK_TRI_COUNT(bx, by)			s_block_counters[bx + (by << BLOCK_SHIFT) + BLOCK_COUNT_SQ * 0]
 
 // TODO: more info
-#define BLOCK_FRAG_COUNT(bx)	s_curblock_counters[bx + BLOCK_COUNT]
-#define BLOCK_FRAG_OFFSET(bx)	s_curblock_counters[bx + BLOCK_COUNT * 2]
-#define BLOCK_GROUP_FRAG_COUNT(bx)	s_curblock_counters[bx + BLOCK_COUNT * 3]
+#define BLOCK_FRAG_COUNT(bx, by)		s_block_counters[bx + (by << BLOCK_SHIFT) + BLOCK_COUNT_SQ * 1]
+#define BLOCK_FRAG_OFFSET(bx, by)		s_block_counters[bx + (by << BLOCK_SHIFT) + BLOCK_COUNT_SQ * 2]
+#define BLOCK_GROUP_FRAG_COUNT(bx, by)	s_block_counters[bx + (by << BLOCK_SHIFT) + BLOCK_COUNT_SQ * 3]
 
 // How many rows can we rasterize in single step?
-shared int s_bx_step; // TODO: better name
+shared int s_bx_step[BLOCK_COUNT]; // TODO: better name
 
 // TODO: add protection from too big number of samples:
 // maximum per row for raster_bin = min(4 * LSIZE, 32768) ?
@@ -145,10 +148,10 @@ uint xorBits(uint value, int bit0, int bit1)
 
 shared uint s_sort_max_block_rcount;
 
-void sortBlockTris()
+void sortBlockTris(uint by)
 {
 	if(LIX < 8) {
-		uint count = BLOCK_TRI_COUNT(LIX);
+		uint count = BLOCK_TRI_COUNT(LIX, by);
 		// rcount: count rounded up to next power of 2
 		uint rcount = max(32, (count & (count - 1)) == 0? count : (2 << findMSB(count)));
 		if(LIX == 0)
@@ -160,7 +163,7 @@ void sortBlockTris()
 	uint gid = LIX >> (LSHIFT - 3);
 	uint lid = LIX & (LSIZE / 8 - 1);
 	uint goffset = gid * MAX_BLOCK_TRIS;
-	uint count = BLOCK_TRI_COUNT(gid);
+	uint count = BLOCK_TRI_COUNT(gid, by);
 	// TODO: max_rcount is only needed for barriers, computations should be performed up to rcount
 	// But it seems, that using rcount directly is actually a bit slower... (Sponza)
 	uint max_rcount = s_sort_max_block_rcount;
@@ -469,8 +472,6 @@ void generateBlocks(uint by)
 	uint buf_offset = bx * MAX_BLOCK_TRIS;
 	uint tri_count = s_block_row_tri_counts[by];
 	uint y = LIX & 7, shift = (y & 1) * 12;
-	resetBlockCounters();
-	barrier();
 	
 	int min_bx = int(bx * 8);
 	vec3 ray_dir_base = s_bin_ray_dir0 + (bx * 8) * frustum.ws_dirx + (by * 8) * frustum.ws_diry;
@@ -513,25 +514,25 @@ void generateBlocks(uint by)
 		float ray_pos = param0 / dot(normal, ray_dir);
 		float depth = float(0x7ffff) / (1.0 + max(0.0, ray_pos)); // 19 bits is enough
 
-		uint idx = atomicAdd(BLOCK_TRI_COUNT(bx), 1);
+		uint idx = atomicAdd(BLOCK_TRI_COUNT(bx, by), 1);
 		if(idx < MAX_BLOCK_TRIS)
 			s_buffer[buf_offset + idx] = i | (uint(depth) << 13);
 	}
 
 	barrier();
 	if(LIX < BLOCK_COUNT)
-		s_bx_step = anyInvocationARB(BLOCK_TRI_COUNT(LIX) > MAX_BLOCK_TRIS)? 0 : 1;
+		s_bx_step[by] = anyInvocationARB(BLOCK_TRI_COUNT(LIX, by) > MAX_BLOCK_TRIS)? 0 : 1;
 	barrier();
-	if(s_bx_step == 0)
+	if(s_bx_step[by] == 0)
 		return;
-	sortBlockTris();
+	sortBlockTris(by);
 	barrier();
 
 	bx = LIX >> (LSHIFT - 3);
 	min_bx = int(bx * 8);
 	buf_offset = bx * MAX_BLOCK_TRIS;
-	tri_count = BLOCK_TRI_COUNT(bx);
-	uint dst_offset = scratchBlockTrisOffset(bx);
+	tri_count = BLOCK_TRI_COUNT(bx, by);
+	uint dst_offset = scratchBlockTrisOffset(bx, by);
 
 	for(uint i = LIX & (LSIZE / 8 - 1); i < tri_count; i += LSIZE / 8) {
 		uint idx = s_buffer[buf_offset + i] & 0x1fff;
@@ -617,9 +618,16 @@ void generateBlocks(uint by)
 
 	if(LIX < BLOCK_COUNT) {
 		uint bx = LIX;
-		uint num_tris = BLOCK_TRI_COUNT(bx);
-		uint frag_count1 = num_tris == 0? 0 : s_buffer[bx * MAX_BLOCK_TRIS + num_tris - 1];
-		BLOCK_FRAG_COUNT(bx) = frag_count1;
+		uint num_tris = BLOCK_TRI_COUNT(bx, by);
+		BLOCK_FRAG_COUNT(bx, by) = num_tris == 0? 0 : s_buffer[bx * MAX_BLOCK_TRIS + num_tris - 1];
+	}
+}
+
+void finalizeGenerateBlocks()
+{
+	uint bx = LIX & 31, by = LIX >> 5;
+	if(bx < BLOCK_COUNT && by < BLOCK_COUNT) {
+		uint frag_count1 = BLOCK_FRAG_COUNT(bx, by);
 		frag_count1 = sumU16x2(frag_count1);
 
 		uint frag_count2 = frag_count1 + shuffleXorNV(frag_count1, 1, 8);
@@ -627,14 +635,14 @@ void generateBlocks(uint by)
 		uint frag_count8 = frag_count4 + shuffleXorNV(frag_count4, 4, 8);
 
 		int bx_step = 8;
-		// TODO: compute this on first warp only
 		if(frag_count8 > MAX_SAMPLES) {
+			// TODO: anyInvocation requires separate rows to operate on separate warps...
 			bool fail4 = anyInvocationARB(frag_count4 > MAX_SAMPLES);
 			bool fail2 = anyInvocationARB(frag_count2 > MAX_SAMPLES);
 			bool fail1 = anyInvocationARB(frag_count1 > MAX_SAMPLES);
 			bx_step = fail1? 0 : fail2? 1 : fail4? 2 : 4;
 		}
-		s_bx_step = bx_step;
+		s_bx_step[by] = bx_step;
 
 		if(bx_step > 0) {
 			uint frag_offset = 0;
@@ -645,24 +653,23 @@ void generateBlocks(uint by)
 			if(bx_step >= 4 && (bx & 2) != 0) frag_offset += temp2;
 			if(bx_step >= 8 && (bx & 4) != 0) frag_offset += temp4;
 
-			BLOCK_FRAG_OFFSET(bx) = frag_offset;
+			BLOCK_FRAG_OFFSET(bx, by) = frag_offset;
 		
 			uint first_bx = bx & ~(bx_step - 1), last_bx = first_bx + bx_step - 1;
 			uint group_count = shuffleNV(frag_count1, last_bx, 8) + shuffleNV(frag_offset, last_bx, 8);
-			BLOCK_GROUP_FRAG_COUNT(bx) = group_count;
-			BLOCK_FRAG_OFFSET(bx) += group_count >> 16;
+			BLOCK_GROUP_FRAG_COUNT(bx, by) = group_count;
+			BLOCK_FRAG_OFFSET(bx, by) += group_count >> 16;
 		}
 	}
-	barrier();
 }
 
 void loadSamples(int bx, int by, int bx_step) {
 	bx += int(LIX / (LSIZE / bx_step)); // TODO: shift instead of div
 
-	uint soffset = scratchBlockTrisOffset(bx);
-	uint tri_count = BLOCK_TRI_COUNT(bx);
+	uint soffset = scratchBlockTrisOffset(bx, by);
+	uint tri_count = BLOCK_TRI_COUNT(bx, by);
 
-	uint block_offset = BLOCK_FRAG_OFFSET(bx) & 0xffff;
+	uint block_offset = BLOCK_FRAG_OFFSET(bx, by) & 0xffff;
 
 	int y = int(LIX & 7);
 	uint y_shift = (y & 3) * 8;
@@ -681,7 +688,7 @@ void loadSamples(int bx, int by, int bx_step) {
 		int x = findLSB(tri_bitmask);
 		do {
 			if(tri_offset >= MAX_SAMPLES)
-				RECORD(x, y, tri_offset, BLOCK_FRAG_COUNT(bx));
+				RECORD(x, y, tri_offset, BLOCK_FRAG_COUNT(bx, by));
 			uint pixel_id = (y << 6) | (bx * 8 + x++);
 			uint value = (pixel_id << 23) | scratchTriOffset(tri_idx);
 			s_buffer[tri_offset++] = value;
@@ -697,10 +704,10 @@ void reduceSamples(int bx, int by, int bx_step) {
 	bx += int(LIX >> 6);
 	int x = int(LIX & 7) + bx * 8, y = int((LIX >> 3) & 7);
 
-	uint soffset = scratchBlockTrisOffset(bx);
-	uint tri_count = BLOCK_TRI_COUNT(bx);
+	uint soffset = scratchBlockTrisOffset(bx, by);
+	uint tri_count = BLOCK_TRI_COUNT(bx, by);
 	
-	uint block_offset = BLOCK_FRAG_OFFSET(bx) & 0xffff;
+	uint block_offset = BLOCK_FRAG_OFFSET(bx, by) & 0xffff;
 
 	// TODO: share pixels between threads for bx_step <= 4?
 	// TODO: WARP_SIZE?
@@ -890,7 +897,7 @@ void shadeSamples(uint bx, uint by) {
 	// Shading samples grouped by triangles
 	// TODO: how can we make sure that tris which generate >= 32 samples are all handles by single warp?
 
-	uint sample_count = BLOCK_GROUP_FRAG_COUNT(bx) & 0xffff;
+	uint sample_count = BLOCK_GROUP_FRAG_COUNT(bx, by) & 0xffff;
 	
 	for(uint i = LIX; i < sample_count; i += LSIZE) {
 		uint value = s_buffer[i];
@@ -915,10 +922,10 @@ void rasterFragmentCounts(int by)
 {
 	for(uint i = LIX; i < BIN_SIZE * MAX_ROWS; i += LSIZE) {
 		ivec2 pixel_pos = ivec2(i & (BIN_SIZE - 1), by * 8 + (i >> BIN_SHIFT));
-		uint count0 = BLOCK_FRAG_COUNT(pixel_pos.x / 8) & 0xffff;
-		uint count1 = BLOCK_FRAG_COUNT(pixel_pos.x / 8) >> 16;
-		count0 = BLOCK_FRAG_OFFSET(pixel_pos.x / 8);
-		count1 = BLOCK_GROUP_FRAG_COUNT(pixel_pos.x / 8);
+		uint count0 = BLOCK_FRAG_COUNT(pixel_pos.x / 8, by) & 0xffff;
+		uint count1 = BLOCK_FRAG_COUNT(pixel_pos.x / 8, by) >> 16;
+		count0 = BLOCK_FRAG_OFFSET(pixel_pos.x / 8, by);
+		count1 = BLOCK_GROUP_FRAG_COUNT(pixel_pos.x / 8, by);
 
 		vec3 color = vec3(count0, count1, 0) / 4096.0;
 		if(count0 == 0xffff)
@@ -927,35 +934,6 @@ void rasterFragmentCounts(int by)
 		outputPixel(pixel_pos, enc_col);
 	}
 }
-
-// TODO: nowy plan:
-//
-// 1. generacja offsetów do segmentów:
-//
-// Dla każdej połowki bloku 8x8 generujemy listę 16/32 segmentów;
-// Każdy segment to 32 sample które mogą być wygenerowane przez jeden warp
-// offsety to pary id-trójkąta (11 bitów) i offset w ramach trójkąta (5 bitów)
-//
-// Czyli powinniśmy mieć 8 * 2 listy po 16/32 segmentów; Każdy można wyznaczyć niezależnie
-// za pomocą 256/512 wątków pod koniec generateBlocks
-//
-// 2.  Mając segmenty możemy generować sample. Każdy warp operuje niezależnie na jednej połówce
-//     bloku 8x8. Każdy wątek odpowiada za 4 różne rzędy po 8 sampli albo za 4 różne sample (2 wątki w rzędzie).
-//
-//     Każdy wątek generuje offsety sampli, i jeśli offset zawiera się w danym segmencie to jest dodawany do odpowiedniej
-//     listy. Dodatkowo, każdy wątek wyznacza kolejność sampli dla odpowiednich pikseli (8 lub 4).
-//
-//     Każdy piksel ma listę sampli: na id-k w liście wystarczy 5 bitów (bo tyle jest maksymalnie sampli w segmencie).
-//     W sumie na jeden sampel wystarczy 16 bitów: 5 bitów na id piksela, 5 bitów na id-k w liście sampli w danym pikselu
-//     i 5 bitów na id-k trójkąta (dlatego że w danym segmencie może być maksymalnie 32 trójkąty).
-//
-//     Na raz generujemy sample do 4 albo 8 segmentów.
-//
-// 3. Mając sample w segmentach, warpy na zmianę operują po jednym segmencie: cieniują 32 sample a następnie od razu
-//    przeprowadzają jego redukcję. Filtr głębokości trzymamy w rejestrach.
-//
-// Dodatkowo możemy trzymać mały bufor na dane trójkątów w SMEM (np. 6 trójkątów na jeden warp). Przed cieniowaniem
-// danego segmentu bufor jest update-owany nowymi trójkątami. Ładowanie danych trójkąta można rozdzielić między kilka wątków (np. 4).
 
 void rasterBin(int bin_id) {
 	INIT_CLOCK();
@@ -974,6 +952,7 @@ void rasterBin(int bin_id) {
 			s_block_row_tri_counts[LIX] = 0;
 		}
 	}
+	resetBlockCounters();
 	barrier();
 	generateRows();
 	groupMemoryBarrier();
@@ -981,14 +960,19 @@ void rasterBin(int bin_id) {
 	UPDATE_CLOCK(0);
 
 	for(int by = 0; by < BLOCK_COUNT; by ++) {
-		barrier();
 		generateBlocks(by);
-		groupMemoryBarrier();
 		barrier();
-		UPDATE_CLOCK(1);
+	}
+	finalizeGenerateBlocks();
+	
+	groupMemoryBarrier();
+	barrier();
+	UPDATE_CLOCK(1);
 
+	for(int by = 0; by < BLOCK_COUNT; by ++) {
+		barrier();
 		// How many rows can we rasterize in single step?
-		int bx_step = s_bx_step;
+		int bx_step = s_bx_step[by];
 		if(bx_step == 0) {
 			float value = bx_step == 0? 0.2 : bx_step == 1? 0.5 : bx_step == 2? 0.8 : 1.0;
 			rasterInvalidBlockRow(by, vec3(value, 0.0, 0.0));
@@ -1011,7 +995,6 @@ void rasterBin(int bin_id) {
 		}
 		//rasterFragmentCounts(by);
 	}
-
 }
 
 int loadNextBin() {

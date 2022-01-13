@@ -394,7 +394,7 @@ void LucidApp::doMenu() {
 		menu::text("Picking % block: %", m_is_picking_8x8 ? "8x8" : "4x4", m_selected_block);
 		if(m_block_info) {
 			auto desc = m_block_info->description();
-			menu::text(desc.c_str());
+			menu::text("%", desc.c_str());
 		}
 	} else if(ImGui::Button("Introspect 8x8 raster block")) {
 		m_is_picking_block = true;

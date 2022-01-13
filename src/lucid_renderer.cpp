@@ -762,7 +762,7 @@ void LucidRenderer::analyzeMaskRasterizer() const {
 
 string RasterBlockInfo::description() const {
 	TextFormatter fmt;
-	fmt("bin:% tile:% block:%\ntris/block:% tris/tile:%", bin_pos, tile_pos, block_pos,
+	fmt("bin:% tile:% block:%\ntris/block:% tris/tile:%\n", bin_pos, tile_pos, block_pos,
 		num_block_tris, num_tile_tris);
 	if(num_sub_block_tris)
 		fmt.stdFormat("total tris/sub block:%d (%.2f %%)\n", num_sub_block_tris,

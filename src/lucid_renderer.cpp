@@ -1014,7 +1014,7 @@ RasterBlockInfo LucidRenderer::introspectBlock4x4(const RasterTileInfo &tile, in
 
 	auto neighbour_map = tile.triNeighbourMap(4);
 	auto are_compatible_tris = [&](int id0, int id1) -> bool {
-		return isOneOf(id1, neighbour_map[id0]);
+		return true || isOneOf(id1, neighbour_map[id0]);
 	};
 
 	// We have to make sure that depth ranges don't get too mixed up...
@@ -1216,7 +1216,7 @@ RasterBlockInfo LucidRenderer::introspectBlock8x8(const RasterTileInfo &tile,
 
 	auto neighbour_map = tile.triNeighbourMap(4);
 	auto are_compatible_tris = [&](int id0, int id1) -> bool {
-		return isOneOf(id1, neighbour_map[id0]);
+		return true || isOneOf(id1, neighbour_map[id0]);
 	};
 
 	// We have to make sure that depth ranges don't get too mixed up...

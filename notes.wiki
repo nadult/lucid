@@ -66,6 +66,46 @@ conference: 2512
                     === Rasteryzacja wszystkich sampli na raz ===
 -----------------------------------------------------------------------------------------
 
+ * *Pomysł nr 37163*
+
+TODO: nowy pomysł na loadSamples:
+nie robimy wogóle loadSamples, zamiast tego na koniec generateBlocks generujemy
+segmenty i używamy ich przy cieniowaniu do wykminienia jaki tróəkąt i jaki pixel cieniujemy
+
+Trik na zakodowanie mapowania max 32 tróəkątów w ramach 32 pikseli:
+wystarczą do tego 32 bity:
+bit jest ustawiony na 1 jeśli w danym pikselu mamy nowy tróəkąt
+
+cur_pixel_mask = uint((1 << (pixel_id + 1)) - 1
+- wyznaczenie który tróəkąt teraz cieniujemy: bitCount(segment_mask & cur_pixels_mask) - 1
+- wyznaczenie offsetu w ramach danego tróəkąta: findMSB(segment_mask & cur_pixels_mask) - pixel_id
+
+Oprócz tego dla każdego segmentu musimy też wyznaczyć id pierwszego trójkąta i jego początkowy offset
+
+Dla każdego bloku mamy listę max 512 tróəkątów. Bitmaski dla tróəkątów cały czas będą potrzebne
+Oprócz tego trzymamy też max 256/512 64-bitowych segmentów ?
+Każdy segment to 64-bity + id trójkąta (11 bitów) i offset (6 bitów)
+
+Jak te segmenty najszybciej wygenerować?
+
+Czy mogę jakoś użyć tej informacji / sposobu do tego, żeby przyspieszyć redukcję ?
+- wygenerowanie list per-pixel ? Ale jak wyznaczyć poprzedni pixel ?
+
+  __match_sync byłoby przydatne do wyznaczenia sampli o tych samych koordynatach...
+  łatwo przeskoczyć sample z tego samego trójkąta, ale w przypadku dragona brute force może być wolny...
+  zakodowanie offsetów dla rzędów pixeli?
+
+segmenty są 32-bitowe ? raczej tak będą się lepiej mapowały na warpy?
+ale za to będą więcej zajmować ?
+
+potrzebujemy:
+- id trójkąta (w ramach bloku? tak: 9 bitów)
+- offset tróəkąta (6 bitów)
+- bitmapę (32 bity)
+
+zapisujemy po prostu 2x 32 bity; bitmapy zapisujemy w SMEM? a gdzie id-ki ? na razie max 128? i tyle
+
+
 * *Luźne myśli*
 
 Skompilkowane rozwiązania też kosztują, na Sponzie np. często mamy bardzo proste sytuacje które

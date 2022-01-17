@@ -728,9 +728,10 @@ void loadSamplesX() {
 	}
 }
 
-#define MAX_TASKS 4
+// TODO: won't work properly for <8 and two producers
+#define MAX_TASKS 8
 
-shared uint s_reserved_counter, s_filled_counter, s_grabbed_counter, s_processed_counter;
+shared uint s_filled_counter, s_grabbed_counter, s_processed_counter;
 shared uvec2 s_tasks[MAX_TASKS];
 
 void multiTest() {
@@ -749,7 +750,6 @@ void multiTest() {
 	if(warp_id == 0) {
 		s_shaded_groups = s_loaded_groups = 0;
 		s_free_groups = 0;
-		s_reserved_counter = 0;
 		s_filled_counter = 0;
 		s_processed_counter = 0;
 		s_grabbed_counter = 0;
@@ -757,26 +757,27 @@ void multiTest() {
 	barrier();
 
 	// This (if+else) takes 0.34 ms
-	if(warp_id == 0) {
+	if(warp_id < 2) {
 		// dodaje taski, dopóki jest miejsce
 		// może być więcej niż 1 warp dodający?
 		//
 		// alokuje id, będzie dostępny dopiero jak processed_counter + buffer_size > id ?
 
-		for(int i = 0; i < 64; i++) {
+		for(uint i = warp_id; i < 64; i += 2) {
 			if(thread_id == 0) {
-				uint task_id = atomicAdd(s_reserved_counter, 1);
+				uint task_id = i;
 				while(task_id >= s_processed_counter + MAX_TASKS)
 					memoryBarrierShared();
 				memoryBarrierShared();
 				s_tasks[task_id & (MAX_TASKS - 1)] = uvec2(i, 0xff000000 + (i % 3) * 0x2000 + i);
+				memoryBarrierShared();
 				while(s_filled_counter < task_id)
 					memoryBarrierShared();
 				atomicAdd(s_filled_counter, 1);
 			}
 		}
 	}
-	else if(warp_id <= 4) {
+	else if(warp_id < 6) {
 		// zbieramy taski aż processed_counter przetworzy wszystko
 		while(true) {
 			uint task_id;
@@ -791,6 +792,7 @@ void multiTest() {
 			if(thread_id == 0) {
 				while(s_filled_counter <= task_id)
 					memoryBarrierShared();
+				memoryBarrierShared();
 				task = s_tasks[task_id & (MAX_TASKS - 1)];
 				memoryBarrierShared();
 				atomicAdd(s_processed_counter, 1);

@@ -696,6 +696,115 @@ void loadSamples(int bx, int by, int bx_step) {
 	}
 }
 
+shared uint s_free_groups, s_loaded_groups, s_shaded_groups;
+
+// Problem: potrzebujemy spinlocków ?
+// a może po prostu jak nie ma nic do roboty to się przełączamy na inny task?
+uint acquireLoadingGroup() {
+	return 0;
+	
+}
+
+// Najpierw jakis prosty przelacznik i zobaczmy czy dziala
+//
+
+shared uint s_shaded_group_id;
+
+// warp redukujący odpowiada za 32 piksele, jak skonczy moze sie przelaczyc na kolejne?
+// tak by się dało jeśłi mielibyśmy wiele niezaleznych strumieni, ale 
+// moze zrobmy na razie prosty addytywny reduktor ? na oddzielnym watku
+//
+// OK, ja zrobic strumieniowe generowanie sampli?
+// tez na watku ? ile warpów?
+// na początku warpy do samplowania będą musiały czekać?
+
+void loadSamplesX() {
+	bool is_leader = (LIX & 31) == 0;
+
+	if(s_free_groups > s_loaded_groups)
+
+	if(is_leader) {
+
+	}
+}
+
+#define MAX_TASKS 4
+
+shared uint s_reserved_counter, s_filled_counter, s_grabbed_counter, s_processed_counter;
+shared uvec2 s_tasks[MAX_TASKS];
+
+void multiTest() {
+	uint warp_id = LIX >> 5;
+	uint thread_id = LIX & 31;
+
+	if(warp_id == 0)
+		for(int group = 0; group < 64; group++) {
+			uint bx = group & 7, by = group >> 3;
+			uint x = thread_id & 7, y = thread_id >> 3;
+			uint color = 0xffffffff;
+			outputPixel(ivec2(bx * 8 + x, by * 8 + y), color);
+			outputPixel(ivec2(bx * 8 + x, by * 8 + 4 + y), color);
+			// jak zarezerwować sobie task ?
+		}
+	if(warp_id == 0) {
+		s_shaded_groups = s_loaded_groups = 0;
+		s_free_groups = 0;
+		s_reserved_counter = 0;
+		s_filled_counter = 0;
+		s_processed_counter = 0;
+		s_grabbed_counter = 0;
+	}
+	barrier();
+
+	if(warp_id == 0) {
+		// dodaje taski, dopóki jest miejsce
+		// może być więcej niż 1 warp dodający?
+		//
+		// alokuje id, będzie dostępny dopiero jak processed_counter + buffer_size > id ?
+
+		for(int i = 0; i < 64; i++) {
+			if(thread_id == 0) {
+				uint task_id = atomicAdd(s_reserved_counter, 1);
+				while(task_id >= s_processed_counter + MAX_TASKS)
+					memoryBarrierShared();
+				memoryBarrierShared();
+				s_tasks[task_id & (MAX_TASKS - 1)] = uvec2(i, 0xff000000 + (i % 3) * 0x2000 + i);
+				while(s_filled_counter < task_id)
+					memoryBarrierShared();
+				atomicAdd(s_filled_counter, 1);
+			}
+		}
+	}
+	else if(warp_id <= 4) {
+		// zbieramy taski aż processed_counter przetworzy wszystko
+		while(true) {
+			uint task_id;
+			uvec2 task;
+
+			if(thread_id == 0)
+				task_id = atomicAdd(s_grabbed_counter, 1);
+			task_id = shuffleNV(task_id, 0, 32);
+			if(task_id >= 64)
+				break;
+
+			if(thread_id == 0) {
+				while(s_filled_counter <= task_id)
+					memoryBarrierShared();
+				task = s_tasks[task_id & (MAX_TASKS - 1)];
+				atomicAdd(s_processed_counter, 1);
+			}
+			task = shuffleNV(task, 0, 32);
+
+			uint group = task.x, color = task.y;
+			uint bx = group & 7, by = group >> 3;
+			uint x = thread_id & 7, y = thread_id >> 3;
+			outputPixel(ivec2(bx * 8 + x, by * 8 + y), color);
+			outputPixel(ivec2(bx * 8 + x, by * 8 + 4 + y), color);
+			// jak zarezerwować sobie task ?
+		}
+	}
+}
+
 // TODO: optimize
 void reduceSamples(int bx, int by, int bx_step) {
 	if(LIX >= bx_step * BIN_SIZE)
@@ -969,6 +1078,10 @@ void rasterBin(int bin_id) {
 	barrier();
 	UPDATE_CLOCK(1);
 
+	multiTest();
+	barrier();
+
+	/*
 	for(int by = 0; by < BLOCK_COUNT; by ++) {
 		barrier();
 		// How many rows can we rasterize in single step?
@@ -994,7 +1107,7 @@ void rasterBin(int bin_id) {
 			UPDATE_CLOCK(4);
 		}
 		//rasterFragmentCounts(by);
-	}
+	}*/
 }
 
 int loadNextBin() {

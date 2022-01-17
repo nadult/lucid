@@ -66,6 +66,141 @@ conference: 2512
                     === Rasteryzacja wszystkich sampli na raz ===
 -----------------------------------------------------------------------------------------
 
+* *Luźne myśli*
+
+Skompilkowane rozwiązania też kosztują, na Sponzie np. często mamy bardzo proste sytuacje które
+wogóle nie wymagają zaawansowanych algorytmów do obsłużenia.
+
+Ale kilka różnych strategii raczej nie wchodzi w grę, bo muszę też brać pod uwagę wielkość
+shadera.
+
+Proste rozwiązanie źle sobie radzi w sytuacjach w których są duże różnice w samplach między
+pikselami. Mogę zminimalizować ten efekt jeśli dobrze pogrupuję piksele.
+
+Bardziej skomplikowane rozwiązania minimalizują ten efekt przez wydzielenie samplowania, także
+problem różnych ilości sampli/pixel dotyczy już tylko ładowania i redukcji. Ale te dodatkowe
+skompilkowanie dodaje też stały koszt... (generowanie/zapisywanie i odczytywanie sampli do/z
+SMEM).
+
+Może jeśli sąsiednie piksele są blisko siebie to koszt różnic w ilościach sampli nie jest tak
+duży? Na whiteoak same samplowanie to ok. 1/6 całego czasu rasteryzacji...
+
+Cały warp po skończeniu pracy mógłby się przełączać na kolejny kawałek?
+
+Prosta wersja jest wolniejsza od skomplikowanej nawet na sponzie (czemu?).
+
+
+* *Nowy pomysł (Producer + Consumer):*
+
+Wersja 1:
+- ładowanie trójkątów i generacja sampli
+- cieniowanie sampli
+- redukcja sampli
+
+Wersja 2:
+- ładowanie danych tróəkątów
+- wstępna redukcja sampli
+- cieniowanie sampli
+- ostateczna redukcja sampli
+
+* *UWAGA:* filtr głębokości raczej musi być wykonywany w ostatecznej fazie redukcji; inaczej w
+  niektórych sytuacjach na zbyt długo mógłby zablokować załodowany trójkąt (mógłby pewnie
+  doprowadzić do deadlocka).
+
+Wszystkie taski działają na małych buforach (np. max 128 trójkątów, max 512 sampli), warpy
+co jakiś czas znajdują sobie jakiś task do zrobienia i je wykonują. Wykonanie taska zwalnia
+miejsce w buforze i umożliwia wykonywanie kolejnych tasków z poprzednich faz.
+
+Task redukcji jest wyjątkowy, bo raz zassignowany do warpa kończy się dopiero jak wszystkie
+sample z danego bloku zostaną przetworzone.
+
+Problemy:
+* *jak zachować kolejność sampli w takim przetwarzaniu?*
+  - task cieniowania ma 32 sample z jakiegoś tam bloku i z jakimśtam offsetem
+  - reduktor nie może redukować tych sampli na chama, musi przetwarzać w odpowiedniej
+	kolejności
+  - sample z różnych bloków są całkowicie niezależne, ale sample z jednego bloku już nie...
+  
+  - musiałbym ustawić takie limity na taski ładowania sampli, żeby nie generować tego za dużo?
+  - ładowarka sampli też chyba najlepiej, żeby generowała sample od początku do końca?
+    z drugiej strony, co jeśli nie będzie miejsca w buforze?
+
+* *jak zapewnić, że wszystkie warpy przez większośc czasu mają coś do robienia?*
+   
+
+
+* *jak zrobić wydajne przełączanie się miedzy taskami ?*
+  Taski to po prostu K-bitowe liczniki trzymane w jednej wartości ?
+  
+  mamy liczniki tasków do zrobienia i dodatkowo miejsca na dane tasków. Jednostką są np.
+  32 trójkąty albo 32 sample
+
+  * *TODO: poszukać producer/consumer on a GPU* | ordered atomics GPU
+
+
+- jak przetwarzać wiele bloków na raz i nie zagłodzić niektórych tasków ?
+- jak wydajnie zrobić wstępną redukcję sampli ?
+
+* *Późna redukcja wybranych sampli:*
+  przy ładowaniu sampli, sample są w kolejności po trójkątach, jak redukcja mogłaby
+  zgarnąć te dane wydajnie ?
+  
+* *Jak zrobić finalną redukcję z wersji #2?*
+  musiałbym mieć miejsce w SMEM na docelowy kolor
+  chyba, że miałbym jeden (zpinowany) task który działa dla danego bloku od początku do końca?
+  jeden wątek mógłby obsługiwać np. 2/4 piksele?
+
+* *Jak zrobić cieniowanie w wersji #2?*
+  - muszę mieć sample w kolejności tróəkątów i wygenerować je w kolejności pikseli
+
+* *Podstawowy problem:* jak w trakcie generowania sampli w kolejności po tróəkątach od razu
+  wygenerować informacje o kolejności do pikseli, które można by użyć przy redukcji?
+
+  Opcje:
+  - generacja kolejności przy generowaniu sampli i zapisanie w oddzielnej tablicy albo w
+	sample id-kach
+	
+  - szybkie znajdowanie sampli dla odopwiednich pikseli w czasie redukcji?
+    powiedzmy, że mamy 512 sampli, w każdym informacja o tym który to piksel (jeden z 64)
+	dodatkowo mamy 64 wątki, każdy odpowiada za któryś piksel
+	
+	każdy wątek bierze 1 sampel i za pomocą atomiców 
+
+* *Nowy schemat*
+
+1) generujemy bloki: mamy ustalone bx_step: 1, 2, 4 albo 8
+   możemy processować bx_step bloków na raz
+  
+2) mergujemy id-ki trójkątów z wybranych bloków:
+   512 bajtów danych; potrzebne do generowania sampli
+
+3) generujemy sample w kolejności po trójkątach:
+   potrzebujemy zmergowanych id-ków
+   4 bajty na próbkę: 8KB danych; 8 bitów na id trójkąta, 9 bitów na pozycję piksela
+
+4) ładujemy idki sampli do rejestrów
+
+5) ładujemy dane trójkątów do SMEM
+
+6) cieniujemy sample, wyniki zapisujemy w rejestrach (16 bitów na kolor: 7 rejestrów)
+
+7) generujemy sample w kolejności po pikselach; od razu ustalamy docelową kolejność, do tego
+   potrzebujemy już załadowanych bazowych danych trójkąta (równanie płaszczyzny) i
+   zmergowanych idków
+   16-bitów na próbkę: 4KB danych
+
+8) wrzucamy ocieniowane sample do SMEM pod pozycje pikseli
+
+9) Prosta redukcja, powinno się dać zrobić szybko niezależnie od bx_stepa
+
+Musimy być w stanie przechować w tym samym momencie w SMEM:
+- 4KB (idki sampli w kolejności po pikselach); 18 KB danych trójkątów; 512 bajtów na zmergowane idki
+
+Zadania 8 i 9 możemy wykonywać w tym samym czasie;
+Jak dobrze rozłożyć pracę? Jeśli generowanie sampli skończy się przed cieniowaniem to co wtedy?
+Musiałbym zrobić jakiś prosty alokator sampli? Mamy ileś tam warpów do pocieniowania i pierwszy
+wątek w każdym warpie alokuje 32 sample dla każdego warpa i tak w pętli aż się skończą sample
+Powinno być proste?
 
 * *Inne podejście: generujemy nie-precinające się warstwy sampli*
 

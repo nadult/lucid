@@ -756,6 +756,7 @@ void multiTest() {
 	}
 	barrier();
 
+	// This (if+else) takes 0.34 ms
 	if(warp_id == 0) {
 		// dodaje taski, dopóki jest miejsce
 		// może być więcej niż 1 warp dodający?
@@ -791,6 +792,7 @@ void multiTest() {
 				while(s_filled_counter <= task_id)
 					memoryBarrierShared();
 				task = s_tasks[task_id & (MAX_TASKS - 1)];
+				memoryBarrierShared();
 				atomicAdd(s_processed_counter, 1);
 			}
 			task = shuffleNV(task, 0, 32);
@@ -803,6 +805,21 @@ void multiTest() {
 			// jak zarezerwować sobie task ?
 		}
 	}
+
+	// This takes 0.06 ms ...
+	/*if(warp_id < 4) {
+		// zbieramy taski aż processed_counter przetworzy wszystko
+		for(uint i = warp_id; i < 64; i += 4) {
+			uvec2 task = uvec2(i, 0xff000000 + (i % 3) * 0x2000 + i);
+			uint group = task.x, color = task.y;
+			uint bx = group & 7, by = group >> 3;
+			uint x = thread_id & 7, y = thread_id >> 3;
+			outputPixel(ivec2(bx * 8 + x, by * 8 + y), color);
+			outputPixel(ivec2(bx * 8 + x, by * 8 + 4 + y), color);
+			// jak zarezerwować sobie task ?
+		}
+	}*/
+
 }
 
 // TODO: optimize

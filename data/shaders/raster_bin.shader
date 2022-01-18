@@ -34,8 +34,8 @@ layout(binding = 1) uniform sampler2D transparent_texture;
 
 uniform bool additive_blending;
 
-#define WORKGROUP_SCRATCH_SIZE	(128 * 1024)
-#define WORKGROUP_SCRATCH_SHIFT	17
+#define WORKGROUP_SCRATCH_SIZE	(256 * 1024)
+#define WORKGROUP_SCRATCH_SHIFT	18
 
 // TODO: does that mean that occupancy is so low?
 #define SAMPLES_PER_THREAD		8
@@ -54,6 +54,7 @@ uniform bool additive_blending;
 #define TRI_SCRATCH(var_idx) \
 	g_scratch[scratch_tri_offset + (var_idx << MAX_SCRATCH_TRIS_SHIFT)]
 
+// TODO: use shifts, it makes a difference
 uint scratchBlockRowTrisOffset(uint by) {
 	return (gl_WorkGroupID.x << WORKGROUP_SCRATCH_SHIFT) + by * MAX_BLOCK_ROW_TRIS * 2;
 }
@@ -62,8 +63,12 @@ uint scratchBlockTrisOffset(uint bx, uint by) {
 	return (gl_WorkGroupID.x << WORKGROUP_SCRATCH_SHIFT) + 32 * 1024 + (bx + by * 8) * MAX_BLOCK_TRIS * 2;
 }
 
+uint scratchBlockSegmentOffset(uint bx, uint by) {
+	return (gl_WorkGroupID.x << WORKGROUP_SCRATCH_SHIFT) + 96 * 1024 + (bx + by * 8) * MAX_BLOCK_TRIS;
+}
+
 uint scratchTriOffset(uint tri_idx) {
-	return (gl_WorkGroupID.x << WORKGROUP_SCRATCH_SHIFT) + 96 * 1024 + tri_idx;
+	return (gl_WorkGroupID.x << WORKGROUP_SCRATCH_SHIFT) + 128 * 1024 + tri_idx;
 }
 
 uint sumU16x2(uint pair) {
@@ -566,7 +571,7 @@ void generateBlocks(uint by)
 
 		uint num_frags0123 = bitCount(bits[0]);
 		uint num_frags4567 = bitCount(bits[1]);
-		uint num_frags = num_frags0123 + (num_frags4567 << 16);
+		uint num_frags = num_frags0123 + num_frags4567;
 		if(num_frags == 0) // This means that bmasks are invalid
 			RECORD(0, 0, 0, 0);
 
@@ -621,6 +626,60 @@ void generateBlocks(uint by)
 		uint num_tris = BLOCK_TRI_COUNT(bx, by);
 		BLOCK_FRAG_COUNT(bx, by) = num_tris == 0? 0 : s_buffer[bx * MAX_BLOCK_TRIS + num_tris - 1];
 	}
+
+	barrier();
+
+	// TODO: last segment can have empty samples
+	// TODO: limited number of segments: max 256
+
+	// generating segments
+	uint first_idx = LIX & (LSIZE / 8 - 1);
+	uint idx_count = (tri_count - first_idx + (LSIZE / 8 - 1)) >> (LSHIFT - 3);
+	uint offsets[8];
+	// TODO: is using arrays a good idea? maybe let's try to unroll it instead?
+	// it's using lmem0 array in asm
+
+	for(int k = 0; k < idx_count; k++) {
+		uint buf_idx = buf_offset + first_idx + (k << (LSHIFT - 3));
+		if(buf_idx >= buf_offset + tri_count)
+			RECORD(k, buf_idx - buf_offset, tri_count, 0);
+		uint cur_value = s_buffer[buf_idx], prev_value = buf_idx == buf_offset? 0 : s_buffer[buf_idx - 1];
+		offsets[k] = prev_value | ((cur_value - prev_value) << 16);
+	}
+	barrier();
+	// TODO: we have to clear only odd slots
+	for(uint i = LIX; i < MAX_SAMPLES; i += LSIZE)
+		s_buffer[i] = 0;
+	barrier();
+	// Musimy wygenerować bitmapy segmentów i offsety + id-ki trójkątów
+	// - najpierw generujemy bitmapy i je zapisujemy a następnie zapisujemy headery?
+	// - na razie tak zróbmy?
+
+	for(int k = 0; k < idx_count; k++) {
+		uint tri_offset = offsets[k] & 0xffff, tri_sample_count = offsets[k] >> 16;
+		uint seg_id = tri_offset >> 5;
+		uint seg_offset = tri_offset & 31;
+		uint tri_idx = first_idx + (k << (LSHIFT - 3));
+		
+		if(seg_id >= 256)
+			RECORD(tri_offset, tri_sample_count, seg_id, 0);
+
+		if(seg_offset > 0)
+			atomicOr(s_buffer[buf_offset + seg_id * 2 + 1], 1u << seg_offset);
+
+		if(seg_offset == 0)
+			s_buffer[buf_offset + seg_id * 2 + 0] = tri_idx;
+		if(seg_offset + tri_sample_count > 32)
+			s_buffer[buf_offset + seg_id * 2 + 2] = tri_idx | ((32 - seg_offset) << 16);
+		if(seg_offset + tri_sample_count > 64)
+			s_buffer[buf_offset + seg_id * 2 + 4] = tri_idx | ((64 - seg_offset) << 16);
+	}
+	barrier();
+
+	uint seg_count = (BLOCK_FRAG_COUNT(bx, by) + 31) >> 5;
+	dst_offset = scratchBlockSegmentOffset(bx, by);
+	for(uint i = LIX & (LSIZE / 8 - 1); i < seg_count; i += LSIZE / 8)
+		g_scratch[dst_offset + i] = uvec2(s_buffer[buf_offset + i * 2 + 0], s_buffer[buf_offset + i * 2 + 1]);
 }
 
 void finalizeGenerateBlocks()
@@ -628,7 +687,6 @@ void finalizeGenerateBlocks()
 	uint bx = LIX & 31, by = LIX >> 5;
 	if(bx < BLOCK_COUNT && by < BLOCK_COUNT) {
 		uint frag_count1 = BLOCK_FRAG_COUNT(bx, by);
-		frag_count1 = sumU16x2(frag_count1);
 
 		uint frag_count2 = frag_count1 + shuffleXorNV(frag_count1, 1, 8);
 		uint frag_count4 = frag_count2 + shuffleXorNV(frag_count2, 2, 8);
@@ -667,6 +725,7 @@ void loadSamples(int bx, int by, int bx_step) {
 	bx += int(LIX / (LSIZE / bx_step)); // TODO: shift instead of div
 
 	uint soffset = scratchBlockTrisOffset(bx, by);
+	uint soffset2 = scratchBlockSegmentOffset(bx, by);
 	uint tri_count = BLOCK_TRI_COUNT(bx, by);
 
 	uint block_offset = BLOCK_FRAG_OFFSET(bx, by) & 0xffff;
@@ -679,7 +738,9 @@ void loadSamples(int bx, int by, int bx_step) {
 		uint tri_bitmask = g_scratch[soffset + i][y < 4? 0 : 1];
 		uvec2 info = g_scratch[soffset + i + MAX_BLOCK_TRIS];
 		uint tri_idx = info.x & 0xffff;
-		uint tri_offset = block_offset + sumU16x2(info.y) + (y >= 4? info.x >> 16 : 0);
+		uint tri_offset = block_offset + info.y + (y >= 4? info.x >> 16 : 0);
+		uint base_tri_offset = info.y;
+
 		tri_offset += bitCount(tri_bitmask & ((1 << y_shift) - 1));
 		tri_bitmask = (tri_bitmask >> y_shift) & 0xff;
 
@@ -689,6 +750,23 @@ void loadSamples(int bx, int by, int bx_step) {
 		do {
 			if(tri_offset >= MAX_SAMPLES)
 				RECORD(x, y, tri_offset, BLOCK_FRAG_COUNT(bx, by));
+
+			/*
+			// Testing segments:
+			uint block_tri_offset = tri_offset - block_offset;
+			uint seg_id = block_tri_offset >> 5, seg_offset = block_tri_offset & 31;
+			uvec2 seg_info = g_scratch[soffset2 + seg_id];
+			uint seg_mask = seg_offset == 31? ~0u : (1u << (seg_offset + 1)) - 1;
+			uint masked_bits = seg_mask & seg_info.y;
+
+			uint tri_idx_from_seg = bitCount(masked_bits) + (seg_info.x & 0xffff);
+			uint tri_offset_from_seg = seg_offset + (masked_bits == 0? (seg_info.x >> 16) : -findMSB(masked_bits));
+			if(tri_idx_from_seg != i)
+				RECORD(i, tri_idx_from_seg, seg_info.x & 0xffff, block_tri_offset);
+			block_tri_offset -= base_tri_offset;
+			if(tri_offset_from_seg != block_tri_offset)
+				RECORD(block_tri_offset, tri_offset_from_seg, masked_bits, 0);*/
+
 			uint pixel_id = (y << 6) | (bx * 8 + x++);
 			uint value = (pixel_id << 23) | scratchTriOffset(tri_idx);
 			s_buffer[tri_offset++] = value;
@@ -717,16 +795,6 @@ shared uint s_shaded_group_id;
 // OK, ja zrobic strumieniowe generowanie sampli?
 // tez na watku ? ile warpów?
 // na początku warpy do samplowania będą musiały czekać?
-
-void loadSamplesX() {
-	bool is_leader = (LIX & 31) == 0;
-
-	if(s_free_groups > s_loaded_groups)
-
-	if(is_leader) {
-
-	}
-}
 
 // TODO: won't work properly for <8 and two producers
 #define MAX_TASKS 8
@@ -821,7 +889,6 @@ void multiTest() {
 			// jak zarezerwować sobie task ?
 		}
 	}*/
-
 }
 
 // TODO: optimize
@@ -861,7 +928,7 @@ void reduceSamples(int bx, int by, int bx_step) {
 				uvec2 info = g_scratch[soffset + i + (LIX & 31) + MAX_BLOCK_TRIS];
 
 				sel_tri_bitmask = y < 4? bits.x : bits.y;
-				sel_tri_offset = block_offset + sumU16x2(info.y) + (y >= 4? info.x >> 16 : 0);
+				sel_tri_offset = block_offset + info.y + (y >= 4? info.x >> 16 : 0);
 
 				uint tri_idx = info.x & 0xffff;
 				uint scratch_tri_offset = scratchTriOffset(tri_idx);
@@ -1050,12 +1117,8 @@ void rasterFragmentCounts(int by)
 {
 	for(uint i = LIX; i < BIN_SIZE * MAX_ROWS; i += LSIZE) {
 		ivec2 pixel_pos = ivec2(i & (BIN_SIZE - 1), by * 8 + (i >> BIN_SHIFT));
-		uint count0 = BLOCK_FRAG_COUNT(pixel_pos.x / 8, by) & 0xffff;
-		uint count1 = BLOCK_FRAG_COUNT(pixel_pos.x / 8, by) >> 16;
-		count0 = BLOCK_FRAG_OFFSET(pixel_pos.x / 8, by);
-		count1 = BLOCK_GROUP_FRAG_COUNT(pixel_pos.x / 8, by);
-
-		vec3 color = vec3(count0, count1, 0) / 4096.0;
+		uint count0 = BLOCK_FRAG_COUNT(pixel_pos.x / 8, by);
+		vec3 color = vec3(count0, count0, 0) / 4096.0;
 		if(count0 == 0xffff)
 			color = vec3(1.0, 0.0, 0.0);
 		uint enc_col = encodeRGBA8(vec4(min(color, vec3(1.0)), 1.0));
@@ -1097,10 +1160,9 @@ void rasterBin(int bin_id) {
 	barrier();
 	UPDATE_CLOCK(1);
 
-	multiTest();
-	barrier();
+	//multiTest();
+	//barrier();
 
-	/*
 	for(int by = 0; by < BLOCK_COUNT; by ++) {
 		barrier();
 		// How many rows can we rasterize in single step?
@@ -1126,7 +1188,7 @@ void rasterBin(int bin_id) {
 			UPDATE_CLOCK(4);
 		}
 		//rasterFragmentCounts(by);
-	}*/
+	}
 }
 
 int loadNextBin() {

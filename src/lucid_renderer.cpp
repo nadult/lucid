@@ -138,7 +138,7 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 						 BufferUsage::dynamic_read);
 	m_block_tri_keys.emplace(BufferType::shader_storage, max_block_tris * sizeof(u32));
 	m_scratch.emplace(BufferType::shader_storage,
-					  (128 * 1024) * 256 * sizeof(u32)); // TODO: control size
+					  (256 * 1024) * 64 * 2 * sizeof(u32)); // TODO: control size
 	m_raster_image.emplace(BufferType::shader_storage, bin_count * square(bin_size) * sizeof(u32));
 
 	if(m_opts & (Opt::check_bins | Opt::check_tiles | Opt::debug_masks | Opt::debug_raster))
@@ -1402,7 +1402,7 @@ void LucidRenderer::rasterBlock(const Context &ctx) {
 	raster_block_program.setShadows(ctx.shadows.matrix, ctx.shadows.enable);
 	ctx.lighting.setUniforms(raster_block_program.glProgram());
 
-	glDispatchCompute(128, 1, 1);
+	glDispatchCompute(64, 1, 1);
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 }
 
@@ -1428,7 +1428,7 @@ void LucidRenderer::rasterTile(const Context &ctx) {
 	// - Inny debugger dla compute i inny dla pozostałych shaderów
 	// - możliwość przekazywania konkretnych wartości (np. 4 różne wartości?)
 	// - jakaś klasa do prostej introspekcji linii kodu programu
-	glDispatchCompute(128, 1, 1);
+	glDispatchCompute(64, 1, 1);
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 
 	if(m_opts & Opt::debug_raster) {
@@ -1462,7 +1462,7 @@ void LucidRenderer::rasterBin(const Context &ctx) {
 	if(m_opts & Opt::debug_raster)
 		shaderDebugUseBuffer(m_errors);
 
-	glDispatchCompute(128, 1, 1);
+	glDispatchCompute(64, 1, 1);
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 	m_tile_tris->bindIndex(8);
 

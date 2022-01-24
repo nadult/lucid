@@ -1177,9 +1177,6 @@ RasterBlockInfo LucidRenderer::introspectBlock8x8(const RasterTileInfo &tile,
 
 	out.num_block_tris = masks8x8.size();
 
-	if(!masks8x8 || !merge_masks)
-		return out;
-
 	// TODO: We're assuming that backface culling is enabled?
 	// Note: it makes no sense without merging non-overlapping masks into layers
 	for(auto &mask : masks8x8) {
@@ -1280,32 +1277,34 @@ RasterBlockInfo LucidRenderer::introspectBlock8x8(const RasterTileInfo &tile,
 		}
 	}
 
-	printf("\nMerged masks: %d (%.2f %%)\n", mmasks.size(),
-		   double(mmasks.size()) / masks8x8.size() * 100.0);
-	max_row_size = 4;
-	for(int i = 0; i < mmasks.size(); i += max_row_size) {
-		printf("\n");
-		int row_size = min(mmasks.size() - i, max_row_size);
-		for(int j = 0; j < row_size; j++)
-			printf("        %4d:%4d          ", i + j, (int)mmasks[i + j].tri_ids.size());
-		printf("\n");
-		for(int j = 0; j < row_size; j++)
-			printf("       %6.2f:%6.2f       ", mmasks[i + j].depth.first,
-				   mmasks[i + j].depth.second);
-		printf("\n");
-		for(int iy = 0; iy < 8; iy++) {
-			for(int j = 0; j < row_size; j++) {
-				auto &mmask = mmasks[i + j];
-				int y = 7 - iy;
-				printf(" ");
-				for(int x = 0; x < 8; x++) {
-					int index = x + y * 8;
-					if(mmask.indices[index] != 255)
-						printf("%2d ", mmask.indices[index]);
-					else
-						printf(" . ");
+	if(merge_masks) {
+		printf("\nMerged masks: %d (%.2f %%)\n", mmasks.size(),
+			   double(mmasks.size()) / masks8x8.size() * 100.0);
+		max_row_size = 4;
+		for(int i = 0; i < mmasks.size(); i += max_row_size) {
+			printf("\n");
+			int row_size = min(mmasks.size() - i, max_row_size);
+			for(int j = 0; j < row_size; j++)
+				printf("        %4d:%4d          ", i + j, (int)mmasks[i + j].tri_ids.size());
+			printf("\n");
+			for(int j = 0; j < row_size; j++)
+				printf("       %6.2f:%6.2f       ", mmasks[i + j].depth.first,
+					   mmasks[i + j].depth.second);
+			printf("\n");
+			for(int iy = 0; iy < 8; iy++) {
+				for(int j = 0; j < row_size; j++) {
+					auto &mmask = mmasks[i + j];
+					int y = 7 - iy;
+					printf(" ");
+					for(int x = 0; x < 8; x++) {
+						int index = x + y * 8;
+						if(mmask.indices[index] != 255)
+							printf("%2d ", mmask.indices[index]);
+						else
+							printf(" . ");
+					}
+					printf(j + 1 == row_size ? "\n" : "  ");
 				}
-				printf(j + 1 == row_size ? "\n" : "  ");
 			}
 		}
 	}

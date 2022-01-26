@@ -66,6 +66,124 @@ conference: 2512
                     === Rasteryzacja wszystkich sampli na raz ===
 -----------------------------------------------------------------------------------------
 
+ * *Pomysł nr 37167 (bez heterogeniczności, redukcja i cieniowanie w jednej pętli)*
+
+ Redukcję robimy w tej samej pętli co cieniowanie, ale jest to robione na zmianę, tzn. napierw
+ ładujemy ileś tam sampli a następnie je wszystkie redukujemy. Minusem jest to, że podczas
+ cieniowania w rejestrach muszę trzymać filtr głębokości
+ 
+ 
+ Mamy tutaj dwie opcje:
+1) możemy najpierw robić pełne cieniowanie a następnie przy redukcji operować na parach
+   głębokość + kolor
+   + prostsze
+   + nie wymaga dwóch faz redukcji
+   + nie wymaga pre-computeowania wypychanych warstw
+   + lepsza koherencja sampli (także pod względem danych trójkątów w SMEM)
+   + można wykorzystać głębię wygenerowaną podczas cieniowania
+   + można ignorować sample bez alphy
+   
+2) możemy też najpierw zrobić wstępną redukcję która będzie operowała na parach tri_id +
+   głębokość (w jednej wartości 32-bit), raz na jakiś czas będzie wypychała warstwy pikseli;
+   te warstwy po zapełnieniu bufora w smem cieniujemy i robimy finalną redukcję
+   + wymaga mniej rejestrów na filtr głębokości
+   ? łatwiej zrobić efekt mgły ?
+   ? wydajniejsza pierwsza faza redukcji, ale wymaga dodatkowej fazy końcowej...
+
+Najpierw 1). Jak ustalić porządek sampli ? Czy segmenty są tutaj potrzebne ?
+
+Czy najpierw nie powinniśmy robić bloków 16x16 ?
+
+
+ * *Pomysł nr 37166 (najpierw redukcja do listy małych sampli)*
+
+Jeśli miałbym ilości per pixel + offsety to mógłbym generować listy sampli tylko za pomocą
+idków tróəkątów (8-9 bitów na trójkąt). Ale jak to później wydajnie pocieniować?
+
+Zapisywanie kontekstu początkowej redukcji? 32-bity na próbkę, po wygenerowaniu odpowiedniej
+liczby sampli (np. 512/1024)
+
+Generowanie mini-sampli pogrupowanych po warstwach?
+
+Co robię z mini-samplami ? Cięzko je teraz pogrupować po tróəkątach... 
+najpierw paprallel prefix sum dla wyliczenia ilości
+potem offsety i na końcu indeksy...
+wydaje się dość kosztowne...
+
+Z drugiej strony, czy nie mogę wygenerować warstw wcześniej ? może drobne zamiany kolejności
+nie wpłwają na same warstwy?
+
+
+Jak te warstwy będą wytwarzane ?
+- w wyniku przepychania sampli przez filtr głębokości, w niektórych pikselach będą generowane
+  sample. Warstwy tworzymy ballotem. Zapisujemy mapę bitową zamiast indeksów sampli; Czy to
+  zależy tylko od ilości sampli per pixel, czy od wartości sampli ?
+  
+  Jest to niezależne od wartości, więc generalnie warstwy można wygenerować przed samą
+  redukcją. Ale raczej nie pomoże i to w grupowaniu sampli per-tri po redukcji...
+
+  A może olać porządkowanie i po prostu założyć, że porządek będzie jako taki ? jeśli bym
+  przetwarzał bloki 16x16, to może byłoby to wystarczające ? Tylko przy przecięciach byłyby
+  problemy z koherencją ?
+
+  Chyba najlepiej je teraz olać...
+  
+  Ale w takim razie czy nie lepiej po prostu od razu cieniować przy redukcji ? Jedynym minusem
+  jest obciążenie rejestrów. Ale może to się opłaca ?
+
+  minusem jest to, że trzeba będzie encodować/dekodować wartości kolorów
+  
+  
+
+  
+
+
+ * *Pomysł nr 37165 (cuda)*
+
+Czy chcę to zrobić na CUDZie czy nie ?
+Albo CUDA albo Vulkan...
+- Vulkan daje przenośne operacje na subgrupach i większą kontrolę nad GPU ale nie daje lepszych
+  narzędzi do heterogenicznych obliczeń
+- CUDA ma chyba wszystko czego potrzebujemy
+
+Mogę też spróbować zrobić heterogiczne obliczenia w opengl, ale może to być wolniejsze niż bez
+tego... więc czy to ma wogóle sens ?
+
+Robiąc na cudę mógłbym użyć whippletree, ala najpierw musiałbym to naprawić...
+
+heterogeniczność jest potrzebna zeby zmiescic w SMEM adane trisow
+Problem: jeśli kolejki będą wolne to heterogeniczność nic nie da...
+
+ * *Pomysł nr 37164 (zapisywanie rzędów oddzielnie)*
+
+- Dla każdego segmentu mamy mapę bitową (32 bity). Bit jest ustawiony jeśli w danym pikselu
+  zaczyna się następny rząd
+  Dodatkowo mamy id-k pierwszego trójkąta i pierwszego rzędu
+- Każdy rząd wymaga: 6/8 bitów na pozycję (zależnie od wielkości bloku) i 5-8 bitów na sub-id
+  trójkąta; Zaokrąglamy do 16 bitów
+- Oprócz tego potrzebujemy jeszcze listy idków tróəkątów (idki w ramach całego bina)
+
+
+Jak wykorzystać informacje o rzędach do szybkiej redukcji?
+- wszystkie piksele po prostu przelatują po wszystkich rzędach, szybko filtrując te rzędy które
+  faktycznie się pokrywają z danym pikselem
+- rzędy mogą być załadowane razem z danymi tróəkątów ? czy będziemy mieć na nie miejsce ?
+  moglibyśmy przesyłać razem z samplami oprócz pozycji pixela odległość do końca danego rzędu,
+  to umożliwiłoby w miarę szybkie przeskakiwanie po samplach?
+  
+- W takiej sytuacji nie musimy wymyślać struktury danych która się nadaje też do redukcji,
+  wystarczy że umożliwi szybką generację.
+  
+  To możemy zrobić teraz, ale pomysł z redukcją używającą pozycji sampli bezpośrednio
+  zakodowanych będzie wymagał rozdzielenia redukcji od cieniowania.
+  
+  Czy da się zrobić sensownie połączone ładowanie danych tróəkątów + segmentów na zmianę z
+  cieniowaniem ?
+  - nie mogę używac barier...
+  czy wogole da się sensownie ładować dane t©óəkątów bez barier ? chyba bez dużych overlapów
+  nie...
+  chyba że warpy niezalenie by operowały na segmentach?
+
  * *Pomysł nr 37163*
 
 TODO: nowy pomysł na loadSamples:
@@ -104,6 +222,34 @@ potrzebujemy:
 - bitmapę (32 bity)
 
 zapisujemy po prostu 2x 32 bity; bitmapy zapisujemy w SMEM? a gdzie id-ki ? na razie max 128? i tyle
+
+
+Co zrobić, żebyśmy nie musieli zapisywać offsetów trójkątów do redukcji?
+- zwięźle raczej nie zakoduję informacji o tym jakie sample należą do jakich pikseli
+- ale może nie muszę? może dałoby się to szybko wyznaczyć? np. za pomocą sync_match ?
+  czy jest jakaś alternatywa?
+
+  po bitach? jak znależć wszystkie wątki które mają ten sam bit ustawiony w ten sam sposób?
+  ballotem tego nie zrobię...
+
+Jaka jest ogólna struktura danych tego co przetwarzam ?
+
+- każdy trójkąt ma maski pikseli które pokrywa w danym bloku; w każdym rzędzie jest to nie
+  przerwany ciąg sampli
+- sample trójkątów są ułożone jeden za drugim
+
+
+Musimy być w stanie szybko:
+- dla danego sampla K z segmentu N: do jakiego trójkąta należy i który pixel jest cieniowany
+  - dla danego piksela wyznaczyć wszystkie sample w jakimś zakresie (segment albo grupa
+	segmentów)
+  - albo: dla danego sampla wyznaczyć następny sampel w danym pikselu
+  - przelicza
+
+
+Odpalenie redukcji na równoległych wątkach na pewno też coś będzie kosztowało a w niektórych
+sytuacjach nie da zysku (nie licząc z zysku na załadowaniu danych tróəkątów do SMEM) bo ilość
+sampli nie jest na tyle duża, żeby się nie mieściły...
 
 
 * *Luźne myśli*

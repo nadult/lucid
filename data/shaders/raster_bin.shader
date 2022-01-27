@@ -469,6 +469,10 @@ void generateRows() {
 	}
 }
 
+// Segmenty rzędów:
+// - możemy dla każdego bloku wyliczyć liczbę rzędów ? ok a co z rzędami przekraczającymi
+//   granice segmentu? nie takie proste...
+
 void generateBlocks(uint by)
 {
 	// TODO: is this really the best order?

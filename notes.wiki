@@ -82,7 +82,7 @@ conference: 2512
    + lepsza koherencja sampli (także pod względem danych trójkątów w SMEM)
    + można wykorzystać głębię wygenerowaną podczas cieniowania
    + można ignorować sample bez alphy
-   
+ 
 2) możemy też najpierw zrobić wstępną redukcję która będzie operowała na parach tri_id +
    głębokość (w jednej wartości 32-bit), raz na jakiś czas będzie wypychała warstwy pikseli;
    te warstwy po zapełnieniu bufora w smem cieniujemy i robimy finalną redukcję
@@ -93,6 +93,75 @@ conference: 2512
 Najpierw 1). Jak ustalić porządek sampli ? Czy segmenty są tutaj potrzebne ?
 
 Czy najpierw nie powinniśmy robić bloków 16x16 ?
+A może najpierw przerobić na segmenty rzędów ?
+Możemy też najpierw zrobić nowy schemat ?
+
+
+Potrzebujemy tutaj też posegmentowanych rzędów sampli ?
+- do redukcji musimy mieć załadowane dane segmentów (żeby było wiadomo które sample do których
+  pixli przypadają)
+
+Ale jak by wyglądała w tej sytuacji redukcja ? 8x8 i 16x16 ?
+muszę też pamiętać o zachowaniu kolejności!
+
+
+segmenty 16x16:
+- 256 sampli, max 64 trójkąty ?
+- 256 bitów na mapę bitową 
+
+segmenty po 64 sample:
+- 2 * 32-bitowa mapa bitowa z początkami rzędów (bit ustawiony tam gdzie zaczyna się kolejny rząd)
+- każdy rząd ma zakodowaną pozycję w ramach bloku 16x16 (8 bitów) i sub-id trójkąta (8 bitów)
+- długość rzędu można wywnioskować z mapy bitowej
+
+Info per segment:
+- id pierwszego rzędu (11 bitów)
+- id pierwszego trójkąta (11 bitów)
+- offset rzędu dla drugiej połowy segmentu (5 bitów)
+- offset trójkąta dla drugiej połowy segmentu (5 bitów)
+
+Info per rząd:
+- pozycja (8 bitów)
+- id tróəkąta (8 bitów)
+- pozycje trzymamy niezależnie od idków tróəkątów? może idki lepiej jest wywnioskowywać z map
+  bitowych tak jak wcześniej?
+  co zajmie mniej miejsca?
+  - 2/4 rzędy minimum na 32 sample, czyli co najmniej 16/32 bity na idki; przy większym
+	zagęszczeniu trójkątów (dragon) mapa bitowa zajmie mniej?
+
+Jak wygenerować info o rzędach? Max 512 * 4 / blok ?
+to się zmieści, ale w smem trzymam już offsety... przenieść do rejestrów?
+
+- przy liczeniu offsetow sampli dla trojkątów od razu zliczamy ilość rzędów i offsety rzędów?
+  Problem w tym, że niektóre rzędy powinny być duplikowane...
+
+  Co zrobić z tą duplikacją?
+  - mając offset i ilość fragmentów na tróəkąt możemy stwierdzić ile fragmentów wypadnie na
+	który segment (może być więcej niż 2)
+  - dla każdego segmentu od razu dać dodatkowy rząd (początkowy), ale jak dobrze wyznaczyć
+	offsety?
+	- tróəkąty rozpoczynjące się wewn. segmentu
+
+  - docelowy offset rzędu to prefix suma licznika rzędów po trójkątach + nr segmentu;
+    jeśli rząd zaczyna się od początku segmentu to offset -= 1
+
+  Problem: wymaga dodatkowego przebiegu po zakresach sampli tróəkątów;
+
+  żeby poumieszczać rzędy na odpowiednich pozycjach muszę mieć offsety?
+  dopiero po posortowaniu można określić jakie rzędy znajdują się w jakich segmentach
+- nie przechowam danych o zakresach tróəkątów w SMEM bo nie ma na nie miejsca...
+
+  chyba, że przechowam w rejestrach? 16 rejestrów potrzebne... czy to dużo? powinno być ok
+- problem: tak naprawdę używana jest do tego cache-owana pamięć globalna; hgw czy da się to
+  sensownie zunrollować
+
+  teraz na tróəkąt/block zapisuję do pamięci 4x 32 bity (to wszystko na 64 sample)
+  na rzędy potrzeba max 2x 32 bity dodatkowo na sample: 3x 32 bity; Czyli w przypadku pełnych
+  trójkątów będzie więcej danych
+  
+  W przypadku małych tróəkątów: 8 bitów na rząd, 8-16 bitów na bitmapy ?
+  Czy da się jakoś zmniejszyć dane na bitmapy ?
+
 
 
  * *Pomysł nr 37166 (najpierw redukcja do listy małych sampli)*
@@ -113,7 +182,6 @@ wydaje się dość kosztowne...
 Z drugiej strony, czy nie mogę wygenerować warstw wcześniej ? może drobne zamiany kolejności
 nie wpłwają na same warstwy?
 
-
 Jak te warstwy będą wytwarzane ?
 - w wyniku przepychania sampli przez filtr głębokości, w niektórych pikselach będą generowane
   sample. Warstwy tworzymy ballotem. Zapisujemy mapę bitową zamiast indeksów sampli; Czy to
@@ -132,10 +200,6 @@ Jak te warstwy będą wytwarzane ?
   jest obciążenie rejestrów. Ale może to się opłaca ?
 
   minusem jest to, że trzeba będzie encodować/dekodować wartości kolorów
-  
-  
-
-  
 
 
  * *Pomysł nr 37165 (cuda)*

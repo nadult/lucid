@@ -6,9 +6,7 @@ flags = [
 '-Wall', '-Wextra', '-Werror', '-Woverloaded-virtual', '-Wnon-virtual-dtor', '-Werror=return-type', '-Werror=switch',
 '-Wimplicit-fallthrough', '-Wno-reorder', '-Wuninitialized', '-Wno-unused-function', '-Wno-unused-variable',
 '-Wno-unused-parameter', '-Wparentheses', '-Wno-overloaded-virtual', '-Wno-undefined-inline', '-Wno-unknown-attributes',
-
-'-DFWK_PARANOID', '-DFWK_PLATFORM_LINUX',
-
+'-DFWK_PARANOID',
 '-Ilibfwk/include', '-Isrc/',
 '-include', 'src/lucid_pch.h'
 ]

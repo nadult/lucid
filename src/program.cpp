@@ -161,9 +161,7 @@ Maybe<string> Program::getDisassembly() const {
 	glGetProgramBinary(m_ref->id(), data.size(), &length, &binary_format, data.data());
 
 	// !!NVcp5.0
-
-	auto *ptr = (const u8 *)memmem(data.data(), data.size(), "!!NVcp", 6);
-	uint text_offset = ptr ? ptr - data.data() : 0;
+	uint text_offset = findBytesOffset(cspan(data).reinterpret<char>(), "!!NVcp");
 	if(text_offset < 4)
 		return none;
 	u32 text_length = 0;

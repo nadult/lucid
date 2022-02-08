@@ -36,7 +36,10 @@
 
 // TODO: save imgui settings
 
-string dataPath(string file_name) { return executablePath().parent() / "data" / file_name; }
+string dataPath(string file_name) {
+	auto main_path = platform == Platform::msvc ? FilePath::current().get() : executablePath().parent();
+	return main_path / "data" / file_name;
+}
 
 LucidApp::LucidApp()
 	: m_imgui(GlDevice::instance(), ImGuiStyleMode::mini),
@@ -55,7 +58,9 @@ LucidApp::LucidApp()
 		return ev.mouseButtonPressed(InputButton::right);
 	};
 
-	auto font_path = dataPath("LiberationSans-Regular.ttf");
+	// TODO: properly get font path
+	auto font_path = isOneOf(platform, Platform::msvc, Platform::mingw) ?
+		"C:/windows/fonts/Segoeui.ttf" : dataPath("LiberationSans-Regular.ttf");
 	m_font.emplace(move(FontFactory().makeFont(font_path, 14, false).get()));
 
 	m_setups.emplace_back(new BoxesSetup());

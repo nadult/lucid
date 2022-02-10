@@ -89,6 +89,8 @@
 #include <fwk/menu/helpers.h>
 #include <fwk/menu_imgui.h>
 
+FilePath mainPath();
+
 SceneSetup::SceneSetup(string name) : name(move(name)) {}
 SceneSetup::~SceneSetup() = default;
 
@@ -158,7 +160,7 @@ LoadedSetup::LoadedSetup(string name) : SceneSetup(move(name)) {}
 Ex<> LoadedSetup::updateScene() {
 	if(scene)
 		return {};
-	auto path = format("%/scenes/%.scene", executablePath().parent(), name);
+	auto path = format("%/scenes/%.scene", mainPath(), name);
 	scene = EX_PASS(Scene::load(path));
 
 	if(isOneOf(name, "bunny", "hairball", "teapot"))

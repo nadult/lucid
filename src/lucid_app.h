@@ -51,7 +51,7 @@ class LucidApp {
 
 	Dynamic<Font> m_font;
 	Maybe<float2> m_mouse_pos;
-	ImGuiWrapper m_imgui;
+	Dynamic<ImGuiWrapper> m_imgui;
 	Dynamic<perf::Analyzer> m_perf_analyzer;
 	PTexture m_depth_buffer;
 	PFramebuffer m_clear_fbo;

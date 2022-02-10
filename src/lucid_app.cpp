@@ -9,6 +9,7 @@
 #include <fwk/gfx/camera_variant.h>
 #include <fwk/gfx/draw_call.h>
 #include <fwk/gfx/font_factory.h>
+#include <fwk/gfx/font_finder.h>
 #include <fwk/gfx/gl_device.h>
 #include <fwk/gfx/gl_format.h>
 #include <fwk/gfx/gl_framebuffer.h>
@@ -36,14 +37,14 @@
 
 // TODO: save imgui settings
 
-string dataPath(string file_name) {
-	auto main_path = platform == Platform::msvc ? FilePath::current().get() : executablePath().parent();
-	return main_path / "data" / file_name;
+FilePath mainPath() {
+	return platform == Platform::msvc ? FilePath::current().get() : executablePath().parent();
 }
 
+string dataPath(string file_name) { return mainPath() / "data" / file_name; }
+
 LucidApp::LucidApp()
-	: m_imgui(GlDevice::instance(), ImGuiStyleMode::mini),
-	  m_cam_control(Plane3F(float3(0, 1, 0), 0.0f)), m_lighting(SceneLighting::makeDefault()) {
+	: m_cam_control(Plane3F(float3(0, 1, 0), 0.0f)), m_lighting(SceneLighting::makeDefault()) {
 	m_filtering_params.magnification = TextureFilterOpt::linear;
 	m_filtering_params.minification = TextureFilterOpt::linear;
 	m_filtering_params.mipmap = TextureFilterOpt::linear;
@@ -59,8 +60,7 @@ LucidApp::LucidApp()
 	};
 
 	// TODO: properly get font path
-	auto font_path = isOneOf(platform, Platform::msvc, Platform::mingw) ?
-		"C:/windows/fonts/Segoeui.ttf" : dataPath("LiberationSans-Regular.ttf");
+	auto font_path = findDefaultSystemFont().get();
 	m_font.emplace(move(FontFactory().makeFont(font_path, 14, false).get()));
 
 	m_setups.emplace_back(new BoxesSetup());
@@ -70,6 +70,13 @@ LucidApp::LucidApp()
 
 	updateViewport();
 	updateRenderer();
+
+	ImGuiOptions imgui_opts;
+	auto &gl_device = GlDevice::instance();
+	float dpi_scale = gl_device.windowDpiScale();
+	imgui_opts.style_mode = dpi_scale > 1.0 ? ImGuiStyleMode::normal : ImGuiStyleMode::mini;
+	imgui_opts.dpi_scale = dpi_scale * 0.5f + 0.5f;
+	m_imgui.emplace(GlDevice::instance(), imgui_opts);
 }
 
 LucidApp::~LucidApp() = default;
@@ -88,7 +95,7 @@ void LucidApp::setConfig(const AnyConfig &config) {
 		if(auto *sub = config.subConfig("perf_analyzer"))
 			m_perf_analyzer->setConfig(*sub);
 	if(auto *sub = config.subConfig("imgui"))
-		m_imgui.setConfig(*sub);
+		m_imgui->setConfig(*sub);
 	m_cam_control.load(config);
 }
 
@@ -114,6 +121,7 @@ void LucidApp::saveConfig() const {
 	out.set("trans_opts", m_lucid_opts);
 	out.set("wireframe", m_wireframe_mode);
 	out.set("window_rect", GlDevice::instance().windowRect());
+	out.set("window_maximized", GlDevice::instance().isWindowMaximized());
 	out.set("show_stats", m_show_stats);
 	out.set("selected_stats_tab", m_selected_stats_tab);
 
@@ -121,7 +129,7 @@ void LucidApp::saveConfig() const {
 		out.set("scene", m_setups[m_setup_idx]->name);
 	if(m_perf_analyzer)
 		out.set("perf_analyzer", m_perf_analyzer->config());
-	out.set("imgui", m_imgui.config());
+	out.set("imgui", m_imgui->config());
 	m_cam_control.save(out);
 
 	XmlDocument doc;
@@ -484,6 +492,12 @@ bool LucidApp::tick(float time_diff) {
 	vector<InputEvent> events;
 	events = device.inputEvents();
 
+	TextFormatter title;
+	title("Lucid rasterizer res:%", device.windowSize());
+	if(auto dpi_scale = device.windowDpiScale(); dpi_scale > 1.0f)
+		title(" dpi_scale:%", dpi_scale);
+	device.setWindowTitle(title.text());
+
 	if(m_test_meshlets) {
 		if(m_setup_idx != -1) {
 			auto &setup = m_setups[m_setup_idx];
@@ -494,14 +508,14 @@ bool LucidApp::tick(float time_diff) {
 	}
 
 	// TODO: handleMenus  function ?
-	m_imgui.beginFrame(device);
+	m_imgui->beginFrame(device);
 	if(m_perf_analyzer) {
 		bool show = true;
 		m_perf_analyzer->doMenu(show);
 		if(!show)
 			m_perf_analyzer.reset();
 	}
-	events = m_imgui.finishFrame(device);
+	events = m_imgui->finishFrame(device);
 	auto result = handleInput(events, time_diff);
 	updatePerfStats();
 
@@ -630,7 +644,7 @@ bool LucidApp::mainLoop(GlDevice &device) {
 	doMenu();
 	{
 		PERF_GPU_SCOPE("ImGuiWrapper::drawFrame");
-		m_imgui.drawFrame(device);
+		m_imgui->drawFrame(device);
 	}
 	glFlush();
 
@@ -639,8 +653,8 @@ bool LucidApp::mainLoop(GlDevice &device) {
 		auto &verts = m_setups[m_setup_idx]->scene->positions;
 		auto tile_pos = *m_selected_block / (m_is_picking_8x8 ? 2 : 4);
 		auto tile_info = m_lucid_renderer->introspectTile(verts, tile_pos);
-		auto func = m_is_picking_8x8 ? &LucidRenderer::introspectBlock8x8
-									 : &LucidRenderer::introspectBlock4x4;
+		auto func = m_is_picking_8x8 ? &LucidRenderer::introspectBlock8x8 :
+										 &LucidRenderer::introspectBlock4x4;
 		m_block_info = (m_lucid_renderer.get()->*func)(tile_info, *m_selected_block, m_merge_masks);
 		if(m_is_final_pick) {
 			if(tile_info.tris)

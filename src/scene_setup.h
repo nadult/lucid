@@ -3,9 +3,6 @@
 #include "scene.h"
 #include <fwk/gfx/camera_variant.h>
 
-DEFINE_ENUM(SceneSetupId, boxes, teapot, bunny, hairball, white_oak, power_plant);
-
-// TODO: rename to SceneSetup
 class SceneSetup {
   public:
 	SceneSetup(string name);

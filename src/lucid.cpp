@@ -10,14 +10,20 @@
 void initShaderCombiner();
 Ex<void> loadShaderPieces();
 
+// Select more powerful GPU if more than 1 available
+extern "C" {
+_declspec(dllexport) uint NvOptimusEnablement = 1;
+_declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
+}
+
 int main(int argc, char **argv) {
 	double time = getTime();
-	int2 resolution(1200, 700);
+	IRect window_rect(int2(1200, 700));
 
 	// TODO: xml loading is still messy
 	Maybe<AnyConfig> config = LucidApp::loadConfig();
 	GlDeviceConfig gl_config;
-	gl_config.flags = GlDeviceOpt::resizable;
+	gl_config.flags = GlDeviceOpt::resizable | GlDeviceOpt::allow_hidpi | GlDeviceOpt::centered;
 	gl_config.version = 4.4;
 
 	for(int n = 1; n < argc; n++) {
@@ -37,8 +43,18 @@ int main(int argc, char **argv) {
 		}
 	}
 
+	if(config) {
+		if(auto *rect = config->get<IRect>("window_rect")) {
+			window_rect = *rect;
+			gl_config.flags &= ~GlDeviceOpt::centered;
+		}
+		if(config->get<bool>("window_maximized", false))
+			gl_config.flags |= GlDeviceOpt::maximized;
+	}
+
 	GlDevice gl_device;
-	gl_device.createWindow("Lucid rasterizer", resolution, gl_config);
+	// TODO: make sure that window rect overlaps some display rect and sanitize if needed
+	gl_device.createWindow("Lucid rasterizer", window_rect, gl_config);
 
 	print("OpenGL info:\n%\n", gl_info->toString());
 	if(gl_info->vendor == GlVendor::nvidia) {
@@ -49,13 +65,6 @@ int main(int argc, char **argv) {
 		glGetIntegerv(GL_SM_COUNT_NV, &sm_count);
 		print("NVIDIA OpenGL info:\n warp size:    %\n warps per SM: %\n SM count:     %\n",
 			  warp_size, warps_per_sm, sm_count);
-	}
-
-	if(config) {
-		if(auto *rect = config->get<IRect>("window_rect")) {
-			// TODO: sanitize ?
-			gl_device.setWindowRect(*rect);
-		}
 	}
 
 	initShaderCombiner();

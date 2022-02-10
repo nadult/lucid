@@ -10,11 +10,13 @@
 void initShaderCombiner();
 Ex<void> loadShaderPieces();
 
+#ifdef FWK_PLATFORM_WINDOWS
 // Select more powerful GPU if more than 1 available
 extern "C" {
 _declspec(dllexport) uint NvOptimusEnablement = 1;
 _declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
 }
+#endif
 
 int main(int argc, char **argv) {
 	double time = getTime();

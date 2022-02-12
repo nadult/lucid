@@ -8,8 +8,6 @@
 #include <fwk/any_config.h>
 #include <fwk/gfx/camera_variant.h>
 #include <fwk/gfx/draw_call.h>
-#include <fwk/gfx/font_factory.h>
-#include <fwk/gfx/font_finder.h>
 #include <fwk/gfx/gl_device.h>
 #include <fwk/gfx/gl_format.h>
 #include <fwk/gfx/gl_framebuffer.h>
@@ -20,13 +18,13 @@
 #include <fwk/gfx/mesh.h>
 #include <fwk/gfx/opengl.h>
 #include <fwk/gfx/renderer2d.h>
+#include <fwk/gui/imgui.h>
+#include <fwk/gui/widgets.h>
 #include <fwk/io/file_system.h>
 #include <fwk/math/axis_angle.h>
 #include <fwk/math/quat.h>
 #include <fwk/math/random.h>
 #include <fwk/math/rotation.h>
-#include <fwk/menu/helpers.h>
-#include <fwk/menu_imgui.h>
 #include <fwk/perf/analyzer.h>
 #include <fwk/perf/exec_tree.h>
 #include <fwk/perf/manager.h>
@@ -35,8 +33,6 @@
 #include <fwk/gfx/investigator3.h>
 #include <fwk/gfx/visualizer3.h>
 
-// TODO: save imgui settings
-
 FilePath mainPath() {
 	return platform == Platform::msvc ? FilePath::current().get() : executablePath().parent();
 }
@@ -44,7 +40,8 @@ FilePath mainPath() {
 string dataPath(string file_name) { return mainPath() / "data" / file_name; }
 
 LucidApp::LucidApp()
-	: m_cam_control(Plane3F(float3(0, 1, 0), 0.0f)), m_lighting(SceneLighting::makeDefault()) {
+	: m_gui(GlDevice::instance(), {GuiStyleMode::mini}),
+	  m_cam_control(Plane3F(float3(0, 1, 0), 0.0f)), m_lighting(SceneLighting::makeDefault()) {
 	m_filtering_params.magnification = TextureFilterOpt::linear;
 	m_filtering_params.minification = TextureFilterOpt::linear;
 	m_filtering_params.mipmap = TextureFilterOpt::linear;
@@ -59,10 +56,6 @@ LucidApp::LucidApp()
 		return ev.mouseButtonPressed(InputButton::right);
 	};
 
-	// TODO: properly get font path
-	auto font_path = findDefaultSystemFont().get();
-	m_font.emplace(move(FontFactory().makeFont(font_path, 14, false).get()));
-
 	m_setups.emplace_back(new BoxesSetup());
 	for(auto scene_name : LoadedSetup::findAll())
 		m_setups.emplace_back(new LoadedSetup(scene_name));
@@ -70,13 +63,6 @@ LucidApp::LucidApp()
 
 	updateViewport();
 	updateRenderer();
-
-	ImGuiOptions imgui_opts;
-	auto &gl_device = GlDevice::instance();
-	float dpi_scale = gl_device.windowDpiScale();
-	imgui_opts.style_mode = dpi_scale > 1.0 ? ImGuiStyleMode::normal : ImGuiStyleMode::mini;
-	imgui_opts.dpi_scale = dpi_scale * 0.5f + 0.5f;
-	m_imgui.emplace(GlDevice::instance(), imgui_opts);
 }
 
 LucidApp::~LucidApp() = default;
@@ -94,8 +80,8 @@ void LucidApp::setConfig(const AnyConfig &config) {
 	if(m_perf_analyzer)
 		if(auto *sub = config.subConfig("perf_analyzer"))
 			m_perf_analyzer->setConfig(*sub);
-	if(auto *sub = config.subConfig("imgui"))
-		m_imgui->setConfig(*sub);
+	if(auto *sub = config.subConfig("gui"))
+		m_gui.setConfig(*sub);
 	m_cam_control.load(config);
 }
 
@@ -117,11 +103,12 @@ void LucidApp::saveConfig() const {
 		out = AnyConfig::load(doc.child("config"), true).get();
 	}
 
+	auto &gl_device = GlDevice::instance();
 	out.set("rendering_mode", m_rendering_mode);
 	out.set("trans_opts", m_lucid_opts);
 	out.set("wireframe", m_wireframe_mode);
-	out.set("window_rect", GlDevice::instance().windowRect());
-	out.set("window_maximized", GlDevice::instance().isWindowMaximized());
+	out.set("window_rect", gl_device.restoredWindowRect());
+	out.set("window_maximized", gl_device.isWindowMaximized());
 	out.set("show_stats", m_show_stats);
 	out.set("selected_stats_tab", m_selected_stats_tab);
 
@@ -129,7 +116,7 @@ void LucidApp::saveConfig() const {
 		out.set("scene", m_setups[m_setup_idx]->name);
 	if(m_perf_analyzer)
 		out.set("perf_analyzer", m_perf_analyzer->config());
-	out.set("imgui", m_imgui->config());
+	out.set("gui", m_gui.config());
 	m_cam_control.save(out);
 
 	XmlDocument doc;
@@ -296,33 +283,33 @@ void LucidApp::showStatsMenu(const Scene &scene) {
 }
 
 void LucidApp::doMenu() {
-	ImGui::SetNextWindowSize({240, 0});
+	ImGui::SetNextWindowSize({240 * m_gui.dpiScale(), 0});
 	ImGui::Begin("Lucid rasterizer tools", nullptr, ImGuiWindowFlags_NoResize);
 
 	auto setup_idx = m_setup_idx;
 	auto names = transform(m_setups, [](auto &setup) { return setup->name.c_str(); });
-	if(menu::selectIndex("Scene:", setup_idx, names))
+	if(m_gui.selectIndex("Scene:", setup_idx, names))
 		selectSetup(setup_idx);
 	auto &setup = *m_setups[m_setup_idx];
 	setup.doMenu();
 
 	auto *scene = setup.scene ? setup.scene.get() : nullptr;
 
-	if(ImGui::Button("Rasterizer options", {120, 0}))
+	if(ImGui::Button("Rasterizer options", {120 * m_gui.dpiScale(), 0}))
 		ImGui::OpenPopup("render_opts");
 	ImGui::SameLine();
-	if(ImGui::Button("Statistics", {99, 0})) {
+	if(ImGui::Button("Statistics", {99 * m_gui.dpiScale(), 0})) {
 		ImGui::SetWindowFocus("Statistics");
 		m_show_stats = true;
 	}
-	if(ImGui::Button("Other tools", {120, 0}))
+	if(ImGui::Button("Other tools", {120 * m_gui.dpiScale(), 0}))
 		ImGui::OpenPopup("other_tools");
 	ImGui::SameLine();
-	if(ImGui::Button("Filtering options", {99, 0}))
+	if(ImGui::Button("Filtering options", {99 * m_gui.dpiScale(), 0}))
 		ImGui::OpenPopup("filter_opts");
 
 	if(ImGui::BeginPopup("render_opts")) {
-		menu::selectFlags(m_lucid_opts);
+		m_gui.selectFlags(m_lucid_opts);
 		ImGui::EndPopup();
 	}
 
@@ -364,11 +351,11 @@ void LucidApp::doMenu() {
 	}
 
 	if(ImGui::BeginPopup("filter_opts")) {
-		menu::selectEnum("Magnification filter", m_filtering_params.magnification);
-		menu::selectEnum("Minification filter", m_filtering_params.minification);
+		m_gui.selectEnum("Magnification filter", m_filtering_params.magnification);
+		m_gui.selectEnum("Minification filter", m_filtering_params.minification);
 
 		bool mipmapping_enabled = !!m_filtering_params.mipmap;
-		if(menu::Checkbox("Mipmapping", &mipmapping_enabled)) {
+		if(ImGui::Checkbox("Mipmapping", &mipmapping_enabled)) {
 			if(mipmapping_enabled)
 				m_filtering_params.mipmap = TextureFilterOpt::nearest;
 			else
@@ -376,7 +363,7 @@ void LucidApp::doMenu() {
 		}
 
 		if(mipmapping_enabled)
-			menu::selectEnum("Mipmap filter", *m_filtering_params.mipmap);
+			m_gui.selectEnum("Mipmap filter", *m_filtering_params.mipmap);
 
 		auto label = format("Anisotropy: %", (int)m_filtering_params.max_anisotropy_samples);
 		if(ImGui::Button(label.c_str())) {
@@ -389,7 +376,7 @@ void LucidApp::doMenu() {
 		ImGui::EndPopup();
 	}
 
-	menu::selectEnum("Rendering mode", m_rendering_mode);
+	m_gui.selectEnum("Rendering mode", m_rendering_mode);
 	ImGui::Checkbox("Back-face culling", &setup.render_config.backface_culling);
 	ImGui::SameLine();
 	ImGui::Checkbox("Additive blending", &setup.render_config.additive_blending);
@@ -398,16 +385,16 @@ void LucidApp::doMenu() {
 	// TODO: different opacity for different scenes ?
 	int labels_size[] = {(int)ImGui::CalcTextSize("Scene opacity").x,
 						 (int)ImGui::CalcTextSize("Scene color").x};
-	ImGui::SetNextItemWidth(220 - labels_size[0]);
+	ImGui::SetNextItemWidth(220 * m_gui.dpiScale() - labels_size[0]);
 	ImGui::SliderFloat("Scene opacity", &setup.render_config.scene_opacity, 0.0f, 1.0f);
-	ImGui::SetNextItemWidth(220 - labels_size[0]);
+	ImGui::SetNextItemWidth(220 * m_gui.dpiScale() - labels_size[0]);
 	ImGui::ColorEdit3("Scene color", setup.render_config.scene_color.v, 0);
 
 	if(m_is_picking_block) {
-		menu::text("Picking % block: %", m_is_picking_8x8 ? "8x8" : "4x4", m_selected_block);
+		m_gui.text("Picking % block: %", m_is_picking_8x8 ? "8x8" : "4x4", m_selected_block);
 		if(m_block_info) {
 			auto desc = m_block_info->description();
-			menu::text("%", desc.c_str());
+			m_gui.text("%", desc.c_str());
 		}
 	} else if(ImGui::Button("Introspect 8x8 raster block")) {
 		m_is_picking_block = true;
@@ -508,14 +495,14 @@ bool LucidApp::tick(float time_diff) {
 	}
 
 	// TODO: handleMenus  function ?
-	m_imgui->beginFrame(device);
+	m_gui.beginFrame(device);
 	if(m_perf_analyzer) {
 		bool show = true;
 		m_perf_analyzer->doMenu(show);
 		if(!show)
 			m_perf_analyzer.reset();
 	}
-	events = m_imgui->finishFrame(device);
+	events = m_gui.finishFrame(device);
 	auto result = handleInput(events, time_diff);
 	updatePerfStats();
 
@@ -644,7 +631,7 @@ bool LucidApp::mainLoop(GlDevice &device) {
 	doMenu();
 	{
 		PERF_GPU_SCOPE("ImGuiWrapper::drawFrame");
-		m_imgui->drawFrame(device);
+		m_gui.drawFrame(device);
 	}
 	glFlush();
 

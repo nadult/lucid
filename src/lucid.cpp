@@ -45,17 +45,17 @@ int main(int argc, char **argv) {
 		}
 	}
 
+	GlDevice gl_device;
 	if(config) {
+		auto display_rects = gl_device.displayRects();
 		if(auto *rect = config->get<IRect>("window_rect")) {
-			window_rect = *rect;
+			window_rect = GlDevice::sanitizeWindowRect(display_rects, *rect);
 			gl_config.flags &= ~GlDeviceOpt::centered;
 		}
 		if(config->get<bool>("window_maximized", false))
 			gl_config.flags |= GlDeviceOpt::maximized;
 	}
 
-	GlDevice gl_device;
-	// TODO: make sure that window rect overlaps some display rect and sanitize if needed
 	gl_device.createWindow("Lucid rasterizer", window_rect, gl_config);
 
 	print("OpenGL info:\n%\n", gl_info->toString());

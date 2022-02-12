@@ -85,9 +85,9 @@
 #include "shading.h"
 #include <fwk/enum_map.h>
 #include <fwk/gfx/orbiting_camera.h>
+#include <fwk/gui/imgui.h>
+#include <fwk/gui/widgets.h>
 #include <fwk/io/file_stream.h>
-#include <fwk/menu/helpers.h>
-#include <fwk/menu_imgui.h>
 
 FilePath mainPath();
 
@@ -98,7 +98,8 @@ BoxesSetup::BoxesSetup() : SceneSetup("#boxes") {}
 
 void BoxesSetup::doMenu() {
 	auto scene_dims = m_dims;
-	menu::text("Dimensions:");
+	auto &gui = Gui::instance();
+	gui.text("Dimensions:");
 	ImGui::SameLine();
 	if(ImGui::InputInt3("##dims", &scene_dims.x, ImGuiInputTextFlags_EnterReturnsTrue)) {
 		scene_dims = vclamp(scene_dims, int3(1), int3(16));

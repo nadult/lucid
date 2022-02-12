@@ -4,7 +4,7 @@
 #include "shading.h"
 #include <fwk/gfx/camera_control.h>
 #include <fwk/gfx/gl_texture.h>
-#include <fwk/menu/imgui_wrapper.h>
+#include <fwk/gui/gui.h>
 #include <fwk/perf_base.h>
 
 class LucidRenderer;
@@ -49,9 +49,8 @@ class LucidApp {
 	void showSceneStats(const Scene &);
 	void showRasterStats(const Scene &);
 
-	Dynamic<Font> m_font;
+	Gui m_gui;
 	Maybe<float2> m_mouse_pos;
-	Dynamic<ImGuiWrapper> m_imgui;
 	Dynamic<perf::Analyzer> m_perf_analyzer;
 	PTexture m_depth_buffer;
 	PFramebuffer m_clear_fbo;

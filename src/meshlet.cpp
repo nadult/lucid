@@ -272,7 +272,8 @@ void visualizeMeshPartitions(const Scene &scene, CSpan<MeshPartition> partitions
 		return "";
 	};
 
-	Investigator3 investigator(vis_func,  InvestigatorOpt::exit_with_space, {DBox(scene.bounding_box), none, 0.1f});
+	Investigator3 investigator(vis_func, InvestigatorOpt::exit_with_space,
+							   {DBox(scene.bounding_box), none, 0.1f});
 	investigator.run();
 }
 

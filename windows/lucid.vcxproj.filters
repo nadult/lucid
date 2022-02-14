@@ -9,9 +9,11 @@
       <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
       <Extensions>h;hh;hpp;hxx;h++;hm;inl;inc;ipp;xsd</Extensions>
     </Filter>
-    <Filter Include="Resource Files">
-      <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
-      <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
+    <Filter Include="shaders">
+      <UniqueIdentifier>{5409dbe8-9c51-4628-9e3d-9cea4979021e}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="shaders\pieces">
+      <UniqueIdentifier>{a0b5a478-b8ac-400e-89a0-57971fec1087}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
   <ItemGroup>
@@ -101,5 +103,74 @@
     <ClInclude Include="..\src\wavefront_obj.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\notes.wiki" />
+    <None Include="..\data\shaders\bin_categorizer.shader">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="..\data\shaders\bin_dispatcher.shader">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="..\data\shaders\bin_estimator.shader">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="..\data\shaders\compose.shader">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="..\data\shaders\dummy.shader">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="..\data\shaders\final_raster.shader">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="..\data\shaders\init_counters.shader">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="..\data\shaders\mask_raster.shader">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="..\data\shaders\mask_sort.shader">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="..\data\shaders\raster_bin.shader">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="..\data\shaders\raster_block.shader">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="..\data\shaders\raster_tile.shader">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="..\data\shaders\setup.shader">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="..\data\shaders\simple.shader">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="..\data\shaders\tile_dispatcher.shader">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="..\data\shaders\pieces\data.shader">
+      <Filter>shaders\pieces</Filter>
+    </None>
+    <None Include="..\data\shaders\pieces\frustum.shader">
+      <Filter>shaders\pieces</Filter>
+    </None>
+    <None Include="..\data\shaders\pieces\funcs.shader">
+      <Filter>shaders\pieces</Filter>
+    </None>
+    <None Include="..\data\shaders\pieces\lighting.shader">
+      <Filter>shaders\pieces</Filter>
+    </None>
+    <None Include="..\data\shaders\pieces\macros.shader">
+      <Filter>shaders\pieces</Filter>
+    </None>
+    <None Include="..\data\shaders\pieces\rect.shader">
+      <Filter>shaders\pieces</Filter>
+    </None>
+    <None Include="..\data\shaders\pieces\viewport.shader">
+      <Filter>shaders\pieces</Filter>
+    </None>
   </ItemGroup>
 </Project>

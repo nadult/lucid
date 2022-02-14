@@ -71,8 +71,7 @@ conference: 2512
  Redukcję robimy w tej samej pętli co cieniowanie, ale jest to robione na zmianę, tzn. napierw
  ładujemy ileś tam sampli a następnie je wszystkie redukujemy. Minusem jest to, że podczas
  cieniowania w rejestrach muszę trzymać filtr głębokości
- 
- 
+
  Mamy tutaj dwie opcje:
 1) możemy najpierw robić pełne cieniowanie a następnie przy redukcji operować na parach
    głębokość + kolor
@@ -82,7 +81,7 @@ conference: 2512
    + lepsza koherencja sampli (także pod względem danych trójkątów w SMEM)
    + można wykorzystać głębię wygenerowaną podczas cieniowania
    + można ignorować sample bez alphy
- 
+
 2) możemy też najpierw zrobić wstępną redukcję która będzie operowała na parach tri_id +
    głębokość (w jednej wartości 32-bit), raz na jakiś czas będzie wypychała warstwy pikseli;
    te warstwy po zapełnieniu bufora w smem cieniujemy i robimy finalną redukcję
@@ -95,7 +94,6 @@ Najpierw 1). Jak ustalić porządek sampli ? Czy segmenty są tutaj potrzebne ?
 Czy najpierw nie powinniśmy robić bloków 16x16 ?
 A może najpierw przerobić na segmenty rzędów ?
 Możemy też najpierw zrobić nowy schemat ?
-
 
 Potrzebujemy tutaj też posegmentowanych rzędów sampli ?
 - do redukcji musimy mieć załadowane dane segmentów (żeby było wiadomo które sample do których

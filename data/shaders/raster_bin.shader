@@ -1,4 +1,5 @@
 // $$include funcs lighting frustum viewport data
+// clang-format off
 
 #define LIX gl_LocalInvocationIndex
 #define LID gl_LocalInvocationID
@@ -67,8 +68,12 @@ uint scratchBlockSegmentOffset(uint bx, uint by) {
 	return (gl_WorkGroupID.x << WORKGROUP_SCRATCH_SHIFT) + 96 * 1024 + (bx + by * 8) * MAX_BLOCK_TRIS;
 }
 
+uint scratchBlockSegmentRowsOffset(uint bx, uint by) {
+    return (gl_WorkGroupID.x << WORKGROUP_SCRATCH_SHIFT) + 128 * 1024 + (bx + by * 8) * MAX_BLOCK_TRIS;
+}
+
 uint scratchTriOffset(uint tri_idx) {
-	return (gl_WorkGroupID.x << WORKGROUP_SCRATCH_SHIFT) + 128 * 1024 + tri_idx;
+	return (gl_WorkGroupID.x << WORKGROUP_SCRATCH_SHIFT) + 160 * 1024 + tri_idx;
 }
 
 uint sumU16x2(uint pair) {
@@ -543,8 +548,16 @@ void generateBlocks(uint by)
 	tri_count = BLOCK_TRI_COUNT(bx, by);
 	uint dst_offset = scratchBlockTrisOffset(bx, by);
 
+	// każdy wątek zapisuje sobie rzędy dla swoich trójkątów
+	uvec2 seg_tri_rows[8];
+	uint num_seg_tri_rows = 0;
+
 	for(uint i = LIX & (LSIZE / 8 - 1); i < tri_count; i += LSIZE / 8) {
 		uint idx = s_buffer[buf_offset + i] & 0x1fff;
+
+		// TODO: jak zaznaczyć pusty rząd ? po prostu zapisać ilość rzędów i zapisywać jeden po drugim?
+		uint seg_rows[2] = {0, 0};
+		uint num_seg_rows = 0;
 
 		// TODO: load range data in groups
 		uint full_rows[4] = {
@@ -570,8 +583,31 @@ void generateBlocks(uint by)
 			uint bits2 = mask2 & (0x00ff0000u << minx2) & (0x00ff0000u >> (7 - maxx2));
 			uint bits3 = mask3 & (0xff000000u << minx3) & (0xff000000u >> (7 - maxx3));
 
+			seg_rows[j] = bits0 | bits1 | bits2 | bits3;
+			uint by = j << 2;
+			if(bits0 != 0) {
+				//seg_rows[num_seg_rows >> 2] |= (minx0 | ((0x0 + by) << 4)) << ((num_seg_rows & 3) << 3);
+				num_seg_rows++;
+			}
+			if(bits1 != 0) {
+				//seg_rows[num_seg_rows >> 2] |= (minx1 | ((0x1 + by) << 4)) << ((num_seg_rows & 3) << 3);
+				num_seg_rows++;
+			}
+			if(bits2 != 0) {
+				//seg_rows[num_seg_rows >> 2] |= (minx2 | ((0x2 + by) << 4)) << ((num_seg_rows & 3) << 3);
+				num_seg_rows++;
+			}
+			if(bits3 != 0) {
+				//seg_rows[num_seg_rows >> 2] |= (minx3 | ((0x3 + by) << 4)) << ((num_seg_rows & 3) << 3);
+				num_seg_rows++;
+			}
+
 			bits[j] = bits0 | bits1 | bits2 | bits3;
 		}
+
+		uint seg_tri_index = i >> (LSHIFT - 3);
+		num_seg_tri_rows |= num_seg_rows << (seg_tri_index << 2);
+		seg_tri_rows[seg_tri_index] = uvec2(seg_rows[0], seg_rows[1]);
 
 		uint num_frags0123 = bitCount(bits[0]);
 		uint num_frags4567 = bitCount(bits[1]);
@@ -583,13 +619,13 @@ void generateBlocks(uint by)
 		g_scratch[dst_offset + i + MAX_BLOCK_TRIS].x = tri_idx | (num_frags0123 << 16);
 
 		// Computing triangle-ordered sample offsets within each block
-		uint temp;
-		temp = shuffleUpNV(num_frags,  1, 32); if((LIX & 31) >=  1) num_frags += temp;
-		temp = shuffleUpNV(num_frags,  2, 32); if((LIX & 31) >=  2) num_frags += temp;
-		temp = shuffleUpNV(num_frags,  4, 32); if((LIX & 31) >=  4) num_frags += temp;
-		temp = shuffleUpNV(num_frags,  8, 32); if((LIX & 31) >=  8) num_frags += temp;
-		temp = shuffleUpNV(num_frags, 16, 32); if((LIX & 31) >= 16) num_frags += temp;
-		s_buffer[buf_offset + i] = num_frags;
+		uint temp, value = num_frags | (num_seg_rows << 16);
+		temp = shuffleUpNV(value,  1, 32); if((LIX & 31) >=  1) value += temp;
+		temp = shuffleUpNV(value,  2, 32); if((LIX & 31) >=  2) value += temp;
+		temp = shuffleUpNV(value,  4, 32); if((LIX & 31) >=  4) value += temp;
+		temp = shuffleUpNV(value,  8, 32); if((LIX & 31) >=  8) value += temp;
+		temp = shuffleUpNV(value, 16, 32); if((LIX & 31) >= 16) value += temp;
+		s_buffer[buf_offset + i] = value;
 	}
 	barrier();
 
@@ -613,7 +649,7 @@ void generateBlocks(uint by)
 	// Storing offsets to scratch mem
 	for(uint i = LIX & (LSIZE / 8 - 1); i < tri_count; i += LSIZE / 8) {
 		uint value = i == 0? 0 : s_buffer[buf_offset + i - 1];
-		g_scratch[dst_offset + i + MAX_BLOCK_TRIS].y = value;
+		//g_scratch[dst_offset + i + MAX_BLOCK_TRIS].y = value;
 	}
 
 #ifdef SHADER_DEBUG
@@ -647,42 +683,98 @@ void generateBlocks(uint by)
 		uint buf_idx = buf_offset + first_idx + (k << (LSHIFT - 3));
 		if(buf_idx >= buf_offset + tri_count)
 			RECORD(k, buf_idx - buf_offset, tri_count, 0);
-		uint cur_value = s_buffer[buf_idx], prev_value = buf_idx == buf_offset? 0 : s_buffer[buf_idx - 1];
-		offsets[k] = prev_value | ((cur_value - prev_value) << 16);
+		offsets[k] = buf_idx == buf_offset? 0 : s_buffer[buf_idx - 1];
 	}
 	barrier();
 	// TODO: we have to clear only odd slots
 	for(uint i = LIX; i < MAX_SAMPLES; i += LSIZE)
 		s_buffer[i] = 0;
 	barrier();
+
+	// Przerabiamy segmenty na bazujące na rzędach:
+	// - Mapy bitowe oznaczają początki rzędów
+	// Musimy też jakoś wyznaczyć offset trójkąta i rzędu ?
+	// To chyba jest proste: jeśli pierwszy rząd zaczynający się w danym segmencie nie zaczyna się od
+	// sampla #0, to pierwszym rzędem jest dany rząd -1; dodatkowo, jeśli aktualny rząd jest pierwszy w
+	// danym trókącie to # trókąta też jest -1
+	// 
+	// skąd wiadomo, że aktualny rząd jest pierwszy w segmencie? chyba zrobimy tak samo jak wczesniej, czyli
+	// rząd który jest pierwszy aktualizuje header segmentu
+
+	// Co potrzebujemy? offsety trókątów po samplach;
+
 	// Musimy wygenerować bitmapy segmentów i offsety + id-ki trójkątów
 	// - najpierw generujemy bitmapy i je zapisujemy a następnie zapisujemy headery?
 	// - na razie tak zróbmy?
 
+	// Segment header:
+	// - first tri idx (10 bits)
+	// - first row idx (10 bits)
+	// - first row offset (10 bits)
+	// wszystko generowane przez wątek odpowiadający za 1 trójkąt
 	for(int k = 0; k < idx_count; k++) {
-		uint tri_offset = offsets[k] & 0xffff, tri_sample_count = offsets[k] >> 16;
-		uint seg_id = tri_offset >> 5;
-		uint seg_offset = tri_offset & 31;
+		uint tri_sample_offset = offsets[k] & 0xffff;
+		uint tri_row_offset = offsets[k] >> 16;
+		uint seg_id = tri_sample_offset >> 5;
+		uint seg_offset = tri_sample_offset & 31; // triangle offset within segment
 		uint tri_idx = first_idx + (k << (LSHIFT - 3));
-		
+
+		uvec2 row_data = seg_tri_rows[k];
+		uint tri_sample_count = bitCount(row_data[0]) + bitCount(row_data[1]);
+
+		uint sample_offset = 0;
+		for(uint y = 0; y < 8; y++) {
+			uint row_bits = (row_data[y >> 2] >> (8 * (y & 3))) & 0xff;
+			if(row_bits == 0)
+				continue;
+			uint num_row_samples = bitCount(row_bits);
+
+			uint row_seg_id = seg_id + (sample_offset >> 5);
+			uint row_seg_offset = (seg_offset + sample_offset) & 31;
+
+			atomicOr(s_buffer[buf_offset + row_seg_id * 2 + 1], 1u << row_seg_offset);
+			if(row_seg_offset == 0)
+				s_buffer[buf_offset + row_seg_id * 2 + 0] = tri_idx | ((tri_row_offset + y) << 14);
+			if(row_seg_offset + num_row_samples > 32)
+				s_buffer[buf_offset + row_seg_id * 2 + 2] = tri_idx | ((tri_row_offset + y) << 14) | ((32 - row_seg_offset) << 26);
+			sample_offset += num_row_samples;
+		}
 		if(seg_id >= 256)
 			RECORD(tri_offset, tri_sample_count, seg_id, 0);
-
-		if(seg_offset > 0)
-			atomicOr(s_buffer[buf_offset + seg_id * 2 + 1], 1u << seg_offset);
-
-		if(seg_offset == 0)
-			s_buffer[buf_offset + seg_id * 2 + 0] = tri_idx;
-		if(seg_offset + tri_sample_count > 32)
-			s_buffer[buf_offset + seg_id * 2 + 2] = tri_idx | ((32 - seg_offset) << 16);
-		if(seg_offset + tri_sample_count > 64)
-			s_buffer[buf_offset + seg_id * 2 + 4] = tri_idx | ((64 - seg_offset) << 16);
 	}
 	barrier();
 
-	uint seg_count = (BLOCK_FRAG_COUNT(bx, by) + 31) >> 5;
+	uint seg_count = ((BLOCK_FRAG_COUNT(bx, by) & 0xffff) + 31) >> 5;
 	dst_offset = scratchBlockSegmentOffset(bx, by);
 	for(uint i = LIX & (LSIZE / 8 - 1); i < seg_count; i += LSIZE / 8)
+		g_scratch[dst_offset + i] = uvec2(s_buffer[buf_offset + i * 2 + 0], s_buffer[buf_offset + i * 2 + 1]);
+
+	barrier();
+	for(uint i = LIX; i < MAX_SAMPLES; i += LSIZE)
+		s_buffer[i] = 0;
+	barrier();
+
+	for(int k = 0; k < idx_count; k++) {
+		uint tri_sample_offset = offsets[k] & 0xffff;
+		uint tri_row_offset = offsets[k] >> 16;
+		uint tri_idx = first_idx + (k << (LSHIFT - 3));
+
+		uvec2 row_data = seg_tri_rows[k];
+		uint sample_offset = 0;
+		for(uint y = 0; y < 8; y++) {
+			uint row_bits = (row_data[y >> 2] >> (8 * (y & 3))) & 0xff;
+			if(row_bits == 0)
+				continue;
+			uint x = findLSB(row_bits);
+			uint row_value = x | (y << 3) | (tri_idx << 6);
+			uint row_id = tri_row_offset + y;
+			atomicOr(s_buffer[buf_offset + (row_id >> 1)], (row_value & 0xffff) << ((row_id & 1) << 4));
+		}
+	}
+	barrier();
+	uint row2_count = ((BLOCK_FRAG_COUNT(bx, by) >> 16) + 1) >> 1;
+	dst_offset = scratchBlockSegmentRowsOffset(bx, by);
+	for(uint i = LIX & (LSIZE / 8 - 1); i < row2_count; i += LSIZE / 8)
 		g_scratch[dst_offset + i] = uvec2(s_buffer[buf_offset + i * 2 + 0], s_buffer[buf_offset + i * 2 + 1]);
 }
 
@@ -690,7 +782,7 @@ void finalizeGenerateBlocks()
 {
 	uint bx = LIX & 31, by = LIX >> 5;
 	if(bx < BLOCK_COUNT && by < BLOCK_COUNT) {
-		uint frag_count1 = BLOCK_FRAG_COUNT(bx, by);
+		uint frag_count1 = BLOCK_FRAG_COUNT(bx, by) & 0xffff;
 
 		uint frag_count2 = frag_count1 + shuffleXorNV(frag_count1, 1, 8);
 		uint frag_count4 = frag_count2 + shuffleXorNV(frag_count2, 2, 8);
@@ -723,6 +815,44 @@ void finalizeGenerateBlocks()
 			BLOCK_FRAG_OFFSET(bx, by) += group_count >> 16;
 		}
 	}
+}
+
+void shadeAndReduceSamples(int by) {
+	int bx = int(LIX >> (LSHIFT - 3));
+
+	uint soffset = scratchBlockTrisOffset(bx, by);
+	uint seg_soffset = scratchBlockSegmentOffset(bx, by);
+	uint row_soffset = scratchBlockSegmentRowsOffset(bx, by);
+
+	uint tri_count = BLOCK_TRI_COUNT(bx, by);
+	uint block_frag_count = BLOCK_FRAG_COUNT(bx, by) & 0xffff;
+	uint block_seg_count = (block_frag_count + 31) >> 5;
+	uint buf_offset = bx * MAX_BLOCK_TRIS;
+	
+	for(uint i = LIX; i < MAX_SAMPLES; i += LSIZE)
+		s_buffer[i] = 0;
+	barrier();
+
+	for(uint i = (LIX & (LSIZE / 8 - 1)) >> 3; i < block_frag_count; i += LSIZE / 8) {
+		uvec2 seg_info = g_scratch[seg_soffset + (i >> 5)];
+
+		uint seg_offset = i & 31;
+		uint seg_mask = seg_offset == 31? ~0u : (1u << (seg_offset + 1)) - 1;
+		uint masked_bits = seg_mask & seg_info.y;
+
+		uint row_idx = bitCount(masked_bits);
+		uint row_offset = seg_offset + (row_idx == 0? seg_info.x >> 28 : -findMSB(masked_bits));
+
+		uint row_data = (g_scratch[row_soffset + (row_idx >> 2)][(row_idx & 2) >> 1] >> ((row_idx & 1) * 16)) & 0xffff;
+
+		uint rx = (row_data & 0x7) + row_offset, ry = (row_data >> 3) & 0x7;
+		atomicAdd(s_buffer[buf_offset + rx + ry * 8], 1);
+	}
+	barrier();
+
+	ivec2 pixel_pos = ivec2(bx, by) * 8 + ivec2(LIX & 7, (LIX >> 3) & 7);
+	uint value = s_buffer[buf_offset + (LIX & 63)];
+	outputPixel(pixel_pos, value | 0xff000000);
 }
 
 void loadSamples(int bx, int by, int bx_step) {
@@ -776,123 +906,6 @@ void loadSamples(int bx, int by, int bx_step) {
 			s_buffer[tri_offset++] = value;
 		} while((tri_bitmask & (1 << x)) != 0);
 	}
-}
-
-shared uint s_free_groups, s_loaded_groups, s_shaded_groups;
-
-// Problem: potrzebujemy spinlocków ?
-// a może po prostu jak nie ma nic do roboty to się przełączamy na inny task?
-uint acquireLoadingGroup() {
-	return 0;
-	
-}
-
-// Najpierw jakis prosty przelacznik i zobaczmy czy dziala
-//
-
-shared uint s_shaded_group_id;
-
-// warp redukujący odpowiada za 32 piksele, jak skonczy moze sie przelaczyc na kolejne?
-// tak by się dało jeśłi mielibyśmy wiele niezaleznych strumieni, ale 
-// moze zrobmy na razie prosty addytywny reduktor ? na oddzielnym watku
-//
-// OK, ja zrobic strumieniowe generowanie sampli?
-// tez na watku ? ile warpów?
-// na początku warpy do samplowania będą musiały czekać?
-
-// TODO: won't work properly for <8 and two producers
-#define MAX_TASKS 8
-
-shared uint s_filled_counter, s_grabbed_counter, s_processed_counter;
-shared uvec2 s_tasks[MAX_TASKS];
-
-void multiTest() {
-	uint warp_id = LIX >> 5;
-	uint thread_id = LIX & 31;
-
-	if(warp_id == 0)
-		for(int group = 0; group < 64; group++) {
-			uint bx = group & 7, by = group >> 3;
-			uint x = thread_id & 7, y = thread_id >> 3;
-			uint color = 0xffffffff;
-			outputPixel(ivec2(bx * 8 + x, by * 8 + y), color);
-			outputPixel(ivec2(bx * 8 + x, by * 8 + 4 + y), color);
-			// jak zarezerwować sobie task ?
-		}
-	if(warp_id == 0) {
-		s_shaded_groups = s_loaded_groups = 0;
-		s_free_groups = 0;
-		s_filled_counter = 0;
-		s_processed_counter = 0;
-		s_grabbed_counter = 0;
-	}
-	barrier();
-
-	// This (if+else) takes 0.34 ms
-	if(warp_id < 2) {
-		// dodaje taski, dopóki jest miejsce
-		// może być więcej niż 1 warp dodający?
-		//
-		// alokuje id, będzie dostępny dopiero jak processed_counter + buffer_size > id ?
-
-		for(uint i = warp_id; i < 64; i += 2) {
-			if(thread_id == 0) {
-				uint task_id = i;
-				while(task_id >= s_processed_counter + MAX_TASKS)
-					memoryBarrierShared();
-				memoryBarrierShared();
-				s_tasks[task_id & (MAX_TASKS - 1)] = uvec2(i, 0xff000000 + (i % 3) * 0x2000 + i);
-				memoryBarrierShared();
-				while(s_filled_counter < task_id)
-					memoryBarrierShared();
-				atomicAdd(s_filled_counter, 1);
-			}
-		}
-	}
-	else if(warp_id < 6) {
-		// zbieramy taski aż processed_counter przetworzy wszystko
-		while(true) {
-			uint task_id;
-			uvec2 task;
-
-			if(thread_id == 0)
-				task_id = atomicAdd(s_grabbed_counter, 1);
-			task_id = shuffleNV(task_id, 0, 32);
-			if(task_id >= 64)
-				break;
-
-			if(thread_id == 0) {
-				while(s_filled_counter <= task_id)
-					memoryBarrierShared();
-				memoryBarrierShared();
-				task = s_tasks[task_id & (MAX_TASKS - 1)];
-				memoryBarrierShared();
-				atomicAdd(s_processed_counter, 1);
-			}
-			task = shuffleNV(task, 0, 32);
-
-			uint group = task.x, color = task.y;
-			uint bx = group & 7, by = group >> 3;
-			uint x = thread_id & 7, y = thread_id >> 3;
-			outputPixel(ivec2(bx * 8 + x, by * 8 + y), color);
-			outputPixel(ivec2(bx * 8 + x, by * 8 + 4 + y), color);
-			// jak zarezerwować sobie task ?
-		}
-	}
-
-	// This takes 0.06 ms ...
-	/*if(warp_id < 4) {
-		// zbieramy taski aż processed_counter przetworzy wszystko
-		for(uint i = warp_id; i < 64; i += 4) {
-			uvec2 task = uvec2(i, 0xff000000 + (i % 3) * 0x2000 + i);
-			uint group = task.x, color = task.y;
-			uint bx = group & 7, by = group >> 3;
-			uint x = thread_id & 7, y = thread_id >> 3;
-			outputPixel(ivec2(bx * 8 + x, by * 8 + y), color);
-			outputPixel(ivec2(bx * 8 + x, by * 8 + 4 + y), color);
-			// jak zarezerwować sobie task ?
-		}
-	}*/
 }
 
 // TODO: optimize
@@ -1121,7 +1134,7 @@ void rasterFragmentCounts(int by)
 {
 	for(uint i = LIX; i < BIN_SIZE * MAX_ROWS; i += LSIZE) {
 		ivec2 pixel_pos = ivec2(i & (BIN_SIZE - 1), by * 8 + (i >> BIN_SHIFT));
-		uint count0 = BLOCK_FRAG_COUNT(pixel_pos.x / 8, by);
+		uint count0 = BLOCK_FRAG_COUNT(pixel_pos.x / 8, by) & 0xffff;
 		vec3 color = vec3(count0, count0, 0) / 4096.0;
 		if(count0 == 0xffff)
 			color = vec3(1.0, 0.0, 0.0);
@@ -1164,9 +1177,6 @@ void rasterBin(int bin_id) {
 	barrier();
 	UPDATE_CLOCK(1);
 
-	//multiTest();
-	//barrier();
-
 	for(int by = 0; by < BLOCK_COUNT; by ++) {
 		barrier();
 		// How many rows can we rasterize in single step?
@@ -1177,7 +1187,9 @@ void rasterBin(int bin_id) {
 			continue;
 		}
 
-		for(int bx = 0; bx < BLOCK_COUNT; bx += bx_step) {
+		shadeAndReduceSamples(by);
+
+		/*for(int bx = 0; bx < BLOCK_COUNT; bx += bx_step) {
 			barrier();
 			loadSamples(bx, by, bx_step);
 			barrier();
@@ -1190,7 +1202,7 @@ void rasterBin(int bin_id) {
 			reduceSamples(bx, by, bx_step);
 			barrier();
 			UPDATE_CLOCK(4);
-		}
+		}*/
 		//rasterFragmentCounts(by);
 	}
 }

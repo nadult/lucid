@@ -127,6 +127,7 @@ void resetBlockCounters() {
 
 // How many rows can we rasterize in single step?
 shared int s_bx_step[BLOCK_COUNT]; // TODO: better name
+shared uint s_block_row_max_steps[BLOCK_COUNT];
 
 // TODO: add protection from too big number of samples:
 // maximum per row for raster_bin = min(4 * LSIZE, 32768) ?
@@ -584,24 +585,7 @@ void generateBlocks(uint by)
 			uint bits3 = mask3 & (0xff000000u << minx3) & (0xff000000u >> (7 - maxx3));
 
 			rows[j] = bits0 | bits1 | bits2 | bits3;
-			uint by = j << 2;
-			if(bits0 != 0) {
-				//rows[num_rows >> 2] |= (minx0 | ((0x0 + by) << 4)) << ((num_rows & 3) << 3);
-				num_rows++;
-			}
-			if(bits1 != 0) {
-				//rows[num_rows >> 2] |= (minx1 | ((0x1 + by) << 4)) << ((num_rows & 3) << 3);
-				num_rows++;
-			}
-			if(bits2 != 0) {
-				//rows[num_rows >> 2] |= (minx2 | ((0x2 + by) << 4)) << ((num_rows & 3) << 3);
-				num_rows++;
-			}
-			if(bits3 != 0) {
-				//rows[num_rows >> 2] |= (minx3 | ((0x3 + by) << 4)) << ((num_rows & 3) << 3);
-				num_rows++;
-			}
-
+			num_rows += (bits0 == 0? 0 : 1) + (bits1 == 0? 0 : 1) + (bits2 == 0? 0 : 1) + (bits3 == 0? 0 : 1);
 			bits[j] = bits0 | bits1 | bits2 | bits3;
 		}
 
@@ -691,22 +675,6 @@ void generateBlocks(uint by)
 		s_buffer[i] = 0;
 	barrier();
 
-	// Przerabiamy segmenty na bazujące na rzędach:
-	// - Mapy bitowe oznaczają początki rzędów
-	// Musimy też jakoś wyznaczyć offset trójkąta i rzędu ?
-	// To chyba jest proste: jeśli pierwszy rząd zaczynający się w danym segmencie nie zaczyna się od
-	// sampla #0, to pierwszym rzędem jest dany rząd -1; dodatkowo, jeśli aktualny rząd jest pierwszy w
-	// danym trókącie to # trókąta też jest -1
-	// 
-	// skąd wiadomo, że aktualny rząd jest pierwszy w segmencie? chyba zrobimy tak samo jak wczesniej, czyli
-	// rząd który jest pierwszy aktualizuje header segmentu
-
-	// Co potrzebujemy? offsety trókątów po samplach;
-
-	// Musimy wygenerować bitmapy segmentów i offsety + id-ki trójkątów
-	// - najpierw generujemy bitmapy i je zapisujemy a następnie zapisujemy headery?
-	// - na razie tak zróbmy?
-
 	// Segment header:
 	// - first tri idx (10 bits)
 	// - first row idx (10 bits)
@@ -785,6 +753,13 @@ void finalizeGenerateBlocks()
 		uint frag_count4 = frag_count2 + shuffleXorNV(frag_count2, 2, 8);
 		uint frag_count8 = frag_count4 + shuffleXorNV(frag_count4, 4, 8);
 
+		uint max_frag_count = frag_count1;
+		max_frag_count = max(max_frag_count, shuffleXorNV(max_frag_count, 1, 8));
+		max_frag_count = max(max_frag_count, shuffleXorNV(max_frag_count, 2, 8));
+		max_frag_count = max(max_frag_count, shuffleXorNV(max_frag_count, 4, 8));
+		if(bx == 0)
+			s_block_row_max_steps[by] = uint((max_frag_count + 63) >> 6);
+
 		int bx_step = 8;
 		if(frag_count8 > MAX_SAMPLES) {
 			// TODO: anyInvocation requires separate rows to operate on separate warps...
@@ -814,6 +789,8 @@ void finalizeGenerateBlocks()
 	}
 }
 
+uint shadeSample(ivec2 bin_pixel_pos, uint scratch_tri_offset, out float out_depth);
+
 void shadeAndReduceSamples(int by) {
 	int bx = int(LIX >> (LSHIFT - 3));
 
@@ -825,33 +802,127 @@ void shadeAndReduceSamples(int by) {
 	uint block_frag_count = BLOCK_FRAG_COUNT(bx, by) & 0xffff;
 	uint block_seg_count = (block_frag_count + 31) >> 5;
 	uint buf_offset = bx * MAX_BLOCK_TRIS;
+
+	// How many iterations do we have to make in outer loop to process all segments from a given block
+	uint block_steps = s_block_row_max_steps[by];
 	
 	for(uint i = LIX; i < MAX_SAMPLES; i += LSIZE)
 		s_buffer[i] = 0;
 	barrier();
 
-	for(uint i = (LIX & (LSIZE / 8 - 1)); i < block_frag_count; i += LSIZE / 8) {
-		uint seg_id = i >> 5, seg_offset = i & 31;
-		uvec2 seg_info = g_scratch[seg_soffset + seg_id];
+	// TODO: problem: muszę synchronizować wszystkie wątki i tak... bo muszę robić bariery
+	// Może później będę mógł po zakończeniu przetwarzania danego bloku od razu się przełączyć
+	// na kolejny?
 
-		uint seg_mask = seg_offset == 31? ~0u : (1u << (seg_offset + 1)) - 1;
-		uint masked_bits = seg_mask & seg_info.y;
+	// TODO: more ?
+	float prev_depths[4] = {-1.0, -1.0, -1.0, -1.0};
+	uint prev_colors[3] = {0, 0, 0};
+	vec3 out_color = vec3(0);
+	float out_transparency = 1.0;
+	bool out_invalid = false;
 
-		// TODO: more bits for rows
-		uint row_idx = ((seg_info.x >> 14) & 0xfff) + bitCount(masked_bits);
-		uint row_offset = seg_offset + (masked_bits == 0? seg_info.x >> 26 : -findMSB(masked_bits));
+	uint bit_masks_offset = buf_offset + 256;
 
-		uint row_data = (g_scratch[row_soffset + (row_idx >> 2)][(row_idx & 2) >> 1] >> ((row_idx & 1) * 16)) & 0xffff;
+	for(uint s = 0; s < block_steps; s++) {
+		uint i = (s << 6) + (LIX & 63);
 
-		uint rx = (row_data & 0x7) + row_offset, ry = (row_data >> 3) & 0x7;
-		if(rx >= 0 && rx < 8)
-			atomicAdd(s_buffer[buf_offset + rx + ry * 8], 16);
+		s_buffer[bit_masks_offset + (LIX & 63)] = 0;
+
+		barrier();
+		if(i < block_frag_count) {
+			uint seg_id = i >> 5, seg_offset = i & 31;
+			uvec2 seg_info = g_scratch[seg_soffset + seg_id];
+
+			uint seg_mask = seg_offset == 31? ~0u : (1u << (seg_offset + 1)) - 1;
+			uint masked_bits = seg_mask & seg_info.y;
+
+			// TODO: more bits for rows
+			uint row_idx = ((seg_info.x >> 14) & 0xfff) + bitCount(masked_bits);
+			uint row_offset = seg_offset + (masked_bits == 0? seg_info.x >> 26 : -findMSB(masked_bits));
+			uint row_data = (g_scratch[row_soffset + (row_idx >> 2)][(row_idx & 2) >> 1] >> ((row_idx & 1) * 16)) & 0xffff;
+
+			uint rx = (row_data & 0x7) + row_offset, ry = (row_data >> 3) & 0x7;
+			uint tri_idx = g_scratch[soffset + MAX_BLOCK_TRIS + (row_data >> 6)].x & 0xffff;
+
+			float sample_depth;
+			uint sample_color = shadeSample(ivec2(bx * 8 + rx, by * 8 + ry), scratchTriOffset(tri_idx), sample_depth);
+			s_buffer[buf_offset + (LIX & 63) * 2 + 0] = sample_color;
+			s_buffer[buf_offset + (LIX & 63) * 2 + 1] = floatBitsToUint(sample_depth);
+
+			atomicOr(s_buffer[bit_masks_offset + rx * 2 + ((LIX & 32) >> 5)], 1 << (LIX & 31));
+			atomicOr(s_buffer[bit_masks_offset + 32 + ry * 2 + ((LIX & 32) >> 5)], 1 << (LIX & 31));
+		}
+		barrier();
+
+		uint rx = LIX & 7, ry = (LIX >> 3) & 7;
+		uint bitmask0 = s_buffer[bit_masks_offset + rx * 2 + 0] & s_buffer[bit_masks_offset + 32 + ry * 2 + 0];
+		uint bitmask1 = s_buffer[bit_masks_offset + rx * 2 + 1] & s_buffer[bit_masks_offset + 32 + ry * 2 + 1];
+
+		int j = bitmask0 == 0? findLSB(bitmask1) + 32 : findLSB(bitmask0);
+		while(bitmask1 != 0 || bitmask0 != 0) {
+			uint color = s_buffer[buf_offset + j * 2 + 0];
+			float depth = 1.0 - 0.0001 * uintBitsToFloat(s_buffer[buf_offset + j * 2 + 1]);
+
+			if(j < 32)
+				bitmask0 &= ~(1 << j);
+			else
+				bitmask1 &= ~(1 << (j - 32));
+			j = bitmask0 == 0? findLSB(bitmask1) + 32 : findLSB(bitmask0);
+
+			if(color == 0 || out_invalid)
+				continue;
+
+#define SWAP_UINT(v1, v2) { uint temp = v1; v1 = v2; v2 = temp; }
+#define SWAP_FLOAT(v1, v2) { float temp = v1; v1 = v2; v2 = temp; }
+
+			if(depth < prev_depths[0]) {
+				SWAP_UINT(color, prev_colors[0]);
+				SWAP_FLOAT(depth, prev_depths[0]);
+				if(prev_depths[0] < prev_depths[1]) {
+					SWAP_UINT(prev_colors[1], prev_colors[0]);
+					SWAP_FLOAT(prev_depths[1], prev_depths[0]);
+					if(prev_depths[1] < prev_depths[2]) {
+						SWAP_UINT(prev_colors[2], prev_colors[1]);
+						SWAP_FLOAT(prev_depths[2], prev_depths[1]);
+						if(prev_depths[2] < prev_depths[3]) {
+							prev_colors[0] = 0xff0000ff;
+							out_invalid = true;
+							continue;
+						}
+					}
+				}
+			}
+
+			prev_depths[3] = prev_depths[2];
+			prev_depths[2] = prev_depths[1];
+			prev_depths[1] = prev_depths[0];
+			prev_depths[0] = depth;
+
+			if(prev_colors[2] != 0) {
+				vec4 cur_color = decodeRGBA8(prev_colors[2]);
+				float cur_transparency = 1.0 - cur_color.a;
+				out_color = (additive_blending? out_color : out_color * cur_transparency) + cur_color.rgb * cur_color.a;
+				out_transparency *= cur_transparency;
+			}
+
+			prev_colors[2] = prev_colors[1];
+			prev_colors[1] = prev_colors[0];
+			prev_colors[0] = color;
+		}
+		barrier();
 	}
 	barrier();
 
-	ivec2 pixel_pos = ivec2(bx, by) * 8 + ivec2(LIX & 7, (LIX >> 3) & 7);
-	uint value = s_buffer[buf_offset + (LIX & 63)];
-	outputPixel(pixel_pos, min(255, value) | 0xff000000);
+	for(int i = 2; i >= 0; i--) if(prev_colors[i] != 0) {
+		vec4 cur_color = decodeRGBA8(prev_colors[i]);
+		float cur_transparency = 1.0 - cur_color.a;
+		out_color = (additive_blending? out_color : out_color * cur_transparency) + cur_color.rgb * cur_color.a;
+		out_transparency *= cur_transparency;
+	}
+
+	out_color = min(out_color, vec3(1.0));
+	uint enc_color = encodeRGBA8(vec4(out_color, 1.0 - out_transparency));
+	outputPixel(ivec2(bx * 8 + (LIX & 7), by * 8 + ((LIX >> 3) & 7)), enc_color);
 }
 
 void loadSamples(int bx, int by, int bx_step) {
@@ -1031,7 +1102,7 @@ void reduceSamples(int bx, int by, int bx_step) {
 // - it seems that it does not help at all with loading vertex attribs; it makes sense:
 //   if they are in the cache then it's not a problem...
 // Can we improve speed of loading vertex data?
-uint shadeSample(ivec2 bin_pixel_pos, uint scratch_tri_offset)
+uint shadeSample(ivec2 bin_pixel_pos, uint scratch_tri_offset, out float out_depth)
 {
 	vec3 ray_dir = s_bin_ray_dir0 + frustum.ws_dirx * bin_pixel_pos.x
 								  + frustum.ws_diry * bin_pixel_pos.y;
@@ -1041,6 +1112,7 @@ uint shadeSample(ivec2 bin_pixel_pos, uint scratch_tri_offset)
 	getTriangleParams(scratch_tri_offset, normal, params, edge0, edge1, instance_id, instance_flags, instance_color);
 
 	float ray_pos = params[0] / dot(normal, ray_dir);
+	out_depth = ray_pos;
 	vec2 bary = vec2(dot(edge0, ray_dir), dot(edge1, ray_dir)) * ray_pos;
 
 	vec2 bary_dx, bary_dy;
@@ -1101,7 +1173,7 @@ uint shadeSample(ivec2 bin_pixel_pos, uint scratch_tri_offset)
 	return encodeRGBA8(color);
 }
 
-void shadeSamples(uint bx, uint by) {
+/*void shadeSamples(uint bx, uint by) {
 	// TODO: what's the best way to fix broken pixels?
 	// full sort ? recreate full depth values and sort pairs?
 
@@ -1117,7 +1189,7 @@ void shadeSamples(uint bx, uint by) {
 		ivec2 bin_pixel_pos = ivec2(pixel_id & (BIN_SIZE - 1), (by * 8) + (pixel_id >> 6));
 		s_buffer[i] = shadeSample(bin_pixel_pos, scratch_tri_offset);
 	}
-}
+}*/
 
 void rasterInvalidBlockRow(int by, vec3 color)
 {

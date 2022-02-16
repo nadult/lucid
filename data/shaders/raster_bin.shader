@@ -42,13 +42,19 @@ uniform bool additive_blending;
 #define SAMPLES_PER_THREAD		8
 #define MAX_SAMPLES				(LSIZE * SAMPLES_PER_THREAD)
 
+#define BLOCK_WIDTH				8
+#define BLOCK_HEIGHT			8
+
+#define BLOCK_COUNTX			8
+#define BLOCK_COUNTY			8
+#define BLOCK_ROW_COUNT			8
+
 #undef BLOCK_SHIFT
 #define BLOCK_SHIFT				3
-#define BLOCK_COUNT				8
-#define BLOCK_COUNT_SQ			64
+#define BLOCK_COUNT_SQ			(BLOCK_COUNTX * BLOCK_COUNTY)
 
 #define MAX_BLOCK_ROW_TRIS		2048
-#define MAX_BLOCK_TRIS			(MAX_SAMPLES / BLOCK_COUNT)
+#define MAX_BLOCK_TRIS			512
 #define MAX_SCRATCH_TRIS		2048
 #define MAX_SCRATCH_TRIS_SHIFT  11
 
@@ -86,8 +92,8 @@ shared int s_num_bins, s_bin_id, s_bin_raster_offset;
 shared ivec2 s_bin_pos;
 shared vec3 s_bin_ray_dir0;
 
-shared uint s_block_row_tri_counts[BLOCK_COUNT];
-shared uint s_block_counters[BLOCK_COUNT * BLOCK_COUNT * 4];
+shared uint s_block_row_tri_counts[BLOCK_ROW_COUNT];
+shared uint s_block_counters[BLOCK_COUNT_SQ * 4];
 
 void outputPixel(ivec2 pixel_pos, uint color) {
 	g_raster_image[s_bin_raster_offset + pixel_pos.x + (pixel_pos.y << BIN_SHIFT)] = color;
@@ -125,9 +131,9 @@ void resetBlockCounters() {
 #define BLOCK_FRAG_OFFSET(bx, by)		s_block_counters[bx + (by << BLOCK_SHIFT) + BLOCK_COUNT_SQ * 2]
 #define BLOCK_GROUP_FRAG_COUNT(bx, by)	s_block_counters[bx + (by << BLOCK_SHIFT) + BLOCK_COUNT_SQ * 3]
 
-// How many rows can we rasterize in single step?
-shared int s_bx_step[BLOCK_COUNT]; // TODO: better name
-shared uint s_block_row_max_steps[BLOCK_COUNT];
+shared bool s_invalid_bin;
+
+shared uint s_block_row_max_steps[BLOCK_COUNTY];
 
 // TODO: add protection from too big number of samples:
 // maximum per row for raster_bin = min(4 * LSIZE, 32768) ?
@@ -137,7 +143,7 @@ shared uint s_block_row_max_steps[BLOCK_COUNT];
 shared uint s_bin_quad_count, s_bin_quad_offset;
 
 shared uint s_buffer[MAX_SAMPLES + 1];
-shared uint s_mini_buffer[16 * BLOCK_COUNT];
+shared uint s_mini_buffer[16 * BLOCK_COUNTY];
 
 #ifdef VENDOR_NVIDIA
 uint swap(uint x, int mask, uint dir)
@@ -535,10 +541,10 @@ void generateBlocks(uint by)
 	}
 
 	barrier();
-	if(LIX < BLOCK_COUNT)
-		s_bx_step[by] = anyInvocationARB(BLOCK_TRI_COUNT(LIX, by) > MAX_BLOCK_TRIS)? 0 : 1;
+	if(LIX < BLOCK_COUNTX && BLOCK_TRI_COUNT(LIX, by) > MAX_BLOCK_TRIS)
+		s_invalid_bin = true;
 	barrier();
-	if(s_bx_step[by] == 0)
+	if(s_invalid_bin)
 		return;
 	sortBlockTris(by);
 	barrier();
@@ -645,7 +651,7 @@ void generateBlocks(uint by)
 	}
 #endif
 
-	if(LIX < BLOCK_COUNT) {
+	if(LIX < BLOCK_COUNTX) {
 		uint bx = LIX;
 		uint num_tris = BLOCK_TRI_COUNT(bx, by);
 		BLOCK_FRAG_COUNT(bx, by) = num_tris == 0? 0 : s_buffer[bx * MAX_BLOCK_TRIS + num_tris - 1];
@@ -746,7 +752,7 @@ void generateBlocks(uint by)
 void finalizeGenerateBlocks()
 {
 	uint bx = LIX & 31, by = LIX >> 5;
-	if(bx < BLOCK_COUNT && by < BLOCK_COUNT) {
+	if(bx < BLOCK_COUNTX && by < BLOCK_COUNTY) {
 		uint max_frag_count = BLOCK_FRAG_COUNT(bx, by) & 0xffff;
 		max_frag_count = max(max_frag_count, shuffleXorNV(max_frag_count, 1, 8));
 		max_frag_count = max(max_frag_count, shuffleXorNV(max_frag_count, 2, 8));
@@ -755,7 +761,6 @@ void finalizeGenerateBlocks()
 			s_block_row_max_steps[by] = uint((max_frag_count + 63) >> 6);
 	}
 }
-
 
 uint shadeSample(ivec2 bin_pixel_pos, uint scratch_tri_offset, out float out_depth);
 
@@ -998,18 +1003,17 @@ void rasterBin(int bin_id) {
 	INIT_CLOCK();
 
 	if(LIX < BIN_SIZE) {
-		if(LIX < BLOCK_COUNT) {
-			if(LIX == 0) {
-				ivec2 bin_pos = ivec2(bin_id % BIN_COUNT_X, bin_id / BIN_COUNT_X) * BIN_SIZE;
-				s_bin_pos = bin_pos;
-				s_bin_quad_count = g_bins.bin_quad_counts[bin_id];
-				s_bin_quad_offset = g_bins.bin_quad_offsets[bin_id];
-				s_bin_ray_dir0 = frustum.ws_dir0 + frustum.ws_dirx * (bin_pos.x + 0.5)
-												 + frustum.ws_diry * (bin_pos.y + 0.5);
-			}
-
-			s_block_row_tri_counts[LIX] = 0;
+		if(LIX == 0) {
+			ivec2 bin_pos = ivec2(bin_id % BIN_COUNT_X, bin_id / BIN_COUNT_X) * BIN_SIZE;
+			s_bin_pos = bin_pos;
+			s_bin_quad_count = g_bins.bin_quad_counts[bin_id];
+			s_bin_quad_offset = g_bins.bin_quad_offsets[bin_id];
+			s_bin_ray_dir0 = frustum.ws_dir0 + frustum.ws_dirx * (bin_pos.x + 0.5)
+												+ frustum.ws_diry * (bin_pos.y + 0.5);
+			s_invalid_bin = false;
 		}
+		if(LIX < BLOCK_COUNTY)
+			s_block_row_tri_counts[LIX] = 0;
 	}
 	resetBlockCounters();
 	barrier();
@@ -1018,24 +1022,24 @@ void rasterBin(int bin_id) {
 	barrier();
 	UPDATE_CLOCK(0);
 
-	for(int by = 0; by < BLOCK_COUNT; by ++) {
+	for(int by = 0; by < BLOCK_COUNTY; by ++) {
 		generateBlocks(by);
 		barrier();
 	}
 	
+	if(s_invalid_bin) {
+		for(int by = 0; by < BLOCK_COUNTY; by++)
+			rasterInvalidBlockRow(by, vec3(0.2, 0.0, 0.0));
+		return;
+	}
+
 	finalizeGenerateBlocks();
 	groupMemoryBarrier();
 	barrier();
 	UPDATE_CLOCK(1);
 
-	for(int by = 0; by < BLOCK_COUNT; by ++) {
+	for(int by = 0; by < BLOCK_COUNTY; by ++) {
 		barrier();
-		// How many rows can we rasterize in single step?
-		int bx_step = s_bx_step[by];
-		if(bx_step == 0) {
-			rasterInvalidBlockRow(by, vec3(0.2, 0.0, 0.0));
-			continue;
-		}
 		shadeAndReduceSamples(by);
 		//rasterFragmentCounts(by);
 	}

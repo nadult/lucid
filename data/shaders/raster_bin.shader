@@ -715,6 +715,11 @@ void generateBlocks(uint by)
 
 uint shadeSample(ivec2 bin_pixel_pos, uint scratch_tri_offset, out float out_depth);
 
+// Aktualne statsy (3050 full):
+//      bunny: 770    68     49    5
+// conference: 1990   61     106   5
+//     sponza: 5335   61     121   6
+//     teapot: 723    26     45    5 
 void shadeAndReduceSamples(int by) {
 	int bx = int(LIX >> (LSHIFT - 3));
 
@@ -731,8 +736,8 @@ void shadeAndReduceSamples(int by) {
 	// na kolejny?
 
 	// TODO: more ?
-	float prev_depths[4] = {-1.0, -1.0, -1.0, -1.0};
-	uint prev_colors[3] = {0, 0, 0};
+	float prev_depths[6] = {-1.0, -1.0, -1.0, -1.0, -1.0, -1.0};
+	uint prev_colors[5] = {0, 0, 0, 0, 0};
 	vec3 out_color = vec3(0);
 	float out_transparency = 1.0;
 
@@ -796,33 +801,45 @@ void shadeAndReduceSamples(int by) {
 						SWAP_UINT(prev_colors[2], prev_colors[1]);
 						SWAP_FLOAT(prev_depths[2], prev_depths[1]);
 						if(prev_depths[2] < prev_depths[3]) {
-							prev_colors[0] = 0xff0000ff;
-							prev_depths[0] = 999999.0;
-							continue;
+							SWAP_UINT(prev_colors[3], prev_colors[2]);
+							SWAP_FLOAT(prev_depths[3], prev_depths[2]);
+							if(prev_depths[3] < prev_depths[4]) {
+								SWAP_UINT(prev_colors[4], prev_colors[3]);
+								SWAP_FLOAT(prev_depths[4], prev_depths[3]);
+								if(prev_depths[4] < prev_depths[5]) {
+									prev_colors[0] = 0xff0000ff;
+									prev_depths[0] = 999999.0;
+									continue;
+								}
+							}
 						}
 					}
 				}
 			}
 
+			prev_depths[5] = prev_depths[4];
+			prev_depths[4] = prev_depths[3];
 			prev_depths[3] = prev_depths[2];
 			prev_depths[2] = prev_depths[1];
 			prev_depths[1] = prev_depths[0];
 			prev_depths[0] = depth;
 
-			if(prev_colors[2] != 0) {
-				vec4 cur_color = decodeRGBA8(prev_colors[2]);
+			if(prev_colors[4] != 0) {
+				vec4 cur_color = decodeRGBA8(prev_colors[4]);
 				float cur_transparency = 1.0 - cur_color.a;
 				out_color = (additive_blending? out_color : out_color * cur_transparency) + cur_color.rgb * cur_color.a;
 				out_transparency *= cur_transparency;
 			}
 
+			prev_colors[4] = prev_colors[3];
+			prev_colors[3] = prev_colors[2];
 			prev_colors[2] = prev_colors[1];
 			prev_colors[1] = prev_colors[0];
 			prev_colors[0] = color;
 		}
 	}
 
-	for(int i = 2; i >= 0; i--) if(prev_colors[i] != 0) {
+	for(int i = 4; i >= 0; i--) if(prev_colors[i] != 0) {
 		vec4 cur_color = decodeRGBA8(prev_colors[i]);
 		float cur_transparency = 1.0 - cur_color.a;
 		out_color = (additive_blending? out_color : out_color * cur_transparency) + cur_color.rgb * cur_color.a;
@@ -989,7 +1006,7 @@ void rasterBin(int bin_id) {
 		shadeAndReduceSamples(by);
 		barrier();
 	}
-
+	UPDATE_CLOCK(2);
 	//for(int by = 0; by < BLOCK_COUNTY; by++)
 		//rasterCounts(by);
 }

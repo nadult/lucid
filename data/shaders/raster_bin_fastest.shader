@@ -120,8 +120,10 @@ void resetBlockCounters() {
 #define BLOCK_FRAG_OFFSET(bx) s_curblock_counters[bx + BLOCK_COUNT * 2]
 #define BLOCK_GROUP_FRAG_COUNT(bx) s_curblock_counters[bx + BLOCK_COUNT * 3]
 
-// How many rows can we rasterize in single step?
-shared int s_bx_step; // TODO: better name
+// How many blocks in a row can we rasterize in single step (log2)
+// -1: invalid (not enough space for samples)
+//  0: 1 block, 1: 2 blocks, 2: 4 blocks, 3: 8 blocks (best option)
+shared int s_max_raster_blocks;
 
 // TODO: add protection from too big number of samples:
 // maximum per row for raster_bin = min(4 * LSIZE, 32768) ?
@@ -504,13 +506,12 @@ void generateBlocks(uint by) {
 		uint idx = atomicAdd(BLOCK_TRI_COUNT(bx), 1);
 		if(idx < MAX_BLOCK_TRIS)
 			s_buffer[buf_offset + idx] = i | (uint(depth) << 13);
+		else
+			s_max_raster_blocks = -1;
 	}
 
 	barrier();
-	if(LIX < BLOCK_COUNT)
-		s_bx_step = anyInvocationARB(BLOCK_TRI_COUNT(LIX) > MAX_BLOCK_TRIS) ? 0 : 1;
-	barrier();
-	if(s_bx_step == 0)
+	if(s_max_raster_blocks == -1)
 		return;
 	sortBlockTris();
 	barrier();
@@ -636,31 +637,32 @@ void generateBlocks(uint by) {
 		uint frag_count4 = frag_count2 + shuffleXorNV(frag_count2, 2, 8);
 		uint frag_count8 = frag_count4 + shuffleXorNV(frag_count4, 4, 8);
 
-		int bx_step = 8;
+		int max_raster_blocks = 3;
 		// TODO: compute this on first warp only
 		if(frag_count8 > MAX_SAMPLES) {
 			bool fail4 = anyInvocationARB(frag_count4 > MAX_SAMPLES);
 			bool fail2 = anyInvocationARB(frag_count2 > MAX_SAMPLES);
 			bool fail1 = anyInvocationARB(frag_count1 > MAX_SAMPLES);
-			bx_step = fail1 ? 0 : fail2 ? 1 : fail4 ? 2 : 4;
+			max_raster_blocks = fail1 ? -1 : fail2 ? 0 : fail4 ? 1 : 2;
 		}
-		s_bx_step = bx_step;
+		s_max_raster_blocks = max_raster_blocks;
 
-		if(bx_step > 0) {
+		if(max_raster_blocks >= 0) {
 			uint frag_offset = 0;
 			uint temp1 = shuffleUpNV(frag_count1, 1, 8);
 			uint temp2 = shuffleUpNV(frag_count2, 2, 8);
 			uint temp4 = shuffleUpNV(frag_count4, 4, 8);
-			if(bx_step >= 2 && (bx & 1) != 0)
+			if(max_raster_blocks >= 1 && (bx & 1) != 0)
 				frag_offset += temp1;
-			if(bx_step >= 4 && (bx & 2) != 0)
+			if(max_raster_blocks >= 2 && (bx & 2) != 0)
 				frag_offset += temp2;
-			if(bx_step >= 8 && (bx & 4) != 0)
+			if(max_raster_blocks >= 3 && (bx & 4) != 0)
 				frag_offset += temp4;
 
 			BLOCK_FRAG_OFFSET(bx) = frag_offset;
 
-			uint first_bx = bx & ~(bx_step - 1), last_bx = first_bx + bx_step - 1;
+			uint block_count = 1 << max_raster_blocks;
+			uint first_bx = bx & ~(block_count - 1), last_bx = first_bx + block_count - 1;
 			uint group_count =
 				shuffleNV(frag_count1, last_bx, 8) + shuffleNV(frag_offset, last_bx, 8);
 			BLOCK_GROUP_FRAG_COUNT(bx) = group_count;
@@ -670,8 +672,8 @@ void generateBlocks(uint by) {
 	barrier();
 }
 
-void loadSamples(int bx, int by, int bx_step) {
-	bx += int(LIX / (LSIZE / bx_step)); // TODO: shift instead of div
+void loadSamples(int bx, int by, int max_raster_blocks) {
+	bx += int(LIX >> (LSHIFT - max_raster_blocks));
 
 	uint soffset = scratchBlockTrisOffset(bx);
 	uint tri_count = BLOCK_TRI_COUNT(bx);
@@ -682,8 +684,8 @@ void loadSamples(int bx, int by, int bx_step) {
 	uint y_shift = (y & 3) * 8;
 
 	// TODO: load tri data similarily as in loadSamples and use shuffles to extract
-	for(uint i = (LIX & (LSIZE / bx_step - 1)) >> 3, istep = (LSIZE / 8) / bx_step; i < tri_count;
-		i += istep) {
+	uint istep = (LSIZE / 8) >> max_raster_blocks;
+	for(uint i = (LIX & ((LSIZE >> max_raster_blocks) - 1)) >> 3; i < tri_count; i += istep) {
 		uint tri_bitmask = g_scratch[soffset + i][y < 4 ? 0 : 1];
 		uvec2 info = g_scratch[soffset + i + MAX_BLOCK_TRIS];
 		uint tri_idx = info.x & 0xffff;
@@ -706,8 +708,8 @@ void loadSamples(int bx, int by, int bx_step) {
 }
 
 // TODO: optimize
-void reduceSamples(int bx, int by, int bx_step) {
-	if(LIX >= bx_step * BIN_SIZE)
+void reduceSamples(int bx, int by, int max_raster_blocks) {
+	if(LIX >= (BIN_SIZE << max_raster_blocks))
 		return;
 
 	bx += int(LIX >> 6);
@@ -718,7 +720,7 @@ void reduceSamples(int bx, int by, int bx_step) {
 
 	uint block_offset = BLOCK_FRAG_OFFSET(bx) & 0xffff;
 
-	// TODO: share pixels between threads for bx_step <= 4?
+	// TODO: share pixels between threads for max_raster_blocks <= 4?
 	// TODO: WARP_SIZE?
 
 	uint pixel_bit = 1u << ((y & 3) * 8 + (x & 7));
@@ -951,6 +953,7 @@ void rasterBin(int bin_id) {
 				s_bin_quad_offset = g_bins.bin_quad_offsets[bin_id];
 				s_bin_ray_dir0 = frustum.ws_dir0 + frustum.ws_dirx * (bin_pos.x + 0.5) +
 								 frustum.ws_diry * (bin_pos.y + 0.5);
+				s_max_raster_blocks = 0;
 			}
 
 			s_block_row_tri_counts[LIX] = 0;
@@ -970,16 +973,18 @@ void rasterBin(int bin_id) {
 		UPDATE_CLOCK(1);
 
 		// How many rows can we rasterize in single step?
-		int bx_step = s_bx_step;
-		if(bx_step == 0) {
-			float value = bx_step == 0 ? 0.2 : bx_step == 1 ? 0.5 : bx_step == 2 ? 0.8 : 1.0;
+		int max_raster_blocks = s_max_raster_blocks;
+		if(max_raster_blocks == -1) {
+			float value = max_raster_blocks == -1 ? 0.2 :
+						  max_raster_blocks == 0  ? 0.5 :
+						  max_raster_blocks == 1  ? 0.8 :
+													  1.0;
 			rasterInvalidBlockRow(by, vec3(value, 0.0, 0.0));
 			continue;
 		}
 
-		for(int bx = 0; bx < BLOCK_COUNT; bx += bx_step) {
-			barrier();
-			loadSamples(bx, by, bx_step);
+		for(int bx = 0; bx < BLOCK_COUNT; bx += (1 << max_raster_blocks)) {
+			loadSamples(bx, by, max_raster_blocks);
 			barrier();
 			UPDATE_CLOCK(2);
 
@@ -987,7 +992,7 @@ void rasterBin(int bin_id) {
 			barrier();
 			UPDATE_CLOCK(3);
 
-			reduceSamples(bx, by, bx_step);
+			reduceSamples(bx, by, max_raster_blocks);
 			barrier();
 			UPDATE_CLOCK(4);
 		}

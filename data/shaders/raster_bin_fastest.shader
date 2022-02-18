@@ -693,14 +693,15 @@ void loadSamples(int bx, int by, int bx_step) {
 
 		if(tri_bitmask == 0)
 			continue;
-		int x = findLSB(tri_bitmask);
-		do {
+		int count = bitCount(tri_bitmask);
+		uint pixel_id = (y << 6) | (bx * 8 + findLSB(tri_bitmask));
+		uint value = (pixel_id << 23) | scratchTriOffset(tri_idx);
+		for(uint i = 0; i < count; i++) {
 			if(tri_offset >= MAX_SAMPLES)
 				RECORD(x, y, tri_offset, BLOCK_FRAG_COUNT(bx));
-			uint pixel_id = (y << 6) | (bx * 8 + x++);
-			uint value = (pixel_id << 23) | scratchTriOffset(tri_idx);
 			s_buffer[tri_offset++] = value;
-		} while((tri_bitmask & (1 << x)) != 0);
+			value += 1 << 23;
+		}
 	}
 }
 

@@ -522,6 +522,13 @@ void generateBlocks(uint by) {
 	tri_count = BLOCK_TRI_COUNT(bx);
 	uint dst_offset = scratchBlockTrisOffset(bx);
 
+#define PREFIX_SUM_STEP(value, step)                                                               \
+	{                                                                                              \
+		uint temp = shuffleUpNV(value, step, 32);                                                  \
+		if((LIX & 31) >= step)                                                                     \
+			value += temp;                                                                         \
+	}
+
 	for(uint i = LIX & (LSIZE / 8 - 1); i < tri_count; i += LSIZE / 8) {
 		uint idx = s_buffer[buf_offset + i] & 0x1fff;
 
@@ -566,22 +573,11 @@ void generateBlocks(uint by) {
 		g_scratch[dst_offset + i + MAX_BLOCK_TRIS].x = tri_idx | (num_frags0123 << 16);
 
 		// Computing triangle-ordered sample offsets within each block
-		uint temp;
-		temp = shuffleUpNV(num_frags, 1, 32);
-		if((LIX & 31) >= 1)
-			num_frags += temp;
-		temp = shuffleUpNV(num_frags, 2, 32);
-		if((LIX & 31) >= 2)
-			num_frags += temp;
-		temp = shuffleUpNV(num_frags, 4, 32);
-		if((LIX & 31) >= 4)
-			num_frags += temp;
-		temp = shuffleUpNV(num_frags, 8, 32);
-		if((LIX & 31) >= 8)
-			num_frags += temp;
-		temp = shuffleUpNV(num_frags, 16, 32);
-		if((LIX & 31) >= 16)
-			num_frags += temp;
+		PREFIX_SUM_STEP(num_frags, 1);
+		PREFIX_SUM_STEP(num_frags, 2);
+		PREFIX_SUM_STEP(num_frags, 4);
+		PREFIX_SUM_STEP(num_frags, 8);
+		PREFIX_SUM_STEP(num_frags, 16);
 		s_buffer[buf_offset + i] = num_frags;
 	}
 	barrier();
@@ -590,19 +586,11 @@ void generateBlocks(uint by) {
 	uint idx32 = (LIX & (LSIZE / 8 - 1)) * 32;
 	// Note: here we expect that idx32 < 32 * 16
 	if(idx32 < tri_count) {
-		uint value = s_buffer[buf_offset + idx32 + 31], temp;
-		temp = shuffleUpNV(value, 1, 32);
-		if((LIX & 31) >= 1)
-			value += temp;
-		temp = shuffleUpNV(value, 2, 32);
-		if((LIX & 31) >= 2)
-			value += temp;
-		temp = shuffleUpNV(value, 4, 32);
-		if((LIX & 31) >= 4)
-			value += temp;
-		temp = shuffleUpNV(value, 8, 32);
-		if((LIX & 31) >= 8)
-			value += temp;
+		uint value = s_buffer[buf_offset + idx32 + 31];
+		PREFIX_SUM_STEP(value, 1);
+		PREFIX_SUM_STEP(value, 2);
+		PREFIX_SUM_STEP(value, 4);
+		PREFIX_SUM_STEP(value, 8);
 		s_mini_buffer[bx * 16 + (idx32 >> 5)] = value;
 	}
 	barrier();

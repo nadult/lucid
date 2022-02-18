@@ -133,9 +133,6 @@
     <None Include="..\data\shaders\mask_sort.shader">
       <Filter>shaders</Filter>
     </None>
-    <None Include="..\data\shaders\raster_bin.shader">
-      <Filter>shaders</Filter>
-    </None>
     <None Include="..\data\shaders\raster_block.shader">
       <Filter>shaders</Filter>
     </None>
@@ -171,6 +168,15 @@
     </None>
     <None Include="..\data\shaders\pieces\viewport.shader">
       <Filter>shaders\pieces</Filter>
+    </None>
+    <None Include="..\data\shaders\raster_bin_fastest.shader">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="..\data\shaders\raster_bin_mixed.shader">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="..\data\shaders\raster_bin_reduction_samples.shader">
+      <Filter>shaders</Filter>
     </None>
   </ItemGroup>
 </Project>

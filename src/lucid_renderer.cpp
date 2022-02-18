@@ -177,7 +177,7 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	mask_raster_program = EX_PASS(Program::makeCompute(
 		"mask_raster", defs, mask(m_opts & Opt::debug_masks, ProgramOpt::debug)));
 	raster_bin_program = EX_PASS(Program::makeCompute(
-		"raster_bin", defs, mask(m_opts & Opt::debug_raster, ProgramOpt::debug)));
+		"raster_bin_fastest", defs, mask(m_opts & Opt::debug_raster, ProgramOpt::debug)));
 	raster_tile_program = EX_PASS(Program::makeCompute(
 		"raster_tile", defs, mask(m_opts & Opt::debug_raster, ProgramOpt::debug)));
 	raster_block_program = EX_PASS(Program::makeCompute(

@@ -1,4 +1,5 @@
 // $$include funcs lighting frustum viewport data
+// clang-format off
 
 #define LIX gl_LocalInvocationIndex
 #define LID gl_LocalInvocationID
@@ -90,9 +91,6 @@ void markPixelInvalid() {
 	atomicAdd(g_tiles.num_invalid_pixels, 1);
 	atomicOr(s_invalid_block_mask, 1 << LID.y);
 }
-
-#define SWAP_FLOAT(a, b) { float temp = a; a = b; b = temp; }
-#define SWAP_UINT(a, b) { uint temp = a; a = b; b = temp; }
 
 void rasterPixel(vec4 color, float cur_d) {
 	if(cur_d < min_depth)

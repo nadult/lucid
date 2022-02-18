@@ -147,7 +147,9 @@
     <None Include="..\data\shaders\pieces\macros.shader" />
     <None Include="..\data\shaders\pieces\rect.shader" />
     <None Include="..\data\shaders\pieces\viewport.shader" />
-    <None Include="..\data\shaders\raster_bin.shader" />
+    <None Include="..\data\shaders\raster_bin_fastest.shader" />
+    <None Include="..\data\shaders\raster_bin_mixed.shader" />
+    <None Include="..\data\shaders\raster_bin_reduction_samples.shader" />
     <None Include="..\data\shaders\raster_block.shader" />
     <None Include="..\data\shaders\raster_tile.shader" />
     <None Include="..\data\shaders\setup.shader" />

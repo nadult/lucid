@@ -189,3 +189,16 @@ vec3 decodeNormalOct(uint ei)
 	vec2 e = vec2(ei & 0xffff, ei >> 16) * (1.0 / 65535.0);
 	return oct_to_float32x3(e);
 }
+
+#define SWAP_UINT(v1, v2)                                                                          \
+	{                                                                                              \
+		uint temp = v1;                                                                            \
+		v1 = v2;                                                                                   \
+		v2 = temp;                                                                                 \
+	}
+#define SWAP_FLOAT(v1, v2)                                                                         \
+	{                                                                                              \
+		float temp = v1;                                                                           \
+		v1 = v2;                                                                                   \
+		v2 = temp;                                                                                 \
+	}

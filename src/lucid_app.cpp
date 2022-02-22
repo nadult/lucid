@@ -608,7 +608,7 @@ static void visualizeBlockTris(const RasterTileInfo &tile, const RasterBlockInfo
 	};
 
 	Investigator3::Config config;
-	config.move_speed_multiplier = 0.01;
+	config.move_speed_multiplier = 0.05;
 	Investigator3 rutkowski(vis_func, InvestigatorOpt::exit_with_space, config);
 	rutkowski.run();
 }

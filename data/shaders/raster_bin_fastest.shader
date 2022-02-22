@@ -62,10 +62,7 @@ uint scratchTriOffset(uint tri_idx) {
 	return (gl_WorkGroupID.x << WORKGROUP_SCRATCH_SHIFT) + 64 * 1024 + tri_idx;
 }
 
-uint sumU16x2(uint pair) { return (pair & 0xffff) + (pair >> 16); }
-
 // Note: in the context of this shader, block size is 8x8, not 4x4
-
 shared int s_num_bins, s_bin_id, s_bin_raster_offset;
 shared ivec2 s_bin_pos;
 shared vec3 s_bin_ray_dir0;
@@ -565,7 +562,7 @@ void generateBlocks(uint by) {
 
 		uint num_frags0123 = bitCount(bits[0]);
 		uint num_frags4567 = bitCount(bits[1]);
-		uint num_frags = num_frags0123 + (num_frags4567 << 16);
+		uint num_frags = num_frags0123 + num_frags4567;
 		if(num_frags == 0) // This means that bmasks are invalid
 			RECORD(0, 0, 0, 0);
 
@@ -619,7 +616,6 @@ void generateBlocks(uint by) {
 		uint num_tris = BLOCK_TRI_COUNT(bx);
 		uint frag_count1 = num_tris == 0 ? 0 : s_buffer[bx * MAX_BLOCK_TRIS + num_tris - 1];
 		BLOCK_FRAG_COUNT(bx) = frag_count1;
-		frag_count1 = sumU16x2(frag_count1);
 
 		uint frag_count2 = frag_count1 + shuffleXorNV(frag_count1, 1, 8);
 		uint frag_count4 = frag_count2 + shuffleXorNV(frag_count2, 2, 8);
@@ -677,7 +673,7 @@ void loadSamples(int bx, int by, int max_raster_blocks) {
 		uint tri_bitmask = g_scratch[soffset + i][y < 4 ? 0 : 1];
 		uvec2 info = g_scratch[soffset + i + MAX_BLOCK_TRIS];
 		uint tri_idx = info.x & 0xffff;
-		uint tri_offset = block_offset + sumU16x2(info.y) + (y >= 4 ? info.x >> 16 : 0);
+		uint tri_offset = block_offset + info.y + (y >= 4 ? info.x >> 16 : 0);
 		tri_offset += bitCount(tri_bitmask & ((1 << y_shift) - 1));
 		tri_bitmask = (tri_bitmask >> y_shift) & 0xff;
 
@@ -732,7 +728,7 @@ void reduceSamples(int bx, int by, int max_raster_blocks) {
 				uvec2 info = g_scratch[soffset + i + (LIX & 31) + MAX_BLOCK_TRIS];
 
 				sel_tri_bitmask = y < 4 ? bits.x : bits.y;
-				sel_tri_offset = block_offset + sumU16x2(info.y) + (y >= 4 ? info.x >> 16 : 0);
+				sel_tri_offset = block_offset + info.y + (y >= 4 ? info.x >> 16 : 0);
 
 				uint tri_idx = info.x & 0xffff;
 				uint scratch_tri_offset = scratchTriOffset(tri_idx);

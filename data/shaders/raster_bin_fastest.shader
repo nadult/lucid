@@ -730,7 +730,9 @@ void rasterDepthOverlaps(int by) {
 	barrier();
 	for(uint i = LIX; i < BIN_SIZE * MAX_ROWS; i += LSIZE) {
 		ivec2 pixel_pos = ivec2(i & (BIN_SIZE - 1), by * 8 + (i >> BIN_SHIFT));
-		uint count0 = uint(s_overlaps[pixel_pos.x / 8 + by * 8]);
+		uint tri_count = BLOCK_TRI_COUNT(pixel_pos.x / 8);
+		float mul = tri_count == 0 ? 0.0 : 1.0 / float(tri_count);
+		float count0 = float(s_overlaps[pixel_pos.x / 8 + by * 8]) * mul;
 
 		vec3 color = vec3(count0, count0, count0) / 64.0;
 		if(count0 <= 4)

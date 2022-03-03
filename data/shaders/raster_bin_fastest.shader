@@ -328,6 +328,12 @@ void storeTriangle(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, uint v0, uint 
 	TRI_SCRATCH(4) = uvec2(floatBitsToUint(edge0.z), floatBitsToUint(edge1.x));
 	TRI_SCRATCH(5) = uvec2(floatBitsToUint(edge1.y), floatBitsToUint(edge1.z));
 
+	vec3 pnormal = normal * (1.0 / plane_dist);
+	vec3 depth_eq = vec3(dot(pnormal, s_bin_ray_dir0), dot(pnormal, frustum.ws_dirx),
+						 dot(pnormal, frustum.ws_diry));
+	TRI_SCRATCH(14) = uvec2(floatBitsToUint(depth_eq.x), floatBitsToUint(depth_eq.y));
+	TRI_SCRATCH(15) = uvec2(floatBitsToUint(depth_eq.z), 0);
+
 	uint instance_flags = g_instances[instance_id].flags;
 	uint instance_color = g_instances[instance_id].color;
 
@@ -458,7 +464,6 @@ void generateBlocks(uint by) {
 	barrier();
 
 	int min_bx = int(bx * 8);
-	vec3 ray_dir_base = s_bin_ray_dir0 + (bx * 8) * frustum.ws_dirx + (by * 8) * frustum.ws_diry;
 	for(uint i = LIX >> 3; i < tri_count; i += LSIZE / 8) {
 		// TODO: load these together with shuffles?
 		uint full_rows[4] = {
@@ -490,15 +495,14 @@ void generateBlocks(uint by) {
 			weight += count0 + count1;
 		}
 		cpos /= weight;
-		vec3 ray_dir = ray_dir_base + cpos.x * frustum.ws_dirx + cpos.y * frustum.ws_diry;
+		cpos += vec2(bx << 3, by << 3);
 
 		uint scratch_tri_offset = scratchTriOffset(tri_idx);
-		vec2 val0 = uintBitsToFloat(TRI_SCRATCH(0));
-		vec2 val1 = uintBitsToFloat(TRI_SCRATCH(1));
-		vec3 normal = vec3(val0.x, val0.y, val1.x);
-		float param0 = val1.y; //TODO: premul by normal
-		float ray_pos = param0 / dot(normal, ray_dir);
-		float depth = float(0x7ffff) / (1.0 + max(0.0, ray_pos)); // 19 bits is enough
+		vec2 val0 = uintBitsToFloat(TRI_SCRATCH(14));
+		vec2 val1 = uintBitsToFloat(TRI_SCRATCH(15));
+		vec3 depth_eq = vec3(val0.x, val0.y, val1.x);
+		float ray_pos = depth_eq.x + depth_eq.y * cpos.x + depth_eq.z * cpos.y;
+		float depth = float(0x7ffff) / max(0.5, 4.0 - ray_pos); // 19 bits is enough
 
 		uint idx = atomicAdd(BLOCK_TRI_COUNT(bx), 1);
 		if(idx < MAX_BLOCK_TRIS)
@@ -679,26 +683,25 @@ void computeDepthRanges(int bx, int by, int bx_step) {
 
 		uint tri_idx = tri_info.x & 0xffff;
 		uint scratch_tri_offset = scratchTriOffset(tri_idx);
-		vec2 val0 = uintBitsToFloat(TRI_SCRATCH(0));
-		vec2 val1 = uintBitsToFloat(TRI_SCRATCH(1));
-		vec3 normal = vec3(val0.x, val0.y, val1.x);
-		float param0 = val1.y; //TODO: premul by normal
+		vec2 val0 = uintBitsToFloat(TRI_SCRATCH(14));
+		vec2 val1 = uintBitsToFloat(TRI_SCRATCH(15));
+		vec3 depth_eq = vec3(val0.x, val0.y, val1.x);
+		//float ray_pos = depth_eq.x + depth_eq.y * cpos.x + depth_eq.z * cpos.y;
 
 		float min_depth = 999999999.0, max_depth = -999999999.0;
+		depth_eq.x += depth_eq.y * (bx << 3) + depth_eq.z * (by << 3);
 
 		for(uint y = 0; y < 8; y++) {
 			uint bits = y < 4 ? tri_bitmask.x : tri_bitmask.y;
 			bits = (bits >> (y & 3) * 8) & 0xff;
 			uint min_x = findLSB(bits), max_x = findMSB(bits);
 
-			vec3 ray_dir =
-				ray_dir_base + float(min_x) * frustum.ws_dirx + float(y) * frustum.ws_diry;
-			float ray_pos = param0 / dot(normal, ray_dir);
+			float row_depth = depth_eq.x + depth_eq.z * y;
+			float ray_pos = row_depth + depth_eq.y * min_x;
 			min_depth = min(min_depth, ray_pos);
 			max_depth = max(max_depth, ray_pos);
 
-			ray_dir += float(max_x - min_x) * frustum.ws_dirx;
-			ray_pos = param0 / dot(normal, ray_dir);
+			ray_pos = row_depth + depth_eq.y * max_x;
 			min_depth = min(min_depth, ray_pos);
 			max_depth = max(max_depth, ray_pos);
 		}
@@ -805,7 +808,6 @@ void reduceSamples(int bx, int by, int max_raster_blocks) {
 	// TODO: WARP_SIZE?
 
 	uint pixel_bit = 1u << ((y & 3) * 8 + (x & 7));
-	vec3 ray_dir = s_bin_ray_dir0 + (by * 8 + y) * frustum.ws_diry + x * frustum.ws_dirx;
 
 	// TODO: more ?
 	float prev_depths[4] = {-1.0, -1.0, -1.0, -1.0};
@@ -817,7 +819,7 @@ void reduceSamples(int bx, int by, int max_raster_blocks) {
 	for(uint i = 0; i < tri_count; i += 32) {
 		uint sub_count = min(32, tri_count - i);
 		uint sel_tri_offset = 0, sel_tri_bitmask, tris_bitmask;
-		vec3 sel_normal;
+		vec3 sel_depth_eq;
 		{
 			bool in_range = false;
 			if((LIX & 31) < sub_count) {
@@ -829,11 +831,9 @@ void reduceSamples(int bx, int by, int max_raster_blocks) {
 
 				uint tri_idx = info.x & 0xffff;
 				uint scratch_tri_offset = scratchTriOffset(tri_idx);
-				vec2 val0 = uintBitsToFloat(TRI_SCRATCH(0));
-				vec2 val1 = uintBitsToFloat(TRI_SCRATCH(1));
-				vec3 normal = vec3(val0.x, val0.y, val1.x);
-				float param0 = val1.y; //TODO: mul by normal
-				sel_normal = normal * (1.0 / param0);
+				vec2 val0 = uintBitsToFloat(TRI_SCRATCH(14));
+				vec2 val1 = uintBitsToFloat(TRI_SCRATCH(15));
+				sel_depth_eq = vec3(val0.x, val0.y, val1.x);
 				in_range = sel_tri_bitmask != 0;
 			}
 			tris_bitmask = uint(ballotARB(in_range));
@@ -843,7 +843,7 @@ void reduceSamples(int bx, int by, int max_raster_blocks) {
 		while(j != -1) {
 			uint tri_offset = shuffleNV(sel_tri_offset, j, 32);
 			uint tri_bitmask = shuffleNV(sel_tri_bitmask, j, 32);
-			vec3 normal = shuffleNV(sel_normal, j, 32);
+			vec3 depth_eq = shuffleNV(sel_depth_eq, j, 32);
 			tris_bitmask &= ~(1 << j);
 			j = findLSB(tris_bitmask);
 			if((tri_bitmask & pixel_bit) == 0)
@@ -854,8 +854,7 @@ void reduceSamples(int bx, int by, int max_raster_blocks) {
 			if(value == 0)
 				continue;
 
-			float depth = dot(normal, ray_dir);
-
+			float depth = depth_eq.x + depth_eq.y * x + depth_eq.z * (y + (by << 3));
 			if(depth < prev_depths[0]) {
 				SWAP_UINT(value, prev_colors[0]);
 				SWAP_FLOAT(depth, prev_depths[0]);

@@ -34,8 +34,8 @@ layout(binding = 1) uniform sampler2D transparent_texture;
 
 uniform bool additive_blending;
 
-#define WORKGROUP_SCRATCH_SIZE (128 * 1024)
-#define WORKGROUP_SCRATCH_SHIFT 17
+#define WORKGROUP_SCRATCH_SIZE (256 * 1024)
+#define WORKGROUP_SCRATCH_SHIFT 18
 
 // TODO: does that mean that occupancy is so low?
 #define SAMPLES_PER_THREAD 8
@@ -60,6 +60,10 @@ uint scratchBlockTrisOffset(uint bx) {
 
 uint scratchTriOffset(uint tri_idx) {
 	return (gl_WorkGroupID.x << WORKGROUP_SCRATCH_SHIFT) + 64 * 1024 + tri_idx;
+}
+
+uint scratchBlockTrisDepthsOffset(uint bx) {
+	return (gl_WorkGroupID.x << WORKGROUP_SCRATCH_SHIFT) + 128 * 1024 + bx * MAX_BLOCK_TRIS;
 }
 
 // Note: in the context of this shader, block size is 8x8, not 4x4
@@ -478,8 +482,14 @@ void generateBlocks(uint by) {
 		// TODO: keep tri_idx & bmask in one place
 		uint tri_idx = (full_rows[0] >> 24) | ((full_rows[1] >> 16) & 0xff00);
 
-		vec2 cpos = vec2(0, 0);
-		float weight = 0.0;
+		uint scratch_tri_offset = scratchTriOffset(tri_idx);
+		vec2 val0 = uintBitsToFloat(TRI_SCRATCH(14));
+		vec2 val1 = uintBitsToFloat(TRI_SCRATCH(15));
+		vec3 depth_eq = vec3(val0.x, val0.y, val1.x);
+		depth_eq.x += depth_eq.y * (bx << 3) + depth_eq.z * (by << 3);
+
+		float min_depth = 999999999.0;
+		// TODO: optimize based on sign of depth_eq.y & depth_eq.z
 		for(int j = 0; j < 4; j++) {
 			int row0 = int(full_rows[j] & 0xfff), row1 = int((full_rows[j] >> 12) & 0xfff);
 			// TODO: these are computed twice
@@ -488,21 +498,19 @@ void generateBlocks(uint by) {
 			int minx1 = max((row1 & 0x3f) - min_bx, 0),
 				maxx1 = min(((row1 >> 6) & 0x3f) - min_bx, 7);
 
-			int count0 = max(0, maxx0 - minx0 + 1);
-			int count1 = max(0, maxx1 - minx1 + 1);
-			cpos += vec2(float(maxx0 + minx0 + 1) * 0.5, j * 2 + 0 + 0.5) * count0;
-			cpos += vec2(float(maxx1 + minx1 + 1) * 0.5, j * 2 + 1 + 0.5) * count1;
-			weight += count0 + count1;
+			float row_depth = depth_eq.x + depth_eq.z * (j * 2);
+			if(maxx0 >= minx0) {
+				float depth = row_depth + depth_eq.y * (depth_eq.y < 0.0 ? minx0 : maxx0);
+				min_depth = min(min_depth, depth);
+			}
+			if(maxx1 >= minx1) {
+				float depth =
+					row_depth + depth_eq.y * (depth_eq.y < 0.0 ? minx1 : maxx1) + depth_eq.z;
+				min_depth = min(min_depth, depth);
+			}
 		}
-		cpos /= weight;
-		cpos += vec2(bx << 3, by << 3);
 
-		uint scratch_tri_offset = scratchTriOffset(tri_idx);
-		vec2 val0 = uintBitsToFloat(TRI_SCRATCH(14));
-		vec2 val1 = uintBitsToFloat(TRI_SCRATCH(15));
-		vec3 depth_eq = vec3(val0.x, val0.y, val1.x);
-		float ray_pos = depth_eq.x + depth_eq.y * cpos.x + depth_eq.z * cpos.y;
-		float depth = float(0x7ffff) / max(0.5, 4.0 - ray_pos); // 19 bits is enough
+		float depth = float(0x7ffff) / (1.0 + max(0.0, 1.0 / min_depth)); // 19 bits is enough
 
 		uint idx = atomicAdd(BLOCK_TRI_COUNT(bx), 1);
 		if(idx < MAX_BLOCK_TRIS)
@@ -521,7 +529,8 @@ void generateBlocks(uint by) {
 	min_bx = int(bx * 8);
 	buf_offset = bx * MAX_BLOCK_TRIS;
 	tri_count = BLOCK_TRI_COUNT(bx);
-	uint dst_offset = scratchBlockTrisOffset(bx);
+	uint dst_soffset = scratchBlockTrisOffset(bx);
+	uint depth_soffset = scratchBlockTrisDepthsOffset(bx);
 
 #define PREFIX_SUM_STEP(value, step)                                                               \
 	{                                                                                              \
@@ -540,6 +549,13 @@ void generateBlocks(uint by) {
 		uint tri_idx = (full_rows[0] >> 24) | ((full_rows[1] >> 16) & 0xff00);
 		uint bits[2];
 
+		uint scratch_tri_offset = scratchTriOffset(tri_idx);
+		vec2 val0 = uintBitsToFloat(TRI_SCRATCH(14));
+		vec2 val1 = uintBitsToFloat(TRI_SCRATCH(15));
+		vec3 depth_eq = vec3(val0.x, val0.y, val1.x);
+		depth_eq.x += depth_eq.y * (bx << 3) + depth_eq.z * (by << 3);
+		float min_depth = 999999999.0, max_depth = -999999999.0;
+
 		for(int j = 0; j < 2; j++) {
 			int rows01 = int(full_rows[j * 2 + 0]), rows23 = int(full_rows[j * 2 + 1]);
 			int minx0 = max(((rows01 >> 0) & 0x3f) - min_bx, 0),
@@ -556,6 +572,21 @@ void generateBlocks(uint by) {
 			uint mask2 = (minx2 <= maxx2 ? ~0u : 0);
 			uint mask3 = (minx3 <= maxx3 ? ~0u : 0);
 
+			float row_depth = depth_eq.x + depth_eq.z * (j * 4);
+#define COMPUTE_ROW_DEPTH(rmin, rmax)                                                              \
+	if(rmax >= rmin) {                                                                             \
+		float depth0 = row_depth + depth_eq.y * rmin;                                              \
+		float depth1 = row_depth + depth_eq.y * rmax;                                              \
+		min_depth = min(min_depth, min(depth0, depth1));                                           \
+		max_depth = max(max_depth, max(depth0, depth1));                                           \
+	}                                                                                              \
+	row_depth += depth_eq.z;
+
+			COMPUTE_ROW_DEPTH(minx0, maxx0)
+			COMPUTE_ROW_DEPTH(minx1, maxx1)
+			COMPUTE_ROW_DEPTH(minx2, maxx2)
+			COMPUTE_ROW_DEPTH(minx3, maxx3)
+
 			uint bits0 = mask0 & (0x000000ffu << minx0) & (0x000000ffu >> (7 - maxx0));
 			uint bits1 = mask1 & (0x0000ff00u << minx1) & (0x0000ff00u >> (7 - maxx1));
 			uint bits2 = mask2 & (0x00ff0000u << minx2) & (0x00ff0000u >> (7 - maxx2));
@@ -564,14 +595,17 @@ void generateBlocks(uint by) {
 			bits[j] = bits0 | bits1 | bits2 | bits3;
 		}
 
+		g_scratch[depth_soffset + i] =
+			uvec2(floatBitsToUint(min_depth), floatBitsToUint(max_depth));
+
 		uint num_frags0123 = bitCount(bits[0]);
 		uint num_frags4567 = bitCount(bits[1]);
 		uint num_frags = num_frags0123 + num_frags4567;
 		if(num_frags == 0) // This means that bmasks are invalid
 			RECORD(0, 0, 0, 0);
 
-		g_scratch[dst_offset + i] = uvec2(bits[0], bits[1]);
-		g_scratch[dst_offset + i + MAX_BLOCK_TRIS].x = tri_idx | (num_frags0123 << 16);
+		g_scratch[dst_soffset + i] = uvec2(bits[0], bits[1]);
+		g_scratch[dst_soffset + i + MAX_BLOCK_TRIS].x = tri_idx | (num_frags0123 << 16);
 
 		// Computing triangle-ordered sample offsets within each block
 		PREFIX_SUM_STEP(num_frags, 1);
@@ -603,7 +637,7 @@ void generateBlocks(uint by) {
 	// Storing offsets to scratch mem
 	for(uint i = LIX & (LSIZE / 8 - 1); i < tri_count; i += LSIZE / 8) {
 		uint value = i == 0 ? 0 : s_buffer[buf_offset + i - 1];
-		g_scratch[dst_offset + i + MAX_BLOCK_TRIS].y = value;
+		g_scratch[dst_soffset + i + MAX_BLOCK_TRIS].y = value;
 	}
 
 #ifdef SHADER_DEBUG
@@ -781,7 +815,7 @@ void loadSamples(int bx, int by, int max_raster_blocks) {
 			continue;
 		int count = bitCount(tri_bitmask);
 		uint pixel_id = (y << 6) | (bx * 8 + findLSB(tri_bitmask));
-		uint value = (pixel_id << 23) | scratchTriOffset(tri_idx);
+		uint value = (pixel_id << 23) | tri_idx;
 		for(uint i = 0; i < count; i++) {
 			if(tri_offset >= MAX_SAMPLES)
 				RECORD(x, y, tri_offset, BLOCK_FRAG_COUNT(bx));
@@ -990,7 +1024,7 @@ void shadeSamples(uint bx, uint by) {
 	for(uint i = LIX; i < sample_count; i += LSIZE) {
 		uint value = s_buffer[i];
 		uint pixel_id = value >> 23;
-		uint scratch_tri_offset = value & ((1 << 23) - 1);
+		uint scratch_tri_offset = scratchTriOffset(value & ((1 << 23) - 1));
 		ivec2 bin_pixel_pos = ivec2(pixel_id & (BIN_SIZE - 1), (by * 8) + (pixel_id >> 6));
 		s_buffer[i] = shadeSample(bin_pixel_pos, scratch_tri_offset);
 	}

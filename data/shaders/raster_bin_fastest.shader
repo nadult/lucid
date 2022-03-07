@@ -743,6 +743,13 @@ void splitTris(int bx, int by) {
 		uvec2 bits = uvec2(BUFFER(i, 0), BUFFER(i, 1));
 		float min_depth = uintBitsToFloat(BUFFER(i, 3));
 		float max_depth = uintBitsToFloat(BUFFER(i, 4));
+		uint tri_idx = BUFFER(i, 2) & 0xffff;
+
+		uint scratch_tri_offset = scratchTriOffset(tri_idx);
+		vec2 val0 = uintBitsToFloat(TRI_SCRATCH(14));
+		vec2 val1 = uintBitsToFloat(TRI_SCRATCH(15));
+		vec3 depth_eq = vec3(val0.x, val0.y, val1.x);
+		depth_eq.x += depth_eq.y * (bx << 3) + depth_eq.z * (by << 3);
 
 		bool hit = false;
 
@@ -750,8 +757,36 @@ void splitTris(int bx, int by) {
 			float min_depth_j = uintBitsToFloat(BUFFER(j, 3));
 			if(min_depth_j > max_depth && min_depth_j >= min_depth) // TODO: second check needed?
 				break;
+
 			uvec2 bits_j = uvec2(BUFFER(j, 0), BUFFER(j, 1));
-			if((bits.x & bits_j.x) != 0 || (bits.y & bits_j.y) != 0) {
+			if((bits.x & bits_j.x) == 0 && (bits.y & bits_j.y) == 0)
+				continue;
+
+			uint tri_idx = BUFFER(j, 2) & 0xffff;
+			uint scratch_tri_offset = scratchTriOffset(tri_idx);
+			vec2 val0 = uintBitsToFloat(TRI_SCRATCH(14));
+			vec2 val1 = uintBitsToFloat(TRI_SCRATCH(15));
+			vec3 depth_eq_j = vec3(val0.x, val0.y, val1.x);
+			depth_eq_j.x += depth_eq_j.y * (bx << 3) + depth_eq_j.z * (by << 3);
+
+			bool cur_hit = false;
+			for(int y = 0; y < 8; y++) {
+				uint bits_i = ((y < 4 ? bits.x : bits.y) >> ((y & 3) << 3)) & 0xff;
+				uint bits_j = ((y < 4 ? bits_j.x : bits_j.y) >> ((y & 3) << 3)) & 0xff;
+				uint bits = bits_i & bits_j;
+
+				float depth_row = depth_eq.x + depth_eq.z * y;
+				float depth_row_j = depth_eq_j.x + depth_eq_j.z * y;
+
+				if(bits != 0) {
+					int min_x = findLSB(bits), max_x = findMSB(bits) + 1;
+					if(depth_row + depth_eq.y * min_x >= depth_row_j + depth_eq_j.y * min_x ||
+					   depth_row + depth_eq.y * max_x >= depth_row_j + depth_eq_j.y * max_x)
+						cur_hit = true;
+				}
+			}
+
+			if(cur_hit) {
 				BUFFER(j, 6) = 0;
 				hit = true;
 			}
@@ -1263,7 +1298,7 @@ void rasterBin(int bin_id) {
 			barrier();
 			UPDATE_CLOCK(3);
 
-			reduceSamples(bx, by, max_raster_blocks);
+			reduceSamplesWithCheck(bx, by, max_raster_blocks);
 			barrier();
 			UPDATE_CLOCK(4);
 		}

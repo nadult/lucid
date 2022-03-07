@@ -457,7 +457,7 @@ void generateRows() {
 	}
 }
 
-void generateBlocks(uint by) {
+void generateBlocks1(uint by) {
 	// TODO: is this really the best order?
 	uint bx = LIX & 7;
 	uint src_offset = scratchBlockRowTrisOffset(by);
@@ -605,7 +605,22 @@ void generateBlocks(uint by) {
 			RECORD(0, 0, 0, 0);
 
 		g_scratch[dst_soffset + i] = uvec2(bits[0], bits[1]);
-		g_scratch[dst_soffset + i + MAX_BLOCK_TRIS].x = tri_idx | (num_frags0123 << 16);
+		g_scratch[dst_soffset + i + MAX_BLOCK_TRIS].x =
+			tri_idx | (num_frags << 16) | (num_frags0123 << 24);
+	}
+	barrier();
+}
+
+void generateBlocks2(uint by) {
+	uint bx = LIX >> (LSHIFT - 3);
+	uint min_bx = int(bx * 8);
+	uint buf_offset = bx * MAX_BLOCK_TRIS;
+	uint tri_count = BLOCK_TRI_COUNT(bx);
+	uint dst_soffset = scratchBlockTrisOffset(bx);
+
+	for(uint i = LIX & (LSIZE / 8 - 1); i < tri_count; i += LSIZE / 8) {
+		uint value = g_scratch[dst_soffset + i + MAX_BLOCK_TRIS].x;
+		uint num_frags = (value >> 16) & 0xff;
 
 		// Computing triangle-ordered sample offsets within each block
 		PREFIX_SUM_STEP(num_frags, 1);
@@ -615,6 +630,7 @@ void generateBlocks(uint by) {
 		PREFIX_SUM_STEP(num_frags, 16);
 		s_buffer[buf_offset + i] = num_frags;
 	}
+
 	barrier();
 
 	// Computing offsets for each triangle within block
@@ -807,7 +823,7 @@ void loadSamples(int bx, int by, int max_raster_blocks) {
 		uint tri_bitmask = g_scratch[soffset + i][y < 4 ? 0 : 1];
 		uvec2 info = g_scratch[soffset + i + MAX_BLOCK_TRIS];
 		uint tri_idx = info.x & 0xffff;
-		uint tri_offset = block_offset + info.y + (y >= 4 ? info.x >> 16 : 0);
+		uint tri_offset = block_offset + info.y + (y >= 4 ? info.x >> 24 : 0);
 		tri_offset += bitCount(tri_bitmask & ((1 << y_shift) - 1));
 		tri_bitmask = (tri_bitmask >> y_shift) & 0xff;
 
@@ -861,7 +877,7 @@ void reduceSamples(int bx, int by, int max_raster_blocks) {
 				uvec2 info = g_scratch[soffset + i + (LIX & 31) + MAX_BLOCK_TRIS];
 
 				sel_tri_bitmask = y < 4 ? bits.x : bits.y;
-				sel_tri_offset = block_offset + info.y + (y >= 4 ? info.x >> 16 : 0);
+				sel_tri_offset = block_offset + info.y + (y >= 4 ? info.x >> 24 : 0);
 
 				uint tri_idx = info.x & 0xffff;
 				uint scratch_tri_offset = scratchTriOffset(tri_idx);
@@ -1081,7 +1097,9 @@ void rasterBin(int bin_id) {
 
 	for(int by = 0; by < BLOCK_COUNT; by++) {
 		barrier();
-		generateBlocks(by);
+		generateBlocks1(by);
+		groupMemoryBarrier();
+		generateBlocks2(by);
 		groupMemoryBarrier();
 		barrier();
 		UPDATE_CLOCK(1);

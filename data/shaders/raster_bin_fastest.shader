@@ -660,102 +660,6 @@ void generateBlocks(uint by) {
 	barrier();
 }
 
-//#define BLOCK_DEPTH_OVERLAPS
-
-#ifdef BLOCK_DEPTH_OVERLAPS
-shared uint s_overlaps[BLOCK_COUNT * BLOCK_COUNT];
-
-void computeDepthRanges(int bx, int by, int bx_step) {
-	bx += int(LIX >> (LSHIFT - bx_step));
-
-	uint tri_count = BLOCK_TRI_COUNT(bx);
-	uint soffset = scratchBlockTrisOffset(bx);
-	uint buf_offset = (bx & ((1 << bx_step) - 1)) * MAX_BLOCK_TRIS * 2;
-	vec3 ray_dir_base = s_bin_ray_dir0 + (bx * 8) * frustum.ws_dirx + (by * 8) * frustum.ws_diry;
-
-	s_overlaps[bx + by * 8] = 0;
-	barrier();
-
-	// This takes way more time than just the comparisons?
-	for(uint i = LIX & ((LSIZE >> bx_step) - 1); i < tri_count; i += (LSIZE >> bx_step)) {
-		uvec2 tri_bitmask = g_scratch[soffset + i];
-		uvec2 tri_info = g_scratch[soffset + i + MAX_BLOCK_TRIS];
-
-		uint tri_idx = tri_info.x & 0xffff;
-		uint scratch_tri_offset = scratchTriOffset(tri_idx);
-		vec2 val0 = uintBitsToFloat(TRI_SCRATCH(14));
-		vec2 val1 = uintBitsToFloat(TRI_SCRATCH(15));
-		vec3 depth_eq = vec3(val0.x, val0.y, val1.x);
-		//float ray_pos = depth_eq.x + depth_eq.y * cpos.x + depth_eq.z * cpos.y;
-
-		float min_depth = 999999999.0, max_depth = -999999999.0;
-		depth_eq.x += depth_eq.y * (bx << 3) + depth_eq.z * (by << 3);
-
-		for(uint y = 0; y < 8; y++) {
-			uint bits = y < 4 ? tri_bitmask.x : tri_bitmask.y;
-			bits = (bits >> (y & 3) * 8) & 0xff;
-			uint min_x = findLSB(bits), max_x = findMSB(bits);
-
-			float row_depth = depth_eq.x + depth_eq.z * y;
-			float ray_pos = row_depth + depth_eq.y * min_x;
-			min_depth = min(min_depth, ray_pos);
-			max_depth = max(max_depth, ray_pos);
-
-			ray_pos = row_depth + depth_eq.y * max_x;
-			min_depth = min(min_depth, ray_pos);
-			max_depth = max(max_depth, ray_pos);
-		}
-
-		s_buffer[buf_offset + i * 2 + 0] = floatBitsToUint(min_depth);
-		s_buffer[buf_offset + i * 2 + 1] = floatBitsToUint(max_depth);
-	}
-	barrier();
-
-	uint num_overlaps = 0;
-
-	for(uint i = LIX & ((LSIZE >> bx_step) - 1); i < tri_count; i += (LSIZE >> bx_step)) {
-		float min_depth = uintBitsToFloat(s_buffer[buf_offset + i * 2 + 0]);
-		float max_depth = uintBitsToFloat(s_buffer[buf_offset + i * 2 + 1]);
-		for(uint j = 0; j < i; j++) {
-			float min_depth_j = uintBitsToFloat(s_buffer[buf_offset + j * 2 + 0]);
-			float max_depth_j = uintBitsToFloat(s_buffer[buf_offset + j * 2 + 1]);
-
-			if(min_depth_j < max_depth && max_depth_j > min_depth)
-				num_overlaps++;
-		}
-	}
-
-	atomicAdd(s_overlaps[bx + by * BLOCK_COUNT], num_overlaps);
-	barrier();
-}
-
-void rasterDepthOverlaps(int by) {
-	barrier();
-	for(uint i = LIX; i < BIN_SIZE * MAX_ROWS; i += LSIZE) {
-		ivec2 pixel_pos = ivec2(i & (BIN_SIZE - 1), by * 8 + (i >> BIN_SHIFT));
-		uint tri_count = BLOCK_TRI_COUNT(pixel_pos.x / 8);
-		float mul = tri_count == 0 ? 0.0 : 1.0 / float(tri_count);
-		float count0 = float(s_overlaps[pixel_pos.x / 8 + by * 8]) * mul;
-
-		vec3 color = vec3(count0, count0, count0) / 64.0;
-		if(count0 <= 4)
-			color = vec3(0, 1, 0);
-		else if(count0 <= 8)
-			color = vec3(0.5, 1, 0);
-		else if(count0 <= 16)
-			color = vec3(1, 1, 0);
-		else if(count0 <= 32)
-			color = vec3(0.8, 0.4, 0);
-		else
-			color = vec3(1, 0, 0);
-
-		uint enc_col = encodeRGBA8(vec4(min(color, vec3(1.0)), 0.5));
-		outputPixel(pixel_pos, enc_col);
-	}
-	barrier();
-}
-#endif
-
 void loadSamples(int bx, int by, int max_raster_blocks) {
 	bx += int(LIX >> (LSHIFT - max_raster_blocks));
 
@@ -1064,13 +968,6 @@ void rasterBin(int bin_id) {
 		barrier();
 		UPDATE_CLOCK(1);
 
-#ifdef BLOCK_DEPTH_OVERLAPS
-		// 0.6 ms na sponzie? To chyba nie dużo?
-		// OK ale jeszcze trzeba podzielić maski!
-		for(int bx = 0; bx < BLOCK_COUNT; bx += 4)
-			computeDepthRanges(bx, by, 2);
-#endif
-
 		// How many rows can we rasterize in single step?
 		int max_raster_blocks = s_max_raster_blocks;
 		if(max_raster_blocks == -1) {
@@ -1096,11 +993,7 @@ void rasterBin(int bin_id) {
 			UPDATE_CLOCK(4);
 		}
 
-#ifdef BLOCK_DEPTH_OVERLAPS
-		rasterDepthOverlaps(by);
-#else
 		//rasterFragmentCounts(by);
-#endif
 	}
 }
 

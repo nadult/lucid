@@ -34,8 +34,8 @@ layout(binding = 1) uniform sampler2D transparent_texture;
 
 uniform bool additive_blending;
 
-#define WORKGROUP_SCRATCH_SIZE (128 * 1024)
-#define WORKGROUP_SCRATCH_SHIFT 17
+#define WORKGROUP_SCRATCH_SIZE (256 * 1024)
+#define WORKGROUP_SCRATCH_SHIFT 18
 
 // TODO: does that mean that occupancy is so low?
 #define SAMPLES_PER_THREAD 8
@@ -60,6 +60,10 @@ uint scratchBlockTrisOffset(uint bx) {
 
 uint scratchTriOffset(uint tri_idx) {
 	return (gl_WorkGroupID.x << WORKGROUP_SCRATCH_SHIFT) + 64 * 1024 + tri_idx;
+}
+
+uint scratchBlockTrisDepthsOffset(uint bx) {
+	return (gl_WorkGroupID.x << WORKGROUP_SCRATCH_SHIFT) + 128 * 1024 + bx * MAX_BLOCK_TRIS;
 }
 
 // Note: in the context of this shader, block size is 8x8, not 4x4
@@ -453,7 +457,7 @@ void generateRows() {
 	}
 }
 
-void generateBlocks(uint by) {
+void generateBlocks1(uint by) {
 	// TODO: is this really the best order?
 	uint bx = LIX & 7;
 	uint src_offset = scratchBlockRowTrisOffset(by);
@@ -478,8 +482,14 @@ void generateBlocks(uint by) {
 		// TODO: keep tri_idx & bmask in one place
 		uint tri_idx = (full_rows[0] >> 24) | ((full_rows[1] >> 16) & 0xff00);
 
-		vec2 cpos = vec2(0, 0);
-		float weight = 0.0;
+		uint scratch_tri_offset = scratchTriOffset(tri_idx);
+		vec2 val0 = uintBitsToFloat(TRI_SCRATCH(14));
+		vec2 val1 = uintBitsToFloat(TRI_SCRATCH(15));
+		vec3 depth_eq = vec3(val0.x, val0.y, val1.x);
+		depth_eq.x += depth_eq.y * (bx << 3) + depth_eq.z * (by << 3);
+
+		float min_depth = 999999999.0;
+		// TODO: optimize based on sign of depth_eq.y & depth_eq.z
 		for(int j = 0; j < 4; j++) {
 			int row0 = int(full_rows[j] & 0xfff), row1 = int((full_rows[j] >> 12) & 0xfff);
 			// TODO: these are computed twice
@@ -488,25 +498,23 @@ void generateBlocks(uint by) {
 			int minx1 = max((row1 & 0x3f) - min_bx, 0),
 				maxx1 = min(((row1 >> 6) & 0x3f) - min_bx, 7);
 
-			int count0 = max(0, maxx0 - minx0 + 1);
-			int count1 = max(0, maxx1 - minx1 + 1);
-			cpos += vec2(float(maxx0 + minx0 + 1) * 0.5, j * 2 + 0 + 0.5) * count0;
-			cpos += vec2(float(maxx1 + minx1 + 1) * 0.5, j * 2 + 1 + 0.5) * count1;
-			weight += count0 + count1;
+			float row_depth = depth_eq.x + depth_eq.z * (j * 2);
+			if(maxx0 >= minx0) {
+				float depth = row_depth + depth_eq.y * (depth_eq.y < 0.0 ? minx0 : maxx0);
+				min_depth = min(min_depth, depth);
+			}
+			if(maxx1 >= minx1) {
+				float depth =
+					row_depth + depth_eq.y * (depth_eq.y < 0.0 ? minx1 : maxx1) + depth_eq.z;
+				min_depth = min(min_depth, depth);
+			}
 		}
-		cpos /= weight;
-		cpos += vec2(bx << 3, by << 3);
 
-		uint scratch_tri_offset = scratchTriOffset(tri_idx);
-		vec2 val0 = uintBitsToFloat(TRI_SCRATCH(14));
-		vec2 val1 = uintBitsToFloat(TRI_SCRATCH(15));
-		vec3 depth_eq = vec3(val0.x, val0.y, val1.x);
-		float ray_pos = depth_eq.x + depth_eq.y * cpos.x + depth_eq.z * cpos.y;
-		float depth = float(0x7ffff) / max(0.5, 4.0 - ray_pos); // 19 bits is enough
+		float depth = float(0xfffff) / (1.0 + max(0.0, 1.0 / min_depth)); // 20 bits is enough
 
 		uint idx = atomicAdd(BLOCK_TRI_COUNT(bx), 1);
 		if(idx < MAX_BLOCK_TRIS)
-			s_buffer[buf_offset + idx] = i | (uint(depth) << 13);
+			s_buffer[buf_offset + idx] = i | (uint(depth) << 12);
 		else
 			s_max_raster_blocks = -1;
 	}
@@ -521,7 +529,8 @@ void generateBlocks(uint by) {
 	min_bx = int(bx * 8);
 	buf_offset = bx * MAX_BLOCK_TRIS;
 	tri_count = BLOCK_TRI_COUNT(bx);
-	uint dst_offset = scratchBlockTrisOffset(bx);
+	uint dst_soffset = scratchBlockTrisOffset(bx);
+	uint depth_soffset = scratchBlockTrisDepthsOffset(bx);
 
 #define PREFIX_SUM_STEP(value, step)                                                               \
 	{                                                                                              \
@@ -531,7 +540,7 @@ void generateBlocks(uint by) {
 	}
 
 	for(uint i = LIX & (LSIZE / 8 - 1); i < tri_count; i += LSIZE / 8) {
-		uint idx = s_buffer[buf_offset + i] & 0x1fff;
+		uint idx = s_buffer[buf_offset + i] & 0xfff;
 
 		// TODO: load range data in groups
 		uint full_rows[4] = {
@@ -539,6 +548,15 @@ void generateBlocks(uint by) {
 			g_scratch[src_offset + idx * 2 + 1].x, g_scratch[src_offset + idx * 2 + 1].y};
 		uint tri_idx = (full_rows[0] >> 24) | ((full_rows[1] >> 16) & 0xff00);
 		uint bits[2];
+
+		uint scratch_tri_offset = scratchTriOffset(tri_idx);
+		vec2 val0 = uintBitsToFloat(TRI_SCRATCH(14));
+		vec2 val1 = uintBitsToFloat(TRI_SCRATCH(15));
+		vec3 depth_eq = vec3(val0.x, val0.y, val1.x);
+		depth_eq.x += depth_eq.y * (bx << 3) + depth_eq.z * (by << 3);
+
+		// TODO: how to compute these accurately ? sample in the middle of pixel?
+		float min_depth = 999999999.0, max_depth = -999999999.0;
 
 		for(int j = 0; j < 2; j++) {
 			int rows01 = int(full_rows[j * 2 + 0]), rows23 = int(full_rows[j * 2 + 1]);
@@ -556,6 +574,21 @@ void generateBlocks(uint by) {
 			uint mask2 = (minx2 <= maxx2 ? ~0u : 0);
 			uint mask3 = (minx3 <= maxx3 ? ~0u : 0);
 
+			float row_depth = depth_eq.x + depth_eq.z * (j * 4);
+#define COMPUTE_ROW_DEPTH(rmin, rmax)                                                              \
+	if(rmax >= rmin) {                                                                             \
+		float depth0 = row_depth + depth_eq.y * rmin;                                              \
+		float depth1 = row_depth + depth_eq.y * (rmax + 1);                                        \
+		min_depth = min(min_depth, min(depth0, depth1));                                           \
+		max_depth = max(max_depth, max(depth0, depth1));                                           \
+	}                                                                                              \
+	row_depth += depth_eq.z;
+
+			COMPUTE_ROW_DEPTH(minx0, maxx0)
+			COMPUTE_ROW_DEPTH(minx1, maxx1)
+			COMPUTE_ROW_DEPTH(minx2, maxx2)
+			COMPUTE_ROW_DEPTH(minx3, maxx3)
+
 			uint bits0 = mask0 & (0x000000ffu << minx0) & (0x000000ffu >> (7 - maxx0));
 			uint bits1 = mask1 & (0x0000ff00u << minx1) & (0x0000ff00u >> (7 - maxx1));
 			uint bits2 = mask2 & (0x00ff0000u << minx2) & (0x00ff0000u >> (7 - maxx2));
@@ -564,14 +597,32 @@ void generateBlocks(uint by) {
 			bits[j] = bits0 | bits1 | bits2 | bits3;
 		}
 
+		g_scratch[depth_soffset + i] =
+			uvec2(floatBitsToUint(min_depth), floatBitsToUint(max_depth));
+
 		uint num_frags0123 = bitCount(bits[0]);
 		uint num_frags4567 = bitCount(bits[1]);
 		uint num_frags = num_frags0123 + num_frags4567;
 		if(num_frags == 0) // This means that bmasks are invalid
 			RECORD(0, 0, 0, 0);
 
-		g_scratch[dst_offset + i] = uvec2(bits[0], bits[1]);
-		g_scratch[dst_offset + i + MAX_BLOCK_TRIS].x = tri_idx | (num_frags0123 << 16);
+		g_scratch[dst_soffset + i] = uvec2(bits[0], bits[1]);
+		g_scratch[dst_soffset + i + MAX_BLOCK_TRIS].x =
+			tri_idx | (num_frags << 16) | (num_frags0123 << 24);
+	}
+	barrier();
+}
+
+void generateBlocks2(uint by) {
+	uint bx = LIX >> (LSHIFT - 3);
+	uint min_bx = int(bx * 8);
+	uint buf_offset = bx * MAX_BLOCK_TRIS;
+	uint tri_count = BLOCK_TRI_COUNT(bx);
+	uint dst_soffset = scratchBlockTrisOffset(bx);
+
+	for(uint i = LIX & (LSIZE / 8 - 1); i < tri_count; i += LSIZE / 8) {
+		uint value = g_scratch[dst_soffset + i + MAX_BLOCK_TRIS].x;
+		uint num_frags = (value >> 16) & 0xff;
 
 		// Computing triangle-ordered sample offsets within each block
 		PREFIX_SUM_STEP(num_frags, 1);
@@ -581,6 +632,7 @@ void generateBlocks(uint by) {
 		PREFIX_SUM_STEP(num_frags, 16);
 		s_buffer[buf_offset + i] = num_frags;
 	}
+
 	barrier();
 
 	// Computing offsets for each triangle within block
@@ -603,7 +655,7 @@ void generateBlocks(uint by) {
 	// Storing offsets to scratch mem
 	for(uint i = LIX & (LSIZE / 8 - 1); i < tri_count; i += LSIZE / 8) {
 		uint value = i == 0 ? 0 : s_buffer[buf_offset + i - 1];
-		g_scratch[dst_offset + i + MAX_BLOCK_TRIS].y = value;
+		g_scratch[dst_soffset + i + MAX_BLOCK_TRIS].y = value;
 	}
 
 #ifdef SHADER_DEBUG
@@ -658,6 +710,147 @@ void generateBlocks(uint by) {
 		}
 	}
 	barrier();
+}
+
+void splitTris(int bx, int by) {
+	uint tri_count = BLOCK_TRI_COUNT(bx);
+	uint dst_soffset = scratchBlockTrisOffset(bx);
+	uint depth_soffset = scratchBlockTrisDepthsOffset(bx);
+
+#define BUFFER(i, j) s_buffer[(i) + MAX_BLOCK_TRIS * (j)]
+	for(uint i = 0; i < 8; i++)
+		BUFFER(LIX, i) = 0;
+	barrier();
+
+	// TODO: compute min/max depth in this loop?
+	for(uint i = LIX; i < tri_count; i += LSIZE) {
+		uvec2 bits = g_scratch[dst_soffset + i];
+		uvec2 depths = g_scratch[depth_soffset + i];
+		uint info = g_scratch[dst_soffset + i + MAX_BLOCK_TRIS].x;
+
+		BUFFER(i, 0) = bits.x;
+		BUFFER(i, 1) = bits.y;
+		BUFFER(i, 2) = info;
+		BUFFER(i, 3) = depths.x;
+		BUFFER(i, 4) = depths.y;
+		BUFFER(i, 6) = 1;
+	}
+
+	barrier();
+
+	// Identifying groups with overlapping tris
+	for(uint i = LIX; i < tri_count; i += LSIZE) {
+		uvec2 bits = uvec2(BUFFER(i, 0), BUFFER(i, 1));
+		float min_depth = uintBitsToFloat(BUFFER(i, 3));
+		float max_depth = uintBitsToFloat(BUFFER(i, 4));
+		uint tri_idx = BUFFER(i, 2) & 0xffff;
+
+		uint scratch_tri_offset = scratchTriOffset(tri_idx);
+		vec2 val0 = uintBitsToFloat(TRI_SCRATCH(14));
+		vec2 val1 = uintBitsToFloat(TRI_SCRATCH(15));
+		vec3 depth_eq = vec3(val0.x, val0.y, val1.x);
+		depth_eq.x += depth_eq.y * (bx << 3) + depth_eq.z * (by << 3);
+
+		bool hit = false;
+
+		for(uint j = i + 1; j < tri_count; j++) {
+			float min_depth_j = uintBitsToFloat(BUFFER(j, 3));
+			if(min_depth_j > max_depth && min_depth_j >= min_depth) // TODO: second check needed?
+				break;
+
+			uvec2 bits_j = uvec2(BUFFER(j, 0), BUFFER(j, 1));
+			if((bits.x & bits_j.x) == 0 && (bits.y & bits_j.y) == 0)
+				continue;
+
+			uint tri_idx = BUFFER(j, 2) & 0xffff;
+			uint scratch_tri_offset = scratchTriOffset(tri_idx);
+			vec2 val0 = uintBitsToFloat(TRI_SCRATCH(14));
+			vec2 val1 = uintBitsToFloat(TRI_SCRATCH(15));
+			vec3 depth_eq_j = vec3(val0.x, val0.y, val1.x);
+			depth_eq_j.x += depth_eq_j.y * (bx << 3) + depth_eq_j.z * (by << 3);
+
+			bool cur_hit = false;
+			for(int y = 0; y < 8; y++) {
+				uint bits_i = ((y < 4 ? bits.x : bits.y) >> ((y & 3) << 3)) & 0xff;
+				uint bits_j = ((y < 4 ? bits_j.x : bits_j.y) >> ((y & 3) << 3)) & 0xff;
+				uint bits = bits_i & bits_j;
+
+				float depth_row = depth_eq.x + depth_eq.z * y;
+				float depth_row_j = depth_eq_j.x + depth_eq_j.z * y;
+
+				if(bits != 0) {
+					int min_x = findLSB(bits), max_x = findMSB(bits) + 1;
+					if(depth_row + depth_eq.y * min_x >= depth_row_j + depth_eq_j.y * min_x ||
+					   depth_row + depth_eq.y * max_x >= depth_row_j + depth_eq_j.y * max_x)
+						cur_hit = true;
+				}
+			}
+
+			if(cur_hit) {
+				BUFFER(j, 6) = 0;
+				hit = true;
+			}
+		}
+
+		if(hit)
+			BUFFER(i, 6) = 0;
+	}
+	barrier();
+	for(uint i = LIX, count = (tri_count + 31) & ~31; i < count; i += LSIZE) {
+		uint cur_offset = BUFFER(i, 6);
+		PREFIX_SUM_STEP(cur_offset, 1);
+		PREFIX_SUM_STEP(cur_offset, 2);
+		PREFIX_SUM_STEP(cur_offset, 4);
+		PREFIX_SUM_STEP(cur_offset, 8);
+		PREFIX_SUM_STEP(cur_offset, 16);
+		BUFFER(i, 7) = cur_offset;
+	}
+	barrier();
+
+	// Computing offsets for each triangle within block
+	uint idx32 = LIX * 32;
+	// Note: here we expect that idx32 < 32 * 16
+	if(idx32 < tri_count) {
+		uint value = BUFFER(idx32 + 31, 7);
+		PREFIX_SUM_STEP(value, 1);
+		PREFIX_SUM_STEP(value, 2);
+		PREFIX_SUM_STEP(value, 4);
+		PREFIX_SUM_STEP(value, 8);
+		s_mini_buffer[idx32 >> 5] = value;
+	}
+	barrier();
+	for(uint i = LIX; i < tri_count; i += LSIZE) {
+		uint warp_idx = i >> 5;
+		if(warp_idx > 0)
+			BUFFER(i, 7) += s_mini_buffer[warp_idx - 1];
+	}
+	barrier();
+
+	// TODO: compute min/max depth in this loop?
+	for(uint i = LIX; i < tri_count; i += LSIZE) {
+		uvec2 bits = uvec2(BUFFER(i, 0), BUFFER(i, 1));
+		uint info = BUFFER(i, 2);
+
+		uint cur_value = BUFFER(i, 6);
+		uint cur_offset = BUFFER(i, 7);
+		cur_offset -= cur_value;
+
+		if(cur_value != 0) {
+			g_scratch[dst_soffset + cur_offset] = bits;
+			g_scratch[dst_soffset + cur_offset + MAX_BLOCK_TRIS].x = info;
+		}
+	}
+	if(LIX == 0)
+		BLOCK_TRI_COUNT(bx) = BUFFER(tri_count - 1, 7);
+
+	barrier();
+
+	for(uint i = 0; i < 8; i++)
+		BUFFER(LIX, i) = 0;
+
+	barrier();
+
+#undef BUFFER
 }
 
 //#define BLOCK_DEPTH_OVERLAPS
@@ -773,7 +966,7 @@ void loadSamples(int bx, int by, int max_raster_blocks) {
 		uint tri_bitmask = g_scratch[soffset + i][y < 4 ? 0 : 1];
 		uvec2 info = g_scratch[soffset + i + MAX_BLOCK_TRIS];
 		uint tri_idx = info.x & 0xffff;
-		uint tri_offset = block_offset + info.y + (y >= 4 ? info.x >> 16 : 0);
+		uint tri_offset = block_offset + info.y + (y >= 4 ? info.x >> 24 : 0);
 		tri_offset += bitCount(tri_bitmask & ((1 << y_shift) - 1));
 		tri_bitmask = (tri_bitmask >> y_shift) & 0xff;
 
@@ -781,18 +974,76 @@ void loadSamples(int bx, int by, int max_raster_blocks) {
 			continue;
 		int count = bitCount(tri_bitmask);
 		uint pixel_id = (y << 6) | (bx * 8 + findLSB(tri_bitmask));
-		uint value = (pixel_id << 23) | scratchTriOffset(tri_idx);
+		uint value = (pixel_id << 23) | tri_idx;
 		for(uint i = 0; i < count; i++) {
-			if(tri_offset >= MAX_SAMPLES)
-				RECORD(x, y, tri_offset, BLOCK_FRAG_COUNT(bx));
+			//if(tri_offset >= MAX_SAMPLES)
+			//RECORD(x, y, tri_offset, BLOCK_FRAG_COUNT(bx));
 			s_buffer[tri_offset++] = value;
 			value += 1 << 23;
 		}
 	}
 }
 
-// TODO: optimize
 void reduceSamples(int bx, int by, int max_raster_blocks) {
+	if(LIX >= (BIN_SIZE << max_raster_blocks))
+		return;
+
+	bx += int(LIX >> 6);
+	int x = int(LIX & 7) + bx * 8, y = int((LIX >> 3) & 7);
+
+	uint soffset = scratchBlockTrisOffset(bx);
+	uint tri_count = BLOCK_TRI_COUNT(bx);
+	uint block_offset = BLOCK_FRAG_OFFSET(bx) & 0xffff;
+
+	// TODO: share pixels between threads for max_raster_blocks <= 4?
+	// TODO: WARP_SIZE?
+
+	uint pixel_bit = 1u << ((y & 3) * 8 + (x & 7));
+	vec3 out_color = vec3(0);
+	float out_transparency = 1.0;
+
+	for(uint i = 0; i < tri_count; i += 32) {
+		uint sub_count = min(32, tri_count - i);
+		uint sel_tri_offset = 0, sel_tri_bitmask, tris_bitmask;
+		{
+			bool in_range = false;
+			if((LIX & 31) < sub_count) {
+				uvec2 bits = g_scratch[soffset + i + (LIX & 31)];
+				uvec2 info = g_scratch[soffset + i + (LIX & 31) + MAX_BLOCK_TRIS];
+				sel_tri_bitmask = y < 4 ? bits.x : bits.y;
+				sel_tri_offset = block_offset + info.y + (y >= 4 ? info.x >> 24 : 0);
+				in_range = sel_tri_bitmask != 0;
+			}
+			tris_bitmask = uint(ballotARB(in_range));
+		}
+
+		int j = findLSB(tris_bitmask);
+		while(j != -1) {
+			uint tri_offset = shuffleNV(sel_tri_offset, j, 32);
+			uint tri_bitmask = shuffleNV(sel_tri_bitmask, j, 32);
+			tris_bitmask &= ~(1 << j);
+			j = findLSB(tris_bitmask);
+			if((tri_bitmask & pixel_bit) == 0)
+				continue;
+
+			tri_offset += bitCount(tri_bitmask & (pixel_bit - 1));
+			uint value = s_buffer[tri_offset];
+			if(value != 0) {
+				vec4 cur_color = decodeRGBA8(value);
+				float cur_transparency = 1.0 - cur_color.a;
+				out_color = (additive_blending ? out_color : out_color * cur_transparency) +
+							cur_color.rgb * cur_color.a;
+				out_transparency *= cur_transparency;
+			}
+		}
+	}
+
+	out_color = min(out_color, vec3(1.0));
+	uint enc_color = encodeRGBA8(vec4(out_color, 1.0 - out_transparency));
+	outputPixel(ivec2(x, by * 8 + y), enc_color);
+}
+
+void reduceSamplesWithCheck(int bx, int by, int max_raster_blocks) {
 	if(LIX >= (BIN_SIZE << max_raster_blocks))
 		return;
 
@@ -804,15 +1055,8 @@ void reduceSamples(int bx, int by, int max_raster_blocks) {
 
 	uint block_offset = BLOCK_FRAG_OFFSET(bx) & 0xffff;
 
-	// TODO: share pixels between threads for max_raster_blocks <= 4?
-	// TODO: WARP_SIZE?
-
 	uint pixel_bit = 1u << ((y & 3) * 8 + (x & 7));
-
-	// TODO: more ?
-	float prev_depths[4] = {-1.0, -1.0, -1.0, -1.0};
-	uint prev_colors[3] = {0, 0, 0};
-
+	float prev_depth = -1.0;
 	vec3 out_color = vec3(0);
 	float out_transparency = 1.0;
 
@@ -827,7 +1071,7 @@ void reduceSamples(int bx, int by, int max_raster_blocks) {
 				uvec2 info = g_scratch[soffset + i + (LIX & 31) + MAX_BLOCK_TRIS];
 
 				sel_tri_bitmask = y < 4 ? bits.x : bits.y;
-				sel_tri_offset = block_offset + info.y + (y >= 4 ? info.x >> 16 : 0);
+				sel_tri_offset = block_offset + info.y + (y >= 4 ? info.x >> 24 : 0);
 
 				uint tri_idx = info.x & 0xffff;
 				uint scratch_tri_offset = scratchTriOffset(tri_idx);
@@ -855,51 +1099,21 @@ void reduceSamples(int bx, int by, int max_raster_blocks) {
 				continue;
 
 			float depth = depth_eq.x + depth_eq.y * x + depth_eq.z * (y + (by << 3));
-			if(depth < prev_depths[0]) {
-				SWAP_UINT(value, prev_colors[0]);
-				SWAP_FLOAT(depth, prev_depths[0]);
-				if(prev_depths[0] < prev_depths[1]) {
-					SWAP_UINT(prev_colors[1], prev_colors[0]);
-					SWAP_FLOAT(prev_depths[1], prev_depths[0]);
-					if(prev_depths[1] < prev_depths[2]) {
-						SWAP_UINT(prev_colors[2], prev_colors[1]);
-						SWAP_FLOAT(prev_depths[2], prev_depths[1]);
-						if(prev_depths[2] < prev_depths[3]) {
-							prev_colors[0] = 0xff0000ff;
-							pixel_bit = 0;
-							continue;
-						}
-					}
-				}
+			if(depth < prev_depth) {
+				out_color = vec3(1.0, 0.0, 0.0);
+				out_transparency = 0.0;
+				pixel_bit = 0;
+				continue;
 			}
 
-			prev_depths[3] = prev_depths[2];
-			prev_depths[2] = prev_depths[1];
-			prev_depths[1] = prev_depths[0];
-			prev_depths[0] = depth;
-
-			if(prev_colors[2] != 0) {
-				vec4 cur_color = decodeRGBA8(prev_colors[2]);
-				float cur_transparency = 1.0 - cur_color.a;
-				out_color = (additive_blending ? out_color : out_color * cur_transparency) +
-							cur_color.rgb * cur_color.a;
-				out_transparency *= cur_transparency;
-			}
-
-			prev_colors[2] = prev_colors[1];
-			prev_colors[1] = prev_colors[0];
-			prev_colors[0] = value;
-		}
-	}
-
-	for(int i = 2; i >= 0; i--)
-		if(prev_colors[i] != 0) {
-			vec4 cur_color = decodeRGBA8(prev_colors[i]);
+			prev_depth = depth;
+			vec4 cur_color = decodeRGBA8(value);
 			float cur_transparency = 1.0 - cur_color.a;
 			out_color = (additive_blending ? out_color : out_color * cur_transparency) +
 						cur_color.rgb * cur_color.a;
 			out_transparency *= cur_transparency;
 		}
+	}
 
 	out_color = min(out_color, vec3(1.0));
 	uint enc_color = encodeRGBA8(vec4(out_color, 1.0 - out_transparency));
@@ -990,7 +1204,7 @@ void shadeSamples(uint bx, uint by) {
 	for(uint i = LIX; i < sample_count; i += LSIZE) {
 		uint value = s_buffer[i];
 		uint pixel_id = value >> 23;
-		uint scratch_tri_offset = value & ((1 << 23) - 1);
+		uint scratch_tri_offset = scratchTriOffset(value & ((1 << 23) - 1));
 		ivec2 bin_pixel_pos = ivec2(pixel_id & (BIN_SIZE - 1), (by * 8) + (pixel_id >> 6));
 		s_buffer[i] = shadeSample(bin_pixel_pos, scratch_tri_offset);
 	}
@@ -1047,7 +1261,12 @@ void rasterBin(int bin_id) {
 
 	for(int by = 0; by < BLOCK_COUNT; by++) {
 		barrier();
-		generateBlocks(by);
+		generateBlocks1(by);
+		groupMemoryBarrier();
+		for(int bx = 0; bx < BLOCK_COUNT; bx++)
+			splitTris(bx, by);
+		groupMemoryBarrier();
+		generateBlocks2(by);
 		groupMemoryBarrier();
 		barrier();
 		UPDATE_CLOCK(1);
@@ -1079,7 +1298,7 @@ void rasterBin(int bin_id) {
 			barrier();
 			UPDATE_CLOCK(3);
 
-			reduceSamples(bx, by, max_raster_blocks);
+			reduceSamplesWithCheck(bx, by, max_raster_blocks);
 			barrier();
 			UPDATE_CLOCK(4);
 		}

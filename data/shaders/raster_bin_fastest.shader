@@ -810,8 +810,8 @@ void reduceSamples(int bx, int by, int max_raster_blocks) {
 	uint pixel_bit = 1u << ((y & 3) * 8 + (x & 7));
 
 	// TODO: more ?
-	float prev_depths[4] = {-1.0, -1.0, -1.0, -1.0};
-	uint prev_colors[3] = {0, 0, 0};
+	float prev_depths[6] = {-1.0, -1.0, -1.0, -1.0, -1.0, -1.0};
+	uint prev_colors[5] = {0, 0, 0, 0, 0};
 
 	vec3 out_color = vec3(0);
 	float out_transparency = 1.0;
@@ -865,34 +865,46 @@ void reduceSamples(int bx, int by, int max_raster_blocks) {
 						SWAP_UINT(prev_colors[2], prev_colors[1]);
 						SWAP_FLOAT(prev_depths[2], prev_depths[1]);
 						if(prev_depths[2] < prev_depths[3]) {
-							prev_colors[0] = 0xff0000ff;
-							pixel_bit = 0;
-							continue;
+							SWAP_UINT(prev_colors[3], prev_colors[2]);
+							SWAP_FLOAT(prev_depths[3], prev_depths[2]);
+							if(prev_depths[3] < prev_depths[4]) {
+								SWAP_UINT(prev_colors[4], prev_colors[3]);
+								SWAP_FLOAT(prev_depths[4], prev_depths[3]);
+								if(prev_depths[4] < prev_depths[5]) {
+									prev_colors[0] = 0xff0000ff;
+									pixel_bit = 0;
+									continue;
+								}
+							}
 						}
 					}
 				}
 			}
 
+			prev_depths[5] = prev_depths[4];
+			prev_depths[4] = prev_depths[3];
 			prev_depths[3] = prev_depths[2];
 			prev_depths[2] = prev_depths[1];
 			prev_depths[1] = prev_depths[0];
 			prev_depths[0] = depth;
 
-			if(prev_colors[2] != 0) {
-				vec4 cur_color = decodeRGBA8(prev_colors[2]);
+			if(prev_colors[4] != 0) {
+				vec4 cur_color = decodeRGBA8(prev_colors[4]);
 				float cur_transparency = 1.0 - cur_color.a;
 				out_color = (additive_blending ? out_color : out_color * cur_transparency) +
 							cur_color.rgb * cur_color.a;
 				out_transparency *= cur_transparency;
 			}
 
+			prev_colors[4] = prev_colors[3];
+			prev_colors[3] = prev_colors[2];
 			prev_colors[2] = prev_colors[1];
 			prev_colors[1] = prev_colors[0];
 			prev_colors[0] = value;
 		}
 	}
 
-	for(int i = 2; i >= 0; i--)
+	for(int i = 4; i >= 0; i--)
 		if(prev_colors[i] != 0) {
 			vec4 cur_color = decodeRGBA8(prev_colors[i]);
 			float cur_transparency = 1.0 - cur_color.a;

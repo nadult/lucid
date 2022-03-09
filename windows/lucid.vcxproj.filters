@@ -178,5 +178,8 @@
     <None Include="..\data\shaders\raster_bin_reduction_samples.shader">
       <Filter>shaders</Filter>
     </None>
+    <None Include="..\data\shaders\raster_bin_handling_collisions.shader">
+      <Filter>shaders</Filter>
+    </None>
   </ItemGroup>
 </Project>

@@ -333,6 +333,7 @@ void storeTriangle(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, uint v0, uint 
 	TRI_SCRATCH(5) = uvec2(floatBitsToUint(edge1.y), floatBitsToUint(edge1.z));
 
 	vec3 pnormal = normal * (1.0 / plane_dist);
+	// TODO: depth_eq: deq.x * X + deq.y * Y + deq.z
 	vec3 depth_eq = vec3(dot(pnormal, s_bin_ray_dir0), dot(pnormal, frustum.ws_dirx),
 						 dot(pnormal, frustum.ws_diry));
 	TRI_SCRATCH(14) = uvec2(floatBitsToUint(depth_eq.x), floatBitsToUint(depth_eq.y));
@@ -486,7 +487,7 @@ void generateBlocks1(uint by) {
 		vec2 val0 = uintBitsToFloat(TRI_SCRATCH(14));
 		vec2 val1 = uintBitsToFloat(TRI_SCRATCH(15));
 		vec3 depth_eq = vec3(val0.x, val0.y, val1.x);
-		depth_eq.x += depth_eq.y * (bx << 3) + depth_eq.z * (by << 3);
+		depth_eq.x += depth_eq.y * (float(bx << 3) + 0.5) + depth_eq.z * (float(by << 3) + 0.5);
 
 		float min_depth = 999999999.0;
 		// TODO: optimize based on sign of depth_eq.y & depth_eq.z
@@ -499,14 +500,15 @@ void generateBlocks1(uint by) {
 				maxx1 = min(((row1 >> 6) & 0x3f) - min_bx, 7);
 
 			float row_depth = depth_eq.x + depth_eq.z * (j * 2);
-			if(maxx0 >= minx0) {
-				float depth = row_depth + depth_eq.y * (depth_eq.y < 0.0 ? minx0 : maxx0);
-				min_depth = min(min_depth, depth);
+			if(maxx0 >= minx0) { // TODO: optimize
+				float depth0 = row_depth + depth_eq.y * minx0;
+				float depth1 = row_depth + depth_eq.y * maxx0;
+				min_depth = min(min_depth, min(depth0, depth1));
 			}
 			if(maxx1 >= minx1) {
-				float depth =
-					row_depth + depth_eq.y * (depth_eq.y < 0.0 ? minx1 : maxx1) + depth_eq.z;
-				min_depth = min(min_depth, depth);
+				float depth0 = row_depth + depth_eq.y * minx1 + depth_eq.z;
+				float depth1 = row_depth + depth_eq.y * maxx1 + depth_eq.z;
+				min_depth = min(min_depth, min(depth0, depth1));
 			}
 		}
 
@@ -553,7 +555,7 @@ void generateBlocks1(uint by) {
 		vec2 val0 = uintBitsToFloat(TRI_SCRATCH(14));
 		vec2 val1 = uintBitsToFloat(TRI_SCRATCH(15));
 		vec3 depth_eq = vec3(val0.x, val0.y, val1.x);
-		depth_eq.x += depth_eq.y * (bx << 3) + depth_eq.z * (by << 3);
+		depth_eq.x += depth_eq.y * (float(bx << 3) + 0.5) + depth_eq.z * (float(by << 3) + 0.5);
 
 		// TODO: how to compute these accurately ? sample in the middle of pixel?
 		float min_depth = 999999999.0, max_depth = -999999999.0;
@@ -578,7 +580,7 @@ void generateBlocks1(uint by) {
 #define COMPUTE_ROW_DEPTH(rmin, rmax)                                                              \
 	if(rmax >= rmin) {                                                                             \
 		float depth0 = row_depth + depth_eq.y * rmin;                                              \
-		float depth1 = row_depth + depth_eq.y * (rmax + 1);                                        \
+		float depth1 = row_depth + depth_eq.y * rmax;                                              \
 		min_depth = min(min_depth, min(depth0, depth1));                                           \
 		max_depth = max(max_depth, max(depth0, depth1));                                           \
 	}                                                                                              \
@@ -733,6 +735,7 @@ void splitTris(int bx, int by) {
 		BUFFER(i, 2) = info;
 		BUFFER(i, 3) = depths.x;
 		BUFFER(i, 4) = depths.y;
+		BUFFER(i, 5) = 0;
 		BUFFER(i, 6) = 1;
 	}
 
@@ -740,7 +743,7 @@ void splitTris(int bx, int by) {
 
 	// Identifying groups with overlapping tris
 	for(uint i = LIX; i < tri_count; i += LSIZE) {
-		uvec2 bits = uvec2(BUFFER(i, 0), BUFFER(i, 1));
+		uvec2 bits_i = uvec2(BUFFER(i, 0), BUFFER(i, 1));
 		float min_depth = uintBitsToFloat(BUFFER(i, 3));
 		float max_depth = uintBitsToFloat(BUFFER(i, 4));
 		uint tri_idx = BUFFER(i, 2) & 0xffff;
@@ -748,18 +751,21 @@ void splitTris(int bx, int by) {
 		uint scratch_tri_offset = scratchTriOffset(tri_idx);
 		vec2 val0 = uintBitsToFloat(TRI_SCRATCH(14));
 		vec2 val1 = uintBitsToFloat(TRI_SCRATCH(15));
-		vec3 depth_eq = vec3(val0.x, val0.y, val1.x);
-		depth_eq.x += depth_eq.y * (bx << 3) + depth_eq.z * (by << 3);
+		vec3 depth_eq_i = vec3(val0.x, val0.y, val1.x);
+		depth_eq_i.x +=
+			depth_eq_i.y * (float(bx << 3) + 0.5) + depth_eq_i.z * (float(by << 3) + 0.5);
 
 		bool hit = false;
 
 		for(uint j = i + 1; j < tri_count; j++) {
 			float min_depth_j = uintBitsToFloat(BUFFER(j, 3));
-			if(min_depth_j > max_depth && min_depth_j >= min_depth) // TODO: second check needed?
+			if(min_depth_j > max_depth)
 				break;
 
 			uvec2 bits_j = uvec2(BUFFER(j, 0), BUFFER(j, 1));
-			if((bits.x & bits_j.x) == 0 && (bits.y & bits_j.y) == 0)
+			uvec2 bits = uvec2(bits_i.x & bits_j.x, bits_i.y & bits_j.y);
+
+			if(bits.x == 0 && bits.y == 0)
 				continue;
 
 			uint tri_idx = BUFFER(j, 2) & 0xffff;
@@ -767,28 +773,36 @@ void splitTris(int bx, int by) {
 			vec2 val0 = uintBitsToFloat(TRI_SCRATCH(14));
 			vec2 val1 = uintBitsToFloat(TRI_SCRATCH(15));
 			vec3 depth_eq_j = vec3(val0.x, val0.y, val1.x);
-			depth_eq_j.x += depth_eq_j.y * (bx << 3) + depth_eq_j.z * (by << 3);
+			depth_eq_j.x +=
+				depth_eq_j.y * (float(bx << 3) + 0.5) + depth_eq_j.z * (float(by << 3) + 0.5);
 
-			bool cur_hit = false;
+			float depth_row_i = depth_eq_i.x, depth_row_j = depth_eq_j.x;
+			uvec2 masked_bits = uvec2(0, 0);
+			uint xor_mask = depth_eq_i.y < depth_eq_j.y ? 0xff : 0;
+
+			// TODO: still some errors left, but they disappear with backface culling
+			// TODO: handle case where eq_i.y == eq_j.y
 			for(int y = 0; y < 8; y++) {
-				uint bits_i = ((y < 4 ? bits.x : bits.y) >> ((y & 3) << 3)) & 0xff;
-				uint bits_j = ((y < 4 ? bits_j.x : bits_j.y) >> ((y & 3) << 3)) & 0xff;
-				uint bits = bits_i & bits_j;
+				float fx = (depth_row_j - depth_row_i) / (depth_eq_i.y - depth_eq_j.y);
+				int x = clamp(int(round(fx + 0.5)), 0, 8);
+				uint bits = (0xff << x) ^ xor_mask;
 
-				float depth_row = depth_eq.x + depth_eq.z * y;
-				float depth_row_j = depth_eq_j.x + depth_eq_j.z * y;
-
-				if(bits != 0) {
-					int min_x = findLSB(bits), max_x = findMSB(bits) + 1;
-					if(depth_row + depth_eq.y * min_x >= depth_row_j + depth_eq_j.y * min_x ||
-					   depth_row + depth_eq.y * max_x >= depth_row_j + depth_eq_j.y * max_x)
-						cur_hit = true;
-				}
+				bits = (bits & 0xff) << ((y & 3) << 3);
+				if(y < 4)
+					masked_bits.x |= bits;
+				else
+					masked_bits.y |= bits;
+				depth_row_i += depth_eq_i.z;
+				depth_row_j += depth_eq_j.z;
 			}
+			masked_bits.x &= bits.x;
+			masked_bits.y &= bits.y;
 
-			if(cur_hit) {
-				BUFFER(j, 6) = 0;
+			if(masked_bits.x != 0 || masked_bits.y != 0) {
+				//BUFFER(i, 5) = j;
+				//BUFFER(j, 6) = 1;
 				hit = true;
+				break;
 			}
 		}
 
@@ -1078,6 +1092,7 @@ void reduceSamplesWithCheck(int bx, int by, int max_raster_blocks) {
 				vec2 val0 = uintBitsToFloat(TRI_SCRATCH(14));
 				vec2 val1 = uintBitsToFloat(TRI_SCRATCH(15));
 				sel_depth_eq = vec3(val0.x, val0.y, val1.x);
+				sel_depth_eq.x += sel_depth_eq.y * 0.5 + sel_depth_eq.z * (float(by << 3) + 0.5);
 				in_range = sel_tri_bitmask != 0;
 			}
 			tris_bitmask = uint(ballotARB(in_range));
@@ -1098,7 +1113,7 @@ void reduceSamplesWithCheck(int bx, int by, int max_raster_blocks) {
 			if(value == 0)
 				continue;
 
-			float depth = depth_eq.x + depth_eq.y * x + depth_eq.z * (y + (by << 3));
+			float depth = depth_eq.x + depth_eq.y * x + depth_eq.z * y;
 			if(depth < prev_depth) {
 				out_color = vec3(1.0, 0.0, 0.0);
 				out_transparency = 0.0;

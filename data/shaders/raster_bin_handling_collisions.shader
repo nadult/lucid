@@ -333,9 +333,8 @@ void storeTriangle(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, uint v0, uint 
 	TRI_SCRATCH(5) = uvec2(floatBitsToUint(edge1.y), floatBitsToUint(edge1.z));
 
 	vec3 pnormal = normal * (1.0 / plane_dist);
-	// TODO: depth_eq: deq.x * X + deq.y * Y + deq.z
-	vec3 depth_eq = vec3(dot(pnormal, s_bin_ray_dir0), dot(pnormal, frustum.ws_dirx),
-						 dot(pnormal, frustum.ws_diry));
+	vec3 depth_eq = vec3(dot(pnormal, frustum.ws_dirx), dot(pnormal, frustum.ws_diry),
+						 dot(pnormal, s_bin_ray_dir0));
 	TRI_SCRATCH(14) = uvec2(floatBitsToUint(depth_eq.x), floatBitsToUint(depth_eq.y));
 	TRI_SCRATCH(15) = uvec2(floatBitsToUint(depth_eq.z), 0);
 
@@ -421,6 +420,13 @@ void getTriangleVertexTexCoords(uint scratch_tri_offset, out vec2 tex0, out vec2
 	tex2 = uintBitsToFloat(val2);
 }
 
+vec3 getTriangleDepthEq(uint tri_idx) {
+	uint scratch_tri_offset = scratchTriOffset(tri_idx);
+	vec2 val0 = uintBitsToFloat(TRI_SCRATCH(14));
+	vec2 val1 = uintBitsToFloat(TRI_SCRATCH(15));
+	return vec3(val0.x, val0.y, val1.x);
+}
+
 void generateRows() {
 	// TODO: optimization: in many cases all rows may very well fit in SMEM,
 	// maybe it would be worth it not to use scratch at all then?
@@ -483,11 +489,8 @@ void generateBlocks1(uint by) {
 		// TODO: keep tri_idx & bmask in one place
 		uint tri_idx = (full_rows[0] >> 24) | ((full_rows[1] >> 16) & 0xff00);
 
-		uint scratch_tri_offset = scratchTriOffset(tri_idx);
-		vec2 val0 = uintBitsToFloat(TRI_SCRATCH(14));
-		vec2 val1 = uintBitsToFloat(TRI_SCRATCH(15));
-		vec3 depth_eq = vec3(val0.x, val0.y, val1.x);
-		depth_eq.x += depth_eq.y * (float(bx << 3) + 0.5) + depth_eq.z * (float(by << 3) + 0.5);
+		vec3 depth_eq = getTriangleDepthEq(tri_idx);
+		depth_eq.z += depth_eq.x * (float(bx << 3) + 0.5) + depth_eq.y * (float(by << 3) + 0.5);
 
 		float min_depth = 999999999.0;
 		// TODO: optimize based on sign of depth_eq.y & depth_eq.z
@@ -499,15 +502,15 @@ void generateBlocks1(uint by) {
 			int minx1 = max((row1 & 0x3f) - min_bx, 0),
 				maxx1 = min(((row1 >> 6) & 0x3f) - min_bx, 7);
 
-			float row_depth = depth_eq.x + depth_eq.z * (j * 2);
+			float row_depth = depth_eq.z + depth_eq.y * (j * 2);
 			if(maxx0 >= minx0) { // TODO: optimize
-				float depth0 = row_depth + depth_eq.y * minx0;
-				float depth1 = row_depth + depth_eq.y * maxx0;
+				float depth0 = row_depth + depth_eq.x * minx0;
+				float depth1 = row_depth + depth_eq.x * maxx0;
 				min_depth = min(min_depth, min(depth0, depth1));
 			}
 			if(maxx1 >= minx1) {
-				float depth0 = row_depth + depth_eq.y * minx1 + depth_eq.z;
-				float depth1 = row_depth + depth_eq.y * maxx1 + depth_eq.z;
+				float depth0 = row_depth + depth_eq.x * minx1 + depth_eq.y;
+				float depth1 = row_depth + depth_eq.x * maxx1 + depth_eq.y;
 				min_depth = min(min_depth, min(depth0, depth1));
 			}
 		}
@@ -551,11 +554,8 @@ void generateBlocks1(uint by) {
 		uint tri_idx = (full_rows[0] >> 24) | ((full_rows[1] >> 16) & 0xff00);
 		uint bits[2];
 
-		uint scratch_tri_offset = scratchTriOffset(tri_idx);
-		vec2 val0 = uintBitsToFloat(TRI_SCRATCH(14));
-		vec2 val1 = uintBitsToFloat(TRI_SCRATCH(15));
-		vec3 depth_eq = vec3(val0.x, val0.y, val1.x);
-		depth_eq.x += depth_eq.y * (float(bx << 3) + 0.5) + depth_eq.z * (float(by << 3) + 0.5);
+		vec3 depth_eq = getTriangleDepthEq(tri_idx);
+		depth_eq.z += depth_eq.x * (float(bx << 3) + 0.5) + depth_eq.y * (float(by << 3) + 0.5);
 
 		// TODO: how to compute these accurately ? sample in the middle of pixel?
 		float min_depth = 999999999.0, max_depth = -999999999.0;
@@ -576,15 +576,15 @@ void generateBlocks1(uint by) {
 			uint mask2 = (minx2 <= maxx2 ? ~0u : 0);
 			uint mask3 = (minx3 <= maxx3 ? ~0u : 0);
 
-			float row_depth = depth_eq.x + depth_eq.z * (j * 4);
+			float row_depth = depth_eq.z + depth_eq.y * (j * 4);
 #define COMPUTE_ROW_DEPTH(rmin, rmax)                                                              \
 	if(rmax >= rmin) {                                                                             \
-		float depth0 = row_depth + depth_eq.y * rmin;                                              \
-		float depth1 = row_depth + depth_eq.y * rmax;                                              \
+		float depth0 = row_depth + depth_eq.x * rmin;                                              \
+		float depth1 = row_depth + depth_eq.x * rmax;                                              \
 		min_depth = min(min_depth, min(depth0, depth1));                                           \
 		max_depth = max(max_depth, max(depth0, depth1));                                           \
 	}                                                                                              \
-	row_depth += depth_eq.z;
+	row_depth += depth_eq.y;
 
 			COMPUTE_ROW_DEPTH(minx0, maxx0)
 			COMPUTE_ROW_DEPTH(minx1, maxx1)
@@ -748,12 +748,9 @@ void splitTris(int bx, int by) {
 		float max_depth = uintBitsToFloat(BUFFER(i, 4));
 		uint tri_idx = BUFFER(i, 2) & 0xffff;
 
-		uint scratch_tri_offset = scratchTriOffset(tri_idx);
-		vec2 val0 = uintBitsToFloat(TRI_SCRATCH(14));
-		vec2 val1 = uintBitsToFloat(TRI_SCRATCH(15));
-		vec3 depth_eq_i = vec3(val0.x, val0.y, val1.x);
-		depth_eq_i.x +=
-			depth_eq_i.y * (float(bx << 3) + 0.5) + depth_eq_i.z * (float(by << 3) + 0.5);
+		vec3 depth_eq_i = getTriangleDepthEq(tri_idx);
+		depth_eq_i.z +=
+			depth_eq_i.x * (float(bx << 3) + 0.5) + depth_eq_i.y * (float(by << 3) + 0.5);
 
 		bool hit = false;
 
@@ -769,20 +766,17 @@ void splitTris(int bx, int by) {
 				continue;
 
 			uint tri_idx = BUFFER(j, 2) & 0xffff;
-			uint scratch_tri_offset = scratchTriOffset(tri_idx);
-			vec2 val0 = uintBitsToFloat(TRI_SCRATCH(14));
-			vec2 val1 = uintBitsToFloat(TRI_SCRATCH(15));
-			vec3 depth_eq_j = vec3(val0.x, val0.y, val1.x);
-			depth_eq_j.x +=
-				depth_eq_j.y * (float(bx << 3) + 0.5) + depth_eq_j.z * (float(by << 3) + 0.5);
+			vec3 depth_eq_j = getTriangleDepthEq(tri_idx);
+			depth_eq_j.z +=
+				depth_eq_j.x * (float(bx << 3) + 0.5) + depth_eq_j.y * (float(by << 3) + 0.5);
 
-			float depth_row_i = depth_eq_i.x, depth_row_j = depth_eq_j.x;
+			float depth_row_i = depth_eq_i.z, depth_row_j = depth_eq_j.z;
 			uvec2 masked_bits = uvec2(0, 0);
-			uint xor_mask = depth_eq_i.y < depth_eq_j.y ? 0xff : 0;
+			uint xor_mask = depth_eq_i.x < depth_eq_j.x ? 0xff : 0;
 
 			// TODO: handle case where eq_i.y == eq_j.y
 			for(int y = 0; y < 8; y++) {
-				float fx = (depth_row_j - depth_row_i) / (depth_eq_i.y - depth_eq_j.y);
+				float fx = (depth_row_j - depth_row_i) / (depth_eq_i.x - depth_eq_j.x);
 				int x = clamp(int(floor(fx + 1.0)), 0, 8);
 				uint bits = (0xff << x) ^ xor_mask;
 				bits = (bits & 0xff) << ((y & 3) << 3);
@@ -790,12 +784,12 @@ void splitTris(int bx, int by) {
 					masked_bits.x |= bits;
 				else
 					masked_bits.y |= bits;
-				depth_row_i += depth_eq_i.z;
-				depth_row_j += depth_eq_j.z;
+				depth_row_i += depth_eq_i.y;
+				depth_row_j += depth_eq_j.y;
 			}
 
 			// TODO: how to handle this properly?
-			if(depth_eq_i.y == depth_eq_j.y)
+			if(depth_eq_i.x == depth_eq_j.x)
 				masked_bits.x = masked_bits.y = 0xffffffff;
 
 			masked_bits.x &= shared_bits.x;
@@ -892,26 +886,23 @@ void computeDepthRanges(int bx, int by, int bx_step) {
 		uvec2 tri_info = g_scratch[soffset + i + MAX_BLOCK_TRIS];
 
 		uint tri_idx = tri_info.x & 0xffff;
-		uint scratch_tri_offset = scratchTriOffset(tri_idx);
-		vec2 val0 = uintBitsToFloat(TRI_SCRATCH(14));
-		vec2 val1 = uintBitsToFloat(TRI_SCRATCH(15));
-		vec3 depth_eq = vec3(val0.x, val0.y, val1.x);
-		//float ray_pos = depth_eq.x + depth_eq.y * cpos.x + depth_eq.z * cpos.y;
+		vec3 depth_eq = getTriangleDepthEq(tri_idx);
+		//float ray_pos = depth_eq.z + depth_eq.x * cpos.x + depth_eq.y * cpos.y;
 
 		float min_depth = 999999999.0, max_depth = -999999999.0;
-		depth_eq.x += depth_eq.y * (bx << 3) + depth_eq.z * (by << 3);
+		depth_eq.z += depth_eq.x * (bx << 3) + depth_eq.y * (by << 3);
 
 		for(uint y = 0; y < 8; y++) {
 			uint bits = y < 4 ? tri_bitmask.x : tri_bitmask.y;
 			bits = (bits >> (y & 3) * 8) & 0xff;
 			uint min_x = findLSB(bits), max_x = findMSB(bits);
 
-			float row_depth = depth_eq.x + depth_eq.z * y;
-			float ray_pos = row_depth + depth_eq.y * min_x;
+			float row_depth = depth_eq.z + depth_eq.y * y;
+			float ray_pos = row_depth + depth_eq.x * min_x;
 			min_depth = min(min_depth, ray_pos);
 			max_depth = max(max_depth, ray_pos);
 
-			ray_pos = row_depth + depth_eq.y * max_x;
+			ray_pos = row_depth + depth_eq.x * max_x;
 			min_depth = min(min_depth, ray_pos);
 			max_depth = max(max_depth, ray_pos);
 		}
@@ -1090,12 +1081,8 @@ void reduceSamplesWithCheck(int bx, int by, int max_raster_blocks) {
 				sel_tri_bitmask = y < 4 ? bits.x : bits.y;
 				sel_tri_offset = block_offset + info.y + (y >= 4 ? info.x >> 24 : 0);
 
-				uint tri_idx = info.x & 0xffff;
-				uint scratch_tri_offset = scratchTriOffset(tri_idx);
-				vec2 val0 = uintBitsToFloat(TRI_SCRATCH(14));
-				vec2 val1 = uintBitsToFloat(TRI_SCRATCH(15));
-				sel_depth_eq = vec3(val0.x, val0.y, val1.x);
-				sel_depth_eq.x += sel_depth_eq.y * 0.5 + sel_depth_eq.z * (float(by << 3) + 0.5);
+				sel_depth_eq = getTriangleDepthEq(info.x & 0xffff);
+				sel_depth_eq.z += sel_depth_eq.x * 0.5 + sel_depth_eq.y * (float(by << 3) + 0.5);
 				in_range = sel_tri_bitmask != 0;
 			}
 			tris_bitmask = uint(ballotARB(in_range));
@@ -1116,7 +1103,7 @@ void reduceSamplesWithCheck(int bx, int by, int max_raster_blocks) {
 			if(value == 0)
 				continue;
 
-			float depth = depth_eq.x + depth_eq.y * x + depth_eq.z * y;
+			float depth = depth_eq.z + depth_eq.x * x + depth_eq.y * y;
 			if(depth < prev_depth) {
 				out_color = vec3(1.0, 0.0, 0.0);
 				out_transparency = 0.0;

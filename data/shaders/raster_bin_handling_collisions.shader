@@ -763,9 +763,9 @@ void splitTris(int bx, int by) {
 				break;
 
 			uvec2 bits_j = uvec2(BUFFER(j, 0), BUFFER(j, 1));
-			uvec2 bits = uvec2(bits_i.x & bits_j.x, bits_i.y & bits_j.y);
+			uvec2 shared_bits = uvec2(bits_i.x & bits_j.x, bits_i.y & bits_j.y);
 
-			if(bits.x == 0 && bits.y == 0)
+			if(shared_bits.x == 0 && shared_bits.y == 0)
 				continue;
 
 			uint tri_idx = BUFFER(j, 2) & 0xffff;
@@ -780,13 +780,11 @@ void splitTris(int bx, int by) {
 			uvec2 masked_bits = uvec2(0, 0);
 			uint xor_mask = depth_eq_i.y < depth_eq_j.y ? 0xff : 0;
 
-			// TODO: still some errors left, but they disappear with backface culling
 			// TODO: handle case where eq_i.y == eq_j.y
 			for(int y = 0; y < 8; y++) {
 				float fx = (depth_row_j - depth_row_i) / (depth_eq_i.y - depth_eq_j.y);
-				int x = clamp(int(round(fx + 0.5)), 0, 8);
+				int x = clamp(int(floor(fx + 1.0)), 0, 8);
 				uint bits = (0xff << x) ^ xor_mask;
-
 				bits = (bits & 0xff) << ((y & 3) << 3);
 				if(y < 4)
 					masked_bits.x |= bits;
@@ -795,8 +793,13 @@ void splitTris(int bx, int by) {
 				depth_row_i += depth_eq_i.z;
 				depth_row_j += depth_eq_j.z;
 			}
-			masked_bits.x &= bits.x;
-			masked_bits.y &= bits.y;
+
+			// TODO: how to handle this properly?
+			if(depth_eq_i.y == depth_eq_j.y)
+				masked_bits.x = masked_bits.y = 0xffffffff;
+
+			masked_bits.x &= shared_bits.x;
+			masked_bits.y &= shared_bits.y;
 
 			if(masked_bits.x != 0 || masked_bits.y != 0) {
 				//BUFFER(i, 5) = j;

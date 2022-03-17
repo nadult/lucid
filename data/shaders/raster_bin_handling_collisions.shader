@@ -735,8 +735,7 @@ void splitTris(int bx, int by) {
 		BUFFER(i, 2) = info;
 		BUFFER(i, 3) = depths.x;
 		BUFFER(i, 4) = depths.y;
-		BUFFER(i, 5) = 0;
-		BUFFER(i, 6) = 1;
+		BUFFER(i, 7) = 0xffff;
 	}
 
 	barrier();
@@ -752,7 +751,8 @@ void splitTris(int bx, int by) {
 		depth_eq_i.z +=
 			depth_eq_i.x * (float(bx << 3) + 0.5) + depth_eq_i.y * (float(by << 3) + 0.5);
 
-		bool hit = false;
+		uint hit = 0;
+		uvec2 masked_bits = uvec2(0, 0);
 
 		for(uint j = i + 1; j < tri_count; j++) {
 			float min_depth_j = uintBitsToFloat(BUFFER(j, 3));
@@ -771,11 +771,10 @@ void splitTris(int bx, int by) {
 				depth_eq_j.x * (float(bx << 3) + 0.5) + depth_eq_j.y * (float(by << 3) + 0.5);
 
 			float depth_row_i = depth_eq_i.z, depth_row_j = depth_eq_j.z;
-			uvec2 masked_bits = uvec2(0, 0);
 			uint xor_mask = depth_eq_i.x < depth_eq_j.x ? 0xff : 0;
 
-			// TODO: handle case where eq_i.y == eq_j.y
 			for(int y = 0; y < 8; y++) {
+				// TODO: optimize
 				float fx = (depth_row_j - depth_row_i) / (depth_eq_i.x - depth_eq_j.x);
 				int x = clamp(int(floor(fx + 1.0)), 0, 8);
 				uint bits = (0xff << x) ^ xor_mask;
@@ -790,31 +789,33 @@ void splitTris(int bx, int by) {
 
 			// TODO: how to handle this properly?
 			if(depth_eq_i.x == depth_eq_j.x)
-				masked_bits.x = masked_bits.y = 0xffffffff;
+				masked_bits.x = masked_bits.y = 0; //0xffffffff;
 
 			masked_bits.x &= shared_bits.x;
 			masked_bits.y &= shared_bits.y;
 
 			if(masked_bits.x != 0 || masked_bits.y != 0) {
-				//BUFFER(i, 5) = j;
-				//BUFFER(j, 6) = 1;
-				hit = true;
+				hit = j;
+				BUFFER(j, 7) = j; // TODO: what about collisions?
 				break;
 			}
 		}
 
-		if(hit)
-			BUFFER(i, 6) = 0;
+		if(hit != 0) {
+			BUFFER(i, 5) = masked_bits.x;
+			BUFFER(i, 6) = masked_bits.y;
+			BUFFER(i, 7) = hit;
+		}
 	}
 	barrier();
 	for(uint i = LIX, count = (tri_count + 31) & ~31; i < count; i += LSIZE) {
-		uint cur_offset = BUFFER(i, 6);
+		uint cur_offset = BUFFER(i, 7) == i ? 2 : 1;
 		PREFIX_SUM_STEP(cur_offset, 1);
 		PREFIX_SUM_STEP(cur_offset, 2);
 		PREFIX_SUM_STEP(cur_offset, 4);
 		PREFIX_SUM_STEP(cur_offset, 8);
 		PREFIX_SUM_STEP(cur_offset, 16);
-		BUFFER(i, 7) = cur_offset;
+		BUFFER(i, 7) |= cur_offset << 16;
 	}
 	barrier();
 
@@ -822,12 +823,12 @@ void splitTris(int bx, int by) {
 	uint idx32 = LIX * 32;
 	// Note: here we expect that idx32 < 32 * 16
 	if(idx32 < tri_count) {
-		uint value = BUFFER(idx32 + 31, 7);
+		uint value = BUFFER(idx32 + 31, 7) >> 16;
 		PREFIX_SUM_STEP(value, 1);
 		PREFIX_SUM_STEP(value, 2);
 		PREFIX_SUM_STEP(value, 4);
 		PREFIX_SUM_STEP(value, 8);
-		s_mini_buffer[idx32 >> 5] = value;
+		s_mini_buffer[idx32 >> 5] = value << 16;
 	}
 	barrier();
 	for(uint i = LIX; i < tri_count; i += LSIZE) {
@@ -842,17 +843,24 @@ void splitTris(int bx, int by) {
 		uvec2 bits = uvec2(BUFFER(i, 0), BUFFER(i, 1));
 		uint info = BUFFER(i, 2);
 
-		uint cur_value = BUFFER(i, 6);
-		uint cur_offset = BUFFER(i, 7);
-		cur_offset -= cur_value;
+		uint cur_value = BUFFER(i, 7);
+		uint cur_offset = cur_value >> 16;
+		cur_value &= 0xffff;
+		cur_offset -= cur_value == i ? 2 : 1;
 
-		if(cur_value != 0) {
-			g_scratch[dst_soffset + cur_offset] = bits;
-			g_scratch[dst_soffset + cur_offset + MAX_BLOCK_TRIS].x = info;
+		if(cur_value != 0xffff && cur_value > i) {
+			uvec2 masked_bits = uvec2(BUFFER(i, 5), BUFFER(i, 6));
+			uint rhs_offset = (BUFFER(cur_value, 7) >> 16) - 1;
+			g_scratch[dst_soffset + rhs_offset] = masked_bits;
+			g_scratch[dst_soffset + rhs_offset + MAX_BLOCK_TRIS].x = info;
+			bits &= ~masked_bits;
 		}
+
+		g_scratch[dst_soffset + cur_offset] = bits;
+		g_scratch[dst_soffset + cur_offset + MAX_BLOCK_TRIS].x = info;
 	}
 	if(LIX == 0)
-		BLOCK_TRI_COUNT(bx) = BUFFER(tri_count - 1, 7);
+		BLOCK_TRI_COUNT(bx) = (BUFFER(tri_count - 1, 7) >> 16);
 
 	barrier();
 

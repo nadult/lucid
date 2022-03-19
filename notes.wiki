@@ -66,6 +66,75 @@ conference: 2512
                     === Rasteryzacja wszystkich sampli na raz ===
 -----------------------------------------------------------------------------------------
 
+
+
+* *Pomysł nr 37168* Dzielenie przecinających się masek*
+
+- Jak to sensownie zrobić?
+  - wyznaczanie wszystkich potencjalnych przecięć brute forcem jest dość szybkie (0.5ms na sponzie)
+
+  - Jak na podstawie wykrytych przecięć wygenerować nowy zestaw masek, w których nie trzeba by już używać filtra głębokości?
+
+  - Jeśli znalazłem przecinającą się parę, to co dalej ?
+    Największy problem jejst wtedy kiedy mam grupę (>2) przecinających się warstw
+	Jak porozdzielać je między wątki?
+	Dzielimy zawsze wcześniejszy kolejnymi warstwami; podział na max 4 kolejne warstwy?
+	W jaki sposób zapisujemy te nowe warstwy do listy ?
+
+	Najpierw robimy sumę prefiksową dla ilości warstw a następnie wrzucamy je do SMEM?
+
+	W tym kontekście co to jest warstwa ? Na razie robimy to dla warstw 8x8?
+	Czyli 64 bity na maskę, albo 8x 6 bitów na zakresy
+
+	Musiałbym też sortować wstępnie maski po min-Z.
+
+	Najgorsze:
+	- czy podział maski na mniejsze będzie wystarczjąco szybki, jeśli każdą maskę będę porównywał z 20-oma innymi?
+	  samo policzenie jest dużo szybsze...;
+	  Z drgiej strony brute force jest dosść szybki...
+
+	OK a jak ma wyglądać samo wyliczenie przecięcia ?
+	- dzielenie nie powinno być potrzebne, wystarczy dot product
+
+	Rdir = Rbase + x * DX + y * DY
+	depth = dot(normal, RDir)
+	      = dot(normal, RBase) + dot(normal, DX) * X + dot(normal, DY) * y
+	Czyli potrzebuję 3 liczb na każdy trójkąt: dot(normal, RDir), dot(normal, DX), dot(normal, DY)
+	Mając je powinno się dać dość szybko wyznaczać przecięcie głębokości na poziomie linii
+
+	Po wyznaczeniu przecięć dla wszystkich linii, jeśli co najmniej jedna jest przecięta,
+	to robimy dwie warstwy;
+	OK, ale później muszę jeszcze raz przetwarzać te dwie części niezależnie?
+
+	Przecięcia liczymy tylko z bazową maską, później ew. rozdzielamy na mniejsze cześci ?
+	To może być dość skomplikowane...
+
+	Max 2 przecięcia na trójkąt? Niektóre (pojednycze) tókąty mogą mieć dużo więcej...
+	Najgorsze w tym rozwiązaniu są właśnie edge-case-y które mogą być 100x 1000x razy wolniejsze od
+	średniego przypadku; Jak sobie z nimi radzić?
+
+	Proste przypadki obsługujemy od razu (na początek np. max 1 przecięcie) a trudne dodajemy do jakiejś listy ?
+
+	Jak przetwarzać trudne przypadki ? Poprzez rozbijanie w odpowiedni sposób (dzielenie na w miarę równe części?)
+	Możemy na razie trudne przypadki olać, zrobić tylko proste i zobaczyć ile to nas kosztuje
+
+	Chyba dobrze by było jakoś szacować ilość przecięć głębokości i na podstawie tego przetwarzać bloki 4x4, 8x8 albo 16x16?
+	Nawet jeśli to na potem.
+
+	Kolejność zmian:
+	- wyłączamy filtr głębokości: zostawiamy tylko prosty test i zaznaczamy błędne piksele
+	- nie sortujemy po centroidzie ale ZMIN, wyznaczamy też ZMAX
+	- wyznaczamy 3 parametry do szybkiego wyznaczania głębokości per trókąt bez dzielenia (od razu przy generacji danych trókątów)
+	- wykombinować jak przechować dane warstw: Z-MIN, Z-MAX i trójkątów: parametry A, B, C do wyznaczania głębokości
+	  
+	- robimy proste liczenie przecięć: każdy wątek odpowiada za jeden trójkąt i testuje go z wszystkimi potencjalnymi
+
+	A może najpierw zobaczmy jak sensownie zrobić przecięcia ?
+
+	Jeszcze jeden problem: po pocięciu na kawałki spada koherencja cieniowania; Czy da się coś z tym zrobić?
+	Czy po prostu zakładam, że takich sytuacji jest na tyle mało, że się nimi nie przejmuję?
+	Na początek raczej się nie powinienem przejmować
+
  * *Pomysł nr 37167 (bez heterogeniczności, redukcja i cieniowanie w jednej pętli)*
 
  Redukcję robimy w tej samej pętli co cieniowanie, ale jest to robione na zmianę, tzn. napierw

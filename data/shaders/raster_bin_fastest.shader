@@ -3,8 +3,8 @@
 #define LIX gl_LocalInvocationIndex
 #define LID gl_LocalInvocationID
 
-#define LSIZE 512
-#define LSHIFT 9
+#define LSIZE 256
+#define LSHIFT 8
 
 #define MAX_ROWS 8
 
@@ -41,10 +41,13 @@ uniform bool additive_blending;
 #define SAMPLES_PER_THREAD 8
 #define MAX_SAMPLES (LSIZE * SAMPLES_PER_THREAD)
 
+// Note: in the context of this shader, blocks are 8x8, not 4x4
+#undef BLOCK_SIZE
+#define BLOCK_SIZE 8
 #define BLOCK_COUNT 8
 
 #define MAX_BLOCK_ROW_TRIS 2048
-#define MAX_BLOCK_TRIS (MAX_SAMPLES / BLOCK_COUNT)
+#define MAX_BLOCK_TRIS 256
 #define MAX_SCRATCH_TRIS 2048
 #define MAX_SCRATCH_TRIS_SHIFT 11
 
@@ -62,7 +65,6 @@ uint scratchTriOffset(uint tri_idx) {
 	return (gl_WorkGroupID.x << WORKGROUP_SCRATCH_SHIFT) + 64 * 1024 + tri_idx;
 }
 
-// Note: in the context of this shader, block size is 8x8, not 4x4
 shared int s_num_bins, s_bin_id, s_bin_raster_offset;
 shared ivec2 s_bin_pos;
 shared vec3 s_bin_ray_dir0;
@@ -181,15 +183,15 @@ void sortBlockTris() {
 		value = swap(value, 0x04, xorBits(lid, 4, 2));
 		value = swap(value, 0x02, xorBits(lid, 4, 1));
 		value = swap(value, 0x01, xorBits(lid, 4, 0));
-		value = swap(value, 0x10, xorBits(lid, 5, 4)); // K = 32
-		value = swap(value, 0x08, xorBits(lid, 5, 3));
-		value = swap(value, 0x04, xorBits(lid, 5, 2));
-		value = swap(value, 0x02, xorBits(lid, 5, 1));
-		value = swap(value, 0x01, xorBits(lid, 5, 0));
+		//	value = swap(value, 0x10, xorBits(lid, 5, 4)); // K = 32
+		//	value = swap(value, 0x08, xorBits(lid, 5, 3));
+		//	value = swap(value, 0x04, xorBits(lid, 5, 2));
+		//	value = swap(value, 0x02, xorBits(lid, 5, 1));
+		//	value = swap(value, 0x01, xorBits(lid, 5, 0));
 		s_buffer[goffset + i] = value;
 	}
 	barrier();
-	int start_k = 64, end_j = 32;
+	int start_k = 32, end_j = 32;
 #else
 	int start_k = 2, end_j = 1;
 #endif
@@ -625,7 +627,7 @@ void generateBlocks(uint by) {
 		uint frag_count4 = frag_count2 + shuffleXorNV(frag_count2, 2, 8);
 		uint frag_count8 = frag_count4 + shuffleXorNV(frag_count4, 4, 8);
 
-		int max_raster_blocks = 3;
+		int max_raster_blocks = LSHIFT - 6;
 		// TODO: compute this on first warp only
 		if(frag_count8 > MAX_SAMPLES) {
 			bool fail4 = anyInvocationARB(frag_count4 > MAX_SAMPLES);
@@ -685,7 +687,7 @@ void loadSamples(int bx, int by, int max_raster_blocks) {
 			continue;
 		int count = bitCount(tri_bitmask);
 		uint pixel_id = (y << 6) | (bx * 8 + findLSB(tri_bitmask));
-		uint value = (pixel_id << 23) | scratchTriOffset(tri_idx);
+		uint value = (pixel_id << 23) | tri_idx;
 		for(uint i = 0; i < count; i++) {
 			if(tri_offset >= MAX_SAMPLES)
 				RECORD(x, y, tri_offset, BLOCK_FRAG_COUNT(bx));
@@ -697,7 +699,7 @@ void loadSamples(int bx, int by, int max_raster_blocks) {
 
 // TODO: optimize
 void reduceSamples(int bx, int by, int max_raster_blocks) {
-	if(LIX >= (BIN_SIZE << max_raster_blocks))
+	if(LIX >= ((BLOCK_SIZE * BLOCK_SIZE) << max_raster_blocks))
 		return;
 
 	bx += int(LIX >> 6);
@@ -906,7 +908,8 @@ void shadeSamples(uint bx, uint by) {
 	for(uint i = LIX; i < sample_count; i += LSIZE) {
 		uint value = s_buffer[i];
 		uint pixel_id = value >> 23;
-		uint scratch_tri_offset = value & ((1 << 23) - 1);
+		uint tri_idx = value & ((1 << 23) - 1);
+		uint scratch_tri_offset = scratchTriOffset(tri_idx);
 		ivec2 bin_pixel_pos = ivec2(pixel_id & (BIN_SIZE - 1), (by * 8) + (pixel_id >> 6));
 		s_buffer[i] = shadeSample(bin_pixel_pos, scratch_tri_offset);
 	}
@@ -940,20 +943,18 @@ void rasterFragmentCounts(int by) {
 void rasterBin(int bin_id) {
 	INIT_CLOCK();
 
-	if(LIX < BIN_SIZE) {
-		if(LIX < BLOCK_COUNT) {
-			if(LIX == 0) {
-				ivec2 bin_pos = ivec2(bin_id % BIN_COUNT_X, bin_id / BIN_COUNT_X) * BIN_SIZE;
-				s_bin_pos = bin_pos;
-				s_bin_quad_count = g_bins.bin_quad_counts[bin_id];
-				s_bin_quad_offset = g_bins.bin_quad_offsets[bin_id];
-				s_bin_ray_dir0 = frustum.ws_dir0 + frustum.ws_dirx * (bin_pos.x + 0.5) +
-								 frustum.ws_diry * (bin_pos.y + 0.5);
-				s_max_raster_blocks = 0;
-			}
-
-			s_block_row_tri_counts[LIX] = 0;
+	if(LIX < BLOCK_COUNT) {
+		if(LIX == 0) {
+			ivec2 bin_pos = ivec2(bin_id % BIN_COUNT_X, bin_id / BIN_COUNT_X) * BIN_SIZE;
+			s_bin_pos = bin_pos;
+			s_bin_quad_count = g_bins.bin_quad_counts[bin_id];
+			s_bin_quad_offset = g_bins.bin_quad_offsets[bin_id];
+			s_bin_ray_dir0 = frustum.ws_dir0 + frustum.ws_dirx * (bin_pos.x + 0.5) +
+							 frustum.ws_diry * (bin_pos.y + 0.5);
+			s_max_raster_blocks = 0;
 		}
+
+		s_block_row_tri_counts[LIX] = 0;
 	}
 	barrier();
 	generateRows();

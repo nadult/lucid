@@ -67,6 +67,47 @@ conference: 2512
 -----------------------------------------------------------------------------------------
 
 
+* *Pomysł nr 37169*
+  A może dałoby się za pomocą redukcji (po pikselach) wygenerować posortowane warstwy, które
+  później używalibysmy do cieniowania?
+
+  Problem: ale jak pogrupować piksele w jak największe maski?
+           chodzi tylko o to, żeby zachować kolejność w ramach poszczegółnych pikseli
+
+  Zamiast stosu pikseli w każdym wątku miałbym stos całych rzędów pikseli? (ew. wymaksowanych)
+  OK ale jak później bym te stosy posklejał tak, żeby sąsiednie wątki obsługiwały te same trókąty?
+
+  Algorytm mergowania: na wejściu z każdego wątku dostajemy strumień rzędów. W danym momencie mamy zestaw 8 rzędów,
+  każdy pochodzący z jakiegoś trójkąta. Wybieramy ten trójkąt, który jest najbardziej wypełniony (procentowo).
+
+  A C B D E F G
+  A B C E F G
+  -> AA C BB C D EE FF GG
+
+  A B C D E
+  F A B C D E
+  F G A B C D E
+  F G H A B C D E
+  -> FFF GG H AAAA BBBB CCCC DDDD
+
+  Problem: jak poszczególne wątki mogą outputować rzędy
+           stos rzędów zamiast stosu pikseli: dwa floaty + maska + id trókąta?
+		   problem: nie wystarczy porównanie z najbliższym elementem, bo różne piksele
+		   mogą mieć różną wartość głębi...
+		   Musiałbym mieć wyliczone dla każdego piksela minimum głębi?
+
+  Problem: jak matchować rzędy o tym samym id trókąta
+  brute force pewnie jest trochę wolny...
+  brute: 
+
+  __match_any_sync by się tutaj bardzo przydało...
+
+  A może najpierw wygenerować strumień rzędów a następnie je pomergować dzieląc strumień na części?
+  To wymagało by dużo danych, nie mieściłoby się w SMEM. Wygenerowanie tylko dla jednego bloku nie wchodzi w grę
+  musiałbym pewnie wygenerować dla wszystkich bloków i wtedy w miarę dobrze można by podzielić te dane między wątki...
+
+  64 bloki * 4 wątki na blok = 256; A dobrze by było, żeby bloki były jeszcze większe? 16x16?
+  Wtedy mam jeszcze mniej niezależnych bloków... jak generować szybko małą liczbę strumieni?
 
 * *Pomysł nr 37168* Dzielenie przecinających się masek*
 

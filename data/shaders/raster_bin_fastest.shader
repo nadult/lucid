@@ -555,6 +555,9 @@ void generateBlocks(uint by) {
 		uint tri_idx = (full_rows[0] >> 24) | ((full_rows[1] >> 16) & 0xff00);
 		uint bits[2];
 
+		uint num_frags_[2];
+		uint enable_bits = 0;
+
 		for(int j = 0; j < 2; j++) {
 			int rows01 = int(full_rows[j * 2 + 0]), rows23 = int(full_rows[j * 2 + 1]);
 			int minx0 = max(((rows01 >> 0) & 0x3f) - min_bx, 0),
@@ -566,27 +569,32 @@ void generateBlocks(uint by) {
 			int minx3 = max(((rows23 >> 12) & 0x3f) - min_bx, 0),
 				maxx3 = min(((rows23 >> 18) & 0x3f) - min_bx, 7);
 
-			uint mask0 = (minx0 <= maxx0 ? ~0u : 0);
-			uint mask1 = (minx1 <= maxx1 ? ~0u : 0);
-			uint mask2 = (minx2 <= maxx2 ? ~0u : 0);
-			uint mask3 = (minx3 <= maxx3 ? ~0u : 0);
+			uint cur_enable_bits = ((minx0 <= maxx0 ? 1 : 0) | (minx1 <= maxx1 ? 2 : 0) |
+									(minx2 <= maxx2 ? 4 : 0) | (minx3 <= maxx3 ? 8 : 0));
 
-			uint bits0 = mask0 & (0x000000ffu << minx0) & (0x000000ffu >> (7 - maxx0));
-			uint bits1 = mask1 & (0x0000ff00u << minx1) & (0x0000ff00u >> (7 - maxx1));
-			uint bits2 = mask2 & (0x00ff0000u << minx2) & (0x00ff0000u >> (7 - maxx2));
-			uint bits3 = mask3 & (0xff000000u << minx3) & (0xff000000u >> (7 - maxx3));
+			int count0 = max(maxx0 - minx0, 0);
+			int count1 = max(maxx1 - minx1, 0);
+			int count2 = max(maxx2 - minx2, 0);
+			int count3 = max(maxx3 - minx3, 0);
 
-			bits[j] = bits0 | bits1 | bits2 | bits3;
+			minx0 = min(minx0, 7);
+			minx1 = min(minx1, 7);
+			minx2 = min(minx2, 7);
+			minx3 = min(minx3, 7);
+
+			bits[j] = minx0 | (minx1 << 4) | (minx2 << 8) | (minx3 << 12) | (count0 << 16) |
+					  (count1 << 20) | (count2 << 24) | (count3 << 28);
+			num_frags_[j] = count0 + count1 + count2 + count3 + bitCount(cur_enable_bits);
+			enable_bits |= cur_enable_bits << (j << 2);
 		}
 
-		uint num_frags0123 = bitCount(bits[0]);
-		uint num_frags4567 = bitCount(bits[1]);
-		uint num_frags = num_frags0123 + num_frags4567;
+		uint num_frags = num_frags_[0] + num_frags_[1];
 		if(num_frags == 0) // This means that bmasks are invalid
 			RECORD(0, 0, 0, 0);
 
 		g_scratch[dst_offset + i] = uvec2(bits[0], bits[1]);
-		g_scratch[dst_offset + i + MAX_BLOCK_TRIS].x = tri_idx | (num_frags0123 << 16);
+		g_scratch[dst_offset + i + MAX_BLOCK_TRIS].x =
+			tri_idx | (num_frags_[0] << 16) | (enable_bits << 24);
 
 		// Computing triangle-ordered sample offsets within each block
 		PREFIX_SUM_STEP(num_frags, 1);
@@ -690,22 +698,37 @@ void loadSamples(int bx, int by, int max_raster_blocks) {
 	uint istep = (LSIZE / 8) >> max_raster_blocks;
 	uint row_bitmask = (1 << y_shift) - 1;
 	for(uint i = (LIX & ((LSIZE >> max_raster_blocks) - 1)) >> 3; i < tri_count; i += istep) {
-		uint tri_bitmask = g_scratch[soffset + i][y < 4 ? 0 : 1];
-		// TODO: prepare two different sets of packed info for bottom/top row?
 		uvec2 info = g_scratch[soffset + i + MAX_BLOCK_TRIS];
-		uint tri_idx = info.x & 0xffff;
-		uint tri_offset = block_offset + info.y + (y >= 4 ? info.x >> 16 : 0);
-		tri_offset += bitCount(tri_bitmask & row_bitmask);
-		tri_bitmask = (tri_bitmask >> y_shift) & 0xff;
+		uint tri_bits = g_scratch[soffset + i][y < 4 ? 0 : 1];
+		tri_bits >>= (y & 3) << 2;
+		uint minx = tri_bits & 7, countx = ((tri_bits >> 16) & 7) + 1;
+		uint enable_bits = info.x >> 24;
+		if((enable_bits & (1 << y)) == 0)
+			countx = 0;
 
-		if(tri_bitmask == 0)
+		// TODO: precompute when loading tri info
+		// TODO: simplify, should be douable without ifs? 3x shuffle - xcount * t
+		uint countx_sum = countx;
+		{
+			uint temp = shuffleUpNV(countx_sum, 1, 4);
+			if((LIX & 3) >= 1)
+				countx_sum += temp;
+			temp = shuffleUpNV(countx_sum, 2, 4);
+			if((LIX & 3) >= 2)
+				countx_sum += temp;
+			countx_sum -= countx;
+		}
+
+		// TODO: prepare two different sets of packed info for bottom/top row?
+		if(countx == 0)
 			continue;
-		int count = bitCount(tri_bitmask);
-		uint pixel_id = (y << 6) | ((bx << 3) + findLSB(tri_bitmask));
+
+		uint tri_idx = info.x & 0xffff;
+		uint tri_offset = block_offset + info.y + countx_sum + (y >= 4 ? (info.x >> 16) & 0xff : 0);
+
+		uint pixel_id = (y << 6) | ((bx << 3) + minx);
 		uint value = (pixel_id << 23) | tri_idx;
-		for(uint i = 0; i < count; i++) {
-			if(tri_offset >= MAX_SAMPLES)
-				RECORD(x, y, tri_offset, BLOCK_FRAG_COUNT(bx));
+		for(uint i = 0; i < countx; i++) {
 			s_buffer[tri_offset++] = value;
 			value += 1 << 23;
 		}
@@ -744,11 +767,27 @@ void reduceSamples(int bx, int by, int max_raster_blocks) {
 		{
 			bool in_range = false;
 			if((LIX & 31) < sub_count) {
-				uvec2 bits = g_scratch[soffset + i + (LIX & 31)];
+				uint bits = g_scratch[soffset + i + (LIX & 31)][y < 4 ? 0 : 1];
 				uvec2 info = g_scratch[soffset + i + (LIX & 31) + MAX_BLOCK_TRIS];
 
-				sel_tri_bitmask = y < 4 ? bits.x : bits.y;
-				sel_tri_offset = block_offset + info.y + (y >= 4 ? info.x >> 16 : 0);
+				uint enable_bits = info.x >> (y >= 4 ? 28 : 24);
+
+				uint minx0 = (bits >> 0) & 7;
+				uint minx1 = (bits >> 4) & 7;
+				uint minx2 = (bits >> 8) & 7;
+				uint minx3 = (bits >> 12) & 7;
+				uint countx0 = (enable_bits & 1) != 0 ? ((bits >> 16) & 7) + 1 : 0;
+				uint countx1 = (enable_bits & 2) != 0 ? ((bits >> 20) & 7) + 1 : 0;
+				uint countx2 = (enable_bits & 4) != 0 ? ((bits >> 24) & 7) + 1 : 0;
+				uint countx3 = (enable_bits & 8) != 0 ? ((bits >> 28) & 7) + 1 : 0;
+
+				uint bits0 = ((1 << countx0) - 1) << (minx0 + 0);
+				uint bits1 = ((1 << countx1) - 1) << (minx1 + 8);
+				uint bits2 = ((1 << countx2) - 1) << (minx2 + 16);
+				uint bits3 = ((1 << countx3) - 1) << (minx3 + 24);
+
+				sel_tri_bitmask = bits0 | bits1 | bits2 | bits3;
+				sel_tri_offset = block_offset + info.y + (y >= 4 ? (info.x >> 16) & 255 : 0);
 
 				uint tri_idx = info.x & 0xffff;
 				uint scratch_tri_offset = scratchTriOffset(tri_idx);

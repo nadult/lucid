@@ -66,6 +66,12 @@ conference: 2512
                     === Rasteryzacja wszystkich sampli na raz ===
 -----------------------------------------------------------------------------------------
 
+Kafle 16x16 zamiast bloków 8x8:
+- sortujemy na raz 4 kafle 16x16 zamiast 8 bloków; Max 512 trisów na kafel
+- przy generowaniu rzędów generujemy dla 16 linii na raz (na razie, później to zoptymalizujemy)
+- przy generowaniu bloków po prostu przerabiamy 2x tyle linii
+- generujemy 2x tyle danych per trókąt
+
 
 * *Pomysł nr 37169*
   A może dałoby się za pomocą redukcji (po pikselach) wygenerować posortowane warstwy, które
@@ -269,7 +275,6 @@ to się zmieści, ale w smem trzymam już offsety... przenieść do rejestrów?
   
   W przypadku małych tróəkątów: 8 bitów na rząd, 8-16 bitów na bitmapy ?
   Czy da się jakoś zmniejszyć dane na bitmapy ?
-
 
 
  * *Pomysł nr 37166 (najpierw redukcja do listy małych sampli)*

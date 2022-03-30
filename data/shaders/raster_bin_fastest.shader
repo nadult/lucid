@@ -525,11 +525,11 @@ void generateBlocks(uint ty) {
 		vec2 val1 = uintBitsToFloat(TRI_SCRATCH(1));
 		vec3 depth_eq = vec3(val0.x, val0.y, val1.x);
 		float ray_pos = depth_eq.x * cpos.x + (depth_eq.y * cpos.y + depth_eq.z);
-		float depth = float(0x7ffff) / max(0.5, 4.0 - ray_pos); // 19 bits is enough
+		float depth = (0x1ffff * 0.99f) * (1.0 - inversesqrt(ray_pos + 1)); // 17 bits
 
 		uint idx = atomicAdd(TILE_TRI_COUNT(tx), 1);
 		if(idx < MAX_TILE_TRIS)
-			s_buffer[buf_offset + idx] = i | (uint(depth) << 13);
+			s_buffer[buf_offset + idx] = i | (uint(depth) << 15);
 		else
 			atomicOr(s_raster_error, 0x80 << tx);
 	}

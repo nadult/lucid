@@ -750,7 +750,7 @@ void loadSamples(int tx, int ty, int segment_id, int frag_count) {
 
 void initReduceSamples(out vec4 prev_depths, out uvec4 prev_colors) {
 	prev_depths = vec4(-1.0);
-	prev_colors = uvec4(0);
+	prev_colors = uvec4(0, 0, 0, 0xff000000);
 }
 
 // TODO: optimize
@@ -773,7 +773,7 @@ void reduceSamples(int tx, int ty, int segment_id, uint frag_count, in out vec4 
 	// TODO: simplify
 	vec4 temp = decodeRGBA8(prev_colors[3]);
 	vec3 out_color = temp.rgb;
-	float out_transparency = 1.0 - temp.a;
+	float out_transparency = temp.a;
 
 	for(uint i = 0; i < tri_count; i += 32) {
 		uint sub_count = min(32, tri_count - i);
@@ -802,10 +802,29 @@ void reduceSamples(int tx, int ty, int segment_id, uint frag_count, in out vec4 
 					enable_bits >>= 2;
 				}
 
-				uint minx0 = (tri_bits >> 0) & 15;
-				uint minx1 = (tri_bits >> 4) & 15;
-				uint countx0 = (enable_bits & 1) != 0 ? ((tri_bits >> 16) & 15) + 1 : 0;
-				uint countx1 = (enable_bits & 2) != 0 ? ((tri_bits >> 20) & 15) + 1 : 0;
+				int minx0 = int((tri_bits >> 0) & 15);
+				int minx1 = int((tri_bits >> 4) & 15);
+				int countx0 = int((enable_bits & 1) != 0 ? ((tri_bits >> 16) & 15) + 1 : 0);
+				int countx1 = int((enable_bits & 2) != 0 ? ((tri_bits >> 20) & 15) + 1 : 0);
+
+				// Removing fragments before current segment
+				if(tri_offset < 0) {
+					int temp = min(countx0, -tri_offset);
+					countx0 -= temp, minx0 += temp, tri_offset += temp;
+					if(tri_offset < 0) {
+						int temp = min(countx1, -tri_offset);
+						countx1 -= temp, minx1 += temp, tri_offset += temp;
+					}
+				}
+
+				// Removing fragments after current segment
+				int over_frags = countx1 + countx0 - (int(frag_count) - tri_offset);
+				if(over_frags > 0) {
+					int reduce1 = min(over_frags, countx1);
+					countx1 -= reduce1, over_frags -= reduce1;
+					countx0 -= over_frags;
+				}
+
 				uint bits0 = ((1 << countx0) - 1) << (minx0 + 0);
 				uint bits1 = ((1 << countx1) - 1) << (minx1 + 16);
 
@@ -834,11 +853,12 @@ void reduceSamples(int tx, int ty, int segment_id, uint frag_count, in out vec4 
 				continue;
 
 			tri_offset += bitCount(tri_bitmask & (pixel_bit - 1));
-			uint value = tri_offset < 0 || tri_offset >= frag_count ? 0 : s_buffer[tri_offset];
+			uint value = s_buffer[tri_offset];
 			if(value == 0)
 				continue;
 
-			//float depth = uintBitsToFloat(s_buffer[tri_offset + SEGMENT_SIZE]);
+			// It's actually faster to recompute depth in reduce than reuse depth
+			// computed during sampling, because we can put 2x as many samples in SMEM
 			float depth = depth_eq.x * x + (depth_eq.y * y + depth_eq.z);
 
 			if(depth < prev_depths[0]) {
@@ -878,7 +898,7 @@ void reduceSamples(int tx, int ty, int segment_id, uint frag_count, in out vec4 
 		}
 	}
 
-	prev_colors[3] = encodeRGBA8(vec4(out_color, 1.0 - out_transparency));
+	prev_colors[3] = encodeRGBA8(vec4(out_color, out_transparency));
 }
 
 void finishReduceSamples(int tx, int ty, uvec4 prev_colors) {
@@ -887,7 +907,7 @@ void finishReduceSamples(int tx, int ty, uvec4 prev_colors) {
 
 	vec4 temp = decodeRGBA8(prev_colors[3]);
 	vec3 out_color = temp.rgb;
-	float out_transparency = 1.0 - temp.a;
+	float out_transparency = temp.a;
 
 	for(int i = 2; i >= 0; i--)
 		if(prev_colors[i] != 0) {
@@ -903,7 +923,7 @@ void finishReduceSamples(int tx, int ty, uvec4 prev_colors) {
 }
 
 // TODO: Can we improve speed of loading vertex data?
-uint shadeSample(ivec2 bin_pixel_pos, uint scratch_tri_offset, out float out_depth) {
+uint shadeSample(ivec2 bin_pixel_pos, uint scratch_tri_offset) {
 	float px = float(bin_pixel_pos.x), py = float(bin_pixel_pos.y);
 
 	vec3 depth_eq, edge0_eq, edge1_eq;
@@ -915,7 +935,6 @@ uint shadeSample(ivec2 bin_pixel_pos, uint scratch_tri_offset, out float out_dep
 	getTriangleSecondaryParams(scratch_tri_offset, unormal, instance_color);
 
 	float inv_ray_pos = depth_eq.x * px + (depth_eq.y * py + depth_eq.z);
-	out_depth = inv_ray_pos;
 	float ray_pos = 1.0 / inv_ray_pos;
 
 	float e0 = edge0_eq.x * px + (edge0_eq.y * py + edge0_eq.z);
@@ -993,9 +1012,7 @@ void shadeSamples(uint tx, uint ty, uint sample_count) {
 		uint tri_idx = value & 0xffff;
 		uint scratch_tri_offset = scratchTriOffset(tri_idx);
 		ivec2 pix_pos = ivec2((pixel_id & 15) + (tx << 4), (pixel_id >> 4) + (ty << 4));
-		float out_depth;
-		s_buffer[i] = shadeSample(pix_pos, scratch_tri_offset, out_depth);
-		//s_buffer[i + SEGMENT_SIZE] = floatBitsToUint(out_depth);
+		s_buffer[i] = shadeSample(pix_pos, scratch_tri_offset);
 	}
 }
 

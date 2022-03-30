@@ -129,6 +129,7 @@ shared uint s_mini_buffer[32 * XTILES_PER_BIN];
 
 #define SEGMENT_SIZE (LSIZE * 8)
 #define SEGMENT_SHIFT (LSHIFT + 3)
+
 #define MAX_SEGMENTS 16
 #define MAX_SEGMENTS_SHIFT 4
 shared uint s_segments[XTILES_PER_BIN][MAX_SEGMENTS];
@@ -474,8 +475,11 @@ void generateBlocks(uint ty) {
 	uint tri_count = s_block_row_tri_counts[ty];
 	resetBlockCounters();
 	barrier();
-	if(LIX < MAX_SEGMENTS * XTILES_PER_BIN)
+	if(LIX < MAX_SEGMENTS * XTILES_PER_BIN) {
 		s_segments[LIX >> MAX_SEGMENTS_SHIFT][LIX & (MAX_SEGMENTS - 1)] = ~0u;
+		if(LIX == 0)
+			s_raster_error = 0;
+	}
 
 	int min_tx = int(tx << 4);
 	for(uint i = LIX >> 2; i < tri_count; i += TILE_STEP) {
@@ -527,11 +531,11 @@ void generateBlocks(uint ty) {
 		if(idx < MAX_TILE_TRIS)
 			s_buffer[buf_offset + idx] = i | (uint(depth) << 13);
 		else
-			s_raster_error = 1;
+			atomicOr(s_raster_error, 0x80 << tx);
 	}
 
 	barrier();
-	if(s_raster_error == 1)
+	if(s_raster_error != 0)
 		return;
 	sortTileTris();
 	barrier();
@@ -642,13 +646,14 @@ void generateBlocks(uint ty) {
 		uint tri_offset = i == 0 ? 0 : s_buffer[buf_offset + i - 1];
 		uint tri_value = s_buffer[buf_offset + i] - tri_offset;
 
-		// TODO: limit segment count properly
 		uint seg_id = tri_offset >> SEGMENT_SHIFT;
-		uint seg_offset = tri_offset & (SEGMENT_SIZE - 1);
-		if(seg_offset == 0)
-			s_segments[tx][seg_id] = i;
-		else if(seg_offset + tri_value > SEGMENT_SIZE)
-			s_segments[tx][seg_id + 1] = i;
+		if(seg_id < MAX_SEGMENTS) {
+			uint seg_offset = tri_offset & (SEGMENT_SIZE - 1);
+			if(seg_offset == 0)
+				s_segments[tx][seg_id] = i;
+			else if(seg_offset + tri_value > SEGMENT_SIZE)
+				s_segments[tx][seg_id + 1] = i;
+		}
 
 		g_scratch[dst_offset + i * 4 + 3].x = tri_offset;
 	}
@@ -680,6 +685,8 @@ void generateBlocks(uint ty) {
 		uint frag_count = num_tris == 0 ? 0 : s_buffer[tx * MAX_TILE_TRIS + num_tris - 1];
 		//uint segment_count = (frag_count + SEGMENT_SIZE - 1) >> SEGMENT_SHIFT;
 		TILE_FRAG_COUNT(tx) = frag_count;
+		if(frag_count > MAX_SEGMENTS * SEGMENT_SIZE)
+			atomicOr(s_raster_error, 1 << tx);
 	}
 }
 
@@ -728,7 +735,7 @@ void loadSamples(int tx, int ty, int segment_id, int frag_count) {
 			uint pixel_id = ((y << 4) + (yblock << 6)) | minx;
 			uint value = (pixel_id << 16) | tri_idx;
 			for(int j = 0; j < countx; j++) {
-				if(tri_offset > 0)
+				if(tri_offset >= 0)
 					s_buffer[tri_offset] = value;
 				tri_offset++;
 				value += 1 << 16;
@@ -1051,7 +1058,6 @@ void rasterBin(int bin_id) {
 			s_bin_quad_offset = g_bins.bin_quad_offsets[bin_id];
 			s_bin_ray_dir0 = frustum.ws_dir0 + frustum.ws_dirx * (bin_pos.x + 0.5) +
 							 frustum.ws_diry * (bin_pos.y + 0.5);
-			s_raster_error = 0;
 		}
 
 		s_block_row_tri_counts[LIX] = 0;
@@ -1069,11 +1075,15 @@ void rasterBin(int bin_id) {
 		barrier();
 		UPDATE_CLOCK(1);
 
-		if(s_raster_error == 1) {
-			for(int tx = 0; tx < XTILES_PER_BIN; tx++)
-				rasterInvalidTile(tx, ty, vec3(0.2, 0.0, 0.0));
-			if(LIX == 0)
-				s_raster_error = 0;
+		if(s_raster_error != 0) {
+			for(int tx = 0; tx < XTILES_PER_BIN; tx++) {
+				float value = 0.2;
+				if((s_raster_error & (1 << tx)) != 0)
+					value += 0.2;
+				if((s_raster_error & (0x80 << tx)) != 0)
+					value += 0.4;
+				rasterInvalidTile(tx, ty, vec3(value, 0.0, 0.0));
+			}
 			continue;
 		}
 

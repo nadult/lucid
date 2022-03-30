@@ -1003,9 +1003,6 @@ void shadeSamples(uint tx, uint ty, uint sample_count) {
 	// TODO: what's the best way to fix broken pixels?
 	// full sort ? recreate full depth values and sort pairs?
 
-	// Shading samples grouped by triangles
-	// TODO: how can we make sure that tris which generate >= 32 samples are all handles by single warp?
-
 	for(uint i = LIX; i < sample_count; i += LSIZE) {
 		uint value = s_buffer[i];
 		uint pixel_id = value >> 16;

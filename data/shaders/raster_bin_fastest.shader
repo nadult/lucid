@@ -783,16 +783,16 @@ void loadSamples(int tx, int ty, int segment_id, int frag_count) {
 		if(countx <= 0)
 			continue;
 
-		uint tri_idx = tri_info.x >> 16;
+		uint scratch_tri_offset = scratch64TriOffset(tri_info.x >> 16);
 		uint qy = tri_info.y >> 20;
 
 		uint pixel_id = ((y << 4) + (qy << 6)) | minx;
-		uint value = (pixel_id << 16) | tri_idx;
+		uint value = pixel_id | (scratch_tri_offset << 8);
 		for(int j = 0; j < countx; j++) {
 			if(tri_offset >= 0) // TODO: remove this check
 				s_buffer[tri_offset] = value;
 			tri_offset++;
-			value += 1 << 16;
+			value++;
 		}
 	}
 }
@@ -1057,8 +1057,8 @@ void shadeSamples(uint tx, uint ty, uint sample_count) {
 
 	for(uint i = LIX; i < sample_count; i += LSIZE) {
 		uint value = s_buffer[i];
-		uint pixel_id = value >> 16;
-		uint scratch_tri_offset = scratch64TriOffset(value & 0xffff);
+		uint pixel_id = value & 0xff;
+		uint scratch_tri_offset = value >> 8;
 		ivec2 pix_pos = ivec2((pixel_id & 15) + (tx << 4), (pixel_id >> 4) + (ty << 4));
 		s_buffer[i] = shadeSample(pix_pos, scratch_tri_offset);
 	}
@@ -1074,7 +1074,7 @@ void resetVisualizeSamples() {
 void visualizeSamples(uint sample_count) {
 	for(uint i = LIX; i < sample_count; i += LSIZE) {
 		uint value = s_buffer[i];
-		atomicAdd(s_pixels[value >> 16], 1);
+		atomicAdd(s_pixels[value & 0xff], 1);
 	}
 }
 

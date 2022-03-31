@@ -54,6 +54,12 @@ uniform bool additive_blending;
 
 #define SATURATE(val) clamp(val, 0.0, 1.0)
 
+// This makes sure that 4x16 chunks coming from the same triangle are clumped together
+// Theoretically this should increase material & texture coherency, but in practice it does
+// not increase performance
+// TODO: investigate
+//#define SYNC_TRIANGLE_PARTS
+
 // TODO: use shifts
 
 uint scratch32TileRowTrisOffset(uint ty) {
@@ -443,13 +449,16 @@ void generateTileRowTris(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, int min_
 				return;
 			}
 
+			uint first_part = 1 << 20;
 			for(uint qy = 0; qy < 4; qy++) {
 				if(tx_masks[qy] == 0)
 					continue;
 				g_scratch_64[dst_offset_64 + roffset] =
 					uvec2(row_ranges[(qy << 1) + 0], row_ranges[(qy << 1) + 1]);
-				g_scratch_32[dst_offset_32 + roffset] = tri_idx | (tx_masks[qy] << 16) | (qy << 20);
+				g_scratch_32[dst_offset_32 + roffset] =
+					tri_idx | (tx_masks[qy] << 16) | first_part | (qy << 24);
 				roffset++;
+				first_part = 0;
 			}
 		}
 
@@ -576,7 +585,8 @@ void generateTiles(uint ty) {
 		uint tri_info = g_scratch_32[src_offset_32 + idx];
 		uvec2 tri_rows = g_scratch_64[src_offset_64 + idx];
 		uint tri_idx = tri_info & 0xffff;
-		uint qy = tri_info >> 20;
+		uint qy = tri_info >> 24;
+		uint first_part_bit = (tri_info & (1 << 20)) >> 6;
 
 		vec2 cpos = vec2(0, 0);
 		float weight = 0.0;
@@ -607,11 +617,36 @@ void generateTiles(uint ty) {
 		float ray_pos = depth_eq.x * cpos.x + (depth_eq.y * cpos.y + depth_eq.z);
 		float depth = (0x1ffff * 0.99f) * SATURATE(1.0 - inversesqrt(ray_pos + 1)); // 17 bits
 
-		s_buffer[buf_offset + i] = idx | (uint(depth) << 15);
+		s_buffer[buf_offset + i] = idx | (uint(depth) << 15) | first_part_bit;
 	}
-
-	// TODO: sync centroids before sort, or average depth values
 	barrier();
+
+#ifdef SYNC_TRIANGLE_PARTS
+	// Synchronising depths coming from the same triangle
+	for(uint i = LIX & (TILE_STEP - 1); i < tri_count; i += TILE_STEP) {
+		uint cur_value = s_buffer[buf_offset + i];
+		if((cur_value & (1 << 14)) == 0)
+			continue;
+		uint depth = cur_value >> 15;
+
+		uint max_count = min(4, tri_count - i);
+		int count = 1;
+		while(count < max_count) {
+			uint value = s_buffer[buf_offset + i + count];
+			if((value & (1 << 14)) != 0)
+				break;
+			depth += value >> 15;
+			count++;
+		}
+		depth = (depth << 1) / count;
+		for(int j = 0; j < count; j++) {
+			uint value = s_buffer[buf_offset + j];
+			s_buffer[buf_offset + j] = (value & 0x3fff) | (depth >> 14);
+		}
+	}
+	barrier();
+#endif
+
 	sortTileTris();
 	barrier();
 
@@ -632,7 +667,7 @@ void generateTiles(uint ty) {
 		uint tri_info = g_scratch_32[src_offset_32 + idx];
 		uvec2 tri_rows = g_scratch_64[src_offset_64 + idx];
 		uint tri_idx = tri_info & 0xffff;
-		uint qy = tri_info >> 20;
+		uint qy = tri_info >> 24;
 		uint min_bits, count_bits;
 		uint num_frags;
 

@@ -45,12 +45,12 @@ layout(std430, binding = 5) readonly buffer buf5_ { uint g_normals[]; };
 layout(std430, binding = 6) buffer buf6_ { BinCounters g_bins; };
 layout(std430, binding = 7) buffer buf7_ { TileCounters g_tiles; };
 
-layout(std430, binding = 8) buffer buf8_  { uint g_tile_tris[]; };
-layout(std430, binding = 9) coherent buffer buf9_ { uvec2 g_scratch[]; };
+layout(std430, binding = 8) buffer buf8_ { uint g_tile_tris[]; };
+layout(std430, binding = 10) coherent buffer buf10_ { uvec2 g_scratch[]; };
 
-layout(std430, binding = 10) readonly buffer buf10_ { InstanceData g_instances[]; };
-layout(std430, binding = 11) readonly buffer buf11_ { vec4 g_uv_rects[]; };
-layout(std430, binding = 12) writeonly buffer buf12_ { uint g_raster_image[]; };
+layout(std430, binding = 11) readonly buffer buf11_ { InstanceData g_instances[]; };
+layout(std430, binding = 12) readonly buffer buf12_ { vec4 g_uv_rects[]; };
+layout(std430, binding = 13) writeonly buffer buf13_ { uint g_raster_image[]; };
 
 layout(binding = 0) uniform sampler2D opaque_texture;
 layout(binding = 1) uniform sampler2D transparent_texture;

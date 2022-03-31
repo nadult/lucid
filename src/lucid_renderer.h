@@ -120,7 +120,7 @@ class LucidRenderer {
 	Program raster_bin_program, raster_tile_program, raster_block_program;
 	Program compose_program, dummy_program;
 
-	PBuffer m_errors, m_scratch, m_instance_data, m_uv_rects;
+	PBuffer m_errors, m_scratch_32, m_scratch_64, m_instance_data, m_uv_rects;
 	PBuffer m_quad_indices, m_quad_aabbs, m_tri_aabbs;
 	PBuffer m_bin_counters, m_tile_counters, m_block_counts, m_block_offsets;
 	PBuffer m_bin_quads, m_tile_tris, m_block_tris, m_block_tri_keys, m_raster_image;

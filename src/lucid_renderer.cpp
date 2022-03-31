@@ -137,8 +137,10 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	m_block_tris.emplace(BufferType::shader_storage, max_block_tris * sizeof(u32),
 						 BufferUsage::dynamic_read);
 	m_block_tri_keys.emplace(BufferType::shader_storage, max_block_tris * sizeof(u32));
-	m_scratch.emplace(BufferType::shader_storage,
-					  (256 * 1024) * 128 * 2 * sizeof(u32)); // TODO: control size
+	m_scratch_32.emplace(BufferType::shader_storage,
+						 (32 * 1024) * 128 * sizeof(u32)); // TODO: control size
+	m_scratch_64.emplace(BufferType::shader_storage,
+						 (128 * 1024) * 128 * sizeof(u64)); // TODO: control size
 	m_raster_image.emplace(BufferType::shader_storage, bin_count * square(bin_size) * sizeof(u32));
 
 	if(m_opts & (Opt::check_bins | Opt::check_tiles | Opt::debug_masks | Opt::debug_raster))
@@ -541,7 +543,7 @@ void LucidRenderer::rasterizeMasks(const Context &ctx) {
 	m_tile_tris->bindIndex(9);
 	m_block_tris->bindIndex(10);
 	m_block_tri_keys->bindIndex(11);
-	m_scratch->bindIndex(12);
+	m_scratch_64->bindIndex(12);
 
 	mask_raster_program.use();
 	mask_raster_program.setFrustum(ctx.camera);
@@ -1384,10 +1386,11 @@ void LucidRenderer::bindRaster(const Context &ctx) {
 	m_bin_counters->bindIndex(6);
 	m_tile_counters->bindIndex(7);
 	m_tile_tris->bindIndex(8);
-	m_scratch->bindIndex(9);
-	m_instance_data->bindIndex(10);
-	m_uv_rects->bindIndex(11);
-	m_raster_image->bindIndex(12); // TODO: too many bindings
+	m_scratch_32->bindIndex(9);
+	m_scratch_64->bindIndex(10);
+	m_instance_data->bindIndex(11);
+	m_uv_rects->bindIndex(12);
+	m_raster_image->bindIndex(13); // TODO: too many bindings
 }
 
 void LucidRenderer::rasterBlock(const Context &ctx) {

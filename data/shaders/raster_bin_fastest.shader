@@ -1,5 +1,7 @@
 // $$include funcs lighting frustum viewport data
 
+// TODO: add synthetic test: 256 planes one after another
+
 #define LIX gl_LocalInvocationIndex
 #define LID gl_LocalInvocationID
 
@@ -38,12 +40,6 @@ uniform bool additive_blending;
 
 #define WORKGROUP_64_SCRATCH_SIZE (64 * 1024)
 #define WORKGROUP_64_SCRATCH_SHIFT 16
-
-// TODO: for some reason, enabling timings makes whole shader work faster
-// it started after optimising UV coordinates computation (added edge equations)
-// Problem is caused by different limit on used registers:
-// enabling timings increases register limit from 48 to 64, probably allowing for
-// better optimisations...
 
 // TODO: does that mean that occupancy is so low?
 #define BUFFER_SIZE (LSIZE * 10)
@@ -237,107 +233,6 @@ void sortTileTris() {
 	}
 }
 
-// TODO: add synthetic test: 256 planes one after another
-
-uint computeScanlineParams(vec3 tri0, vec3 tri1, vec3 tri2, out vec3 scan_base,
-						   out vec3 scan_step) {
-	vec3 nrm0 = cross(tri2, tri1 - tri2);
-	vec3 nrm1 = cross(tri0, tri2 - tri0);
-	vec3 nrm2 = cross(tri1, tri0 - tri1);
-	float volume = dot(tri0, nrm0);
-	if(volume < 0)
-		nrm0 = -nrm0, nrm1 = -nrm1, nrm2 = -nrm2;
-
-	vec3 edges[3] = {
-		vec3(dot(nrm0, frustum.ws_dirx), dot(nrm0, frustum.ws_diry), dot(nrm0, frustum.ws_dir0)),
-		vec3(dot(nrm1, frustum.ws_dirx), dot(nrm1, frustum.ws_diry), dot(nrm1, frustum.ws_dir0)),
-		vec3(dot(nrm2, frustum.ws_dirx), dot(nrm2, frustum.ws_diry), dot(nrm2, frustum.ws_dir0)),
-	};
-
-	float inv_ex[3] = {1.0 / edges[0].x, 1.0 / edges[1].x, 1.0 / edges[2].x};
-	scan_base = -vec3(edges[0].z * inv_ex[0], edges[1].z * inv_ex[1], edges[2].z * inv_ex[2]);
-	scan_step = -vec3(edges[0].y * inv_ex[0], edges[1].y * inv_ex[1], edges[2].y * inv_ex[2]);
-	return (edges[0].x < 0.0 ? 1 : 0) | (edges[1].x < 0.0 ? 2 : 0) | (edges[2].x < 0.0 ? 4 : 0);
-}
-
-// TODO: można by tutaj użyć algorytmu bazującego na liniach
-void generateTriGroups(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, int min_ty, int max_ty) {
-	// Inspired by Nanite scanline rasterizer
-	vec3 scan_min, scan_max, scan_step;
-
-	{
-		float sx = s_bin_pos.x - 0.5f;
-		float sy = s_bin_pos.y + min_ty * 16 + 0.5f;
-
-		vec3 scan_base;
-		uint sign_mask = computeScanlineParams(tri0, tri1, tri2, scan_base, scan_step);
-
-		vec3 scan = scan_step * sy + scan_base - vec3(sx, sx, sx);
-		scan_min = vec3((sign_mask & 1) == 0 ? scan[0] : -1.0 / 0.0,
-						(sign_mask & 2) == 0 ? scan[1] : -1.0 / 0.0,
-						(sign_mask & 4) == 0 ? scan[2] : -1.0 / 0.0);
-		scan_max = vec3((sign_mask & 1) != 0 ? scan[0] : 1.0 / 0.0,
-						(sign_mask & 2) != 0 ? scan[1] : 1.0 / 0.0,
-						(sign_mask & 4) != 0 ? scan[2] : 1.0 / 0.0);
-	}
-
-	uint dst_offset_64 = scratch64TileRowTrisOffset(min_ty);
-	uint dst_offset_32 = scratch32TileRowTrisOffset(min_ty);
-	for(int ty = min_ty; ty <= max_ty; ty++) {
-		// TODO: convert to uvecs?
-		uint row_ranges[8] = {0, 0, 0, 0, 0, 0, 0, 0};
-		uint tx_masks[4];
-		uint num_rows = 0;
-
-		// TODO: optimize, makes no sense to walk through 16 rows for 2x2 tris
-		for(int qy = 0; qy < 4; qy++) {
-			uint tx_mask = 0;
-			// TODO: process 4 rows at once
-			for(int y = 0; y < 4; y++) {
-				float xmin = max(max(scan_min[0], scan_min[1]), max(scan_min[2], 0.0));
-				float xmax = min(min(scan_max[0], scan_max[1]), min(scan_max[2], BIN_SIZE));
-
-				scan_min += scan_step;
-				scan_max += scan_step;
-
-				// TODO: use floor/ceil?
-				int imin = int(xmin), imax = int(xmax) - 1;
-				if(imin <= imax) {
-					uint tmin = imin >> 4, tmax = imax >> 4;
-					tx_mask |= (0xf << tmin) & (0xf >> (3 - tmax));
-				}
-
-				// TODO: instead of min+max, save min+count, now it will fit
-				row_ranges[(qy << 1) + (y >> 1)] |=
-					(imin <= imax ? (uint(imin) | (uint(imax) << 6)) : 0x3f) << ((y & 1) * 12);
-			}
-			if(tx_mask != 0)
-				num_rows++;
-			tx_masks[qy] = tx_mask;
-		}
-
-		if(num_rows > 0) {
-			uint roffset = atomicAdd(s_block_row_tri_counts[ty], num_rows);
-			if(roffset + num_rows > MAX_TILE_ROW_TRIS) {
-				s_raster_error = 0xffffffff;
-				return;
-			}
-
-			for(uint qy = 0; qy < 4; qy++) {
-				if(tx_masks[qy] == 0)
-					continue;
-				g_scratch_64[dst_offset_64 + roffset] =
-					uvec2(row_ranges[(qy << 1) + 0], row_ranges[(qy << 1) + 1]);
-				g_scratch_32[dst_offset_32 + roffset] = tri_idx | (tx_masks[qy] << 16) | (qy << 20);
-				roffset++;
-			}
-		}
-
-		dst_offset_64 += MAX_TILE_ROW_TRIS;
-		dst_offset_32 += MAX_TILE_ROW_TRIS;
-	}
-}
-
 // TODO: don't store triangles which generate very small number of samples in scratch,
 // instead precompute them directly when sampling; We would have to somehow group those triangles together
 //
@@ -464,9 +359,106 @@ void getTriangleVertexTexCoords(uint scratch_tri_offset, out vec2 tex0, out vec2
 	tex2 = uintBitsToFloat(val2);
 }
 
-// TODO: keep storage functions together in front
+uint computeScanlineParams(vec3 tri0, vec3 tri1, vec3 tri2, out vec3 scan_base,
+						   out vec3 scan_step) {
+	vec3 nrm0 = cross(tri2, tri1 - tri2);
+	vec3 nrm1 = cross(tri0, tri2 - tri0);
+	vec3 nrm2 = cross(tri1, tri0 - tri1);
+	float volume = dot(tri0, nrm0);
+	if(volume < 0)
+		nrm0 = -nrm0, nrm1 = -nrm1, nrm2 = -nrm2;
 
-void generateRows() {
+	vec3 edges[3] = {
+		vec3(dot(nrm0, frustum.ws_dirx), dot(nrm0, frustum.ws_diry), dot(nrm0, frustum.ws_dir0)),
+		vec3(dot(nrm1, frustum.ws_dirx), dot(nrm1, frustum.ws_diry), dot(nrm1, frustum.ws_dir0)),
+		vec3(dot(nrm2, frustum.ws_dirx), dot(nrm2, frustum.ws_diry), dot(nrm2, frustum.ws_dir0)),
+	};
+
+	float inv_ex[3] = {1.0 / edges[0].x, 1.0 / edges[1].x, 1.0 / edges[2].x};
+	scan_base = -vec3(edges[0].z * inv_ex[0], edges[1].z * inv_ex[1], edges[2].z * inv_ex[2]);
+	scan_step = -vec3(edges[0].y * inv_ex[0], edges[1].y * inv_ex[1], edges[2].y * inv_ex[2]);
+	return (edges[0].x < 0.0 ? 1 : 0) | (edges[1].x < 0.0 ? 2 : 0) | (edges[2].x < 0.0 ? 4 : 0);
+}
+
+// TODO: można by tutaj użyć algorytmu bazującego na liniach
+void generateTileRowTris(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, int min_ty, int max_ty) {
+	// Inspired by Nanite scanline rasterizer
+	vec3 scan_min, scan_max, scan_step;
+
+	{
+		float sx = s_bin_pos.x - 0.5f;
+		float sy = s_bin_pos.y + min_ty * 16 + 0.5f;
+
+		vec3 scan_base;
+		uint sign_mask = computeScanlineParams(tri0, tri1, tri2, scan_base, scan_step);
+
+		vec3 scan = scan_step * sy + scan_base - vec3(sx, sx, sx);
+		scan_min = vec3((sign_mask & 1) == 0 ? scan[0] : -1.0 / 0.0,
+						(sign_mask & 2) == 0 ? scan[1] : -1.0 / 0.0,
+						(sign_mask & 4) == 0 ? scan[2] : -1.0 / 0.0);
+		scan_max = vec3((sign_mask & 1) != 0 ? scan[0] : 1.0 / 0.0,
+						(sign_mask & 2) != 0 ? scan[1] : 1.0 / 0.0,
+						(sign_mask & 4) != 0 ? scan[2] : 1.0 / 0.0);
+	}
+
+	uint dst_offset_64 = scratch64TileRowTrisOffset(min_ty);
+	uint dst_offset_32 = scratch32TileRowTrisOffset(min_ty);
+	for(int ty = min_ty; ty <= max_ty; ty++) {
+		// TODO: convert to uvecs?
+		uint row_ranges[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+		uint tx_masks[4];
+		uint num_rows = 0;
+
+		// TODO: optimize, makes no sense to walk through 16 rows for 2x2 tris
+		for(int qy = 0; qy < 4; qy++) {
+			uint tx_mask = 0;
+			// TODO: process 4 rows at once
+			for(int y = 0; y < 4; y++) {
+				float xmin = max(max(scan_min[0], scan_min[1]), max(scan_min[2], 0.0));
+				float xmax = min(min(scan_max[0], scan_max[1]), min(scan_max[2], BIN_SIZE));
+
+				scan_min += scan_step;
+				scan_max += scan_step;
+
+				// TODO: use floor/ceil?
+				int imin = int(xmin), imax = int(xmax) - 1;
+				if(imin <= imax) {
+					uint tmin = imin >> 4, tmax = imax >> 4;
+					tx_mask |= (0xf << tmin) & (0xf >> (3 - tmax));
+				}
+
+				// TODO: instead of min+max, save min+count, now it will fit
+				row_ranges[(qy << 1) + (y >> 1)] |=
+					(imin <= imax ? (uint(imin) | (uint(imax) << 6)) : 0x3f) << ((y & 1) * 12);
+			}
+			if(tx_mask != 0)
+				num_rows++;
+			tx_masks[qy] = tx_mask;
+		}
+
+		if(num_rows > 0) {
+			uint roffset = atomicAdd(s_block_row_tri_counts[ty], num_rows);
+			if(roffset + num_rows > MAX_TILE_ROW_TRIS) {
+				s_raster_error = 0xffffffff;
+				return;
+			}
+
+			for(uint qy = 0; qy < 4; qy++) {
+				if(tx_masks[qy] == 0)
+					continue;
+				g_scratch_64[dst_offset_64 + roffset] =
+					uvec2(row_ranges[(qy << 1) + 0], row_ranges[(qy << 1) + 1]);
+				g_scratch_32[dst_offset_32 + roffset] = tri_idx | (tx_masks[qy] << 16) | (qy << 20);
+				roffset++;
+			}
+		}
+
+		dst_offset_64 += MAX_TILE_ROW_TRIS;
+		dst_offset_32 += MAX_TILE_ROW_TRIS;
+	}
+}
+
+void processQuads() {
 	// TODO: optimization: in many cases all rows may very well fit in SMEM,
 	// maybe it would be worth it not to use scratch at all then?
 	// TODO: this loop is slooooow
@@ -499,7 +491,7 @@ void generateRows() {
 		// TODO: do triangle storing later
 		uint tri_idx = i * 2 + (LIX & 1);
 		storeTriangle(tri_idx, tri0, tri1, tri2, v0, v1, v2, instance_id);
-		generateTriGroups(tri_idx, tri0, tri1, tri2, min_ty, max_ty);
+		generateTileRowTris(tri_idx, tri0, tri1, tri2, min_ty, max_ty);
 	}
 }
 
@@ -797,6 +789,96 @@ void loadSamples(int tx, int ty, int segment_id, int frag_count) {
 	}
 }
 
+// TODO: Can we improve speed of loading vertex data?
+uint shadeSample(ivec2 bin_pixel_pos, uint scratch_tri_offset) {
+	float px = float(bin_pixel_pos.x), py = float(bin_pixel_pos.y);
+
+	vec3 depth_eq, edge0_eq, edge1_eq;
+	uint instance_id, instance_flags;
+	vec2 bary_params;
+	getTriangleParams(scratch_tri_offset, depth_eq, bary_params, edge0_eq, edge1_eq, instance_id,
+					  instance_flags);
+	uint instance_color, unormal;
+	getTriangleSecondaryParams(scratch_tri_offset, unormal, instance_color);
+
+	float inv_ray_pos = depth_eq.x * px + (depth_eq.y * py + depth_eq.z);
+	float ray_pos = 1.0 / inv_ray_pos;
+
+	float e0 = edge0_eq.x * px + (edge0_eq.y * py + edge0_eq.z);
+	float e1 = edge1_eq.x * px + (edge1_eq.y * py + edge1_eq.z);
+	vec2 bary = vec2(e0, e1) * ray_pos;
+
+	vec2 bary_dx, bary_dy;
+	if((instance_flags & INST_HAS_TEXTURE) != 0) {
+		float ray_posx = 1.0 / (inv_ray_pos + depth_eq.x);
+		float ray_posy = 1.0 / (inv_ray_pos + depth_eq.y);
+
+		bary_dx = vec2(e0 + edge0_eq.x, e1 + edge1_eq.x) * ray_posx - bary;
+		bary_dy = vec2(e0 + edge0_eq.y, e1 + edge1_eq.y) * ray_posy - bary;
+	}
+	bary -= bary_params;
+
+	vec4 color = decodeRGBA8(instance_color);
+	if((instance_flags & INST_HAS_TEXTURE) != 0) {
+		vec2 tex0, tex1, tex2;
+		getTriangleVertexTexCoords(scratch_tri_offset, tex0, tex1, tex2);
+
+		vec2 tex_coord = bary[0] * tex1 + (bary[1] * tex2 + tex0);
+		vec2 tex_dx = bary_dx[0] * tex1 + bary_dx[1] * tex2;
+		vec2 tex_dy = bary_dy[0] * tex1 + bary_dy[1] * tex2;
+
+		if((instance_flags & INST_HAS_UV_RECT) != 0) {
+			vec4 uv_rect = g_uv_rects[instance_id];
+			tex_coord = uv_rect.zw * fract(tex_coord) + uv_rect.xy;
+			tex_dx *= uv_rect.zw, tex_dy *= uv_rect.zw;
+		}
+
+		vec4 tex_col;
+		if((instance_flags & INST_TEX_OPAQUE) != 0)
+			tex_col = vec4(textureGrad(opaque_texture, tex_coord, tex_dx, tex_dy).xyz, 1.0);
+		else
+			tex_col = textureGrad(transparent_texture, tex_coord, tex_dx, tex_dy);
+		color *= tex_col;
+	}
+
+	if((instance_flags & INST_HAS_VERTEX_COLORS) != 0) {
+		vec4 col0, col1, col2;
+		getTriangleVertexColors(scratch_tri_offset, col0, col1, col2);
+		color *= (1.0 - bary[0] - bary[1]) * col0 + (bary[0] * col1 + bary[1] * col2);
+	}
+
+	if(color.a == 0.0)
+		return 0;
+
+	vec3 normal;
+	if((instance_flags & INST_HAS_VERTEX_NORMALS) != 0) {
+		vec3 nrm0, nrm1, nrm2;
+		getTriangleVertexNormals(scratch_tri_offset, nrm0, nrm1, nrm2);
+		nrm1 -= nrm0;
+		nrm2 -= nrm0;
+		normal = bary[0] * nrm1 + (bary[1] * nrm2 + nrm0);
+	} else {
+		normal = decodeNormalUint(unormal);
+	}
+
+	float light_value = max(0.0, dot(-lighting.sun_dir, normal) * 0.7 + 0.3);
+	color.rgb = SATURATE(finalShading(color.rgb, light_value));
+	return encodeRGBA8(color);
+}
+
+void shadeSamples(uint tx, uint ty, uint sample_count) {
+	// TODO: what's the best way to fix broken pixels?
+	// full sort ? recreate full depth values and sort pairs?
+
+	for(uint i = LIX; i < sample_count; i += LSIZE) {
+		uint value = s_buffer[i];
+		uint pixel_id = value & 0xff;
+		uint scratch_tri_offset = value >> 8;
+		ivec2 pix_pos = ivec2((pixel_id & 15) + (tx << 4), (pixel_id >> 4) + (ty << 4));
+		s_buffer[i] = shadeSample(pix_pos, scratch_tri_offset);
+	}
+}
+
 void initReduceSamples(out vec4 prev_depths, out uvec4 prev_colors) {
 	prev_depths = vec4(-1.0);
 	prev_colors = uvec4(0, 0, 0, 0xff000000);
@@ -974,96 +1056,6 @@ void finishReduceSamples(int tx, int ty, uvec4 prev_colors) {
 	outputPixel(ivec2((tx << 4) + x, (ty << 4) + y), enc_color);
 }
 
-// TODO: Can we improve speed of loading vertex data?
-uint shadeSample(ivec2 bin_pixel_pos, uint scratch_tri_offset) {
-	float px = float(bin_pixel_pos.x), py = float(bin_pixel_pos.y);
-
-	vec3 depth_eq, edge0_eq, edge1_eq;
-	uint instance_id, instance_flags;
-	vec2 bary_params;
-	getTriangleParams(scratch_tri_offset, depth_eq, bary_params, edge0_eq, edge1_eq, instance_id,
-					  instance_flags);
-	uint instance_color, unormal;
-	getTriangleSecondaryParams(scratch_tri_offset, unormal, instance_color);
-
-	float inv_ray_pos = depth_eq.x * px + (depth_eq.y * py + depth_eq.z);
-	float ray_pos = 1.0 / inv_ray_pos;
-
-	float e0 = edge0_eq.x * px + (edge0_eq.y * py + edge0_eq.z);
-	float e1 = edge1_eq.x * px + (edge1_eq.y * py + edge1_eq.z);
-	vec2 bary = vec2(e0, e1) * ray_pos;
-
-	vec2 bary_dx, bary_dy;
-	if((instance_flags & INST_HAS_TEXTURE) != 0) {
-		float ray_posx = 1.0 / (inv_ray_pos + depth_eq.x);
-		float ray_posy = 1.0 / (inv_ray_pos + depth_eq.y);
-
-		bary_dx = vec2(e0 + edge0_eq.x, e1 + edge1_eq.x) * ray_posx - bary;
-		bary_dy = vec2(e0 + edge0_eq.y, e1 + edge1_eq.y) * ray_posy - bary;
-	}
-	bary -= bary_params;
-
-	vec4 color = decodeRGBA8(instance_color);
-	if((instance_flags & INST_HAS_TEXTURE) != 0) {
-		vec2 tex0, tex1, tex2;
-		getTriangleVertexTexCoords(scratch_tri_offset, tex0, tex1, tex2);
-
-		vec2 tex_coord = bary[0] * tex1 + (bary[1] * tex2 + tex0);
-		vec2 tex_dx = bary_dx[0] * tex1 + bary_dx[1] * tex2;
-		vec2 tex_dy = bary_dy[0] * tex1 + bary_dy[1] * tex2;
-
-		if((instance_flags & INST_HAS_UV_RECT) != 0) {
-			vec4 uv_rect = g_uv_rects[instance_id];
-			tex_coord = uv_rect.zw * fract(tex_coord) + uv_rect.xy;
-			tex_dx *= uv_rect.zw, tex_dy *= uv_rect.zw;
-		}
-
-		vec4 tex_col;
-		if((instance_flags & INST_TEX_OPAQUE) != 0)
-			tex_col = vec4(textureGrad(opaque_texture, tex_coord, tex_dx, tex_dy).xyz, 1.0);
-		else
-			tex_col = textureGrad(transparent_texture, tex_coord, tex_dx, tex_dy);
-		color *= tex_col;
-	}
-
-	if((instance_flags & INST_HAS_VERTEX_COLORS) != 0) {
-		vec4 col0, col1, col2;
-		getTriangleVertexColors(scratch_tri_offset, col0, col1, col2);
-		color *= (1.0 - bary[0] - bary[1]) * col0 + (bary[0] * col1 + bary[1] * col2);
-	}
-
-	if(color.a == 0.0)
-		return 0;
-
-	vec3 normal;
-	if((instance_flags & INST_HAS_VERTEX_NORMALS) != 0) {
-		vec3 nrm0, nrm1, nrm2;
-		getTriangleVertexNormals(scratch_tri_offset, nrm0, nrm1, nrm2);
-		nrm1 -= nrm0;
-		nrm2 -= nrm0;
-		normal = bary[0] * nrm1 + (bary[1] * nrm2 + nrm0);
-	} else {
-		normal = decodeNormalUint(unormal);
-	}
-
-	float light_value = max(0.0, dot(-lighting.sun_dir, normal) * 0.7 + 0.3);
-	color.rgb = SATURATE(finalShading(color.rgb, light_value));
-	return encodeRGBA8(color);
-}
-
-void shadeSamples(uint tx, uint ty, uint sample_count) {
-	// TODO: what's the best way to fix broken pixels?
-	// full sort ? recreate full depth values and sort pairs?
-
-	for(uint i = LIX; i < sample_count; i += LSIZE) {
-		uint value = s_buffer[i];
-		uint pixel_id = value & 0xff;
-		uint scratch_tri_offset = value >> 8;
-		ivec2 pix_pos = ivec2((pixel_id & 15) + (tx << 4), (pixel_id >> 4) + (ty << 4));
-		s_buffer[i] = shadeSample(pix_pos, scratch_tri_offset);
-	}
-}
-
 shared uint s_pixels[TILE_SIZE * TILE_SIZE];
 
 void resetVisualizeSamples() {
@@ -1127,7 +1119,7 @@ void rasterBin(int bin_id) {
 		s_block_row_tri_counts[LIX] = 0;
 	}
 	barrier();
-	generateRows();
+	processQuads();
 	groupMemoryBarrier();
 	barrier();
 	UPDATE_CLOCK(0);

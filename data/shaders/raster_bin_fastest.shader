@@ -33,11 +33,11 @@ layout(binding = 1) uniform sampler2D transparent_texture;
 
 uniform bool additive_blending;
 
-#define WORKGROUP_32_SCRATCH_SIZE (32 * 1024)
-#define WORKGROUP_32_SCRATCH_SHIFT 15
+#define WORKGROUP_32_SCRATCH_SIZE (16 * 1024)
+#define WORKGROUP_32_SCRATCH_SHIFT 14
 
-#define WORKGROUP_64_SCRATCH_SIZE (128 * 1024)
-#define WORKGROUP_64_SCRATCH_SHIFT 17
+#define WORKGROUP_64_SCRATCH_SIZE (64 * 1024)
+#define WORKGROUP_64_SCRATCH_SHIFT 16
 
 // TODO: for some reason, enabling timings makes whole shader work faster
 // it started after optimising UV coordinates computation (added edge equations)
@@ -64,20 +64,20 @@ uint scratch32TileRowTrisOffset(uint ty) {
 	return (gl_WorkGroupID.x << WORKGROUP_32_SCRATCH_SHIFT) + ty * MAX_TILE_ROW_TRIS;
 }
 
-uint scratch64TileRowTrisOffset(uint ty) {
-	return (gl_WorkGroupID.x << WORKGROUP_64_SCRATCH_SHIFT) + ty * MAX_TILE_ROW_TRIS;
-}
-
 uint scratch32TileTrisOffset(uint tx) {
 	return (gl_WorkGroupID.x << WORKGROUP_32_SCRATCH_SHIFT) + 4 * 1024 + tx * MAX_TILE_TRIS;
 }
 
-uint scratch64TileTrisOffset(uint tx) {
-	return (gl_WorkGroupID.x << WORKGROUP_64_SCRATCH_SHIFT) + 4 * 1024 + tx * MAX_TILE_TRIS;
+uint scratch64TriOffset(uint tri_idx) {
+	return (gl_WorkGroupID.x << WORKGROUP_64_SCRATCH_SHIFT) + tri_idx;
 }
 
-uint scratchTriOffset(uint tri_idx) {
-	return (gl_WorkGroupID.x << WORKGROUP_64_SCRATCH_SHIFT) + 8 * 1024 + tri_idx;
+uint scratch64TileRowTrisOffset(uint ty) {
+	return (gl_WorkGroupID.x << WORKGROUP_64_SCRATCH_SHIFT) + 32 * 1024 + ty * MAX_TILE_ROW_TRIS;
+}
+
+uint scratch64TileTrisOffset(uint tx) {
+	return (gl_WorkGroupID.x << WORKGROUP_64_SCRATCH_SHIFT) + 36 * 1024 + tx * MAX_TILE_TRIS;
 }
 
 shared int s_num_bins, s_bin_id, s_bin_raster_offset;
@@ -345,7 +345,7 @@ void generateTriGroups(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, int min_ty
 
 void storeTriangle(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, uint v0, uint v1, uint v2,
 				   uint instance_id) {
-	uint scratch_tri_offset = scratchTriOffset(tri_idx);
+	uint scratch_tri_offset = scratch64TriOffset(tri_idx);
 	vec3 normal = cross(tri0 - tri2, tri1 - tri0);
 	float multiplier = 1.0 / length(normal);
 	normal *= multiplier;
@@ -608,7 +608,7 @@ void generateTiles(uint ty) {
 		cpos /= weight;
 		cpos += vec2(tx << 4, (ty << 4) + (qy << 2));
 
-		uint scratch_tri_offset = scratchTriOffset(tri_idx);
+		uint scratch_tri_offset = scratch64TriOffset(tri_idx);
 		vec2 val0 = uintBitsToFloat(TRI_SCRATCH(0));
 		vec2 val1 = uintBitsToFloat(TRI_SCRATCH(1));
 		vec3 depth_eq = vec3(val0.x, val0.y, val1.x);
@@ -877,7 +877,7 @@ void reduceSamples(int tx, int ty, int segment_id, uint frag_count, in out vec4 
 					sel_tri_bitmask = bits0 | bits1;
 
 					uint tri_idx = tri_info.x >> 16;
-					uint scratch_tri_offset = scratchTriOffset(tri_idx);
+					uint scratch_tri_offset = scratch64TriOffset(tri_idx);
 					vec2 val0 = uintBitsToFloat(TRI_SCRATCH(0));
 					vec2 val1 = uintBitsToFloat(TRI_SCRATCH(1));
 					sel_depth_eq = vec3(val0.x, val0.y, val1.x);
@@ -1058,8 +1058,7 @@ void shadeSamples(uint tx, uint ty, uint sample_count) {
 	for(uint i = LIX; i < sample_count; i += LSIZE) {
 		uint value = s_buffer[i];
 		uint pixel_id = value >> 16;
-		uint tri_idx = value & 0xffff;
-		uint scratch_tri_offset = scratchTriOffset(tri_idx);
+		uint scratch_tri_offset = scratch64TriOffset(value & 0xffff);
 		ivec2 pix_pos = ivec2((pixel_id & 15) + (tx << 4), (pixel_id >> 4) + (ty << 4));
 		s_buffer[i] = shadeSample(pix_pos, scratch_tri_offset);
 	}

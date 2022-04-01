@@ -2,6 +2,8 @@
 
 // TODO: add synthetic test: 256 planes one after another
 
+// NOTE: converting integer multiplications to shifts does not increase perf
+
 #define LIX gl_LocalInvocationIndex
 #define LID gl_LocalInvocationID
 
@@ -387,13 +389,13 @@ uint computeScanlineParams(vec3 tri0, vec3 tri1, vec3 tri2, out vec3 scan_base,
 }
 
 // TODO: można by tutaj użyć algorytmu bazującego na liniach
-void generateTileRowTris(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, int min_ty, int max_ty) {
+void generateTileRowTris(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, int min_qy, int max_qy) {
 	// Inspired by Nanite scanline rasterizer
 	vec3 scan_min, scan_max, scan_step;
 
 	{
 		float sx = s_bin_pos.x - 0.5f;
-		float sy = s_bin_pos.y + min_ty * 16 + 0.5f;
+		float sy = s_bin_pos.y + (float(min_qy) * 4.0 + 0.5f);
 
 		vec3 scan_base;
 		uint sign_mask = computeScanlineParams(tri0, tri1, tri2, scan_base, scan_step);
@@ -407,55 +409,51 @@ void generateTileRowTris(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, int min_
 						(sign_mask & 4) != 0 ? scan[2] : 1.0 / 0.0);
 	}
 
-	uint dst_offset_64 = scratch64TileRowTrisOffset(min_ty);
-	uint dst_offset_32 = scratch32TileRowTrisOffset(min_ty);
-	for(int ty = min_ty; ty <= max_ty; ty++) {
-		// TODO: convert to uvecs?
-		uint row_ranges[8] = {0, 0, 0, 0, 0, 0, 0, 0};
-		uint tx_masks[4];
-		uint num_rows = 0;
+	uint dst_offset_64 = scratch64TileRowTrisOffset(0);
+	uint dst_offset_32 = scratch32TileRowTrisOffset(0);
 
-		// TODO: optimize, makes no sense to walk through 16 rows for 2x2 tris
-		for(int qy = 0; qy < 4; qy++) {
-			uint tx_mask = 0;
-			// TODO: process 4 rows at once
-			for(int y = 0; y < 4; y++) {
-				float xmin = max(max(scan_min[0], scan_min[1]), max(scan_min[2], 0.0));
-				float xmax = min(min(scan_max[0], scan_max[1]), min(scan_max[2], BIN_SIZE));
+	for(int qy = min_qy; qy <= max_qy; qy++) {
+		float xmin0 = max(max(scan_min[0], scan_min[1]), max(scan_min[2], 0.0));
+		float xmax0 = min(min(scan_max[0], scan_max[1]), min(scan_max[2], BIN_SIZE));
+		scan_min += scan_step, scan_max += scan_step;
+		float xmin1 = max(max(scan_min[0], scan_min[1]), max(scan_min[2], 0.0));
+		float xmax1 = min(min(scan_max[0], scan_max[1]), min(scan_max[2], BIN_SIZE));
+		scan_min += scan_step, scan_max += scan_step;
+		float xmin2 = max(max(scan_min[0], scan_min[1]), max(scan_min[2], 0.0));
+		float xmax2 = min(min(scan_max[0], scan_max[1]), min(scan_max[2], BIN_SIZE));
+		scan_min += scan_step, scan_max += scan_step;
+		float xmin3 = max(max(scan_min[0], scan_min[1]), max(scan_min[2], 0.0));
+		float xmax3 = min(min(scan_max[0], scan_max[1]), min(scan_max[2], BIN_SIZE));
+		scan_min += scan_step, scan_max += scan_step;
 
-				scan_min += scan_step;
-				scan_max += scan_step;
+		int imin0 = int(xmin0), imax0 = int(xmax0) - 1;
+		int imin1 = int(xmin1), imax1 = int(xmax1) - 1;
+		int imin2 = int(xmin2), imax2 = int(xmax2) - 1;
+		int imin3 = int(xmin3), imax3 = int(xmax3) - 1;
 
-				// TODO: use floor/ceil?
-				int imin = int(xmin), imax = int(xmax) - 1;
-				if(imin <= imax) {
-					uint tmin = imin >> 4, tmax = imax >> 4;
-					tx_mask |= (0xf << tmin) & (0xf >> (3 - tmax));
-				}
+		if(imin0 > imax0)
+			imin0 = 63, imax0 = 0;
+		if(imin1 > imax1)
+			imin1 = 63, imax1 = 0;
+		if(imin2 > imax2)
+			imin2 = 63, imax2 = 0;
+		if(imin3 > imax3)
+			imin3 = 63, imax3 = 0;
 
-				// TODO: instead of min+max, save min+count, now it will fit
-				row_ranges[(qy << 1) + (y >> 1)] |=
-					(imin <= imax ? (uint(imin) | (uint(imax) << 6)) : 0x3f) << ((y & 1) * 12);
-			}
-			if(tx_mask != 0)
-				num_rows++;
-			tx_masks[qy] = tx_mask;
-		}
+		uint tx_mask = ((0xf << (imin0 >> 4)) & (0xf >> (3 - (imax0 >> 4)))) |
+					   ((0xf << (imin1 >> 4)) & (0xf >> (3 - (imax1 >> 4)))) |
+					   ((0xf << (imin2 >> 4)) & (0xf >> (3 - (imax2 >> 4)))) |
+					   ((0xf << (imin3 >> 4)) & (0xf >> (3 - (imax3 >> 4))));
+		if(tx_mask == 0)
+			continue;
 
-		if(num_rows > 0) {
-			uint roffset = atomicAdd(s_block_row_tri_counts[ty], num_rows);
-			for(uint qy = 0; qy < 4; qy++) {
-				if(tx_masks[qy] == 0)
-					continue;
-				g_scratch_64[dst_offset_64 + roffset] =
-					uvec2(row_ranges[(qy << 1) + 0], row_ranges[(qy << 1) + 1]);
-				g_scratch_32[dst_offset_32 + roffset] = tri_idx | (tx_masks[qy] << 16) | (qy << 24);
-				roffset++;
-			}
-		}
+		uint ty = qy >> 2;
+		uint roffset = atomicAdd(s_block_row_tri_counts[ty], 1) + ty * MAX_TILE_ROW_TRIS;
 
-		dst_offset_64 += MAX_TILE_ROW_TRIS;
-		dst_offset_32 += MAX_TILE_ROW_TRIS;
+		g_scratch_64[dst_offset_64 + roffset] =
+			uvec2((imin0 << 0) | (imin1 << 6) | (imin2 << 12) | (imin3 << 18),
+				  (imax0 << 0) | (imax1 << 6) | (imax2 << 12) | (imax3 << 18));
+		g_scratch_32[dst_offset_32 + roffset] = tri_idx | (tx_mask << 16) | ((qy & 3) << 24);
 	}
 }
 
@@ -470,8 +468,8 @@ void processQuads() {
 
 		uvec4 aabb = g_tri_aabbs[quad_idx];
 		aabb = decodeAABB(second_tri != 0 ? aabb.zw : aabb.xy);
-		int min_ty = clamp(int(aabb[1]) - s_bin_pos.y, 0, 63) >> 4;
-		int max_ty = clamp(int(aabb[3]) - s_bin_pos.y, 0, 63) >> 4;
+		int min_qy = clamp(int(aabb[1]) - s_bin_pos.y, 0, 63) >> 2;
+		int max_qy = clamp(int(aabb[3]) - s_bin_pos.y, 0, 63) >> 2;
 
 		uint verts[4] = {g_quad_indices[quad_idx * 4 + 0], g_quad_indices[quad_idx * 4 + 1],
 						 g_quad_indices[quad_idx * 4 + 2], g_quad_indices[quad_idx * 4 + 3]};
@@ -492,7 +490,7 @@ void processQuads() {
 		// TODO: do triangle storing later
 		uint tri_idx = i * 2 + (LIX & 1);
 		storeTriangle(tri_idx, tri0, tri1, tri2, v0, v1, v2, instance_id);
-		generateTileRowTris(tri_idx, tri0, tri1, tri2, min_ty, max_ty);
+		generateTileRowTris(tri_idx, tri0, tri1, tri2, min_qy, max_qy);
 	}
 }
 
@@ -524,9 +522,9 @@ void generateTiles(uint ty) {
 		return;
 
 	uint tx = LIX >> (LSHIFT - 2);
-	uint buf_offset = tx * MAX_TILE_TRIS; // TODO: shift
+	uint buf_offset = tx * MAX_TILE_TRIS;
 	tri_count = TILE_TRI_COUNT(tx);
-	int min_tx = int(tx << 4); // TODO: bad name
+	int startx = int(tx << 4); // TODO: bad name
 
 	for(uint i = LIX & (TILE_STEP - 1); i < tri_count; i += TILE_STEP) {
 		uint idx = s_buffer[buf_offset + i];
@@ -540,21 +538,29 @@ void generateTiles(uint ty) {
 		vec2 cpos = vec2(0, 0);
 		float weight = 0.0;
 
-		for(int j = 0; j < 2; j++) {
-			int row0 = int(tri_rows[j] & 0xfff), row1 = int((tri_rows[j] >> 12) & 0xfff);
+		{
+			// TODO: this is counted twice...
+			int minx0 = max(int((tri_rows.x >> 0) & 0x3f) - startx, 0);
+			int minx1 = max(int((tri_rows.x >> 6) & 0x3f) - startx, 0);
+			int minx2 = max(int((tri_rows.x >> 12) & 0x3f) - startx, 0);
+			int minx3 = max(int((tri_rows.x >> 18) & 0x3f) - startx, 0);
 
-			// TODO: handling of empty rows?
-			// TODO: these are computed twice
-			int minx0 = max((row0 & 0x3f) - min_tx, 0),
-				maxx0 = min(((row0 >> 6) & 0x3f) - min_tx, 15);
-			int minx1 = max((row1 & 0x3f) - min_tx, 0),
-				maxx1 = min(((row1 >> 6) & 0x3f) - min_tx, 15);
+			int maxx0 = min(int((tri_rows.y >> 0) & 0x3f) - startx, 15);
+			int maxx1 = min(int((tri_rows.y >> 6) & 0x3f) - startx, 15);
+			int maxx2 = min(int((tri_rows.y >> 12) & 0x3f) - startx, 15);
+			int maxx3 = min(int((tri_rows.y >> 18) & 0x3f) - startx, 15);
 
-			int count0 = max(0, maxx0 - minx0 + 1);
-			int count1 = max(0, maxx1 - minx1 + 1);
-			cpos += vec2(float(maxx0 + minx0 + 1) * 0.5, j * 2 + 0 + 0.5) * count0;
-			cpos += vec2(float(maxx1 + minx1 + 1) * 0.5, j * 2 + 1 + 0.5) * count1;
-			weight += count0 + count1;
+			int count0 = max(maxx0 - minx0 + 1, 0);
+			int count1 = max(maxx1 - minx1 + 1, 0);
+			int count2 = max(maxx2 - minx2 + 1, 0);
+			int count3 = max(maxx3 - minx3 + 1, 0);
+
+			cpos += vec2(float(maxx0 + minx0 + 1) * 0.5, 0.5) * count0;
+			cpos += vec2(float(maxx1 + minx1 + 1) * 0.5, 1.5) * count1;
+			cpos += vec2(float(maxx2 + minx2 + 1) * 0.5, 2.5) * count2;
+			cpos += vec2(float(maxx3 + minx3 + 1) * 0.5, 3.5) * count3;
+
+			weight += count0 + count1 + count2 + count3;
 		}
 		cpos /= weight;
 		cpos += vec2(tx << 4, (ty << 4) + (qy << 2));
@@ -594,28 +600,23 @@ void generateTiles(uint ty) {
 		uint num_frags;
 
 		{
-			int rows01 = int(tri_rows[0]), rows23 = int(tri_rows[1]);
-			int minx0 = max(((rows01 >> 0) & 0x3f) - min_tx, 0),
-				maxx0 = min(((rows01 >> 6) & 0x3f) - min_tx, 15);
-			int minx1 = max(((rows01 >> 12) & 0x3f) - min_tx, 0),
-				maxx1 = min(((rows01 >> 18) & 0x3f) - min_tx, 15);
-			int minx2 = max(((rows23 >> 0) & 0x3f) - min_tx, 0),
-				maxx2 = min(((rows23 >> 6) & 0x3f) - min_tx, 15);
-			int minx3 = max(((rows23 >> 12) & 0x3f) - min_tx, 0),
-				maxx3 = min(((rows23 >> 18) & 0x3f) - min_tx, 15);
+			int minx0 = max(int((tri_rows.x >> 0) & 0x3f) - startx, 0);
+			int minx1 = max(int((tri_rows.x >> 6) & 0x3f) - startx, 0);
+			int minx2 = max(int((tri_rows.x >> 12) & 0x3f) - startx, 0);
+			int minx3 = max(int((tri_rows.x >> 18) & 0x3f) - startx, 0);
+
+			int maxx0 = min(int((tri_rows.y >> 0) & 0x3f) - startx, 15);
+			int maxx1 = min(int((tri_rows.y >> 6) & 0x3f) - startx, 15);
+			int maxx2 = min(int((tri_rows.y >> 12) & 0x3f) - startx, 15);
+			int maxx3 = min(int((tri_rows.y >> 18) & 0x3f) - startx, 15);
 
 			int count0 = max(maxx0 - minx0 + 1, 0);
 			int count1 = max(maxx1 - minx1 + 1, 0);
 			int count2 = max(maxx2 - minx2 + 1, 0);
 			int count3 = max(maxx3 - minx3 + 1, 0);
 
-			// TODO: is this even needed? in such case count will be 0
-			minx0 = min(minx0, 15);
-			minx1 = min(minx1, 15);
-			minx2 = min(minx2, 15);
-			minx3 = min(minx3, 15);
-
-			min_bits = minx0 | (minx1 << 4) | (minx2 << 8) | (minx3 << 12);
+			min_bits =
+				(minx0 & 15) | ((minx1 & 15) << 4) | ((minx2 & 15) << 8) | ((minx3 & 15) << 12);
 			count_bits = count0 | (count1 << 5) | (count2 << 10) | (count3 << 15);
 			num_frags = count0 + count1 + count2 + count3;
 		}

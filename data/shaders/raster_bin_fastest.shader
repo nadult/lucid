@@ -44,7 +44,7 @@ uniform bool additive_blending;
 // TODO: does that mean that occupancy is so low?
 #define BUFFER_SIZE (LSIZE * 10)
 
-#define MAX_TILE_ROW_TRIS 1024
+#define MAX_TILE_ROW_TRIS 2048
 #define MAX_TILE_TRIS 512
 
 #define MAX_SCRATCH_TRIS 2048
@@ -67,7 +67,7 @@ uint scratch32TileRowTrisOffset(uint ty) {
 }
 
 uint scratch32TileTrisOffset(uint tx) {
-	return (gl_WorkGroupID.x << WORKGROUP_32_SCRATCH_SHIFT) + 4 * 1024 + tx * MAX_TILE_TRIS;
+	return (gl_WorkGroupID.x << WORKGROUP_32_SCRATCH_SHIFT) + 8 * 1024 + tx * MAX_TILE_TRIS;
 }
 
 uint scratch64TriOffset(uint tri_idx) {
@@ -79,7 +79,7 @@ uint scratch64TileRowTrisOffset(uint ty) {
 }
 
 uint scratch64TileTrisOffset(uint tx) {
-	return (gl_WorkGroupID.x << WORKGROUP_64_SCRATCH_SHIFT) + 36 * 1024 + tx * MAX_TILE_TRIS;
+	return (gl_WorkGroupID.x << WORKGROUP_64_SCRATCH_SHIFT) + 40 * 1024 + tx * MAX_TILE_TRIS;
 }
 
 shared int s_num_bins, s_bin_id, s_bin_raster_offset;
@@ -444,21 +444,13 @@ void generateTileRowTris(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, int min_
 
 		if(num_rows > 0) {
 			uint roffset = atomicAdd(s_block_row_tri_counts[ty], num_rows);
-			if(roffset + num_rows > MAX_TILE_ROW_TRIS) {
-				s_raster_error = 0xffffffff;
-				return;
-			}
-
-			uint first_part = 1 << 20;
 			for(uint qy = 0; qy < 4; qy++) {
 				if(tx_masks[qy] == 0)
 					continue;
 				g_scratch_64[dst_offset_64 + roffset] =
 					uvec2(row_ranges[(qy << 1) + 0], row_ranges[(qy << 1) + 1]);
-				g_scratch_32[dst_offset_32 + roffset] =
-					tri_idx | (tx_masks[qy] << 16) | first_part | (qy << 24);
+				g_scratch_32[dst_offset_32 + roffset] = tri_idx | (tx_masks[qy] << 16) | (qy << 24);
 				roffset++;
-				first_part = 0;
 			}
 		}
 
@@ -510,71 +502,29 @@ void generateTiles(uint ty) {
 	uint tri_count = s_block_row_tri_counts[ty];
 
 	resetBlockCounters();
-	barrier();
 	if(LIX < MAX_SEGMENTS * XTILES_PER_BIN) {
 		s_segments[LIX >> MAX_SEGMENTS_SHIFT][LIX & (MAX_SEGMENTS - 1)] = ~0u;
-		if(LIX == 0)
-			s_raster_error = 0;
+		if(LIX < XTILES_PER_BIN)
+			TILE_TRI_COUNT(LIX) = 0;
 	}
+	barrier();
+
+	for(uint tx = LIX & 3, tx_bit = 0x10000 << tx, buf_offset = tx * MAX_TILE_TRIS, i = LIX >> 2;
+		i < tri_count; i += LSIZE / 4) {
+		if((g_scratch_32[src_offset_32 + i] & tx_bit) == 0)
+			continue;
+		uint tri_offset = atomicAdd(TILE_TRI_COUNT(tx), 1);
+		if(tri_offset < MAX_TILE_TRIS)
+			s_buffer[buf_offset + tri_offset] = i;
+		else
+			atomicOr(s_raster_error, 0x10 << tx);
+	}
+	barrier();
+	if(s_raster_error != 0)
+		return;
 
 	uint tx = LIX >> (LSHIFT - 2);
 	uint buf_offset = tx * MAX_TILE_TRIS; // TODO: shift
-
-	{
-		uint tx_bit = 0x10000 << tx;
-		uint bits_offset = MAX_TILE_TRIS * XTILES_PER_BIN + (tx << 6);
-
-		// Computing quad-row offsets for each triangle; Each tri can be divided into 1-4 quad rows
-		// TODO: limit number of tile-tri-quads to 1024
-		// TODO: add more constants, name them properly
-		for(uint i = LIX & (LSIZE / 4 - 1); i < tri_count; i += LSIZE / 4) {
-			uint tri_info = g_scratch_32[src_offset_32 + i];
-			bool value = (tri_info & tx_bit) != 0;
-			uint mask = uint(ballotARB(value));
-			if((LIX & 31) == 0)
-				s_buffer[bits_offset + (i >> 5)] = mask;
-		}
-		barrier();
-
-		if(LIX < 32 * XTILES_PER_BIN) {
-			uint num_warps = (tri_count + 31) >> 5;
-			uint tx = LIX >> 5, warp_id = LIX & 31;
-			uint bits_offset = MAX_TILE_TRIS * XTILES_PER_BIN + (tx << 6);
-
-			uint mask = warp_id >= num_warps ? 0 : s_buffer[bits_offset + warp_id];
-			uint count = bitCount(mask);
-
-			uint count_sum = count, temp;
-			temp = shuffleUpNV(count_sum, 1, 32), count_sum += warp_id >= 1 ? temp : 0;
-			temp = shuffleUpNV(count_sum, 2, 32), count_sum += warp_id >= 2 ? temp : 0;
-			temp = shuffleUpNV(count_sum, 4, 32), count_sum += warp_id >= 4 ? temp : 0;
-			temp = shuffleUpNV(count_sum, 8, 32), count_sum += warp_id >= 8 ? temp : 0;
-			temp = shuffleUpNV(count_sum, 16, 32), count_sum += warp_id >= 16 ? temp : 0;
-			if(warp_id == 31) {
-				TILE_TRI_COUNT(tx) = count_sum;
-				if(count_sum > MAX_TILE_TRIS)
-					atomicOr(s_raster_error, 0x10 << tx);
-			}
-			s_buffer[bits_offset + warp_id + 32] = count_sum - count;
-		}
-
-		barrier();
-		if(s_raster_error != 0)
-			return;
-
-		uint bit_mask = 1 << (LIX & 31), bit_prev_mask = bit_mask - 1;
-		for(uint i = LIX & (LSIZE / 4 - 1); i < tri_count; i += LSIZE / 4) {
-			uint bits = s_buffer[bits_offset + (i >> 5)];
-			uint count_sum = s_buffer[bits_offset + (i >> 5) + 32];
-
-			if((bits & bit_mask) != 0) {
-				uint cur_offset = count_sum + bitCount(bits & bit_prev_mask);
-				s_buffer[buf_offset + cur_offset] = i;
-			}
-		}
-	}
-	barrier();
-
 	tri_count = TILE_TRI_COUNT(tx);
 	int min_tx = int(tx << 4); // TODO: bad name
 
@@ -586,7 +536,6 @@ void generateTiles(uint ty) {
 		uvec2 tri_rows = g_scratch_64[src_offset_64 + idx];
 		uint tri_idx = tri_info & 0xffff;
 		uint qy = tri_info >> 24;
-		uint first_part_bit = (tri_info & (1 << 20)) >> 6;
 
 		vec2 cpos = vec2(0, 0);
 		float weight = 0.0;
@@ -617,36 +566,9 @@ void generateTiles(uint ty) {
 		float ray_pos = depth_eq.x * cpos.x + (depth_eq.y * cpos.y + depth_eq.z);
 		float depth = (0x1ffff * 0.99f) * SATURATE(1.0 - inversesqrt(ray_pos + 1)); // 17 bits
 
-		s_buffer[buf_offset + i] = idx | (uint(depth) << 15) | first_part_bit;
+		s_buffer[buf_offset + i] = idx | (uint(depth) << 15);
 	}
 	barrier();
-
-#ifdef SYNC_TRIANGLE_PARTS
-	// Synchronising depths coming from the same triangle
-	for(uint i = LIX & (TILE_STEP - 1); i < tri_count; i += TILE_STEP) {
-		uint cur_value = s_buffer[buf_offset + i];
-		if((cur_value & (1 << 14)) == 0)
-			continue;
-		uint depth = cur_value >> 15;
-
-		uint max_count = min(4, tri_count - i);
-		int count = 1;
-		while(count < max_count) {
-			uint value = s_buffer[buf_offset + i + count];
-			if((value & (1 << 14)) != 0)
-				break;
-			depth += value >> 15;
-			count++;
-		}
-		depth = (depth << 1) / count;
-		for(int j = 0; j < count; j++) {
-			uint value = s_buffer[buf_offset + j];
-			s_buffer[buf_offset + j] = (value & 0x3fff) | (depth >> 14);
-		}
-	}
-	barrier();
-#endif
-
 	sortTileTris();
 	barrier();
 
@@ -1128,7 +1050,7 @@ void rasterFragmentCounts(int ty) {
 	for(uint i = LIX; i < BIN_SIZE * TILE_SIZE; i += LSIZE) {
 		ivec2 pixel_pos = ivec2(i & (BIN_SIZE - 1), ty * TILE_SIZE + (i >> BIN_SHIFT));
 		uint count0 = TILE_FRAG_COUNT(pixel_pos.x / TILE_SIZE) & 0xffff;
-		//count0 = TILE_TRI_COUNT(pixel_pos.x / TILE_SIZE);
+		//count0 = TILE_TRI_COUNT(pixel_pos.x / TILE_SIZE) * 8;
 
 		vec3 color = vec3(count0, count0, count0) / 4096;
 		uint enc_col = encodeRGBA8(vec4(SATURATE(color), 1.0));
@@ -1159,13 +1081,6 @@ void rasterBin(int bin_id) {
 	barrier();
 	UPDATE_CLOCK(0);
 
-	if(s_raster_error != 0) {
-		for(int ty = 0; ty < XTILES_PER_BIN; ty++)
-			for(int tx = 0; tx < XTILES_PER_BIN; tx++)
-				rasterInvalidTile(tx, ty, vec3(0.2, 0.2, 0.0));
-		return;
-	}
-
 	for(int ty = 0; ty < XTILES_PER_BIN; ty++) {
 		barrier();
 		generateTiles(ty);
@@ -1182,6 +1097,8 @@ void rasterBin(int bin_id) {
 					value += 0.4;
 				rasterInvalidTile(tx, ty, vec3(value, 0.0, 0.0));
 			}
+			if(LIX == 0)
+				s_raster_error = 0;
 			continue;
 		}
 

@@ -11,6 +11,20 @@
 #define LSIZE 256
 #define LSHIFT 8
 
+#define BUFFER_SIZE (LSIZE * 10)
+
+#define MAX_TILE_ROW_TRIS 2048
+#define MAX_TILE_TRIS 512
+
+#define MAX_SCRATCH_TRIS 2048
+#define MAX_SCRATCH_TRIS_SHIFT 11
+
+#define SEGMENT_SIZE (LSIZE * 8)
+#define SEGMENT_SHIFT (LSHIFT + 3)
+
+#define MAX_SEGMENTS 32
+#define MAX_SEGMENTS_SHIFT 5
+
 #define TILE_STEP (LSIZE / XTILES_PER_BIN)
 
 layout(local_size_x = LSIZE) in;
@@ -38,32 +52,15 @@ layout(binding = 1) uniform sampler2D transparent_texture;
 
 uniform bool additive_blending;
 
+#define SATURATE(val) clamp(val, 0.0, 1.0)
+
 #define WORKGROUP_32_SCRATCH_SIZE (16 * 1024)
 #define WORKGROUP_32_SCRATCH_SHIFT 14
 
 #define WORKGROUP_64_SCRATCH_SIZE (64 * 1024)
 #define WORKGROUP_64_SCRATCH_SHIFT 16
 
-// TODO: does that mean that occupancy is so low?
-#define BUFFER_SIZE (LSIZE * 10)
-
-#define MAX_TILE_ROW_TRIS 2048
-#define MAX_TILE_TRIS 512
-
-#define MAX_SCRATCH_TRIS 2048
-#define MAX_SCRATCH_TRIS_SHIFT 11
-
 #define TRI_SCRATCH(var_idx) g_scratch_64[scratch_tri_offset + (var_idx << MAX_SCRATCH_TRIS_SHIFT)]
-
-#define SATURATE(val) clamp(val, 0.0, 1.0)
-
-// This makes sure that 4x16 chunks coming from the same triangle are clumped together
-// Theoretically this should increase material & texture coherency, but in practice it does
-// not increase performance
-// TODO: investigate
-//#define SYNC_TRIANGLE_PARTS
-
-// TODO: use shifts
 
 uint scratch32TileRowTrisOffset(uint ty) {
 	return (gl_WorkGroupID.x << WORKGROUP_32_SCRATCH_SHIFT) + ty * MAX_TILE_ROW_TRIS;
@@ -89,8 +86,16 @@ shared int s_num_bins, s_bin_id, s_bin_raster_offset;
 shared ivec2 s_bin_pos;
 shared vec3 s_bin_ray_dir0;
 
-shared uint s_block_row_tri_counts[XTILES_PER_BIN];
-shared uint s_curblock_counters[XTILES_PER_BIN * 4];
+shared uint s_tile_row_tri_counts[XTILES_PER_BIN];
+shared uint s_tile_tri_count[XTILES_PER_BIN];
+shared uint s_tile_frag_count[XTILES_PER_BIN];
+
+shared uint s_bin_quad_count, s_bin_quad_offset;
+
+shared uint s_buffer[BUFFER_SIZE + 1];
+shared uint s_mini_buffer[32 * XTILES_PER_BIN];
+shared uint s_segments[XTILES_PER_BIN][MAX_SEGMENTS];
+shared int s_raster_error;
 
 void outputPixel(ivec2 pixel_pos, uint color) {
 	g_raster_image[s_bin_raster_offset + pixel_pos.x + (pixel_pos.y << BIN_SHIFT)] = color;
@@ -124,42 +129,12 @@ void initTimers() {}
 void commitTimers() {}
 #endif
 
-void resetBlockCounters() {
-	if(LIX < XTILES_PER_BIN)
-		s_curblock_counters[LIX] = 0;
-}
-
-// These functions work only within current tile row
-#define TILE_TRI_COUNT(tx) s_curblock_counters[tx]
-#define TILE_FRAG_COUNT(tx) s_curblock_counters[tx + XTILES_PER_BIN]
-
-shared int s_raster_error;
-
-// TODO: add protection from too big number of samples:
-// maximum per row for raster_bin = min(4 * LSIZE, 32768) ?
-// we have to somehow estimate max# of samples during categorization?
-// max 512 tris per block -> max samples = 512 * 64: fits in 15 bits
-
-shared uint s_bin_quad_count, s_bin_quad_offset;
-
-shared uint s_buffer[BUFFER_SIZE + 1];
-shared uint s_mini_buffer[32 * XTILES_PER_BIN];
-
-#define SEGMENT_SIZE (LSIZE * 8)
-#define SEGMENT_SHIFT (LSHIFT + 3)
-
-#define MAX_SEGMENTS 16
-#define MAX_SEGMENTS_SHIFT 4
-shared uint s_segments[XTILES_PER_BIN][MAX_SEGMENTS];
-
 #ifdef VENDOR_NVIDIA
 uint swap(uint x, int mask, uint dir) {
 	uint y = shuffleXorNV(x, mask, 32);
 	return uint(x < y) == dir ? y : x;
 }
-
 uint bitExtract(uint value, int boffset) { return (value >> boffset) & 1; }
-
 uint xorBits(uint value, int bit0, int bit1) { return ((value >> bit0) ^ (value >> bit1)) & 1; }
 #endif
 
@@ -167,7 +142,7 @@ shared uint s_sort_max_block_rcount;
 
 void sortTileTris() {
 	if(LIX < XTILES_PER_BIN) {
-		uint count = TILE_TRI_COUNT(LIX);
+		uint count = s_tile_tri_count[LIX];
 		// rcount: count rounded up to next power of 2
 		uint rcount = max(32, (count & (count - 1)) == 0 ? count : (2 << findMSB(count)));
 		if(LIX == 0)
@@ -179,7 +154,7 @@ void sortTileTris() {
 	uint gid = LIX >> (LSHIFT - 2);
 	uint lid = LIX & (LSIZE / 4 - 1);
 	uint goffset = gid * MAX_TILE_TRIS;
-	uint count = TILE_TRI_COUNT(gid);
+	uint count = s_tile_tri_count[gid];
 	// TODO: max_rcount is only needed for barriers, computations should be performed up to rcount
 	// But it seems, that using rcount directly is actually a bit slower... (Sponza)
 	uint max_rcount = s_sort_max_block_rcount;
@@ -449,7 +424,7 @@ void generateTileRowTris(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, int min_
 			continue;
 
 		uint ty = qy >> 2;
-		uint roffset = atomicAdd(s_block_row_tri_counts[ty], 1) + ty * MAX_TILE_ROW_TRIS;
+		uint roffset = atomicAdd(s_tile_row_tri_counts[ty], 1) + ty * MAX_TILE_ROW_TRIS;
 
 		g_scratch_64[dst_offset_64 + roffset] =
 			uvec2((imin0 << 0) | (imin1 << 6) | (imin2 << 12) | (imin3 << 18),
@@ -498,13 +473,12 @@ void processQuads() {
 void generateTiles(uint ty) {
 	uint src_offset_32 = scratch32TileRowTrisOffset(ty);
 	uint src_offset_64 = scratch64TileRowTrisOffset(ty);
-	uint tri_count = s_block_row_tri_counts[ty];
+	uint tri_count = s_tile_row_tri_counts[ty];
 
-	resetBlockCounters();
 	if(LIX < MAX_SEGMENTS * XTILES_PER_BIN) {
 		s_segments[LIX >> MAX_SEGMENTS_SHIFT][LIX & (MAX_SEGMENTS - 1)] = ~0u;
 		if(LIX < XTILES_PER_BIN)
-			TILE_TRI_COUNT(LIX) = 0;
+			s_tile_tri_count[LIX] = 0;
 	}
 	barrier();
 
@@ -512,7 +486,7 @@ void generateTiles(uint ty) {
 		i < tri_count; i += LSIZE / 4) {
 		if((g_scratch_32[src_offset_32 + i] & tx_bit) == 0)
 			continue;
-		uint tri_offset = atomicAdd(TILE_TRI_COUNT(tx), 1);
+		uint tri_offset = atomicAdd(s_tile_tri_count[tx], 1);
 		if(tri_offset < MAX_TILE_TRIS)
 			s_buffer[buf_offset + tri_offset] = i;
 		else
@@ -524,7 +498,7 @@ void generateTiles(uint ty) {
 
 	uint tx = LIX >> (LSHIFT - 2);
 	uint buf_offset = tx * MAX_TILE_TRIS;
-	tri_count = TILE_TRI_COUNT(tx);
+	tri_count = s_tile_tri_count[tx];
 	int startx = int(tx << 4); // TODO: bad name
 
 	for(uint i = LIX & (TILE_STEP - 1); i < tri_count; i += TILE_STEP) {
@@ -676,7 +650,7 @@ void generateTiles(uint ty) {
 	if(LIX < MAX_SEGMENTS * XTILES_PER_BIN) {
 		uint seg_id = LIX & (MAX_SEGMENTS - 1);
 		uint tx = LIX >> MAX_SEGMENTS_SHIFT;
-		uint tri_count = TILE_TRI_COUNT(tx);
+		uint tri_count = s_tile_tri_count[tx];
 
 		uint cur_value = s_segments[tx][seg_id];
 		uint next_value = seg_id + 1 == MAX_SEGMENTS ? ~0u : s_segments[tx][seg_id + 1];
@@ -696,10 +670,10 @@ void generateTiles(uint ty) {
 
 	if(LIX < XTILES_PER_BIN) {
 		uint tx = LIX;
-		uint num_tris = TILE_TRI_COUNT(tx);
+		uint num_tris = s_tile_tri_count[tx];
 		uint frag_count = num_tris == 0 ? 0 : s_buffer[tx * MAX_TILE_TRIS + num_tris - 1];
 		//uint segment_count = (frag_count + SEGMENT_SIZE - 1) >> SEGMENT_SHIFT;
-		TILE_FRAG_COUNT(tx) = frag_count;
+		s_tile_frag_count[tx] = frag_count;
 		if(frag_count > MAX_SEGMENTS * SEGMENT_SIZE)
 			atomicOr(s_raster_error, 1 << tx);
 	}
@@ -1050,8 +1024,8 @@ void rasterFragmentCounts(int ty) {
 	barrier();
 	for(uint i = LIX; i < BIN_SIZE * TILE_SIZE; i += LSIZE) {
 		ivec2 pixel_pos = ivec2(i & (BIN_SIZE - 1), ty * TILE_SIZE + (i >> BIN_SHIFT));
-		uint count0 = TILE_FRAG_COUNT(pixel_pos.x / TILE_SIZE) & 0xffff;
-		//count0 = TILE_TRI_COUNT(pixel_pos.x / TILE_SIZE) * 8;
+		uint count0 = s_tile_frag_count[pixel_pos.x / TILE_SIZE] & 0xffff;
+		//count0 = s_tile_tri_count[pixel_pos.x / TILE_SIZE] * 8;
 
 		vec3 color = vec3(count0, count0, count0) / 4096;
 		uint enc_col = encodeRGBA8(vec4(SATURATE(color), 1.0));
@@ -1074,7 +1048,7 @@ void rasterBin(int bin_id) {
 			s_raster_error = 0;
 		}
 
-		s_block_row_tri_counts[LIX] = 0;
+		s_tile_row_tri_counts[LIX] = 0;
 	}
 	barrier();
 	processQuads();
@@ -1104,7 +1078,7 @@ void rasterBin(int bin_id) {
 		}
 
 		for(int tx = 0; tx < XTILES_PER_BIN; tx++) {
-			int frag_count = int(TILE_FRAG_COUNT(tx));
+			int frag_count = int(s_tile_frag_count[tx]);
 			int segment_id = 0;
 
 			vec4 prev_depths;

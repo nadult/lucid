@@ -1,6 +1,7 @@
 // $$include funcs lighting frustum viewport data
 
 // TODO: add synthetic test: 256 planes one after another
+// TODO: cleanup in the beginning (group definitions)
 
 // NOTE: converting integer multiplications to shifts does not increase perf
 
@@ -704,20 +705,29 @@ void generateTiles(uint ty) {
 	}
 }
 
-void loadSamples(int tx, int ty, int segment_id, int frag_count) {
-	int first_offset = segment_id << SEGMENT_SHIFT;
-	uint first_tri = s_segments[tx][segment_id];
-	uint tri_count = first_tri >> 16;
-	first_tri &= 0xffff;
+shared uint s_src_offset_32, s_src_offset_64, s_tri_count;
+shared int s_first_offset;
 
-	uint src_offset_32 = scratch32TileTrisOffset(tx) + first_tri;
-	uint src_offset_64 = scratch64TileTrisOffset(tx) + first_tri;
+void initSegment(int tx, int ty, int segment_id) {
+	if(LIX == 0) {
+		s_first_offset = segment_id << SEGMENT_SHIFT;
+		uint first_tri = s_segments[tx][segment_id];
+		s_tri_count = first_tri >> 16;
+		first_tri &= 0xffff;
 
+		s_src_offset_32 = scratch32TileTrisOffset(tx) + first_tri;
+		s_src_offset_64 = scratch64TileTrisOffset(tx) + first_tri;
+	}
+}
+
+void loadSamples(int tx, int ty, int frag_count) {
 	int y = int(LIX & 3);
 	uint min_shift = y << 2, count_shift = min_shift + y;
 
 	// TODO: group differently for better memory accesses (and measure)
-	for(uint i = (LIX >> 2); i < tri_count; i += LSIZE / 4) {
+	int first_offset = s_first_offset;
+	uint src_offset_32 = s_src_offset_32, src_offset_64 = s_src_offset_64;
+	for(uint tri_count = s_tri_count, i = (LIX >> 2); i < tri_count; i += LSIZE / 4) {
 		uvec2 tri_info = g_scratch_64[src_offset_64 + i];
 		int tri_offset = int(g_scratch_32[src_offset_32 + i]) - first_offset;
 		int minx = int((tri_info.x >> min_shift) & 15);
@@ -843,21 +853,10 @@ void initReduceSamples(out vec4 prev_depths, out uvec4 prev_colors) {
 }
 
 // TODO: optimize
-void reduceSamples(int tx, int ty, int segment_id, uint frag_count, in out vec4 prev_depths,
+void reduceSamples(int tx, int ty, uint frag_count, in out vec4 prev_depths,
 				   in out uvec4 prev_colors) {
 	int x = int(LIX & 15);
 	int y = int((LIX >> 4) & 15);
-
-	int first_offset = segment_id << SEGMENT_SHIFT;
-	uint first_tri = s_segments[tx][segment_id];
-	uint tri_count = first_tri >> 16;
-	first_tri &= 0xffff;
-
-	uint src_offset_32 = scratch32TileTrisOffset(tx) + first_tri;
-	uint src_offset_64 = scratch64TileTrisOffset(tx) + first_tri;
-
-	// TODO: share pixels between threads for max_raster_blocks <= 4?
-	// TODO: WARP_SIZE?
 
 	uint pixel_bit = 1u << (((y & 1) << 4) + x);
 
@@ -866,7 +865,8 @@ void reduceSamples(int tx, int ty, int segment_id, uint frag_count, in out vec4 
 	vec3 out_color = temp.rgb;
 	float out_transparency = temp.a;
 
-	for(uint i = 0; i < tri_count; i += 32) {
+	int first_offset = s_first_offset;
+	for(uint tri_count = s_tri_count, i = 0; i < tri_count; i += 32) {
 		uint sub_count = min(32, tri_count - i);
 		int sel_tri_offset = 0;
 		uint sel_tri_bitmask, tris_bitmask;
@@ -874,8 +874,8 @@ void reduceSamples(int tx, int ty, int segment_id, uint frag_count, in out vec4 
 		{
 			bool in_range = false;
 			if((LIX & 31) < sub_count) {
-				uvec2 tri_info = g_scratch_64[src_offset_64 + i + (LIX & 31)];
-				sel_tri_offset = int(g_scratch_32[src_offset_32 + i + (LIX & 31)]) - first_offset;
+				uvec2 tri_info = g_scratch_64[s_src_offset_64 + i + (LIX & 31)];
+				sel_tri_offset = int(g_scratch_32[s_src_offset_32 + i + (LIX & 31)]) - first_offset;
 
 				// TODO: quicker filtering of tris with invalid QY?
 				int tri_qy = int(tri_info.y >> 20), qy = y >> 2;
@@ -1116,7 +1116,10 @@ void rasterBin(int bin_id) {
 			while(frag_count > 0) {
 				int cur_frag_count = min(frag_count, SEGMENT_SIZE);
 
-				loadSamples(tx, ty, segment_id, cur_frag_count);
+				initSegment(tx, ty, segment_id);
+				barrier();
+
+				loadSamples(tx, ty, cur_frag_count);
 				barrier();
 				UPDATE_CLOCK(2);
 
@@ -1125,7 +1128,7 @@ void rasterBin(int bin_id) {
 				barrier();
 				UPDATE_CLOCK(3);
 
-				reduceSamples(tx, ty, segment_id, cur_frag_count, prev_depths, prev_colors);
+				reduceSamples(tx, ty, cur_frag_count, prev_depths, prev_colors);
 				barrier();
 				UPDATE_CLOCK(4);
 

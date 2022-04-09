@@ -841,7 +841,7 @@ void initReduceSamples(out vec4 prev_depths, out uvec4 prev_colors) {
 
 // TODO: optimize
 void reduceSamples(int tx, int ty, uint frag_count, in out vec4 prev_depths,
-				   in out uvec4 prev_colors) {
+				   in out uvec4 prev_colors, bool finish) {
 	int x = int(LIX & 15);
 	int y = int((LIX >> 4) & 15);
 
@@ -987,28 +987,22 @@ void reduceSamples(int tx, int ty, uint frag_count, in out vec4 prev_depths,
 		}
 	}
 
-	prev_colors[3] = encodeRGBA8(vec4(out_color, out_transparency));
-}
+	if(finish) {
+		for(int i = 2; i >= 0; i--)
+			if(prev_colors[i] != 0) {
+				vec4 cur_color = decodeRGBA8(prev_colors[i]);
+				float cur_transparency = 1.0 - cur_color.a;
+				out_color.rgb = cur_color.rgb * cur_color.a +
+								(additive_blending ? out_color : out_color * cur_transparency);
+				out_transparency *= cur_transparency;
+			}
 
-void finishReduceSamples(int tx, int ty, uvec4 prev_colors) {
-	int x = int(LIX & 15);
-	int y = int((LIX >> 4) & 15);
+		uint enc_color = encodeRGBA8(vec4(SATURATE(out_color), 1.0 - out_transparency));
+		outputPixel(ivec2((tx << 4) + x, (ty << 4) + y), enc_color);
 
-	vec4 temp = decodeRGBA8(prev_colors[3]);
-	vec3 out_color = temp.rgb;
-	float out_transparency = temp.a;
-
-	for(int i = 2; i >= 0; i--)
-		if(prev_colors[i] != 0) {
-			vec4 cur_color = decodeRGBA8(prev_colors[i]);
-			float cur_transparency = 1.0 - cur_color.a;
-			out_color.rgb = cur_color.rgb * cur_color.a +
-							(additive_blending ? out_color : out_color * cur_transparency);
-			out_transparency *= cur_transparency;
-		}
-
-	uint enc_color = encodeRGBA8(vec4(SATURATE(out_color), 1.0 - out_transparency));
-	outputPixel(ivec2((tx << 4) + x, (ty << 4) + y), enc_color);
+	} else {
+		prev_colors[3] = encodeRGBA8(vec4(out_color, out_transparency));
+	}
 }
 
 shared uint s_pixels[TILE_SIZE * TILE_SIZE];
@@ -1034,13 +1028,9 @@ void finishVisualizeSamples(uint tx, uint ty) {
 	outputPixel(pixel_pos, enc_col);
 }
 
-void rasterInvalidTile(int tx, int ty, vec3 color) {
-	uint enc_col = encodeRGBA8(vec4(color, 1.0));
-
-	for(uint i = LIX; i < TILE_SIZE * TILE_SIZE; i += LSIZE) {
-		ivec2 pixel_pos = ivec2(i & (TILE_SIZE - 1), i >> TILE_SHIFT);
-		outputPixel(pixel_pos + ivec2(tx, ty) * TILE_SIZE, enc_col);
-	}
+void fillTile(int tx, int ty, uint enc_color) {
+	ivec2 pixel_pos = ivec2((tx << TILE_SHIFT) + (LIX & 15), (ty << TILE_SHIFT) + (LIX >> 4));
+	outputPixel(pixel_pos, enc_color);
 }
 
 void rasterFragmentCounts(int ty) {
@@ -1093,7 +1083,8 @@ void rasterBin(int bin_id) {
 					value += 0.2;
 				if((s_raster_error & (0x10 << tx)) != 0)
 					value += 0.4;
-				rasterInvalidTile(tx, ty, vec3(value, 0.0, 0.0));
+				vec4 color = vec4(value, 0.0, 0.0, 1.0);
+				fillTile(tx, ty, encodeRGBA8(color));
 			}
 			if(LIX == 0)
 				s_raster_error = 0;
@@ -1104,6 +1095,11 @@ void rasterBin(int bin_id) {
 			int frag_count = int(s_tile_frag_count[tx]);
 			int segment_id = 0;
 
+			if(frag_count == 0) {
+				fillTile(tx, ty, 0);
+				continue;
+			}
+
 			vec4 prev_depths;
 			uvec4 prev_colors;
 
@@ -1113,7 +1109,8 @@ void rasterBin(int bin_id) {
 			while(frag_count > 0) {
 				int cur_frag_count = min(frag_count, SEGMENT_SIZE);
 
-				initSegment(tx, ty, segment_id);
+				initSegment(tx, ty, segment_id++);
+				frag_count -= SEGMENT_SIZE;
 				barrier();
 
 				loadSamples(tx, ty, cur_frag_count);
@@ -1125,15 +1122,11 @@ void rasterBin(int bin_id) {
 				barrier();
 				UPDATE_CLOCK(3);
 
-				reduceSamples(tx, ty, cur_frag_count, prev_depths, prev_colors);
+				reduceSamples(tx, ty, cur_frag_count, prev_depths, prev_colors, frag_count <= 0);
 				barrier();
 				UPDATE_CLOCK(4);
-
-				segment_id++;
-				frag_count -= SEGMENT_SIZE;
 			}
 
-			finishReduceSamples(tx, ty, prev_colors);
 			//finishVisualizeSamples(tx, ty);
 		}
 

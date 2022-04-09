@@ -72,6 +72,8 @@ Kafle 16x16 zamiast bloków 8x8:
 - przy generowaniu bloków po prostu przerabiamy 2x tyle linii
 - generujemy 2x tyle danych per trókąt
 
+Uwaga: wcześniejsze skopiowanie danych trókątów ze scratcha dużo nie dało... najwyraźniej cache
+  działa na tyle dobrze, że niezależne kopiowanie do SMEM nie pomaga...
 
 * *Pomysł nr 37169*
   A może dałoby się za pomocą redukcji (po pikselach) wygenerować posortowane warstwy, które

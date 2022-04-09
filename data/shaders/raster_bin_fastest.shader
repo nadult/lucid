@@ -573,6 +573,7 @@ void generateTiles(uint ty) {
 		uint qy = tri_info >> 24;
 		uint min_bits, count_bits;
 		uint num_frags;
+		uint row_mask = 0;
 
 		{
 			int minx0 = max(int((tri_rows.x >> 0) & 0x3f) - startx, 0);
@@ -590,11 +591,15 @@ void generateTiles(uint ty) {
 			int count2 = max(maxx2 - minx2 + 1, 0);
 			int count3 = max(maxx3 - minx3 + 1, 0);
 
+			row_mask = (count0 > 0 ? 1 : 0) | (count1 > 0 ? 2 : 0) | (count2 > 0 ? 4 : 0) |
+					   (count3 > 0 ? 8 : 0);
+
 			min_bits =
 				(minx0 & 15) | ((minx1 & 15) << 4) | ((minx2 & 15) << 8) | ((minx3 & 15) << 12);
 			count_bits = count0 | (count1 << 5) | (count2 << 10) | (count3 << 15);
 			num_frags = count0 + count1 + count2 + count3;
 		}
+		row_mask <<= qy << 2;
 
 		if(num_frags == 0) // This means that tx_masks are invalid
 			RECORD(0, 0, 0, 0);
@@ -608,7 +613,7 @@ void generateTiles(uint ty) {
 		PREFIX_SUM_STEP(num_frags, 4);
 		PREFIX_SUM_STEP(num_frags, 8);
 		PREFIX_SUM_STEP(num_frags, 16);
-		s_buffer[buf_offset + i] = num_frags;
+		s_buffer[buf_offset + i] = num_frags | (row_mask << 16);
 	}
 	barrier();
 
@@ -616,7 +621,7 @@ void generateTiles(uint ty) {
 	// Note: here we expect that idx32 < 32 * 16
 	uint idx32 = (LIX & (TILE_STEP - 1)) << 5;
 	if(idx32 < tri_count) {
-		uint value = s_buffer[buf_offset + idx32 + 31];
+		uint value = s_buffer[buf_offset + idx32 + 31] & 0xffff;
 		PREFIX_SUM_STEP(value, 1);
 		PREFIX_SUM_STEP(value, 2);
 		PREFIX_SUM_STEP(value, 4);
@@ -632,8 +637,10 @@ void generateTiles(uint ty) {
 	// Storing offsets to scratch mem
 	// Also finding first triangle for each segment
 	for(uint i = LIX & (TILE_STEP - 1); i < tri_count; i += TILE_STEP) {
-		uint tri_offset = i == 0 ? 0 : s_buffer[buf_offset + i - 1];
-		uint tri_value = s_buffer[buf_offset + i] - tri_offset;
+		uint tri_offset = i == 0 ? 0 : s_buffer[buf_offset + i - 1] & 0xffff;
+		uint tri_value = s_buffer[buf_offset + i];
+		uint row_mask = tri_value & 0xffff0000;
+		tri_value = (tri_value & 0xffff) - tri_offset;
 
 		uint seg_id = tri_offset >> SEGMENT_SHIFT;
 		if(seg_id < MAX_SEGMENTS) {
@@ -644,7 +651,7 @@ void generateTiles(uint ty) {
 				s_segments[tx][seg_id + 1] = i;
 		}
 
-		g_scratch_32[dst_offset_32 + i] = tri_offset;
+		g_scratch_32[dst_offset_32 + i] = tri_offset | row_mask;
 	}
 	barrier();
 	if(LIX < MAX_SEGMENTS * XTILES_PER_BIN) {
@@ -671,7 +678,7 @@ void generateTiles(uint ty) {
 	if(LIX < XTILES_PER_BIN) {
 		uint tx = LIX;
 		uint num_tris = s_tile_tri_count[tx];
-		uint frag_count = num_tris == 0 ? 0 : s_buffer[tx * MAX_TILE_TRIS + num_tris - 1];
+		uint frag_count = num_tris == 0 ? 0 : s_buffer[tx * MAX_TILE_TRIS + num_tris - 1] & 0xffff;
 		//uint segment_count = (frag_count + SEGMENT_SIZE - 1) >> SEGMENT_SHIFT;
 		s_tile_frag_count[tx] = frag_count;
 		if(frag_count > MAX_SEGMENTS * SEGMENT_SIZE)
@@ -694,6 +701,13 @@ void initSegment(int tx, int ty, int segment_id) {
 	}
 }
 
+// TODO:
+// - przygotować dane tak, żeby były łatwiej przetwarzalne podczas ładowania i redukcji
+//   np. zamiast 4 rzędów 2; problem: wydajne matchowanie tych rzędów w redukcji
+//   (tak, żeby wszystkie grupy wątków nie musiały przelatywać po wszystkich rzędach)
+// - możliwość obniżenia ilości sampli do 4, tak, żeby można było przechowywać też głębię i
+//   żeby nie trzeba było re-compute-ować jej;
+
 void loadSamples(int tx, int ty, int frag_count) {
 	int y = int(LIX & 3);
 	uint min_shift = y << 2, count_shift = min_shift + y;
@@ -703,7 +717,7 @@ void loadSamples(int tx, int ty, int frag_count) {
 	uint src_offset_32 = s_src_offset_32, src_offset_64 = s_src_offset_64;
 	for(uint tri_count = s_tri_count, i = (LIX >> 2); i < tri_count; i += LSIZE / 4) {
 		uvec2 tri_info = g_scratch_64[src_offset_64 + i];
-		int tri_offset = int(g_scratch_32[src_offset_32 + i]) - first_offset;
+		int tri_offset = int(g_scratch_32[src_offset_32 + i] & 0xffff) - first_offset;
 		int minx = int((tri_info.x >> min_shift) & 15);
 		int count_bits = int(tri_info.y & ((1 << 20) - 1));
 
@@ -839,128 +853,157 @@ void reduceSamples(int tx, int ty, uint frag_count, in out vec4 prev_depths,
 	vec3 out_color = temp.rgb;
 	float out_transparency = temp.a;
 
+	// Każdy warp robi listę trisów; Problem: 8 bitów nie wystarczy..., chyba że pogrupujemy po 256 trisów
+	// wtedy mamy max 64 uinty wymagane do przechowania listy trisów
+
+	uint tri_count = s_tri_count;
 	int first_offset = s_first_offset;
-	for(uint tri_count = s_tri_count, i = 0; i < tri_count; i += 32) {
-		uint sub_count = min(32, tri_count - i);
-		int sel_tri_offset = 0;
-		uint sel_tri_bitmask, tris_bitmask;
-		vec3 sel_depth_eq;
-		{
+	uint buf_offset = SEGMENT_SIZE + (LIX >> 5) * 64;
+	uint warp_row_mask = 0x30000 << (y & ~1);
+
+	for(uint gi = 0; gi < tri_count; gi += 256) {
+		uint cur_tri_count = min(tri_count - gi, 256);
+		uint warp_id = LIX & 31;
+
+		uint filtered_count = 0;
+		s_buffer[buf_offset + warp_id] = 0;
+		s_buffer[buf_offset + 32 + warp_id] = 0;
+
+		for(uint i = 0; i < cur_tri_count; i += 32) {
+			uint tile_tri_idx = i + warp_id;
 			bool in_range = false;
-			if((LIX & 31) < sub_count) {
-				uvec2 tri_info = g_scratch_64[s_src_offset_64 + i + (LIX & 31)];
-				sel_tri_offset = int(g_scratch_32[s_src_offset_32 + i + (LIX & 31)]) - first_offset;
-
-				// TODO: quicker filtering of tris with invalid QY?
-				int tri_qy = int(tri_info.y >> 20), qy = y >> 2;
-				if(tri_qy == qy) {
-					int min_bits = int(tri_info.x & 0xffff);
-					int count_bits = int(tri_info.y & 0xfffff);
-
-					// TODO: mask pixels out of segment here
-					if((y & 2) != 0) {
-						sel_tri_offset += (count_bits & 31) + ((count_bits >> 5) & 31);
-						count_bits >>= 10;
-						min_bits >>= 8;
-					}
-
-					int minx0 = min_bits & 15, minx1 = (min_bits >> 4) & 15;
-					int countx0 = count_bits & 31, countx1 = (count_bits >> 5) & 31;
-
-					// Removing fragments before current segment
-					if(sel_tri_offset < 0) {
-						int temp = min(countx0, -sel_tri_offset);
-						countx0 -= temp, minx0 += temp, sel_tri_offset += temp;
-						if(sel_tri_offset < 0) {
-							int temp = min(countx1, -sel_tri_offset);
-							countx1 -= temp, minx1 += temp, sel_tri_offset += temp;
-						}
-					}
-
-					// Removing fragments after current segment
-					// TODO: there is a bug here
-					int over_frags = countx1 + countx0 - (int(frag_count) - sel_tri_offset);
-					if(over_frags > 0) {
-						int reduce1 = min(over_frags, countx1);
-						countx1 -= reduce1;
-						countx0 -= over_frags - reduce1;
-					}
-
-					uint bits0 = ((1 << countx0) - 1) << (minx0 + 0);
-					uint bits1 = ((1 << countx1) - 1) << (minx1 + 16);
-					sel_tri_bitmask = bits0 | bits1;
-
-					uint tri_idx = tri_info.x >> 16;
-					uint scratch_tri_offset = scratch64TriOffset(tri_idx);
-					vec2 val0 = uintBitsToFloat(TRI_SCRATCH(0));
-					vec2 val1 = uintBitsToFloat(TRI_SCRATCH(1));
-					sel_depth_eq = vec3(val0.x, val0.y, val1.x);
-					sel_depth_eq.z += sel_depth_eq.x * (tx << 4) + sel_depth_eq.y * (ty << 4);
-				} else {
-					sel_tri_bitmask = 0;
-				}
-
-				in_range = sel_tri_bitmask != 0;
+			if(tile_tri_idx < cur_tri_count) {
+				uint row_mask = g_scratch_32[s_src_offset_32 + gi + tile_tri_idx];
+				in_range = (warp_row_mask & row_mask) != 0;
 			}
-			tris_bitmask = uint(ballotARB(in_range));
+			uint in_range_mask = uint(ballotARB(in_range));
+
+			// TODO: better (faster) way to store/retrieve indices?
+			if(in_range) {
+				uint prev_mask = in_range_mask & ((1 << warp_id) - 1);
+				uint cur_offset = filtered_count + bitCount(prev_mask);
+				atomicOr(s_buffer[buf_offset + (cur_offset >> 2)],
+						 tile_tri_idx << ((cur_offset & 3) << 3));
+			}
+			filtered_count += bitCount(in_range_mask);
 		}
 
-		int j = findLSB(tris_bitmask);
-		while(j != -1) {
-			int tri_offset = shuffleNV(sel_tri_offset, j, 32);
-			uint tri_bitmask = shuffleNV(sel_tri_bitmask, j, 32);
-			vec3 depth_eq = shuffleNV(sel_depth_eq, j, 32);
-			tris_bitmask &= ~(1 << j);
-			j = findLSB(tris_bitmask);
-			if((tri_bitmask & pixel_bit) == 0)
-				continue;
+		for(uint i = 0; i < filtered_count; i += 32) {
+			uint sub_count = min(32, filtered_count - i);
+			int sel_tri_offset = 0;
+			uint sel_tri_bitmask, tris_bitmask;
+			vec3 sel_depth_eq;
 
-			tri_offset += bitCount(tri_bitmask & (pixel_bit - 1));
-			// TODO: this check shouldn't be needed
-			uint value = tri_offset >= SEGMENT_SIZE ? 0 : s_buffer[tri_offset];
-			if(value == 0)
-				continue;
+			if(warp_id < sub_count) {
+				uint warp_idx = i + warp_id;
+				uint tile_tri_idx =
+					gi + ((s_buffer[buf_offset + (warp_idx >> 2)] >> ((warp_idx & 3) << 3)) & 0xff);
 
-			// It's actually faster to recompute depth in reduce than reuse depth
-			// computed during sampling, because we can put 2x as many samples in SMEM
-			float depth = depth_eq.x * x + (depth_eq.y * y + depth_eq.z);
+				uvec2 tri_info = g_scratch_64[s_src_offset_64 + tile_tri_idx];
+				sel_tri_offset =
+					int(g_scratch_32[s_src_offset_32 + tile_tri_idx] & 0xffff) - first_offset;
 
-			if(depth < prev_depths[0]) {
-				SWAP_UINT(value, prev_colors[0]);
-				SWAP_FLOAT(depth, prev_depths[0]);
-				if(prev_depths[0] < prev_depths[1]) {
-					SWAP_UINT(prev_colors[1], prev_colors[0]);
-					SWAP_FLOAT(prev_depths[1], prev_depths[0]);
-					if(prev_depths[1] < prev_depths[2]) {
-						SWAP_UINT(prev_colors[2], prev_colors[1]);
-						SWAP_FLOAT(prev_depths[2], prev_depths[1]);
+				// TODO: quicker filtering of tris with invalid QY?
+				int min_bits = int(tri_info.x & 0xffff);
+				int count_bits = int(tri_info.y & 0xfffff);
 
-						// TODO: put this under flag
-						if(prev_depths[2] < prev_depths[3]) {
-							prev_colors[0] = 0xff0000ff;
-							pixel_bit = 0;
-							continue;
+				// TODO: mask pixels out of segment here
+				if((y & 2) != 0) {
+					sel_tri_offset += (count_bits & 31) + ((count_bits >> 5) & 31);
+					count_bits >>= 10;
+					min_bits >>= 8;
+				}
+
+				int minx0 = min_bits & 15, minx1 = (min_bits >> 4) & 15;
+				int countx0 = count_bits & 31, countx1 = (count_bits >> 5) & 31;
+
+				// Removing fragments before current segment
+				if(sel_tri_offset < 0) {
+					int temp = min(countx0, -sel_tri_offset);
+					countx0 -= temp, minx0 += temp, sel_tri_offset += temp;
+					if(sel_tri_offset < 0) {
+						int temp = min(countx1, -sel_tri_offset);
+						countx1 -= temp, minx1 += temp, sel_tri_offset += temp;
+					}
+				}
+
+				// Removing fragments after current segment
+				// TODO: there is a bug here
+				int over_frags = countx1 + countx0 - (int(frag_count) - sel_tri_offset);
+				if(over_frags > 0) {
+					int reduce1 = min(over_frags, countx1);
+					countx1 -= reduce1;
+					countx0 -= over_frags - reduce1;
+				}
+
+				uint bits0 = ((1 << countx0) - 1) << (minx0 + 0);
+				uint bits1 = ((1 << countx1) - 1) << (minx1 + 16);
+				sel_tri_bitmask = bits0 | bits1;
+
+				uint tri_idx = tri_info.x >> 16;
+				uint scratch_tri_offset = scratch64TriOffset(tri_idx);
+				vec2 val0 = uintBitsToFloat(TRI_SCRATCH(0));
+				vec2 val1 = uintBitsToFloat(TRI_SCRATCH(1));
+				sel_depth_eq = vec3(val0.x, val0.y, val1.x);
+				sel_depth_eq.z += sel_depth_eq.x * (tx << 4) + sel_depth_eq.y * (ty << 4);
+			}
+
+			for(int j = 0; j < sub_count; j++) {
+				int tri_offset = shuffleNV(sel_tri_offset, j, 32);
+				uint tri_bitmask = shuffleNV(sel_tri_bitmask, j, 32);
+				vec3 depth_eq = shuffleNV(sel_depth_eq, j, 32);
+				tri_offset += bitCount(tri_bitmask & (pixel_bit - 1));
+
+				// TODO: tri_offset check shouldn't be needed?
+				if((tri_bitmask & pixel_bit) == 0 ||
+				   (tri_offset & (SEGMENT_SIZE - 1)) != tri_offset)
+					continue;
+
+				uint value = s_buffer[tri_offset];
+				if(value == 0)
+					continue;
+
+				// It's actually faster to recompute depth in reduce than reuse depth
+				// computed during sampling, because we can put 2x as many samples in SMEM
+				float depth = depth_eq.x * x + (depth_eq.y * y + depth_eq.z);
+
+				if(depth < prev_depths[0]) {
+					SWAP_UINT(value, prev_colors[0]);
+					SWAP_FLOAT(depth, prev_depths[0]);
+					if(prev_depths[0] < prev_depths[1]) {
+						SWAP_UINT(prev_colors[1], prev_colors[0]);
+						SWAP_FLOAT(prev_depths[1], prev_depths[0]);
+						if(prev_depths[1] < prev_depths[2]) {
+							SWAP_UINT(prev_colors[2], prev_colors[1]);
+							SWAP_FLOAT(prev_depths[2], prev_depths[1]);
+
+							// TODO: put this under flag
+							if(prev_depths[2] < prev_depths[3]) {
+								prev_colors[0] = 0xff0000ff;
+								i = filtered_count;
+								break;
+							}
 						}
 					}
 				}
+
+				prev_depths[3] = prev_depths[2];
+				prev_depths[2] = prev_depths[1];
+				prev_depths[1] = prev_depths[0];
+				prev_depths[0] = depth;
+
+				if(prev_colors[2] != 0) {
+					vec4 cur_color = decodeRGBA8(prev_colors[2]);
+					float cur_transparency = 1.0 - cur_color.a;
+					out_color = cur_color.rgb * cur_color.a +
+								(additive_blending ? out_color : out_color * cur_transparency);
+					out_transparency *= cur_transparency;
+				}
+
+				prev_colors[2] = prev_colors[1];
+				prev_colors[1] = prev_colors[0];
+				prev_colors[0] = value;
 			}
-
-			prev_depths[3] = prev_depths[2];
-			prev_depths[2] = prev_depths[1];
-			prev_depths[1] = prev_depths[0];
-			prev_depths[0] = depth;
-
-			if(prev_colors[2] != 0) {
-				vec4 cur_color = decodeRGBA8(prev_colors[2]);
-				float cur_transparency = 1.0 - cur_color.a;
-				out_color = cur_color.rgb * cur_color.a +
-							(additive_blending ? out_color : out_color * cur_transparency);
-				out_transparency *= cur_transparency;
-			}
-
-			prev_colors[2] = prev_colors[1];
-			prev_colors[1] = prev_colors[0];
-			prev_colors[0] = value;
 		}
 	}
 

@@ -7,7 +7,7 @@
 // TODO: better handling of phases
 // TODO: ability to change options without recreating renderer
 DEFINE_ENUM(LucidRenderOpt, check_bins, check_tiles, debug_masks, debug_raster, new_raster,
-			raster_timings, additive_blending);
+			raster_timings, additive_blending, visualize_errors);
 using LucidRenderOpts = EnumFlags<LucidRenderOpt>;
 
 struct RasterBlockInfo {

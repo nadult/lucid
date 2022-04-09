@@ -956,17 +956,20 @@ void reduceSamples(int tx, int ty, uint frag_count, in out vec4 prev_depths,
 							SWAP_UINT(prev_colors[2], prev_colors[1]);
 							SWAP_FLOAT(prev_depths[2], prev_depths[1]);
 
-							// TODO: put this under flag
+#ifdef VISUALIZE_ERRORS
 							if(prev_depths[2] < prev_depths[3]) {
 								prev_colors[0] = 0xff0000ff;
 								i = filtered_count;
 								break;
 							}
+#endif
 						}
 					}
 				}
 
+#ifdef VISUALIZE_ERRORS
 				prev_depths[3] = prev_depths[2];
+#endif
 				prev_depths[2] = prev_depths[1];
 				prev_depths[1] = prev_depths[0];
 				prev_depths[0] = depth;

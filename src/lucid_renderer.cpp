@@ -168,6 +168,8 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 		defs["ENABLE_TIMINGS"] = 1;
 	if(m_opts & Opt::additive_blending)
 		defs["ADDITIVE_BLENDING"] = 1;
+	if(m_opts & Opt::visualize_errors)
+		defs["VISUALIZE_ERRORS"] = 1;
 
 	init_counters_program = EX_PASS(Program::makeCompute("init_counters", defs));
 	setup_program = EX_PASS(Program::makeCompute("setup", defs));

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "lucid_pch.h"
+#include <fwk/gfx/color.h>
 #include <fwk/gfx/gl_ref.h>
 #include <fwk/gfx_base.h>
 #include <fwk/io/file_system.h>
@@ -15,6 +16,7 @@ string dataPath(string file_name);
 struct RenderConfig {
 	float scene_opacity = 1.0f;
 	float3 scene_color = float3(1);
+	IColor background_color = IColor(0, 30, 30);
 	bool backface_culling = false;
 	bool additive_blending = false;
 };

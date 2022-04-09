@@ -310,6 +310,7 @@ void LucidApp::doMenu() {
 
 	if(ImGui::BeginPopup("render_opts")) {
 		m_gui.selectFlags(m_lucid_opts);
+		setup.render_config.additive_blending = m_lucid_opts & LucidRenderOpt::additive_blending;
 		ImGui::EndPopup();
 	}
 
@@ -379,7 +380,11 @@ void LucidApp::doMenu() {
 	m_gui.selectEnum("Rendering mode", m_rendering_mode);
 	ImGui::Checkbox("Back-face culling", &setup.render_config.backface_culling);
 	ImGui::SameLine();
-	ImGui::Checkbox("Additive blending", &setup.render_config.additive_blending);
+
+	if(ImGui::Checkbox("Additive blending", &setup.render_config.additive_blending))
+		m_lucid_opts.setIf(LucidRenderOpt::additive_blending,
+						   setup.render_config.additive_blending);
+
 	ImGui::Checkbox("Wireframe mode (only simple rendering)", &m_wireframe_mode);
 
 	// TODO: different opacity for different scenes ?
@@ -518,9 +523,10 @@ void LucidApp::drawScene() {
 	auto &setup = *m_setups[m_setup_idx];
 
 	{
-		// TODO: renderer3d should draw to depth buffer
-		// TODO: what objects to show ?
 		PERF_GPU_SCOPE("Clear buffers");
+		clearColor(setup.render_config.background_color);
+		clearDepth(1.0);
+
 		m_clear_fbo->bind();
 		glClearDepth(1.0f);
 		glClearStencil(0);
@@ -616,9 +622,6 @@ static void visualizeBlockTris(const RasterTileInfo &tile, const RasterBlockInfo
 bool LucidApp::mainLoop(GlDevice &device) {
 	perf::nextFrame();
 	perf::Manager::instance()->getNewFrames();
-
-	clearColor(IColor(0, 30, 30));
-	clearDepth(1.0f);
 
 	auto cur_time = getTime();
 	float time_diff = m_last_time < 0.0 ? 1.0f / 60.0f : (cur_time - m_last_time);

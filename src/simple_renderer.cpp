@@ -41,7 +41,8 @@ void SimpleRenderer::renderPhase(const RenderContext &ctx, bool opaque) {
 		glDepthMask(1);
 	} else {
 		glEnable(GL_BLEND);
-		glBlendFunc(GL_SRC_ALPHA, ctx.config.additive_blending ? GL_ONE : GL_ONE_MINUS_SRC_ALPHA);
+		auto dst_factor = ctx.config.additive_blending ? GL_ONE : GL_ONE_MINUS_SRC_ALPHA;
+		glBlendFuncSeparate(GL_SRC_ALPHA, dst_factor, GL_ONE, dst_factor);
 		glEnable(GL_DEPTH_TEST);
 		glDepthMask(0);
 	}

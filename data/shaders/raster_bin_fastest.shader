@@ -50,7 +50,9 @@ layout(std430, binding = 13) writeonly buffer buf13_ { uint g_raster_image[]; };
 layout(binding = 0) uniform sampler2D opaque_texture;
 layout(binding = 1) uniform sampler2D transparent_texture;
 
-uniform bool additive_blending;
+// TODO: separate opaque and transparent objects, draw opaque objects first to texture
+// then read it and use depth to optimize drawing
+uniform uint background_color;
 
 #define SATURATE(val) clamp(val, 0.0, 1.0)
 
@@ -836,7 +838,7 @@ void shadeSamples(uint tx, uint ty, uint sample_count) {
 
 void initReduceSamples(out vec4 prev_depths, out uvec4 prev_colors) {
 	prev_depths = vec4(-1.0);
-	prev_colors = uvec4(0, 0, 0, 0xff000000);
+	prev_colors = uvec4(0, 0, 0, background_color);
 }
 
 // TODO: optimize
@@ -847,10 +849,7 @@ void reduceSamples(int tx, int ty, uint frag_count, in out vec4 prev_depths,
 
 	uint pixel_bit = 1u << (((y & 1) << 4) + x);
 
-	// TODO: simplify
-	vec4 temp = decodeRGBA8(prev_colors[3]);
-	vec3 out_color = temp.rgb;
-	float out_transparency = temp.a;
+	vec4 out_color = decodeRGBA8(prev_colors[3]);
 
 	// Każdy warp robi listę trisów; Problem: 8 bitów nie wystarczy..., chyba że pogrupujemy po 256 trisów
 	// wtedy mamy max 64 uinty wymagane do przechowania listy trisów
@@ -974,10 +973,14 @@ void reduceSamples(int tx, int ty, uint frag_count, in out vec4 prev_depths,
 
 				if(prev_colors[2] != 0) {
 					vec4 cur_color = decodeRGBA8(prev_colors[2]);
-					float cur_transparency = 1.0 - cur_color.a;
-					out_color = cur_color.rgb * cur_color.a +
-								(additive_blending ? out_color : out_color * cur_transparency);
-					out_transparency *= cur_transparency;
+#ifdef ADDITIVE_BLENDING
+					out_color.rgb += cur_color.rgb * cur_color.a;
+					out_color.a += cur_color.a;
+#else
+					float cur_trans = 1.0 - cur_color.a;
+					out_color.rgb = cur_color.rgb * cur_color.a + out_color.rgb * cur_trans;
+					out_color.a = cur_color.a + out_color.a * cur_trans;
+#endif
 				}
 
 				prev_colors[2] = prev_colors[1];
@@ -992,16 +995,21 @@ void reduceSamples(int tx, int ty, uint frag_count, in out vec4 prev_depths,
 			if(prev_colors[i] != 0) {
 				vec4 cur_color = decodeRGBA8(prev_colors[i]);
 				float cur_transparency = 1.0 - cur_color.a;
-				out_color.rgb = cur_color.rgb * cur_color.a +
-								(additive_blending ? out_color : out_color * cur_transparency);
-				out_transparency *= cur_transparency;
+#ifdef ADDITIVE_BLENDING
+				out_color.rgb += cur_color.rgb * cur_color.a;
+				out_color.a += cur_color.a;
+#else
+				float cur_trans = 1.0 - cur_color.a;
+				out_color.rgb = cur_color.rgb * cur_color.a + out_color.rgb * cur_trans;
+				out_color.a = cur_color.a + out_color.a * cur_trans;
+#endif
 			}
 
-		uint enc_color = encodeRGBA8(vec4(SATURATE(out_color), 1.0 - out_transparency));
+		uint enc_color = encodeRGBA8(SATURATE(out_color));
 		outputPixel(ivec2((tx << 4) + x, (ty << 4) + y), enc_color);
 
 	} else {
-		prev_colors[3] = encodeRGBA8(vec4(out_color, out_transparency));
+		prev_colors[3] = encodeRGBA8(SATURATE(out_color));
 	}
 }
 
@@ -1096,7 +1104,7 @@ void rasterBin(int bin_id) {
 			int segment_id = 0;
 
 			if(frag_count == 0) {
-				fillTile(tx, ty, 0);
+				fillTile(tx, ty, background_color);
 				continue;
 			}
 

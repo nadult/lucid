@@ -166,6 +166,8 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	defs["MAX_LSIZE"] = gl_info->limits[GlLimit::max_compute_work_group_invocations];
 	if(m_opts & Opt::raster_timings)
 		defs["ENABLE_TIMINGS"] = 1;
+	if(m_opts & Opt::additive_blending)
+		defs["ADDITIVE_BLENDING"] = 1;
 
 	init_counters_program = EX_PASS(Program::makeCompute("init_counters", defs));
 	setup_program = EX_PASS(Program::makeCompute("setup", defs));
@@ -1460,7 +1462,7 @@ void LucidRenderer::rasterBin(const Context &ctx) {
 	raster_bin_program.setFrustum(ctx.camera);
 	raster_bin_program.setViewport(ctx.camera, m_size);
 	raster_bin_program.setShadows(ctx.shadows.matrix, ctx.shadows.enable);
-	raster_bin_program["additive_blending"] = ctx.config.additive_blending;
+	raster_bin_program["background_color"] = u32(ctx.config.background_color);
 	ctx.lighting.setUniforms(raster_bin_program.glProgram());
 
 	if(m_opts & Opt::debug_raster)
@@ -1534,18 +1536,16 @@ void LucidRenderer::compose(const Context &ctx) {
 	DASSERT(!ctx.out_fbo || ctx.out_fbo->size() == m_size);
 	glDrawBuffer(GL_BACK);
 	setupView(IRect(m_size), ctx.out_fbo);
-	glEnable(GL_BLEND);
+	glDisable(GL_BLEND);
 	glDisable(GL_DEPTH_TEST);
 	glDisable(GL_CULL_FACE);
 	glDepthMask(0);
-	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 	compose_program.setFullscreenRect();
 	compose_program.use();
 	compose_program["bin_counts"] = m_bin_counts;
 	compose_program["screen_scale"] = float2(1.0) / float2(m_size);
 	m_raster_image->bindIndex(0);
 	m_compose_quads_vao->draw(PrimitiveType::triangles, m_bin_counts.x * m_bin_counts.y * 6);
-	glDisable(GL_BLEND);
 }
 
 void LucidRenderer::copyCounters() {

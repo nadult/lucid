@@ -727,7 +727,6 @@ void loadSamples(int tx, int ty, int frag_count) {
 			count_bits >>= 5;
 		}
 		int countx = min(count_bits & 31, SEGMENT_SIZE - tri_offset);
-
 		if(countx <= 0)
 			continue;
 
@@ -916,25 +915,6 @@ void reduceSamples(int tx, int ty, uint frag_count, in out vec4 prev_depths,
 
 				int minx0 = min_bits & 15, minx1 = (min_bits >> 4) & 15;
 				int countx0 = count_bits & 31, countx1 = (count_bits >> 5) & 31;
-
-				// Removing fragments before current segment
-				if(sel_tri_offset < 0) {
-					int temp = min(countx0, -sel_tri_offset);
-					countx0 -= temp, minx0 += temp, sel_tri_offset += temp;
-					if(sel_tri_offset < 0) {
-						int temp = min(countx1, -sel_tri_offset);
-						countx1 -= temp, minx1 += temp, sel_tri_offset += temp;
-					}
-				}
-
-				// Removing fragments after current segment
-				// TODO: there is a bug here
-				int over_frags = countx1 + countx0 - (int(frag_count) - sel_tri_offset);
-				if(over_frags > 0) {
-					int reduce1 = min(over_frags, countx1);
-					countx1 -= reduce1;
-					countx0 -= over_frags - reduce1;
-				}
 
 				uint bits0 = ((1 << countx0) - 1) << (minx0 + 0);
 				uint bits1 = ((1 << countx1) - 1) << (minx1 + 16);

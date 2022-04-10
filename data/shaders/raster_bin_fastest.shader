@@ -836,23 +836,35 @@ void shadeSamples(uint tx, uint ty, uint sample_count) {
 	}
 }
 
-void initReduceSamples(out vec4 prev_depths, out uvec4 prev_colors) {
-	prev_depths = vec4(-1.0);
-	prev_colors = uvec4(0, 0, 0, background_color);
+struct ReductionContext {
+#ifdef VISUALIZE_ERRORS
+	vec4 prev_depths;
+#else
+	vec3 prev_depths;
+#endif
+	uvec3 prev_colors;
+	vec3 out_color;
+};
+
+void initReduceSamples(out ReductionContext ctx) {
+#ifdef VISUALIZE_ERRORS
+	ctx.prev_depths = vec4(-1.0);
+#else
+	ctx.prev_depths = vec3(-1.0);
+#endif
+	ctx.prev_colors = uvec3(0);
+	ctx.out_color = decodeRGB8(background_color); // TODO
 }
 
 // TODO: optimize
-void reduceSamples(int tx, int ty, uint frag_count, in out vec4 prev_depths,
-				   in out uvec4 prev_colors, bool finish) {
+// Ta funkcja jest cały czas zbyt wolna!
+// Zamiast iterować po trisach lepiej porobić listy
+// sampli per pixel w loadSamples ?
+void reduceSamples(int tx, int ty, uint frag_count, in out ReductionContext ctx, bool finish) {
 	int x = int(LIX & 15);
 	int y = int((LIX >> 4) & 15);
 
 	uint pixel_bit = 1u << (((y & 1) << 4) + x);
-
-	vec4 out_color = decodeRGBA8(prev_colors[3]);
-
-	// Każdy warp robi listę trisów; Problem: 8 bitów nie wystarczy..., chyba że pogrupujemy po 256 trisów
-	// wtedy mamy max 64 uinty wymagane do przechowania listy trisów
 
 	uint tri_count = s_tri_count;
 	int first_offset = s_first_offset;
@@ -946,19 +958,19 @@ void reduceSamples(int tx, int ty, uint frag_count, in out vec4 prev_depths,
 				// computed during sampling, because we can put 2x as many samples in SMEM
 				float depth = depth_eq.x * x + (depth_eq.y * y + depth_eq.z);
 
-				if(depth < prev_depths[0]) {
-					SWAP_UINT(value, prev_colors[0]);
-					SWAP_FLOAT(depth, prev_depths[0]);
-					if(prev_depths[0] < prev_depths[1]) {
-						SWAP_UINT(prev_colors[1], prev_colors[0]);
-						SWAP_FLOAT(prev_depths[1], prev_depths[0]);
-						if(prev_depths[1] < prev_depths[2]) {
-							SWAP_UINT(prev_colors[2], prev_colors[1]);
-							SWAP_FLOAT(prev_depths[2], prev_depths[1]);
+				if(depth < ctx.prev_depths[0]) {
+					SWAP_UINT(value, ctx.prev_colors[0]);
+					SWAP_FLOAT(depth, ctx.prev_depths[0]);
+					if(ctx.prev_depths[0] < ctx.prev_depths[1]) {
+						SWAP_UINT(ctx.prev_colors[1], ctx.prev_colors[0]);
+						SWAP_FLOAT(ctx.prev_depths[1], ctx.prev_depths[0]);
+						if(ctx.prev_depths[1] < ctx.prev_depths[2]) {
+							SWAP_UINT(ctx.prev_colors[2], ctx.prev_colors[1]);
+							SWAP_FLOAT(ctx.prev_depths[2], ctx.prev_depths[1]);
 
 #ifdef VISUALIZE_ERRORS
-							if(prev_depths[2] < prev_depths[3]) {
-								prev_colors[0] = 0xff0000ff;
+							if(ctx.prev_depths[2] < ctx.prev_depths[3]) {
+								ctx.prev_colors[0] = 0xff0000ff;
 								i = filtered_count;
 								break;
 							}
@@ -968,51 +980,44 @@ void reduceSamples(int tx, int ty, uint frag_count, in out vec4 prev_depths,
 				}
 
 #ifdef VISUALIZE_ERRORS
-				prev_depths[3] = prev_depths[2];
+				ctx.prev_depths[3] = ctx.prev_depths[2];
 #endif
-				prev_depths[2] = prev_depths[1];
-				prev_depths[1] = prev_depths[0];
-				prev_depths[0] = depth;
+				ctx.prev_depths[2] = ctx.prev_depths[1];
+				ctx.prev_depths[1] = ctx.prev_depths[0];
+				ctx.prev_depths[0] = depth;
 
-				if(prev_colors[2] != 0) {
-					vec4 cur_color = decodeRGBA8(prev_colors[2]);
+				if(ctx.prev_colors[2] != 0) {
+					vec4 cur_color = decodeRGBA8(ctx.prev_colors[2]);
 #ifdef ADDITIVE_BLENDING
-					out_color.rgb += cur_color.rgb * cur_color.a;
-					out_color.a += cur_color.a;
+					ctx.out_color += cur_color.rgb * cur_color.a;
 #else
 					float cur_trans = 1.0 - cur_color.a;
-					out_color.rgb = cur_color.rgb * cur_color.a + out_color.rgb * cur_trans;
-					out_color.a = cur_color.a + out_color.a * cur_trans;
+					ctx.out_color = cur_color.rgb * cur_color.a + ctx.out_color * cur_trans;
 #endif
 				}
 
-				prev_colors[2] = prev_colors[1];
-				prev_colors[1] = prev_colors[0];
-				prev_colors[0] = value;
+				ctx.prev_colors[2] = ctx.prev_colors[1];
+				ctx.prev_colors[1] = ctx.prev_colors[0];
+				ctx.prev_colors[0] = value;
 			}
 		}
 	}
 
 	if(finish) {
 		for(int i = 2; i >= 0; i--)
-			if(prev_colors[i] != 0) {
-				vec4 cur_color = decodeRGBA8(prev_colors[i]);
+			if(ctx.prev_colors[i] != 0) {
+				vec4 cur_color = decodeRGBA8(ctx.prev_colors[i]);
 				float cur_transparency = 1.0 - cur_color.a;
 #ifdef ADDITIVE_BLENDING
-				out_color.rgb += cur_color.rgb * cur_color.a;
-				out_color.a += cur_color.a;
+				ctx.out_color += cur_color.rgb * cur_color.a;
 #else
 				float cur_trans = 1.0 - cur_color.a;
-				out_color.rgb = cur_color.rgb * cur_color.a + out_color.rgb * cur_trans;
-				out_color.a = cur_color.a + out_color.a * cur_trans;
+				ctx.out_color = cur_color.rgb * cur_color.a + ctx.out_color * cur_trans;
 #endif
 			}
 
-		uint enc_color = encodeRGBA8(SATURATE(out_color));
+		uint enc_color = encodeRGB8(SATURATE(ctx.out_color)) | 0xff000000;
 		outputPixel(ivec2((tx << 4) + x, (ty << 4) + y), enc_color);
-
-	} else {
-		prev_colors[3] = encodeRGBA8(SATURATE(out_color));
 	}
 }
 
@@ -1111,11 +1116,10 @@ void rasterBin(int bin_id) {
 				continue;
 			}
 
-			vec4 prev_depths;
-			uvec4 prev_colors;
+			ReductionContext context;
+			initReduceSamples(context);
 
 			//resetVisualizeSamples();
-			initReduceSamples(prev_depths, prev_colors);
 
 			while(frag_count > 0) {
 				int cur_frag_count = min(frag_count, SEGMENT_SIZE);
@@ -1133,7 +1137,7 @@ void rasterBin(int bin_id) {
 				barrier();
 				UPDATE_CLOCK(3);
 
-				reduceSamples(tx, ty, cur_frag_count, prev_depths, prev_colors, frag_count <= 0);
+				reduceSamples(tx, ty, cur_frag_count, context, frag_count <= 0);
 				barrier();
 				UPDATE_CLOCK(4);
 			}

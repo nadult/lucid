@@ -19,8 +19,8 @@
 #define MAX_SCRATCH_TRIS 2048
 #define MAX_SCRATCH_TRIS_SHIFT 11
 
-#define SEGMENT_SIZE (LSIZE * 8)
-#define SEGMENT_SHIFT (LSHIFT + 3)
+#define SEGMENT_SIZE (LSIZE * 4)
+#define SEGMENT_SHIFT (LSHIFT + 2)
 
 #define MAX_SEGMENTS 32
 #define MAX_SEGMENTS_SHIFT 5
@@ -449,8 +449,8 @@ void processQuads() {
 		int min_qy = clamp(int(aabb[1]) - s_bin_pos.y, 0, 63) >> 2;
 		int max_qy = clamp(int(aabb[3]) - s_bin_pos.y, 0, 63) >> 2;
 
-		uint verts[4] = {g_quad_indices[quad_idx * 4 + 0], g_quad_indices[quad_idx * 4 + 1],
-						 g_quad_indices[quad_idx * 4 + 2], g_quad_indices[quad_idx * 4 + 3]};
+		uvec4 verts = uvec4(g_quad_indices[quad_idx * 4 + 0], g_quad_indices[quad_idx * 4 + 1],
+							g_quad_indices[quad_idx * 4 + 2], g_quad_indices[quad_idx * 4 + 3]);
 		uint instance_id =
 			(verts[0] >> 26) | ((verts[1] >> 20) & 0xfc0) | ((verts[2] >> 14) & 0x3f000);
 		uint v0 = verts[0] & 0x03ffffff;
@@ -703,13 +703,6 @@ void initSegment(int tx, int ty, int segment_id) {
 	}
 }
 
-// TODO:
-// - przygotować dane tak, żeby były łatwiej przetwarzalne podczas ładowania i redukcji
-//   np. zamiast 4 rzędów 2; problem: wydajne matchowanie tych rzędów w redukcji
-//   (tak, żeby wszystkie grupy wątków nie musiały przelatywać po wszystkich rzędach)
-// - możliwość obniżenia ilości sampli do 4, tak, żeby można było przechowywać też głębię i
-//   żeby nie trzeba było re-compute-ować jej;
-
 void loadSamples(int tx, int ty, int frag_count) {
 	int y = int(LIX & 3);
 	uint min_shift = y << 2, count_shift = min_shift + y;
@@ -747,7 +740,7 @@ void loadSamples(int tx, int ty, int frag_count) {
 }
 
 // TODO: Can we improve speed of loading vertex data?
-uint shadeSample(ivec2 bin_pixel_pos, uint scratch_tri_offset) {
+uint shadeSample(ivec2 bin_pixel_pos, uint scratch_tri_offset, out float out_depth) {
 	float px = float(bin_pixel_pos.x), py = float(bin_pixel_pos.y);
 
 	vec3 depth_eq, edge0_eq, edge1_eq;
@@ -759,6 +752,7 @@ uint shadeSample(ivec2 bin_pixel_pos, uint scratch_tri_offset) {
 	getTriangleSecondaryParams(scratch_tri_offset, unormal, instance_color);
 
 	float inv_ray_pos = depth_eq.x * px + (depth_eq.y * py + depth_eq.z);
+	out_depth = inv_ray_pos;
 	float ray_pos = 1.0 / inv_ray_pos;
 
 	float e0 = edge0_eq.x * px + (edge0_eq.y * py + edge0_eq.z);
@@ -832,7 +826,10 @@ void shadeSamples(uint tx, uint ty, uint sample_count) {
 		uint pixel_id = value & 0xff;
 		uint scratch_tri_offset = value >> 8;
 		ivec2 pix_pos = ivec2((pixel_id & 15) + (tx << 4), (pixel_id >> 4) + (ty << 4));
-		s_buffer[i] = shadeSample(pix_pos, scratch_tri_offset);
+		float depth;
+		s_buffer[i] = shadeSample(pix_pos, scratch_tri_offset, depth);
+		s_buffer[i + SEGMENT_SIZE] = floatBitsToUint(depth);
+		atomicOr(s_buffer[SEGMENT_SIZE * 2 + (i >> 2)], pixel_id << ((LIX & 3) << 3));
 	}
 }
 
@@ -856,150 +853,174 @@ void initReduceSamples(out ReductionContext ctx) {
 	ctx.out_color = decodeRGB8(background_color); // TODO
 }
 
+#define POS_OFFSET (SEGMENT_SIZE * 2)
+#define BITS_OFFSET (SEGMENT_SIZE * 2 + LSIZE)
+
+// Pixels are grouped into 8x4 blocks
+// 16x16 tile can thus be divided into 8 blocks.
+// Starting from Y=0: 0 1, Y=4: 2 3, Y=8: 4 5, Y=12: 6 7
+void groupSamplesForReduction(uint sample_count) {
+	uint sample_value[4];
+	uint sample_depth[4];
+	uint samples_pos = 0;
+
+	uint cur_idx = LIX;
+#define LOAD_SAMPLE(idx)                                                                           \
+	{                                                                                              \
+		sample_value[idx] = cur_idx < sample_count ? s_buffer[cur_idx] : 0;                        \
+		if(sample_value[idx] != 0) {                                                               \
+			sample_depth[idx] = s_buffer[SEGMENT_SIZE + cur_idx];                                  \
+			uint sample_pos =                                                                      \
+				(s_buffer[POS_OFFSET + (cur_idx >> 2)] >> ((cur_idx & 3) << 3)) & 0xff;            \
+			samples_pos |= sample_pos << (idx * 8);                                                \
+		}                                                                                          \
+		cur_idx += LSIZE;                                                                          \
+	}
+
+	LOAD_SAMPLE(0);
+	LOAD_SAMPLE(1);
+	LOAD_SAMPLE(2);
+	LOAD_SAMPLE(3);
+
+#undef LOAD_SAMPLE
+
+	if(LIX < 128)
+		s_mini_buffer[LIX] = 0;
+	barrier();
+
+#define COUNT_SAMPLE(idx)                                                                          \
+	if(sample_value[idx] != 0) {                                                                   \
+		uint pos = (samples_pos >> (idx * 8)) & 0xff;                                              \
+		uint px = pos & 0xf, py = (pos >> 4) & 0xf;                                                \
+		uint gx = px >> 3, gy = py >> 2;                                                           \
+		uint gid = gx + (gy << 1);                                                                 \
+		atomicAdd(s_mini_buffer[gid], 1);                                                          \
+	}
+
+	COUNT_SAMPLE(0);
+	COUNT_SAMPLE(1);
+	COUNT_SAMPLE(2);
+	COUNT_SAMPLE(3);
+
+#undef COUNT_SAMPLE
+
+	s_buffer[POS_OFFSET + LIX] = 0;
+	barrier();
+	if(LIX < 8) {
+		uint group_size = s_mini_buffer[LIX];
+		uint temp, group_offset = group_size;
+		temp = shuffleUpNV(group_offset, 1, 8), group_offset += LIX >= 1 ? temp : 0;
+		temp = shuffleUpNV(group_offset, 2, 8), group_offset += LIX >= 2 ? temp : 0;
+		temp = shuffleUpNV(group_offset, 4, 8), group_offset += LIX >= 4 ? temp : 0;
+		s_mini_buffer[8 + LIX] = group_offset - group_size;
+	}
+	barrier();
+
+#define STORE_SAMPLE(idx)                                                                          \
+	if(sample_value[idx] != 0) {                                                                   \
+		uint pos = (samples_pos >> (idx * 8)) & 0xff;                                              \
+		uint px = pos & 0xf, py = (pos >> 4) & 0xf;                                                \
+		uint gx = px >> 3, gy = py >> 2;                                                           \
+		uint gid = gx + (gy << 1);                                                                 \
+                                                                                                   \
+		uint sample_offset = atomicAdd(s_mini_buffer[8 + gid], 1);                                 \
+		s_buffer[sample_offset] = sample_value[idx];                                               \
+		s_buffer[SEGMENT_SIZE + sample_offset] = sample_depth[idx];                                \
+		atomicOr(s_buffer[POS_OFFSET + (sample_offset >> 2)], pos << ((sample_offset & 3) << 3));  \
+	}
+
+	STORE_SAMPLE(0);
+	STORE_SAMPLE(1);
+	STORE_SAMPLE(2);
+	STORE_SAMPLE(3);
+#undef STORE_SAMPLE
+}
+
 // TODO: optimize
-// Ta funkcja jest cały czas zbyt wolna!
-// Zamiast iterować po trisach lepiej porobić listy
-// sampli per pixel w loadSamples ?
 void reduceSamples(int tx, int ty, uint frag_count, in out ReductionContext ctx, bool finish) {
-	int x = int(LIX & 15);
-	int y = int((LIX >> 4) & 15);
+	// Pixels are grouped in 8x8 blocks
+	uint x = (LIX & 7) + ((LIX & 0x40) >> 3);
+	uint y = ((LIX & 0x38) >> 3) + ((LIX & 0x80) >> 4);
+	uint gx = x >> 3, gy = y >> 2, gid = gx + (gy << 1);
 
-	uint pixel_bit = 1u << (((y & 1) << 4) + x);
+	// TODO: keep in single counter
+	// TODO: move out of mini_buffer (keep separate counter); barrier won't be needed
+	uint group_count = s_mini_buffer[gid];
+	uint group_offset = s_mini_buffer[gid + 8];
+	group_offset -= group_count;
+	barrier();
 
-	uint tri_count = s_tri_count;
-	int first_offset = s_first_offset;
-	uint buf_offset = SEGMENT_SIZE + (LIX >> 5) * 64;
-	uint warp_row_mask = 0x30000 << (y & ~1);
+	uint mini_offset = (LIX >> 5) << 4;
+	uint warp_id = LIX & 31;
 
-	for(uint gi = 0; gi < tri_count; gi += 256) {
-		uint cur_tri_count = min(tri_count - gi, 256);
-		uint warp_id = LIX & 31;
+	// Możemy robić od razu grupować piksele w warpach tak jak chcę: 8x4 a nie 16x2
+	for(uint gi = 0; gi < group_count; gi += 32) {
+		uint sub_idx = gi + (LIX & 31);
+		bool invalid = sub_idx >= group_count;
+		sub_idx += group_offset;
+		uint pos = s_buffer[POS_OFFSET + (sub_idx >> 2)] >> ((sub_idx & 3) << 3);
+		uint px = pos & 0xf, py = (pos >> 4) & 0xf;
+		uint subx = px & 7, suby = py & 3;
 
-		uint filtered_count = 0;
-		s_buffer[buf_offset + warp_id] = 0;
-		s_buffer[buf_offset + 32 + warp_id] = 0;
-
-		for(uint i = 0; i < cur_tri_count; i += 32) {
-			uint tile_tri_idx = i + warp_id;
-			bool in_range = false;
-			if(tile_tri_idx < cur_tri_count) {
-				uint row_mask = g_scratch_32[s_src_offset_32 + gi + tile_tri_idx];
-				in_range = (warp_row_mask & row_mask) != 0;
-			}
-			uint in_range_mask = uint(ballotARB(in_range));
-
-			// TODO: better (faster) way to store/retrieve indices?
-			if(in_range) {
-				uint prev_mask = in_range_mask & ((1 << warp_id) - 1);
-				uint cur_offset = filtered_count + bitCount(prev_mask);
-				atomicOr(s_buffer[buf_offset + (cur_offset >> 2)],
-						 tile_tri_idx << ((cur_offset & 3) << 3));
-			}
-			filtered_count += bitCount(in_range_mask);
+		if(warp_id < 16)
+			s_mini_buffer[mini_offset + warp_id] = 0;
+		if(!invalid) {
+			atomicOr(s_mini_buffer[mini_offset + subx], 1u << warp_id);
+			atomicOr(s_mini_buffer[mini_offset + 8 + suby], 1u << warp_id);
 		}
 
-		for(uint i = 0; i < filtered_count; i += 32) {
-			uint sub_count = min(32, filtered_count - i);
-			int sel_tri_offset = 0;
-			uint sel_tri_bitmask, tris_bitmask;
-			vec3 sel_depth_eq;
+		uint bitmask =
+			s_mini_buffer[mini_offset + (x & 7)] & s_mini_buffer[mini_offset + 8 + (y & 3)];
+		int j = findLSB(bitmask);
+		while(j != -1) {
+			// TODO: pass through regs?
+			uint value = s_buffer[group_offset + gi + j];
+			float depth = uintBitsToFloat(s_buffer[SEGMENT_SIZE + group_offset + gi + j]);
 
-			if(warp_id < sub_count) {
-				uint warp_idx = i + warp_id;
-				uint tile_tri_idx =
-					gi + ((s_buffer[buf_offset + (warp_idx >> 2)] >> ((warp_idx & 3) << 3)) & 0xff);
+			bitmask &= ~(1 << j);
+			j = findLSB(bitmask);
 
-				uvec2 tri_info = g_scratch_64[s_src_offset_64 + tile_tri_idx];
-				sel_tri_offset =
-					int(g_scratch_32[s_src_offset_32 + tile_tri_idx] & 0xffff) - first_offset;
-
-				// TODO: quicker filtering of tris with invalid QY?
-				int min_bits = int(tri_info.x & 0xffff);
-				int count_bits = int(tri_info.y & 0xfffff);
-
-				// TODO: mask pixels out of segment here
-				if((y & 2) != 0) {
-					sel_tri_offset += (count_bits & 31) + ((count_bits >> 5) & 31);
-					count_bits >>= 10;
-					min_bits >>= 8;
-				}
-
-				int minx0 = min_bits & 15, minx1 = (min_bits >> 4) & 15;
-				int countx0 = count_bits & 31, countx1 = (count_bits >> 5) & 31;
-
-				uint bits0 = ((1 << countx0) - 1) << (minx0 + 0);
-				uint bits1 = ((1 << countx1) - 1) << (minx1 + 16);
-				sel_tri_bitmask = bits0 | bits1;
-
-				uint tri_idx = tri_info.x >> 16;
-				uint scratch_tri_offset = scratch64TriOffset(tri_idx);
-				vec2 val0 = uintBitsToFloat(TRI_SCRATCH(0));
-				vec2 val1 = uintBitsToFloat(TRI_SCRATCH(1));
-				sel_depth_eq = vec3(val0.x, val0.y, val1.x);
-				sel_depth_eq.z += sel_depth_eq.x * (tx << 4) + sel_depth_eq.y * (ty << 4);
-			}
-
-			for(int j = 0; j < sub_count; j++) {
-				int tri_offset = shuffleNV(sel_tri_offset, j, 32);
-				uint tri_bitmask = shuffleNV(sel_tri_bitmask, j, 32);
-				vec3 depth_eq = shuffleNV(sel_depth_eq, j, 32);
-				tri_offset += bitCount(tri_bitmask & (pixel_bit - 1));
-
-				// TODO: tri_offset check shouldn't be needed?
-				if((tri_bitmask & pixel_bit) == 0 ||
-				   (tri_offset & (SEGMENT_SIZE - 1)) != tri_offset)
-					continue;
-
-				uint value = s_buffer[tri_offset];
-				if(value == 0)
-					continue;
-
-				// It's actually faster to recompute depth in reduce than reuse depth
-				// computed during sampling, because we can put 2x as many samples in SMEM
-				float depth = depth_eq.x * x + (depth_eq.y * y + depth_eq.z);
-
-				if(depth < ctx.prev_depths[0]) {
-					SWAP_UINT(value, ctx.prev_colors[0]);
-					SWAP_FLOAT(depth, ctx.prev_depths[0]);
-					if(ctx.prev_depths[0] < ctx.prev_depths[1]) {
-						SWAP_UINT(ctx.prev_colors[1], ctx.prev_colors[0]);
-						SWAP_FLOAT(ctx.prev_depths[1], ctx.prev_depths[0]);
-						if(ctx.prev_depths[1] < ctx.prev_depths[2]) {
-							SWAP_UINT(ctx.prev_colors[2], ctx.prev_colors[1]);
-							SWAP_FLOAT(ctx.prev_depths[2], ctx.prev_depths[1]);
+			if(depth < ctx.prev_depths[0]) {
+				SWAP_UINT(value, ctx.prev_colors[0]);
+				SWAP_FLOAT(depth, ctx.prev_depths[0]);
+				if(ctx.prev_depths[0] < ctx.prev_depths[1]) {
+					SWAP_UINT(ctx.prev_colors[1], ctx.prev_colors[0]);
+					SWAP_FLOAT(ctx.prev_depths[1], ctx.prev_depths[0]);
+					if(ctx.prev_depths[1] < ctx.prev_depths[2]) {
+						SWAP_UINT(ctx.prev_colors[2], ctx.prev_colors[1]);
+						SWAP_FLOAT(ctx.prev_depths[2], ctx.prev_depths[1]);
 
 #ifdef VISUALIZE_ERRORS
-							if(ctx.prev_depths[2] < ctx.prev_depths[3]) {
-								ctx.prev_colors[0] = 0xff0000ff;
-								i = filtered_count;
-								break;
-							}
-#endif
+						if(ctx.prev_depths[2] < ctx.prev_depths[3]) {
+							ctx.prev_colors[0] = 0xff0000ff;
+							i = filtered_count;
+							break;
 						}
+#endif
 					}
 				}
+			}
 
 #ifdef VISUALIZE_ERRORS
-				ctx.prev_depths[3] = ctx.prev_depths[2];
+			ctx.prev_depths[3] = ctx.prev_depths[2];
 #endif
-				ctx.prev_depths[2] = ctx.prev_depths[1];
-				ctx.prev_depths[1] = ctx.prev_depths[0];
-				ctx.prev_depths[0] = depth;
+			ctx.prev_depths[2] = ctx.prev_depths[1];
+			ctx.prev_depths[1] = ctx.prev_depths[0];
+			ctx.prev_depths[0] = depth;
 
-				if(ctx.prev_colors[2] != 0) {
-					vec4 cur_color = decodeRGBA8(ctx.prev_colors[2]);
+			if(ctx.prev_colors[2] != 0) {
+				vec4 cur_color = decodeRGBA8(ctx.prev_colors[2]);
 #ifdef ADDITIVE_BLENDING
-					ctx.out_color += cur_color.rgb * cur_color.a;
+				ctx.out_color += cur_color.rgb * cur_color.a;
 #else
-					float cur_trans = 1.0 - cur_color.a;
-					ctx.out_color = cur_color.rgb * cur_color.a + ctx.out_color * cur_trans;
+				float cur_trans = 1.0 - cur_color.a;
+				ctx.out_color = cur_color.rgb * cur_color.a + ctx.out_color * cur_trans;
 #endif
-				}
-
-				ctx.prev_colors[2] = ctx.prev_colors[1];
-				ctx.prev_colors[1] = ctx.prev_colors[0];
-				ctx.prev_colors[0] = value;
 			}
+
+			ctx.prev_colors[2] = ctx.prev_colors[1];
+			ctx.prev_colors[1] = ctx.prev_colors[0];
+			ctx.prev_colors[0] = value;
 		}
 	}
 
@@ -1129,6 +1150,8 @@ void rasterBin(int bin_id) {
 				barrier();
 
 				loadSamples(tx, ty, cur_frag_count);
+				s_buffer[SEGMENT_SIZE * 2 + LIX] = 0;
+				s_buffer[SEGMENT_SIZE * 2 + LSIZE + LIX] = 0;
 				barrier();
 				UPDATE_CLOCK(2);
 
@@ -1136,6 +1159,9 @@ void rasterBin(int bin_id) {
 				shadeSamples(tx, ty, cur_frag_count);
 				barrier();
 				UPDATE_CLOCK(3);
+
+				groupSamplesForReduction(cur_frag_count);
+				barrier();
 
 				reduceSamples(tx, ty, cur_frag_count, context, frag_count <= 0);
 				barrier();

@@ -138,13 +138,15 @@ void LucidApp::selectSetup(int idx) {
 		return;
 	if(m_setup_idx != -1)
 		m_setups[m_setup_idx]->camera = m_cam_control.current();
-	if(auto result = m_setups[idx]->updateScene(); !result) {
+	auto &setup = *m_setups[idx];
+	if(auto result = setup.updateScene(); !result) {
 		result.error().print();
 		return;
 	}
-	if(auto cam = m_setups[idx]->camera)
+	if(auto cam = setup.camera)
 		m_cam_control.setTarget(*cam);
 	m_cam_control.finishAnim();
+	m_lucid_opts.setIf(LucidRenderOpt::additive_blending, setup.render_config.additive_blending);
 	m_setup_idx = idx;
 }
 

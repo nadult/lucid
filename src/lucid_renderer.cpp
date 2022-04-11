@@ -164,12 +164,6 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	defs["BLOCKS_PER_TILE"] = blocks_per_tile;
 	defs["BLOCKS_PER_BIN"] = blocks_per_bin;
 	defs["MAX_LSIZE"] = gl_info->limits[GlLimit::max_compute_work_group_invocations];
-	if(m_opts & Opt::raster_timings)
-		defs["ENABLE_TIMINGS"] = 1;
-	if(m_opts & Opt::additive_blending)
-		defs["ADDITIVE_BLENDING"] = 1;
-	if(m_opts & Opt::visualize_errors)
-		defs["VISUALIZE_ERRORS"] = 1;
 
 	init_counters_program = EX_PASS(Program::makeCompute("init_counters", defs));
 	setup_program = EX_PASS(Program::makeCompute("setup", defs));
@@ -184,6 +178,14 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	final_raster_program = EX_PASS(Program::makeCompute("final_raster", defs));
 	mask_raster_program = EX_PASS(Program::makeCompute(
 		"mask_raster", defs, mask(m_opts & Opt::debug_masks, ProgramOpt::debug)));
+
+	if(m_opts & Opt::raster_timings)
+		defs["ENABLE_TIMINGS"] = 1;
+	if(m_opts & Opt::additive_blending)
+		defs["ADDITIVE_BLENDING"] = 1;
+	if(m_opts & Opt::visualize_errors)
+		defs["VISUALIZE_ERRORS"] = 1;
+
 	raster_bin_program = EX_PASS(Program::makeCompute(
 		"raster_bin_fastest", defs, mask(m_opts & Opt::debug_raster, ProgramOpt::debug)));
 	raster_tile_program = EX_PASS(Program::makeCompute(

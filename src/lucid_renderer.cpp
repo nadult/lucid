@@ -1517,6 +1517,7 @@ void LucidRenderer::rasterizeFinal(const Context &ctx) {
 	//GlTexture::bind({ctx.depth_buffer, ctx.shadows.map});
 
 	final_raster_program["fog_multiplier"] = 0.3f / ctx.camera.params().ortho_scale;
+	final_raster_program["background_color"] = u32(ctx.config.background_color);
 
 	ctx.lighting.setUniforms(final_raster_program.glProgram());
 	final_raster_program.setFrustum(ctx.camera);

@@ -1016,7 +1016,7 @@ void reduceSamples(int tx, int ty, uint frag_count, in out ReductionContext ctx,
 #endif
 			}
 
-		uint enc_color = encodeRGB8(SATURATE(ctx.out_color)) | 0xff000000;
+		uint enc_color = encodeRGB8(SATURATE(ctx.out_color));
 		outputPixel(ivec2((tx << 4) + x, (ty << 4) + y), enc_color);
 	}
 }

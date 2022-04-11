@@ -6,8 +6,8 @@ uniform ivec2 bin_counts;
 uniform vec2 screen_scale;
 
 // TODO: hardcoded
-#define BIN_SIZE	64
-#define BIN_SHIFT	6
+#define BIN_SIZE 64
+#define BIN_SHIFT 6
 
 #ifdef VERTEX_SHADER
 
@@ -36,7 +36,8 @@ out vec4 frag_color;
 void main() {
 	ivec2 bin_pos = ivec2(v_bin_pos);
 	uint col = g_raster_image[v_bin_offset + bin_pos.x + (bin_pos.y << BIN_SHIFT)];
-	frag_color = decodeRGBA8(col);
+	frag_color.rgb = decodeRGB8(col); // TODO: 11:11:10 RGB bits
+	frag_color.a = 1.0;
 }
 
 #endif

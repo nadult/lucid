@@ -22,8 +22,6 @@
 #define DEPTH_BUFFER_SAMPLER sampler2D
 #endif
 
-//#define ADDITIVE_MODE
-
 uniform float fog_multiplier;
 
 layout(local_size_x = TILE_SIZE, local_size_y = TILE_SIZE) in;
@@ -62,6 +60,10 @@ shared uint s_max_fragment_count_per_pixel;
 layout(binding = 0) uniform sampler2D opaque_texture;
 layout(binding = 1) uniform sampler2D transparent_texture;
 
+// TODO: separate opaque and transparent objects, draw opaque objects first to texture
+// then read it and use depth to optimize drawing
+uniform uint background_color;
+
 void outputPixel(ivec2 pixel_pos, uint color) {
 	g_raster_image[s_tile_raster_offset + pixel_pos.x + (pixel_pos.y << BIN_SHIFT)] = color;
 }
@@ -71,15 +73,14 @@ void outputPixel(ivec2 pixel_pos, uint color) {
 #define DEPTH_FILTER_SIZE 6
 
 vec3 result;
-float result_neg_alpha, min_depth;
+float min_depth;
 float old_depths[DEPTH_FILTER_SIZE + 1];
 uint old_colors[DEPTH_FILTER_SIZE];
 
 void resetPixel() {
 	for(int i = 0; i <= DEPTH_FILTER_SIZE; i++)
 		old_depths[i] = 1000000000.0;
-	result = vec3(0.0, 0.0, 0.0);
-	result_neg_alpha = 1.0;
+	result = decodeRGB8(background_color);
 	min_depth = viewport.near_plane;
 }
 
@@ -87,7 +88,6 @@ void markPixelInvalid() {
 	old_depths[0] = -100000000.0;
 	min_depth = 1000000000.0;
 	result = vec3(1.0, 0.0, 0.0);
-	result_neg_alpha = 0.0;
 	atomicAdd(g_tiles.num_invalid_pixels, 1);
 	atomicOr(s_invalid_block_mask, 1 << LID.y);
 }
@@ -98,7 +98,6 @@ void rasterPixel(vec4 color, float cur_d) {
 
 	uint icolor = encodeRGBA8(color);
 	result = result * (1.0 - color.a) + color.rgb * color.a;
-	result_neg_alpha *= (1.0 - color.a);
 	
 	if(cur_d > old_depths[0]) {
 		vec4 old_color = decodeRGBA8(old_colors[0]);
@@ -312,14 +311,13 @@ void rasterizeBlocks(ivec2 tile_pos) {
 	
 	atomicMax(s_max_fragment_count_per_pixel, cur_tri_count);
 	//result = vec3(float(cur_tri_count) / 4, float(cur_tri_count) / 32, float(cur_tri_count) / 256);
-	//result_neg_alpha = 0.2;
 
 	result = min(result, vec3(1.0));
 
 	barrier();
 	if((s_invalid_block_mask & (1 << LID.y)) != 0)
 		result = result * 0.5 + vec3(0.5, 0.0, 0.0);
-	uint col = encodeRGBA8(vec4(result, 1.0f - result_neg_alpha));
+	uint col = encodeRGB8(result);
 	outputPixel(pixel_pos - tile_pos, col);
 }
 

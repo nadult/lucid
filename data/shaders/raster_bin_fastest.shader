@@ -925,11 +925,11 @@ void groupSamplesForReduction(uint sample_count) {
 		uint px = pos & 0xf, py = (pos >> 4) & 0xf;                                                \
 		uint gx = px >> 3, gy = py >> 2;                                                           \
 		uint gid = gx + (gy << 1);                                                                 \
-		uint subid = (px & 7) | ((py & 3) << 3);                                                   \
+		uint pixel_id = (px & 7) | ((py & 3) << 3);                                                \
                                                                                                    \
 		uint sample_offset = atomicAdd(s_reduce_groups[gid], 0x10000) >> 16;                       \
 		s_buffer[sample_offset] = sample_value[idx];                                               \
-		s_buffer[SEGMENT_SIZE + sample_offset] = (sample_depth[idx] & ~31) | subid;                \
+		s_buffer[SEGMENT_SIZE + sample_offset] = (sample_depth[idx] & ~31) | pixel_id;             \
 	}
 
 	STORE_SAMPLE(0);
@@ -949,31 +949,29 @@ void reduceSamples(int tx, int ty, uint frag_count, in out ReductionContext ctx,
 	// TODO: keep in single counter
 	// TODO: move out of mini_buffer (keep separate counter); barrier won't be needed
 	uint group_count = s_reduce_groups[gid];
-	uint group_offset = group_count >> 16;
+	uint group_end_offset = group_count >> 16;
 	group_count &= 0xffff;
-	group_offset -= group_count;
+	uint group_offset = group_end_offset - group_count;
 
 	uint mini_offset = LIX & ~31;
-	uint warp_id = LIX & 31;
+	uint pixel_bit = 1u << (LIX & 31);
 	uint pixel_id = (x & 7) | ((y & 3) << 3);
 
 	// Możemy robić od razu grupować piksele w warpach tak jak chcę: 8x4 a nie 16x2
-	for(uint gi = 0; gi < group_count; gi += 32) {
-		uint sub_idx = gi + (LIX & 31);
-		bool invalid = sub_idx >= group_count;
-		sub_idx += group_offset;
-		uint subid = s_buffer[SEGMENT_SIZE + sub_idx] & 31;
+	for(; group_offset < group_end_offset; group_offset += 32) {
+		uint sample_offset = group_offset + (LIX & 31);
+		uint sample_pixel_id = s_buffer[SEGMENT_SIZE + sample_offset] & 31;
 
 		s_mini_buffer[LIX] = 0;
-		if(!invalid)
-			atomicOr(s_mini_buffer[mini_offset + subid], 1u << warp_id);
+		if(sample_offset < group_end_offset)
+			atomicOr(s_mini_buffer[mini_offset + sample_pixel_id], pixel_bit);
 
 		uint bitmask = s_mini_buffer[mini_offset + pixel_id];
 		int j = findLSB(bitmask);
 		while(j != -1) {
 			// TODO: pass through regs?
-			uint value = s_buffer[group_offset + gi + j];
-			float depth = uintBitsToFloat(s_buffer[SEGMENT_SIZE + group_offset + gi + j]);
+			uint value = s_buffer[group_offset + j];
+			float depth = uintBitsToFloat(s_buffer[SEGMENT_SIZE + group_offset + j]);
 
 			bitmask &= ~(1 << j);
 			j = findLSB(bitmask);

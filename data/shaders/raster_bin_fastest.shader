@@ -578,7 +578,6 @@ void generateTiles(uint ty) {
 		uint qy = tri_info >> 24;
 		uint min_bits, count_bits;
 		uint num_frags;
-		uint row_mask = 0;
 
 		{
 			int minx0 = max(int((tri_rows.x >> 0) & 0x3f) - startx, 0);
@@ -596,15 +595,11 @@ void generateTiles(uint ty) {
 			int count2 = max(maxx2 - minx2 + 1, 0);
 			int count3 = max(maxx3 - minx3 + 1, 0);
 
-			row_mask = (count0 > 0 ? 1 : 0) | (count1 > 0 ? 2 : 0) | (count2 > 0 ? 4 : 0) |
-					   (count3 > 0 ? 8 : 0);
-
 			min_bits =
 				(minx0 & 15) | ((minx1 & 15) << 4) | ((minx2 & 15) << 8) | ((minx3 & 15) << 12);
 			count_bits = count0 | (count1 << 5) | (count2 << 10) | (count3 << 15);
 			num_frags = count0 + count1 + count2 + count3;
 		}
-		row_mask <<= qy << 2;
 
 		if(num_frags == 0) // This means that tx_masks are invalid
 			RECORD(0, 0, 0, 0);
@@ -618,7 +613,7 @@ void generateTiles(uint ty) {
 		PREFIX_SUM_STEP(num_frags, 4);
 		PREFIX_SUM_STEP(num_frags, 8);
 		PREFIX_SUM_STEP(num_frags, 16);
-		s_buffer[buf_offset + i] = num_frags | (row_mask << 16);
+		s_buffer[buf_offset + i] = num_frags;
 	}
 	barrier();
 
@@ -642,10 +637,8 @@ void generateTiles(uint ty) {
 	// Storing offsets to scratch mem
 	// Also finding first triangle for each segment
 	for(uint i = LIX & (TILE_STEP - 1); i < tri_count; i += TILE_STEP) {
-		uint tri_offset = i == 0 ? 0 : s_buffer[buf_offset + i - 1] & 0xffff;
-		uint tri_value = s_buffer[buf_offset + i];
-		uint row_mask = tri_value & 0xffff0000;
-		tri_value = (tri_value & 0xffff) - tri_offset;
+		uint tri_offset = i == 0 ? 0 : s_buffer[buf_offset + i - 1];
+		uint tri_value = s_buffer[buf_offset + i] - tri_offset;
 
 		uint seg_id = tri_offset >> SEGMENT_SHIFT;
 		if(seg_id < MAX_SEGMENTS) {
@@ -656,7 +649,7 @@ void generateTiles(uint ty) {
 				s_segments[tx][seg_id + 1] = i;
 		}
 
-		g_scratch_32[dst_offset_32 + i] = tri_offset | row_mask;
+		g_scratch_32[dst_offset_32 + i] = tri_offset;
 	}
 	barrier();
 	if(LIX < MAX_SEGMENTS * XTILES_PER_BIN) {
@@ -683,7 +676,7 @@ void generateTiles(uint ty) {
 	if(LIX < XTILES_PER_BIN) {
 		uint tx = LIX;
 		uint num_tris = s_tile_tri_count[tx];
-		uint frag_count = num_tris == 0 ? 0 : s_buffer[tx * MAX_TILE_TRIS + num_tris - 1] & 0xffff;
+		uint frag_count = num_tris == 0 ? 0 : s_buffer[tx * MAX_TILE_TRIS + num_tris - 1];
 		//uint segment_count = (frag_count + SEGMENT_SIZE - 1) >> SEGMENT_SHIFT;
 		s_tile_frag_count[tx] = frag_count;
 		if(frag_count > MAX_SEGMENTS * SEGMENT_SIZE)
@@ -715,7 +708,7 @@ void loadSamples(int tx, int ty, int frag_count) {
 	uint src_offset_32 = s_src_offset_32, src_offset_64 = s_src_offset_64;
 	for(uint tri_count = s_tri_count, i = (LIX >> 2); i < tri_count; i += LSIZE / 4) {
 		uvec2 tri_info = g_scratch_64[src_offset_64 + i];
-		int tri_offset = int(g_scratch_32[src_offset_32 + i] & 0xffff) - first_offset;
+		int tri_offset = int(g_scratch_32[src_offset_32 + i]) - first_offset;
 		int minx = int((tri_info.x >> min_shift) & 15);
 		int count_bits = int(tri_info.y & ((1 << 20) - 1));
 
@@ -867,9 +860,9 @@ void groupSamplesForReduction(uint sample_count) {
 	uint sample_depth[4];
 	uint samples_pos = 0;
 
-	uint cur_idx = LIX;
 #define LOAD_SAMPLE(idx)                                                                           \
 	{                                                                                              \
+		uint cur_idx = LIX + LSIZE * idx;                                                          \
 		sample_value[idx] = cur_idx < sample_count ? s_buffer[cur_idx] : 0;                        \
 		if(sample_value[idx] != 0) {                                                               \
 			sample_depth[idx] = s_buffer[SEGMENT_SIZE + cur_idx];                                  \
@@ -877,7 +870,6 @@ void groupSamplesForReduction(uint sample_count) {
 				(s_buffer[POS_OFFSET + (cur_idx >> 2)] >> ((cur_idx & 3) << 3)) & 0xff;            \
 			samples_pos |= sample_pos << (idx * 8);                                                \
 		}                                                                                          \
-		cur_idx += LSIZE;                                                                          \
 	}
 
 	LOAD_SAMPLE(0);

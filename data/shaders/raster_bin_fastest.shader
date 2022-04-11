@@ -940,7 +940,7 @@ void groupSamplesForReduction(uint sample_count) {
 }
 
 // TODO: optimize
-void reduceSamples(int tx, int ty, uint frag_count, in out ReductionContext ctx, bool finish) {
+void reduceSamples(in out ReductionContext ctx) {
 	// Pixels are grouped in 8x8 blocks
 	uint x = (LIX & 7) + ((LIX & 0x40) >> 3);
 	uint y = ((LIX & 0x38) >> 3) + ((LIX & 0x80) >> 4);
@@ -1019,43 +1019,46 @@ void reduceSamples(int tx, int ty, uint frag_count, in out ReductionContext ctx,
 			ctx.prev_colors[0] = value;
 		}
 	}
-
-	if(finish) {
-		for(int i = 2; i >= 0; i--)
-			if(ctx.prev_colors[i] != 0) {
-				vec4 cur_color = decodeRGBA8(ctx.prev_colors[i]);
-				float cur_transparency = 1.0 - cur_color.a;
-#ifdef ADDITIVE_BLENDING
-				ctx.out_color += cur_color.rgb * cur_color.a;
-#else
-				float cur_trans = 1.0 - cur_color.a;
-				ctx.out_color = cur_color.rgb * cur_color.a + ctx.out_color * cur_trans;
-#endif
-			}
-
-		uint enc_color = encodeRGB8(SATURATE(ctx.out_color));
-		outputPixel(ivec2((tx << 4) + x, (ty << 4) + y), enc_color);
-	}
 }
 
-shared uint s_pixels[TILE_SIZE * TILE_SIZE];
+void finishReduceSamples(int tx, int ty, ReductionContext ctx) {
+	uint x = (LIX & 7) + ((LIX & 0x40) >> 3);
+	uint y = ((LIX & 0x38) >> 3) + ((LIX & 0x80) >> 4);
 
-void resetVisualizeSamples() {
-	s_pixels[LIX] = 0;
+	for(int i = 2; i >= 0; i--)
+		if(ctx.prev_colors[i] != 0) {
+			vec4 cur_color = decodeRGBA8(ctx.prev_colors[i]);
+			float cur_transparency = 1.0 - cur_color.a;
+#ifdef ADDITIVE_BLENDING
+			ctx.out_color += cur_color.rgb * cur_color.a;
+#else
+			float cur_trans = 1.0 - cur_color.a;
+			ctx.out_color = cur_color.rgb * cur_color.a + ctx.out_color * cur_trans;
+#endif
+		}
+
+	uint enc_color = encodeRGB8(SATURATE(ctx.out_color));
+	outputPixel(ivec2((tx << 4) + x, (ty << 4) + y), enc_color);
+}
+
+shared uint s_vis_pixels[TILE_SIZE * TILE_SIZE];
+
+void initVisualizeSamples() {
+	s_vis_pixels[LIX] = 0;
 	barrier();
 }
 
 void visualizeSamples(uint sample_count) {
 	for(uint i = LIX; i < sample_count; i += LSIZE) {
 		uint value = s_buffer[i];
-		atomicAdd(s_pixels[value & 0xff], 1);
+		atomicAdd(s_vis_pixels[value & 0xff], 1);
 	}
 }
 
 void finishVisualizeSamples(uint tx, uint ty) {
 	ivec2 pixel_pos = ivec2(LIX & (TILE_SIZE - 1), (LIX >> TILE_SHIFT));
 	pixel_pos += ivec2(tx << TILE_SHIFT, ty << TILE_SHIFT);
-	uint value = s_pixels[LIX];
+	uint value = s_vis_pixels[LIX];
 	vec3 color = vec3(value, value, value) / 32.0;
 	uint enc_col = encodeRGBA8(vec4(SATURATE(color), 1.0));
 	outputPixel(pixel_pos, enc_col);
@@ -1135,8 +1138,7 @@ void rasterBin(int bin_id) {
 
 			ReductionContext context;
 			initReduceSamples(context);
-
-			//resetVisualizeSamples();
+			//initVisualizeSamples();
 
 			while(frag_count > 0) {
 				int cur_frag_count = min(frag_count, SEGMENT_SIZE);
@@ -1159,12 +1161,13 @@ void rasterBin(int bin_id) {
 				groupSamplesForReduction(cur_frag_count);
 				barrier();
 
-				reduceSamples(tx, ty, cur_frag_count, context, frag_count <= 0);
+				reduceSamples(context);
 				barrier();
 				UPDATE_CLOCK(4);
 			}
 
 			//finishVisualizeSamples(tx, ty);
+			finishReduceSamples(tx, ty, context);
 		}
 
 		//rasterFragmentCounts(ty);

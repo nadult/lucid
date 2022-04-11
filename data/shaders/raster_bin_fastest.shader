@@ -95,9 +95,12 @@ shared uint s_tile_frag_count[XTILES_PER_BIN];
 shared uint s_bin_quad_count, s_bin_quad_offset;
 
 shared uint s_buffer[BUFFER_SIZE + 1];
-shared uint s_mini_buffer[32 * XTILES_PER_BIN];
+shared uint s_mini_buffer[LSIZE];
 shared uint s_segments[XTILES_PER_BIN][MAX_SEGMENTS];
 shared int s_raster_error;
+
+#define REDUCE_GROUP_COUNT 8
+shared uint s_reduce_groups[REDUCE_GROUP_COUNT];
 
 void outputPixel(ivec2 pixel_pos, uint color) {
 	g_raster_image[s_bin_raster_offset + pixel_pos.x + (pixel_pos.y << BIN_SHIFT)] = color;
@@ -884,8 +887,8 @@ void groupSamplesForReduction(uint sample_count) {
 
 #undef LOAD_SAMPLE
 
-	if(LIX < 128)
-		s_mini_buffer[LIX] = 0;
+	if(LIX < REDUCE_GROUP_COUNT)
+		s_reduce_groups[LIX] = 0;
 	barrier();
 
 #define COUNT_SAMPLE(idx)                                                                          \
@@ -894,7 +897,7 @@ void groupSamplesForReduction(uint sample_count) {
 		uint px = pos & 0xf, py = (pos >> 4) & 0xf;                                                \
 		uint gx = px >> 3, gy = py >> 2;                                                           \
 		uint gid = gx + (gy << 1);                                                                 \
-		atomicAdd(s_mini_buffer[gid], 1);                                                          \
+		atomicAdd(s_reduce_groups[gid], 1);                                                        \
 	}
 
 	COUNT_SAMPLE(0);
@@ -907,12 +910,12 @@ void groupSamplesForReduction(uint sample_count) {
 	s_buffer[POS_OFFSET + LIX] = 0;
 	barrier();
 	if(LIX < 8) {
-		uint group_size = s_mini_buffer[LIX];
+		uint group_size = s_reduce_groups[LIX];
 		uint temp, group_offset = group_size;
 		temp = shuffleUpNV(group_offset, 1, 8), group_offset += LIX >= 1 ? temp : 0;
 		temp = shuffleUpNV(group_offset, 2, 8), group_offset += LIX >= 2 ? temp : 0;
 		temp = shuffleUpNV(group_offset, 4, 8), group_offset += LIX >= 4 ? temp : 0;
-		s_mini_buffer[8 + LIX] = group_offset - group_size;
+		s_reduce_groups[LIX] |= (group_offset - group_size) << 16;
 	}
 	barrier();
 
@@ -922,11 +925,11 @@ void groupSamplesForReduction(uint sample_count) {
 		uint px = pos & 0xf, py = (pos >> 4) & 0xf;                                                \
 		uint gx = px >> 3, gy = py >> 2;                                                           \
 		uint gid = gx + (gy << 1);                                                                 \
+		uint subid = (px & 7) | ((py & 3) << 3);                                                   \
                                                                                                    \
-		uint sample_offset = atomicAdd(s_mini_buffer[8 + gid], 1);                                 \
+		uint sample_offset = atomicAdd(s_reduce_groups[gid], 0x10000) >> 16;                       \
 		s_buffer[sample_offset] = sample_value[idx];                                               \
-		s_buffer[SEGMENT_SIZE + sample_offset] = sample_depth[idx];                                \
-		atomicOr(s_buffer[POS_OFFSET + (sample_offset >> 2)], pos << ((sample_offset & 3) << 3));  \
+		s_buffer[SEGMENT_SIZE + sample_offset] = (sample_depth[idx] & ~31) | subid;                \
 	}
 
 	STORE_SAMPLE(0);
@@ -945,32 +948,27 @@ void reduceSamples(int tx, int ty, uint frag_count, in out ReductionContext ctx,
 
 	// TODO: keep in single counter
 	// TODO: move out of mini_buffer (keep separate counter); barrier won't be needed
-	uint group_count = s_mini_buffer[gid];
-	uint group_offset = s_mini_buffer[gid + 8];
+	uint group_count = s_reduce_groups[gid];
+	uint group_offset = group_count >> 16;
+	group_count &= 0xffff;
 	group_offset -= group_count;
-	barrier();
 
-	uint mini_offset = (LIX >> 5) << 4;
+	uint mini_offset = LIX & ~31;
 	uint warp_id = LIX & 31;
+	uint pixel_id = (x & 7) | ((y & 3) << 3);
 
 	// Możemy robić od razu grupować piksele w warpach tak jak chcę: 8x4 a nie 16x2
 	for(uint gi = 0; gi < group_count; gi += 32) {
 		uint sub_idx = gi + (LIX & 31);
 		bool invalid = sub_idx >= group_count;
 		sub_idx += group_offset;
-		uint pos = s_buffer[POS_OFFSET + (sub_idx >> 2)] >> ((sub_idx & 3) << 3);
-		uint px = pos & 0xf, py = (pos >> 4) & 0xf;
-		uint subx = px & 7, suby = py & 3;
+		uint subid = s_buffer[SEGMENT_SIZE + sub_idx] & 31;
 
-		if(warp_id < 16)
-			s_mini_buffer[mini_offset + warp_id] = 0;
-		if(!invalid) {
-			atomicOr(s_mini_buffer[mini_offset + subx], 1u << warp_id);
-			atomicOr(s_mini_buffer[mini_offset + 8 + suby], 1u << warp_id);
-		}
+		s_mini_buffer[LIX] = 0;
+		if(!invalid)
+			atomicOr(s_mini_buffer[mini_offset + subid], 1u << warp_id);
 
-		uint bitmask =
-			s_mini_buffer[mini_offset + (x & 7)] & s_mini_buffer[mini_offset + 8 + (y & 3)];
+		uint bitmask = s_mini_buffer[mini_offset + pixel_id];
 		int j = findLSB(bitmask);
 		while(j != -1) {
 			// TODO: pass through regs?

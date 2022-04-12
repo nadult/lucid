@@ -75,6 +75,13 @@ Kafle 16x16 zamiast bloków 8x8:
 Uwaga: wcześniejsze skopiowanie danych trókątów ze scratcha dużo nie dało... najwyraźniej cache
   działa na tyle dobrze, że niezależne kopiowanie do SMEM nie pomaga...
 
+Optymalizacja: czy compute shader mógłby od razu renderować do tekstury? Może faza compose nie jest potrzebna?
+Optymalizacja: rysujemy od przodu i przerywamy w momencie gdy mamy zamalowane na full
+
+TODO: widoczne glitche na boxach jak się wjedzie do środka kamerą
+TODO: minor issues when switching additive blending or changing scenes
+TODO: fix old rasters blending
+
 * *Pomysł nr 37169*
   A może dałoby się za pomocą redukcji (po pikselach) wygenerować posortowane warstwy, które
   później używalibysmy do cieniowania?

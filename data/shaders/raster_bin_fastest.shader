@@ -475,6 +475,25 @@ void processQuads() {
 	}
 }
 
+// Nowy pomysł:
+// - Zamiast przetwarzania na raz 1 kafla 16x16 operujemy na 8 blokach 8x4
+// - przetwarzamy te bloki linia po linii (16 iteracji w sumie)
+// - porządkowanie sampli nie będzie potrzebne, bo sample będą od razu uporządkowane w grupy 32-elementowe
+// - dla każdego bloku wyznaczamy niezależne segmenty po 128 sampli;
+// - w każdym bloku 8x4 może być max 256 trókątów: w segmentach można używać 8-bitowych indeksów;
+//   będzie trzeba trochę więcej miejsca na segmenty (2x albo 4x tyle)
+// - początkowa generacja powinna rozrzucać tile-row-trisy do 16 różnych grup (nie trzeba zapisywać qy)
+// - troszkę trzeba będzie zmodyfikować sortowanie
+//
+// - load, shade & reduce operują w pętli biorą po jednym segmencie z każdego bloku; bariery nie powinny być potrzebne,
+//   muszę tylko zapewnić, że wszystkie warpy we wszystkich fazach działają na tych samych danych
+//
+// - problem: przy 16x16 miałem na koniec jeden niepełny segment, teraz będę miał 8;
+//   Może to jest do rowiązania na potem ?
+// - lokalność w czasie samplowania będzie trochę gorsza, ale jeśli mam jeden materiał to nie jest to problem
+//
+// - na początek muszę powyłączać końcowe fazy i przerobić wszytko od początku jeszcze raz
+
 void generateTiles(uint ty) {
 	uint src_offset_32 = scratch32TileRowTrisOffset(ty);
 	uint src_offset_64 = scratch64TileRowTrisOffset(ty);

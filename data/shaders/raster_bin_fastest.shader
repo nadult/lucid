@@ -648,15 +648,14 @@ void generateBlocks(uint by) {
 	}
 	barrier();
 
-	// Computing offsets for each triangle within block
-	// Note: here we expect that idx32 < 256
-	uint idx32 = (LIX & (BLOCK_STEP - 1)) << 5;
-	if(idx32 < tri_count) {
-		uint value = s_buffer[buf_offset + idx32 + 31] & 0xffff;
-		PREFIX_SUM_STEP(value, 1);
-		PREFIX_SUM_STEP(value, 2);
-		PREFIX_SUM_STEP(value, 4);
-		s_mini_buffer[bx * 8 + (idx32 >> 5)] = value;
+	// Computing prefix sum across whole blocks (at most 8 * 32 elements)
+	if(LIX < 64) {
+		uint bx = LIX >> 3, warp_idx = LIX & 7, warp_offset = warp_idx << 5;
+		uint value = s_buffer[(bx << MAX_BLOCK_TRIS_SHIFT) + warp_offset + 31], temp;
+		temp = shuffleUpNV(value, 1, 8), value += warp_idx >= 1 ? temp : 0;
+		temp = shuffleUpNV(value, 2, 8), value += warp_idx >= 2 ? temp : 0;
+		temp = shuffleUpNV(value, 4, 8), value += warp_idx >= 4 ? temp : 0;
+		s_mini_buffer[LIX] = value;
 	}
 	barrier();
 
@@ -714,8 +713,6 @@ void generateBlocks(uint by) {
 			atomicOr(s_raster_error, 1 << bx);
 	}
 }
-
-shared uint s_vis_pixels[BIN_SIZE * BLOCK_HEIGHT];
 
 void loadSamples(int bx, int by, int segment_id, int frag_count) {
 	uint first_tri = s_segments[bx][segment_id];
@@ -964,6 +961,8 @@ void finishReduceSamples(int bx, int by, ReductionContext ctx) {
 	uint enc_color = encodeRGB8(SATURATE(ctx.out_color));
 	outputPixel(ivec2((LIX & 7) + (bx << 3), ((LIX >> 3) & 3) + (by << 2)), enc_color);
 }
+
+shared uint s_vis_pixels[BIN_SIZE * BLOCK_HEIGHT];
 
 void initVisualizeSamples() {
 	s_vis_pixels[LIX] = 0;

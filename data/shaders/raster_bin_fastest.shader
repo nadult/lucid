@@ -11,21 +11,31 @@
 #define LSIZE 256
 #define LSHIFT 8
 
-#define BUFFER_SIZE (LSIZE * 10)
+#define BUFFER_SIZE (LSIZE * 9)
 
-#define MAX_TILE_ROW_TRIS 2048
-#define MAX_TILE_TRIS 512
+#define MAX_BLOCK_ROW_TRIS 1024 // TODO: detect overflow
+#define MAX_BLOCK_TRIS 256
+#define MAX_BLOCK_TRIS_SHIFT 8
 
 #define MAX_SCRATCH_TRIS 2048
 #define MAX_SCRATCH_TRIS_SHIFT 11
 
-#define SEGMENT_SIZE (LSIZE * 4)
-#define SEGMENT_SHIFT (LSHIFT + 2)
+#define SEGMENT_SIZE 128
+#define SEGMENT_SHIFT 7
 
 #define MAX_SEGMENTS 32
 #define MAX_SEGMENTS_SHIFT 5
 
-#define TILE_STEP (LSIZE / XTILES_PER_BIN)
+#undef BLOCK_SIZE
+#undef BLOCK_SHIFT
+
+#define BLOCK_WIDTH 8
+#define BLOCK_HEIGHT 4
+
+#define NUM_BLOCK_COLS 8
+#define NUM_BLOCK_ROWS 16
+
+#define BLOCK_STEP (LSIZE / NUM_BLOCK_COLS)
 
 layout(local_size_x = LSIZE) in;
 
@@ -56,47 +66,47 @@ uniform uint background_color;
 
 #define SATURATE(val) clamp(val, 0.0, 1.0)
 
-#define WORKGROUP_32_SCRATCH_SIZE (16 * 1024)
-#define WORKGROUP_32_SCRATCH_SHIFT 14
+#define WORKGROUP_32_SCRATCH_SIZE (32 * 1024)
+#define WORKGROUP_32_SCRATCH_SHIFT 15
 
 #define WORKGROUP_64_SCRATCH_SIZE (64 * 1024)
 #define WORKGROUP_64_SCRATCH_SHIFT 16
 
 #define TRI_SCRATCH(var_idx) g_scratch_64[scratch_tri_offset + (var_idx << MAX_SCRATCH_TRIS_SHIFT)]
 
-uint scratch32TileRowTrisOffset(uint ty) {
-	return (gl_WorkGroupID.x << WORKGROUP_32_SCRATCH_SHIFT) + ty * MAX_TILE_ROW_TRIS;
+uint scratch32BlockRowTrisOffset(uint by) {
+	return (gl_WorkGroupID.x << WORKGROUP_32_SCRATCH_SHIFT) + by * MAX_BLOCK_ROW_TRIS;
 }
 
-uint scratch32TileTrisOffset(uint tx) {
-	return (gl_WorkGroupID.x << WORKGROUP_32_SCRATCH_SHIFT) + 8 * 1024 + tx * MAX_TILE_TRIS;
+uint scratch32BlockTrisOffset(uint bx) {
+	return (gl_WorkGroupID.x << WORKGROUP_32_SCRATCH_SHIFT) + 16 * 1024 + bx * MAX_BLOCK_TRIS;
 }
 
 uint scratch64TriOffset(uint tri_idx) {
 	return (gl_WorkGroupID.x << WORKGROUP_64_SCRATCH_SHIFT) + tri_idx;
 }
 
-uint scratch64TileRowTrisOffset(uint ty) {
-	return (gl_WorkGroupID.x << WORKGROUP_64_SCRATCH_SHIFT) + 32 * 1024 + ty * MAX_TILE_ROW_TRIS;
+uint scratch64BlockRowTrisOffset(uint by) {
+	return (gl_WorkGroupID.x << WORKGROUP_64_SCRATCH_SHIFT) + 32 * 1024 + by * MAX_BLOCK_ROW_TRIS;
 }
 
-uint scratch64TileTrisOffset(uint tx) {
-	return (gl_WorkGroupID.x << WORKGROUP_64_SCRATCH_SHIFT) + 40 * 1024 + tx * MAX_TILE_TRIS;
+uint scratch64BlockTrisOffset(uint bx) {
+	return (gl_WorkGroupID.x << WORKGROUP_64_SCRATCH_SHIFT) + 48 * 1024 + bx * MAX_BLOCK_TRIS;
 }
 
 shared int s_num_bins, s_bin_id, s_bin_raster_offset;
 shared ivec2 s_bin_pos;
 shared vec3 s_bin_ray_dir0;
 
-shared uint s_tile_row_tri_counts[XTILES_PER_BIN];
-shared uint s_tile_tri_count[XTILES_PER_BIN];
-shared uint s_tile_frag_count[XTILES_PER_BIN];
+shared uint s_block_row_tri_count[NUM_BLOCK_ROWS];
+shared uint s_block_tri_count[NUM_BLOCK_COLS];
+shared uint s_block_frag_count[NUM_BLOCK_COLS];
 
 shared uint s_bin_quad_count, s_bin_quad_offset;
 
 shared uint s_buffer[BUFFER_SIZE + 1];
 shared uint s_mini_buffer[LSIZE];
-shared uint s_segments[XTILES_PER_BIN][MAX_SEGMENTS];
+shared uint s_segments[NUM_BLOCK_COLS][MAX_SEGMENTS];
 shared int s_raster_error;
 
 #define REDUCE_GROUP_COUNT 8
@@ -107,8 +117,10 @@ void outputPixel(ivec2 pixel_pos, uint color) {
 }
 
 // Note: UPDATE_CLOCK should be called after a barrier
+// TODO: make it more accurate
 #ifdef ENABLE_TIMINGS
-shared uint64_t s_timings[8];
+#define MAX_TIMERS 8
+shared uint64_t s_timings[MAX_TIMERS];
 #define INIT_CLOCK() uint64_t clock0 = clockARB();
 #define UPDATE_CLOCK(idx)                                                                          \
 	if(LIX == 0) {                                                                                 \
@@ -118,11 +130,11 @@ shared uint64_t s_timings[8];
 	}
 
 void initTimers() {
-	if(LIX < 8)
+	if(LIX < MAX_TIMERS)
 		s_timings[LIX] = 0;
 }
 void commitTimers() {
-	if(LIX < 8)
+	if(LIX < MAX_TIMERS)
 		atomicAdd(g_bins.timings[LIX], uint(s_timings[LIX]));
 }
 
@@ -146,8 +158,8 @@ uint xorBits(uint value, int bit0, int bit1) { return ((value >> bit0) ^ (value 
 shared uint s_sort_max_block_rcount;
 
 void sortTileTris() {
-	if(LIX < XTILES_PER_BIN) {
-		uint count = s_tile_tri_count[LIX];
+	if(LIX < NUM_BLOCK_COLS) {
+		uint count = s_block_tri_count[LIX];
 		// rcount: count rounded up to next power of 2
 		uint rcount = max(32, (count & (count - 1)) == 0 ? count : (2 << findMSB(count)));
 		if(LIX == 0)
@@ -156,19 +168,19 @@ void sortTileTris() {
 	}
 	barrier();
 
-	uint gid = LIX >> (LSHIFT - 2);
-	uint lid = LIX & (LSIZE / 4 - 1);
-	uint goffset = gid * MAX_TILE_TRIS;
-	uint count = s_tile_tri_count[gid];
+	uint gid = LIX >> (LSHIFT - 3);
+	uint lid = LIX & (BLOCK_STEP - 1);
+	uint goffset = gid * MAX_BLOCK_TRIS;
+	uint count = s_block_tri_count[gid];
 	// TODO: max_rcount is only needed for barriers, computations should be performed up to rcount
 	// But it seems, that using rcount directly is actually a bit slower... (Sponza)
 	uint max_rcount = s_sort_max_block_rcount;
-	for(uint i = lid + count; i < max_rcount; i += LSIZE / 4)
+	for(uint i = lid + count; i < max_rcount; i += BLOCK_STEP)
 		s_buffer[goffset + i] = 0xffffffff;
 	barrier();
 
 #ifdef VENDOR_NVIDIA
-	for(uint i = lid; i < max_rcount; i += LSIZE / 4) {
+	for(uint i = lid; i < max_rcount; i += BLOCK_STEP) {
 		uint value = s_buffer[goffset + i];
 		// TODO: register sort could be faster
 		value = swap(value, 0x01, xorBits(lid, 1, 0)); // K = 2
@@ -181,22 +193,22 @@ void sortTileTris() {
 		value = swap(value, 0x04, xorBits(lid, 4, 2));
 		value = swap(value, 0x02, xorBits(lid, 4, 1));
 		value = swap(value, 0x01, xorBits(lid, 4, 0));
-		value = swap(value, 0x10, xorBits(lid, 5, 4)); // K = 32
-		value = swap(value, 0x08, xorBits(lid, 5, 3));
-		value = swap(value, 0x04, xorBits(lid, 5, 2));
-		value = swap(value, 0x02, xorBits(lid, 5, 1));
-		value = swap(value, 0x01, xorBits(lid, 5, 0));
+		//value = swap(value, 0x10, xorBits(lid, 5, 4)); // K = 32
+		//value = swap(value, 0x08, xorBits(lid, 5, 3));
+		//value = swap(value, 0x04, xorBits(lid, 5, 2));
+		//value = swap(value, 0x02, xorBits(lid, 5, 1));
+		//value = swap(value, 0x01, xorBits(lid, 5, 0));
 		s_buffer[goffset + i] = value;
 	}
 	barrier();
-	int start_k = 64, end_j = 32;
+	int start_k = 32, end_j = 32;
 #else
 	int start_k = 2, end_j = 1;
 #endif
 	for(uint k = start_k; k <= max_rcount; k = 2 * k) {
 		for(uint j = k >> 1; j >= end_j; j = j >> 1) {
-			for(uint i = lid; i < max_rcount; i += (LSIZE / 4) * 2) {
-				uint idx = (i & j) != 0 ? i + (LSIZE / 4) - j : i;
+			for(uint i = lid; i < max_rcount; i += BLOCK_STEP * 2) {
+				uint idx = (i & j) != 0 ? i + BLOCK_STEP - j : i;
 				uint lvalue = s_buffer[goffset + idx];
 				uint rvalue = s_buffer[goffset + idx + j];
 				if(((idx & k) != 0) == (lvalue.x < rvalue.x)) {
@@ -207,7 +219,7 @@ void sortTileTris() {
 			barrier();
 		}
 #ifdef VENDOR_NVIDIA
-		for(uint i = lid; i < max_rcount; i += LSIZE / 4) {
+		for(uint i = lid; i < max_rcount; i += BLOCK_STEP) {
 			uint bit = (i & k) == 0 ? 0 : 1;
 			uint value = s_buffer[goffset + i];
 			value = swap(value, 0x10, bit ^ bitExtract(lid, 4));
@@ -369,14 +381,13 @@ uint computeScanlineParams(vec3 tri0, vec3 tri1, vec3 tri2, out vec3 scan_base,
 	return (edges[0].x < 0.0 ? 1 : 0) | (edges[1].x < 0.0 ? 2 : 0) | (edges[2].x < 0.0 ? 4 : 0);
 }
 
-// TODO: można by tutaj użyć algorytmu bazującego na liniach
-void generateTileRowTris(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, int min_qy, int max_qy) {
+void generateRowTris(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, int min_by, int max_by) {
 	// Inspired by Nanite scanline rasterizer
 	vec3 scan_min, scan_max, scan_step;
 
 	{
 		float sx = s_bin_pos.x - 0.5f;
-		float sy = s_bin_pos.y + (float(min_qy) * 4.0 + 0.5f);
+		float sy = s_bin_pos.y + (float(min_by) * 4.0 + 0.5f);
 
 		vec3 scan_base;
 		uint sign_mask = computeScanlineParams(tri0, tri1, tri2, scan_base, scan_step);
@@ -390,10 +401,10 @@ void generateTileRowTris(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, int min_
 						(sign_mask & 4) != 0 ? scan[2] : 1.0 / 0.0);
 	}
 
-	uint dst_offset_64 = scratch64TileRowTrisOffset(0);
-	uint dst_offset_32 = scratch32TileRowTrisOffset(0);
+	uint dst_offset_64 = scratch64BlockRowTrisOffset(0);
+	uint dst_offset_32 = scratch32BlockRowTrisOffset(0);
 
-	for(int qy = min_qy; qy <= max_qy; qy++) {
+	for(int by = min_by; by <= max_by; by++) {
 		float xmin0 = max(max(scan_min[0], scan_min[1]), max(scan_min[2], 0.0));
 		float xmax0 = min(min(scan_max[0], scan_max[1]), min(scan_max[2], BIN_SIZE));
 		scan_min += scan_step, scan_max += scan_step;
@@ -421,20 +432,19 @@ void generateTileRowTris(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, int min_
 		if(imin3 > imax3)
 			imin3 = 63, imax3 = 0;
 
-		uint tx_mask = ((0xf << (imin0 >> 4)) & (0xf >> (3 - (imax0 >> 4)))) |
-					   ((0xf << (imin1 >> 4)) & (0xf >> (3 - (imax1 >> 4)))) |
-					   ((0xf << (imin2 >> 4)) & (0xf >> (3 - (imax2 >> 4)))) |
-					   ((0xf << (imin3 >> 4)) & (0xf >> (3 - (imax3 >> 4))));
-		if(tx_mask == 0)
+		// TODO: bx mask
+		uint bx_mask = ((0xff << (imin0 >> 3)) & (0xff >> (7 - (imax0 >> 3)))) |
+					   ((0xff << (imin1 >> 3)) & (0xff >> (7 - (imax1 >> 3)))) |
+					   ((0xff << (imin2 >> 3)) & (0xff >> (7 - (imax2 >> 3)))) |
+					   ((0xff << (imin3 >> 3)) & (0xff >> (7 - (imax3 >> 3))));
+		if(bx_mask == 0)
 			continue;
 
-		uint ty = qy >> 2;
-		uint roffset = atomicAdd(s_tile_row_tri_counts[ty], 1) + ty * MAX_TILE_ROW_TRIS;
-
+		uint roffset = atomicAdd(s_block_row_tri_count[by], 1) + by * MAX_BLOCK_ROW_TRIS;
 		g_scratch_64[dst_offset_64 + roffset] =
 			uvec2((imin0 << 0) | (imin1 << 6) | (imin2 << 12) | (imin3 << 18),
 				  (imax0 << 0) | (imax1 << 6) | (imax2 << 12) | (imax3 << 18));
-		g_scratch_32[dst_offset_32 + roffset] = tri_idx | (tx_mask << 16) | ((qy & 3) << 24);
+		g_scratch_32[dst_offset_32 + roffset] = tri_idx | (bx_mask << 16);
 	}
 }
 
@@ -449,8 +459,8 @@ void processQuads() {
 
 		uvec4 aabb = g_tri_aabbs[quad_idx];
 		aabb = decodeAABB(second_tri != 0 ? aabb.zw : aabb.xy);
-		int min_qy = clamp(int(aabb[1]) - s_bin_pos.y, 0, 63) >> 2;
-		int max_qy = clamp(int(aabb[3]) - s_bin_pos.y, 0, 63) >> 2;
+		int min_by = clamp(int(aabb[1]) - s_bin_pos.y, 0, 63) >> 2;
+		int max_by = clamp(int(aabb[3]) - s_bin_pos.y, 0, 63) >> 2;
 
 		uvec4 verts = uvec4(g_quad_indices[quad_idx * 4 + 0], g_quad_indices[quad_idx * 4 + 1],
 							g_quad_indices[quad_idx * 4 + 2], g_quad_indices[quad_idx * 4 + 3]);
@@ -471,7 +481,7 @@ void processQuads() {
 		// TODO: do triangle storing later
 		uint tri_idx = i * 2 + (LIX & 1);
 		storeTriangle(tri_idx, tri0, tri1, tri2, v0, v1, v2, instance_id);
-		generateTileRowTris(tri_idx, tri0, tri1, tri2, min_qy, max_qy);
+		generateRowTris(tri_idx, tri0, tri1, tri2, min_by, max_by);
 	}
 }
 
@@ -494,45 +504,48 @@ void processQuads() {
 //
 // - na początek muszę powyłączać końcowe fazy i przerobić wszytko od początku jeszcze raz
 
-void generateTiles(uint ty) {
-	uint src_offset_32 = scratch32TileRowTrisOffset(ty);
-	uint src_offset_64 = scratch64TileRowTrisOffset(ty);
-	uint tri_count = s_tile_row_tri_counts[ty];
+void generateBlocks(uint by) {
+	uint src_offset_32 = scratch32BlockRowTrisOffset(by);
+	uint src_offset_64 = scratch64BlockRowTrisOffset(by);
+	uint tri_count = s_block_row_tri_count[by];
 
-	if(LIX < MAX_SEGMENTS * XTILES_PER_BIN) {
+	if(LIX < MAX_SEGMENTS * NUM_BLOCK_COLS) {
 		s_segments[LIX >> MAX_SEGMENTS_SHIFT][LIX & (MAX_SEGMENTS - 1)] = ~0u;
-		if(LIX < XTILES_PER_BIN)
-			s_tile_tri_count[LIX] = 0;
+		if(LIX < NUM_BLOCK_COLS)
+			s_block_tri_count[LIX] = 0;
 	}
-	barrier();
+	barrier(); // TODO: could it be removed?
 
-	for(uint tx = LIX & 3, tx_bit = 0x10000 << tx, buf_offset = tx * MAX_TILE_TRIS, i = LIX >> 2;
-		i < tri_count; i += LSIZE / 4) {
-		if((g_scratch_32[src_offset_32 + i] & tx_bit) == 0)
-			continue;
-		uint tri_offset = atomicAdd(s_tile_tri_count[tx], 1);
-		if(tri_offset < MAX_TILE_TRIS)
-			s_buffer[buf_offset + tri_offset] = i;
-		else
-			atomicOr(s_raster_error, 0x10 << tx);
+	{
+		uint bx = LIX & 7, bx_bit = 0x10000 << bx;
+		uint buf_offset = bx << MAX_BLOCK_TRIS_SHIFT;
+		// TODO: optimize this loop? iterate over bits for atomicAdd?
+		for(uint i = LIX >> 3; i < tri_count; i += LSIZE / 8) {
+			if((g_scratch_32[src_offset_32 + i] & bx_bit) == 0)
+				continue;
+			uint tri_offset = atomicAdd(s_block_tri_count[bx], 1);
+			if(tri_offset < MAX_BLOCK_TRIS)
+				s_buffer[buf_offset + tri_offset] = i;
+			else
+				atomicOr(s_raster_error, 0x100 << bx);
+		}
+		barrier();
+		if(s_raster_error != 0)
+			return;
 	}
-	barrier();
-	if(s_raster_error != 0)
-		return;
 
-	uint tx = LIX >> (LSHIFT - 2);
-	uint buf_offset = tx * MAX_TILE_TRIS;
-	tri_count = s_tile_tri_count[tx];
-	int startx = int(tx << 4); // TODO: bad name
+	uint bx = LIX >> (LSHIFT - 3);
+	uint buf_offset = bx * MAX_BLOCK_TRIS;
+	tri_count = s_block_tri_count[bx];
+	int startx = int(bx << 3);
 
-	for(uint i = LIX & (TILE_STEP - 1); i < tri_count; i += TILE_STEP) {
+	for(uint i = LIX & (BLOCK_STEP - 1); i < tri_count; i += BLOCK_STEP) {
 		uint idx = s_buffer[buf_offset + i];
 
 		// TODO: load these together with shuffles?
 		uint tri_info = g_scratch_32[src_offset_32 + idx];
 		uvec2 tri_rows = g_scratch_64[src_offset_64 + idx];
 		uint tri_idx = tri_info & 0xffff;
-		uint qy = tri_info >> 24;
 
 		vec2 cpos = vec2(0, 0);
 		float weight = 0.0;
@@ -544,10 +557,10 @@ void generateTiles(uint ty) {
 			int minx2 = max(int((tri_rows.x >> 12) & 0x3f) - startx, 0);
 			int minx3 = max(int((tri_rows.x >> 18) & 0x3f) - startx, 0);
 
-			int maxx0 = min(int((tri_rows.y >> 0) & 0x3f) - startx, 15);
-			int maxx1 = min(int((tri_rows.y >> 6) & 0x3f) - startx, 15);
-			int maxx2 = min(int((tri_rows.y >> 12) & 0x3f) - startx, 15);
-			int maxx3 = min(int((tri_rows.y >> 18) & 0x3f) - startx, 15);
+			int maxx0 = min(int((tri_rows.y >> 0) & 0x3f) - startx, 7);
+			int maxx1 = min(int((tri_rows.y >> 6) & 0x3f) - startx, 7);
+			int maxx2 = min(int((tri_rows.y >> 12) & 0x3f) - startx, 7);
+			int maxx3 = min(int((tri_rows.y >> 18) & 0x3f) - startx, 7);
 
 			int count0 = max(maxx0 - minx0 + 1, 0);
 			int count1 = max(maxx1 - minx1 + 1, 0);
@@ -562,7 +575,7 @@ void generateTiles(uint ty) {
 			weight += count0 + count1 + count2 + count3;
 		}
 		cpos /= weight;
-		cpos += vec2(tx << 4, (ty << 4) + (qy << 2));
+		cpos += vec2(bx << 3, (by << 2));
 
 		uint scratch_tri_offset = scratch64TriOffset(tri_idx);
 		vec2 val0 = uintBitsToFloat(TRI_SCRATCH(0));
@@ -584,17 +597,16 @@ void generateTiles(uint ty) {
 			value += temp;                                                                         \
 	}
 
-	uint dst_offset_32 = scratch32TileTrisOffset(tx);
-	uint dst_offset_64 = scratch64TileTrisOffset(tx);
+	uint dst_offset_32 = scratch32BlockTrisOffset(bx);
+	uint dst_offset_64 = scratch64BlockTrisOffset(bx);
 
-	for(uint i = LIX & (TILE_STEP - 1); i < tri_count; i += TILE_STEP) {
+	for(uint i = LIX & (BLOCK_STEP - 1); i < tri_count; i += BLOCK_STEP) {
 		uint idx = s_buffer[buf_offset + i] & 0x1fff;
 
-		// TODO: load range data in groups
+		// TODO: load range data in groups?
 		uint tri_info = g_scratch_32[src_offset_32 + idx];
 		uvec2 tri_rows = g_scratch_64[src_offset_64 + idx];
 		uint tri_idx = tri_info & 0xffff;
-		uint qy = tri_info >> 24;
 		uint min_bits, count_bits;
 		uint num_frags;
 
@@ -604,16 +616,17 @@ void generateTiles(uint ty) {
 			int minx2 = max(int((tri_rows.x >> 12) & 0x3f) - startx, 0);
 			int minx3 = max(int((tri_rows.x >> 18) & 0x3f) - startx, 0);
 
-			int maxx0 = min(int((tri_rows.y >> 0) & 0x3f) - startx, 15);
-			int maxx1 = min(int((tri_rows.y >> 6) & 0x3f) - startx, 15);
-			int maxx2 = min(int((tri_rows.y >> 12) & 0x3f) - startx, 15);
-			int maxx3 = min(int((tri_rows.y >> 18) & 0x3f) - startx, 15);
+			int maxx0 = min(int((tri_rows.y >> 0) & 0x3f) - startx, 7);
+			int maxx1 = min(int((tri_rows.y >> 6) & 0x3f) - startx, 7);
+			int maxx2 = min(int((tri_rows.y >> 12) & 0x3f) - startx, 7);
+			int maxx3 = min(int((tri_rows.y >> 18) & 0x3f) - startx, 7);
 
 			int count0 = max(maxx0 - minx0 + 1, 0);
 			int count1 = max(maxx1 - minx1 + 1, 0);
 			int count2 = max(maxx2 - minx2 + 1, 0);
 			int count3 = max(maxx3 - minx3 + 1, 0);
 
+			// TODO: minimize bits
 			min_bits =
 				(minx0 & 15) | ((minx1 & 15) << 4) | ((minx2 & 15) << 8) | ((minx3 & 15) << 12);
 			count_bits = count0 | (count1 << 5) | (count2 << 10) | (count3 << 15);
@@ -623,8 +636,7 @@ void generateTiles(uint ty) {
 		if(num_frags == 0) // This means that tx_masks are invalid
 			RECORD(0, 0, 0, 0);
 
-		g_scratch_64[dst_offset_64 + i] =
-			uvec2(min_bits | (tri_idx << 16), count_bits | (qy << 20));
+		g_scratch_64[dst_offset_64 + i] = uvec2(min_bits | (tri_idx << 16), count_bits);
 
 		// Computing triangle-ordered sample offsets within each block
 		PREFIX_SUM_STEP(num_frags, 1);
@@ -637,54 +649,54 @@ void generateTiles(uint ty) {
 	barrier();
 
 	// Computing offsets for each triangle within block
-	// Note: here we expect that idx32 < 32 * 16
-	uint idx32 = (LIX & (TILE_STEP - 1)) << 5;
+	// Note: here we expect that idx32 < 256
+	uint idx32 = (LIX & (BLOCK_STEP - 1)) << 5;
 	if(idx32 < tri_count) {
 		uint value = s_buffer[buf_offset + idx32 + 31] & 0xffff;
 		PREFIX_SUM_STEP(value, 1);
 		PREFIX_SUM_STEP(value, 2);
 		PREFIX_SUM_STEP(value, 4);
-		PREFIX_SUM_STEP(value, 8);
-		s_mini_buffer[tx * 16 + (idx32 >> 5)] = value;
+		s_mini_buffer[bx * 8 + (idx32 >> 5)] = value;
 	}
 	barrier();
 
-	for(uint i = 32 + (LIX & (TILE_STEP - 1)); i < tri_count; i += TILE_STEP)
-		s_buffer[buf_offset + i] += s_mini_buffer[tx * 16 + (i >> 5) - 1];
+	for(uint i = 32 + (LIX & (BLOCK_STEP - 1)); i < tri_count; i += BLOCK_STEP)
+		s_buffer[buf_offset + i] += s_mini_buffer[bx * 8 + (i >> 5) - 1];
 	barrier();
 
 	// Storing offsets to scratch mem
 	// Also finding first triangle for each segment
-	for(uint i = LIX & (TILE_STEP - 1); i < tri_count; i += TILE_STEP) {
+	for(uint i = LIX & (BLOCK_STEP - 1); i < tri_count; i += BLOCK_STEP) {
 		uint tri_offset = i == 0 ? 0 : s_buffer[buf_offset + i - 1];
 		uint tri_value = s_buffer[buf_offset + i] - tri_offset;
 
 		uint seg_id = tri_offset >> SEGMENT_SHIFT;
-		if(seg_id < MAX_SEGMENTS) {
+		if(seg_id < MAX_SEGMENTS) { // TODO: MAX_SEGMENTS-1?
 			uint seg_offset = tri_offset & (SEGMENT_SIZE - 1);
 			if(seg_offset == 0)
-				s_segments[tx][seg_id] = i;
+				s_segments[bx][seg_id] = i;
 			else if(seg_offset + tri_value > SEGMENT_SIZE)
-				s_segments[tx][seg_id + 1] = i;
+				s_segments[bx][seg_id + 1] = i;
 		}
 
 		g_scratch_32[dst_offset_32 + i] = tri_offset;
 	}
 	barrier();
-	if(LIX < MAX_SEGMENTS * XTILES_PER_BIN) {
-		uint seg_id = LIX & (MAX_SEGMENTS - 1);
-		uint tx = LIX >> MAX_SEGMENTS_SHIFT;
-		uint tri_count = s_tile_tri_count[tx];
 
-		uint cur_value = s_segments[tx][seg_id];
-		uint next_value = seg_id + 1 == MAX_SEGMENTS ? ~0u : s_segments[tx][seg_id + 1];
+	if(LIX < MAX_SEGMENTS * NUM_BLOCK_COLS) {
+		uint seg_id = LIX & (MAX_SEGMENTS - 1);
+		uint bx = LIX >> MAX_SEGMENTS_SHIFT;
+		uint tri_count = s_block_tri_count[bx];
+
+		uint cur_value = s_segments[bx][seg_id];
+		uint next_value = seg_id + 1 == MAX_SEGMENTS ? ~0u : s_segments[bx][seg_id + 1];
 		next_value = next_value == ~0u ? tri_count : min(tri_count, next_value + 1);
 		cur_value = cur_value == ~0u ? 0 : cur_value | ((next_value - cur_value) << 16);
-		s_segments[tx][seg_id] = cur_value;
+		s_segments[bx][seg_id] = cur_value;
 	}
 
 #ifdef SHADER_DEBUG
-	for(uint i = LIX & (TILE_STEP - 1); i < tri_count; i += TILE_STEP) {
+	for(uint i = LIX & (BLOCK_STEP - 1); i < tri_count; i += BLOCK_STEP) {
 		uint value = s_buffer[buf_offset + i] & 0xffff;
 		uint prev_value = i == 0 ? 0 : s_buffer[buf_offset + i - 1] & 0xffff;
 		if(value <= prev_value)
@@ -692,43 +704,37 @@ void generateTiles(uint ty) {
 	}
 #endif
 
-	if(LIX < XTILES_PER_BIN) {
-		uint tx = LIX;
-		uint num_tris = s_tile_tri_count[tx];
-		uint frag_count = num_tris == 0 ? 0 : s_buffer[tx * MAX_TILE_TRIS + num_tris - 1];
+	if(LIX < NUM_BLOCK_COLS) {
+		uint bx = LIX;
+		uint num_tris = s_block_tri_count[bx];
+		uint frag_count = num_tris == 0 ? 0 : s_buffer[bx * MAX_BLOCK_TRIS + num_tris - 1];
 		//uint segment_count = (frag_count + SEGMENT_SIZE - 1) >> SEGMENT_SHIFT;
-		s_tile_frag_count[tx] = frag_count;
+		s_block_frag_count[bx] = frag_count;
 		if(frag_count > MAX_SEGMENTS * SEGMENT_SIZE)
-			atomicOr(s_raster_error, 1 << tx);
+			atomicOr(s_raster_error, 1 << bx);
 	}
 }
 
-shared uint s_src_offset_32, s_src_offset_64, s_tri_count;
-shared int s_first_offset;
+shared uint s_vis_pixels[BIN_SIZE * BLOCK_HEIGHT];
 
-void initSegment(int tx, int ty, int segment_id) {
-	if(LIX == 0) {
-		s_first_offset = segment_id << SEGMENT_SHIFT;
-		uint first_tri = s_segments[tx][segment_id];
-		s_tri_count = first_tri >> 16;
-		first_tri &= 0xffff;
+void loadSamples(int bx, int by, int segment_id, int frag_count) {
+	uint first_tri = s_segments[bx][segment_id];
+	uint tri_count = first_tri >> 16;
+	first_tri &= 0xffff;
 
-		s_src_offset_32 = scratch32TileTrisOffset(tx) + first_tri;
-		s_src_offset_64 = scratch64TileTrisOffset(tx) + first_tri;
-	}
-}
+	uint src_offset_32 = scratch32BlockTrisOffset(bx) + first_tri;
+	uint src_offset_64 = scratch64BlockTrisOffset(bx) + first_tri;
+	uint buf_offset = bx << SEGMENT_SHIFT;
+	int first_offset = segment_id << SEGMENT_SHIFT;
 
-void loadSamples(int tx, int ty, int frag_count) {
 	int y = int(LIX & 3);
 	uint min_shift = y << 2, count_shift = min_shift + y;
 
 	// TODO: group differently for better memory accesses (and measure)
-	int first_offset = s_first_offset;
-	uint src_offset_32 = s_src_offset_32, src_offset_64 = s_src_offset_64;
-	for(uint tri_count = s_tri_count, i = (LIX >> 2); i < tri_count; i += LSIZE / 4) {
+	for(uint i = (LIX & (BLOCK_STEP - 1)) >> 2; i < tri_count; i += BLOCK_STEP / 4) {
 		uvec2 tri_info = g_scratch_64[src_offset_64 + i];
 		int tri_offset = int(g_scratch_32[src_offset_32 + i]) - first_offset;
-		int minx = int((tri_info.x >> min_shift) & 15);
+		int minx = int((tri_info.x >> min_shift) & 15); // TODO: too many bits
 		int count_bits = int(tri_info.y & ((1 << 20) - 1));
 
 		// TODO: precompute it somehow?
@@ -741,13 +747,13 @@ void loadSamples(int tx, int ty, int frag_count) {
 			continue;
 
 		uint scratch_tri_offset = scratch64TriOffset(tri_info.x >> 16);
-		uint qy = tri_info.y >> 20;
 
-		uint pixel_id = ((y << 4) + (qy << 6)) | minx;
+		uint pixel_id = (y << 3) | minx;
 		uint value = pixel_id | (scratch_tri_offset << 8);
+
 		for(int j = 0; j < countx; j++) {
 			if(tri_offset >= 0) // TODO: remove this check
-				s_buffer[tri_offset] = value;
+				s_buffer[buf_offset + tri_offset] = value;
 			tri_offset++;
 			value++;
 		}
@@ -832,19 +838,19 @@ uint shadeSample(ivec2 bin_pixel_pos, uint scratch_tri_offset, out float out_dep
 	return encodeRGBA8(color);
 }
 
-void shadeSamples(uint tx, uint ty, uint sample_count) {
+void shadeSamples(uint bx, uint by, uint sample_count) {
 	// TODO: what's the best way to fix broken pixels?
 	// full sort ? recreate full depth values and sort pairs?
 
-	for(uint i = LIX; i < sample_count; i += LSIZE) {
-		uint value = s_buffer[i];
-		uint pixel_id = value & 0xff;
+	uint buf_offset = bx << SEGMENT_SHIFT;
+	for(uint i = LIX & 31; i < sample_count; i += 32) {
+		uint value = s_buffer[buf_offset + i];
+		uint pixel_id = value & 31;
 		uint scratch_tri_offset = value >> 8;
-		ivec2 pix_pos = ivec2((pixel_id & 15) + (tx << 4), (pixel_id >> 4) + (ty << 4));
+		ivec2 pix_pos = ivec2((pixel_id & 7) + (bx << 3), (pixel_id >> 3) + (by << 2));
 		float depth;
-		s_buffer[i] = shadeSample(pix_pos, scratch_tri_offset, depth);
-		s_buffer[i + SEGMENT_SIZE] = floatBitsToUint(depth);
-		atomicOr(s_buffer[SEGMENT_SIZE * 2 + (i >> 2)], pixel_id << ((LIX & 3) << 3));
+		s_buffer[buf_offset + i] = shadeSample(pix_pos, scratch_tri_offset, depth);
+		s_buffer[buf_offset + i + SEGMENT_SIZE * 8] = (floatBitsToUint(depth) & ~31) | pixel_id;
 	}
 }
 
@@ -871,118 +877,28 @@ void initReduceSamples(out ReductionContext ctx) {
 #define POS_OFFSET (SEGMENT_SIZE * 2)
 #define BITS_OFFSET (SEGMENT_SIZE * 2 + LSIZE)
 
-// Pixels are grouped into 8x4 blocks
-// 16x16 tile can thus be divided into 8 blocks.
-// Starting from Y=0: 0 1, Y=4: 2 3, Y=8: 4 5, Y=12: 6 7
-void groupSamplesForReduction(uint sample_count) {
-	uint sample_value[4];
-	uint sample_depth[4];
-	uint samples_pos = 0;
-
-#define LOAD_SAMPLE(idx)                                                                           \
-	{                                                                                              \
-		uint cur_idx = LIX + LSIZE * idx;                                                          \
-		sample_value[idx] = cur_idx < sample_count ? s_buffer[cur_idx] : 0;                        \
-		if(sample_value[idx] != 0) {                                                               \
-			sample_depth[idx] = s_buffer[SEGMENT_SIZE + cur_idx];                                  \
-			uint sample_pos =                                                                      \
-				(s_buffer[POS_OFFSET + (cur_idx >> 2)] >> ((cur_idx & 3) << 3)) & 0xff;            \
-			samples_pos |= sample_pos << (idx * 8);                                                \
-		}                                                                                          \
-	}
-
-	LOAD_SAMPLE(0);
-	LOAD_SAMPLE(1);
-	LOAD_SAMPLE(2);
-	LOAD_SAMPLE(3);
-
-#undef LOAD_SAMPLE
-
-	if(LIX < REDUCE_GROUP_COUNT)
-		s_reduce_groups[LIX] = 0;
-	barrier();
-
-#define COUNT_SAMPLE(idx)                                                                          \
-	if(sample_value[idx] != 0) {                                                                   \
-		uint pos = (samples_pos >> (idx * 8)) & 0xff;                                              \
-		uint px = pos & 0xf, py = (pos >> 4) & 0xf;                                                \
-		uint gx = px >> 3, gy = py >> 2;                                                           \
-		uint gid = gx + (gy << 1);                                                                 \
-		atomicAdd(s_reduce_groups[gid], 1);                                                        \
-	}
-
-	COUNT_SAMPLE(0);
-	COUNT_SAMPLE(1);
-	COUNT_SAMPLE(2);
-	COUNT_SAMPLE(3);
-
-#undef COUNT_SAMPLE
-
-	s_buffer[POS_OFFSET + LIX] = 0;
-	barrier();
-	if(LIX < 8) {
-		uint group_size = s_reduce_groups[LIX];
-		uint temp, group_offset = group_size;
-		temp = shuffleUpNV(group_offset, 1, 8), group_offset += LIX >= 1 ? temp : 0;
-		temp = shuffleUpNV(group_offset, 2, 8), group_offset += LIX >= 2 ? temp : 0;
-		temp = shuffleUpNV(group_offset, 4, 8), group_offset += LIX >= 4 ? temp : 0;
-		s_reduce_groups[LIX] |= (group_offset - group_size) << 16;
-	}
-	barrier();
-
-#define STORE_SAMPLE(idx)                                                                          \
-	if(sample_value[idx] != 0) {                                                                   \
-		uint pos = (samples_pos >> (idx * 8)) & 0xff;                                              \
-		uint px = pos & 0xf, py = (pos >> 4) & 0xf;                                                \
-		uint gx = px >> 3, gy = py >> 2;                                                           \
-		uint gid = gx + (gy << 1);                                                                 \
-		uint pixel_id = (px & 7) | ((py & 3) << 3);                                                \
-                                                                                                   \
-		uint sample_offset = atomicAdd(s_reduce_groups[gid], 0x10000) >> 16;                       \
-		s_buffer[sample_offset] = sample_value[idx];                                               \
-		s_buffer[SEGMENT_SIZE + sample_offset] = (sample_depth[idx] & ~31) | pixel_id;             \
-	}
-
-	STORE_SAMPLE(0);
-	STORE_SAMPLE(1);
-	STORE_SAMPLE(2);
-	STORE_SAMPLE(3);
-#undef STORE_SAMPLE
-}
-
 // TODO: optimize
-void reduceSamples(in out ReductionContext ctx) {
-	// Pixels are grouped in 8x8 blocks
-	uint x = (LIX & 7) + ((LIX & 0x40) >> 3);
-	uint y = ((LIX & 0x38) >> 3) + ((LIX & 0x80) >> 4);
-	uint gx = x >> 3, gy = y >> 2, gid = gx + (gy << 1);
-
-	// TODO: keep in single counter
-	// TODO: move out of mini_buffer (keep separate counter); barrier won't be needed
-	uint group_count = s_reduce_groups[gid];
-	uint group_end_offset = group_count >> 16;
-	group_count &= 0xffff;
-	uint group_offset = group_end_offset - group_count;
-
+void reduceSamples(uint bx, uint sample_count, in out ReductionContext ctx) {
+	uint buf_offset = bx << SEGMENT_SHIFT;
 	uint mini_offset = LIX & ~31;
 	uint pixel_bit = 1u << (LIX & 31);
-	uint pixel_id = (x & 7) | ((y & 3) << 3);
+	uint pixel_id = LIX & 31;
 
 	// Możemy robić od razu grupować piksele w warpach tak jak chcę: 8x4 a nie 16x2
-	for(; group_offset < group_end_offset; group_offset += 32) {
-		uint sample_offset = group_offset + (LIX & 31);
-		uint sample_pixel_id = s_buffer[SEGMENT_SIZE + sample_offset] & 31;
+	for(uint i = 0; i < sample_count; i += 32) {
+		uint sample_offset = i + (LIX & 31);
+		uint sample_pixel_id = s_buffer[buf_offset + sample_offset + SEGMENT_SIZE * 8] & 31;
 
 		s_mini_buffer[LIX] = 0;
-		if(sample_offset < group_end_offset)
+		if(sample_offset < sample_count)
 			atomicOr(s_mini_buffer[mini_offset + sample_pixel_id], pixel_bit);
 
 		uint bitmask = s_mini_buffer[mini_offset + pixel_id];
 		int j = findLSB(bitmask);
 		while(j != -1) {
 			// TODO: pass through regs?
-			uint value = s_buffer[group_offset + j];
-			float depth = uintBitsToFloat(s_buffer[SEGMENT_SIZE + group_offset + j]);
+			uint value = s_buffer[buf_offset + i + j];
+			float depth = uintBitsToFloat(s_buffer[buf_offset + i + j + SEGMENT_SIZE * 8]);
 
 			bitmask &= ~(1 << j);
 			j = findLSB(bitmask);
@@ -1000,7 +916,7 @@ void reduceSamples(in out ReductionContext ctx) {
 #ifdef VISUALIZE_ERRORS
 						if(ctx.prev_depths[2] < ctx.prev_depths[3]) {
 							ctx.prev_colors[0] = 0xff0000ff;
-							i = filtered_count;
+							i = sample_count;
 							break;
 						}
 #endif
@@ -1032,10 +948,7 @@ void reduceSamples(in out ReductionContext ctx) {
 	}
 }
 
-void finishReduceSamples(int tx, int ty, ReductionContext ctx) {
-	uint x = (LIX & 7) + ((LIX & 0x40) >> 3);
-	uint y = ((LIX & 0x38) >> 3) + ((LIX & 0x80) >> 4);
-
+void finishReduceSamples(int bx, int by, ReductionContext ctx) {
 	for(int i = 2; i >= 0; i--)
 		if(ctx.prev_colors[i] != 0) {
 			vec4 cur_color = decodeRGBA8(ctx.prev_colors[i]);
@@ -1049,45 +962,38 @@ void finishReduceSamples(int tx, int ty, ReductionContext ctx) {
 		}
 
 	uint enc_color = encodeRGB8(SATURATE(ctx.out_color));
-	outputPixel(ivec2((tx << 4) + x, (ty << 4) + y), enc_color);
+	outputPixel(ivec2((LIX & 7) + (bx << 3), ((LIX >> 3) & 3) + (by << 2)), enc_color);
 }
-
-shared uint s_vis_pixels[TILE_SIZE * TILE_SIZE];
 
 void initVisualizeSamples() {
 	s_vis_pixels[LIX] = 0;
 	barrier();
 }
 
-void visualizeSamples(uint sample_count) {
-	for(uint i = LIX; i < sample_count; i += LSIZE) {
-		uint value = s_buffer[i];
-		atomicAdd(s_vis_pixels[value & 0xff], 1);
+void visualizeSamples(int bx, uint sample_count) {
+	int buf_offset = bx << SEGMENT_SHIFT;
+	for(uint i = LIX & 31; i < sample_count; i += 32) {
+		uint value = s_buffer[buf_offset + i];
+		uint x = (value & 7) + (bx << 3), y = (value >> 3) & 3;
+		atomicAdd(s_vis_pixels[x | (y << 6)], 1);
 	}
 }
 
-void finishVisualizeSamples(uint tx, uint ty) {
-	ivec2 pixel_pos = ivec2(LIX & (TILE_SIZE - 1), (LIX >> TILE_SHIFT));
-	pixel_pos += ivec2(tx << TILE_SHIFT, ty << TILE_SHIFT);
-	uint value = s_vis_pixels[LIX];
-	vec3 color = vec3(value, value, value) / 32.0;
+void finishVisualizeSamples(uint by) {
+	vec3 color = vec3(s_vis_pixels[LIX]) / 32.0;
 	uint enc_col = encodeRGBA8(vec4(SATURATE(color), 1.0));
-	outputPixel(pixel_pos, enc_col);
+	outputPixel(ivec2(LIX & 63, (LIX >> 6) + (by << 2)), enc_col);
 }
 
-void fillTile(int tx, int ty, uint enc_color) {
-	ivec2 pixel_pos = ivec2((tx << TILE_SHIFT) + (LIX & 15), (ty << TILE_SHIFT) + (LIX >> 4));
-	outputPixel(pixel_pos, enc_color);
-}
-
-void rasterFragmentCounts(int ty) {
+void rasterFragmentCounts(int by) {
 	barrier();
-	for(uint i = LIX; i < BIN_SIZE * TILE_SIZE; i += LSIZE) {
-		ivec2 pixel_pos = ivec2(i & (BIN_SIZE - 1), ty * TILE_SIZE + (i >> BIN_SHIFT));
-		uint count0 = s_tile_frag_count[pixel_pos.x / TILE_SIZE] & 0xffff;
-		//count0 = s_tile_tri_count[pixel_pos.x / TILE_SIZE] * 8;
+	for(uint i = LIX; i < BLOCK_HEIGHT * BIN_SIZE; i += LSIZE) {
+		ivec2 pixel_pos = ivec2(i & (BIN_SIZE - 1), by * BLOCK_HEIGHT + (i >> BIN_SHIFT));
+		uint bx = pixel_pos.x / BLOCK_WIDTH, by = pixel_pos.y / BLOCK_HEIGHT;
+		uint count0 = s_block_frag_count[bx] & 0xffff;
+		//count0 = s_block_tri_count[bx] * 8;
 
-		vec3 color = vec3(count0, count0, count0) / 4096;
+		vec3 color = vec3(count0, count0, count0) / 512;
 		uint enc_col = encodeRGBA8(vec4(SATURATE(color), 1.0));
 		outputPixel(pixel_pos, enc_col);
 	}
@@ -1097,7 +1003,7 @@ void rasterFragmentCounts(int ty) {
 void rasterBin(int bin_id) {
 	INIT_CLOCK();
 
-	if(LIX < XTILES_PER_BIN) {
+	if(LIX < NUM_BLOCK_ROWS) {
 		if(LIX == 0) {
 			ivec2 bin_pos = ivec2(bin_id % BIN_COUNT_X, bin_id / BIN_COUNT_X) * BIN_SIZE;
 			s_bin_pos = bin_pos;
@@ -1108,7 +1014,7 @@ void rasterBin(int bin_id) {
 			s_raster_error = 0;
 		}
 
-		s_tile_row_tri_counts[LIX] = 0;
+		s_block_row_tri_count[LIX] = 0;
 	}
 	barrier();
 	processQuads();
@@ -1116,72 +1022,56 @@ void rasterBin(int bin_id) {
 	barrier();
 	UPDATE_CLOCK(0);
 
-	for(int ty = 0; ty < XTILES_PER_BIN; ty++) {
+	for(int by = 0; by < NUM_BLOCK_ROWS; by++) {
 		barrier();
-		generateTiles(ty);
+		generateBlocks(by);
 		groupMemoryBarrier();
 		barrier();
 		UPDATE_CLOCK(1);
 
 		if(s_raster_error != 0) {
-			for(int tx = 0; tx < XTILES_PER_BIN; tx++) {
-				float value = 0.2;
-				if((s_raster_error & (1 << tx)) != 0)
-					value += 0.2;
-				if((s_raster_error & (0x10 << tx)) != 0)
-					value += 0.4;
-				vec4 color = vec4(value, 0.0, 0.0, 1.0);
-				fillTile(tx, ty, encodeRGBA8(color));
-			}
+			ivec2 pixel_pos = ivec2(LIX & (BIN_SIZE - 1), LIX >> BIN_SHIFT);
+			uint bx = pixel_pos.x >> 3;
+			uint color = 0xff000032;
+			if((s_raster_error & (1 << bx)) != 0)
+				color += 0x32;
+			if((s_raster_error & (0x100 << bx)) != 0)
+				color += 0x64;
+			outputPixel(pixel_pos, color);
+			barrier();
 			if(LIX == 0)
 				s_raster_error = 0;
 			continue;
 		}
 
-		for(int tx = 0; tx < XTILES_PER_BIN; tx++) {
-			int frag_count = int(s_tile_frag_count[tx]);
-			int segment_id = 0;
+		int segment_id = 0;
+		int bx = int(LIX >> 5);
+		int frag_count = int(s_block_frag_count[bx]);
+		// TODO: handle empty block?
 
-			if(frag_count == 0) {
-				fillTile(tx, ty, background_color);
-				continue;
-			}
+		ReductionContext context;
+		initReduceSamples(context);
+		//initVisualizeSamples();
 
-			ReductionContext context;
-			initReduceSamples(context);
-			//initVisualizeSamples();
+		while(frag_count > 0) {
+			int cur_frag_count = min(frag_count, SEGMENT_SIZE);
+			frag_count -= SEGMENT_SIZE;
 
-			while(frag_count > 0) {
-				int cur_frag_count = min(frag_count, SEGMENT_SIZE);
+			loadSamples(bx, by, segment_id++, cur_frag_count);
+			UPDATE_CLOCK(2);
 
-				initSegment(tx, ty, segment_id++);
-				frag_count -= SEGMENT_SIZE;
-				barrier();
+			//visualizeSamples(bx, cur_frag_count);
+			shadeSamples(bx, by, cur_frag_count);
+			UPDATE_CLOCK(3);
 
-				loadSamples(tx, ty, cur_frag_count);
-				s_buffer[SEGMENT_SIZE * 2 + LIX] = 0;
-				s_buffer[SEGMENT_SIZE * 2 + LSIZE + LIX] = 0;
-				barrier();
-				UPDATE_CLOCK(2);
-
-				//visualizeSamples(cur_frag_count);
-				shadeSamples(tx, ty, cur_frag_count);
-				barrier();
-				UPDATE_CLOCK(3);
-
-				groupSamplesForReduction(cur_frag_count);
-				barrier();
-
-				reduceSamples(context);
-				barrier();
-				UPDATE_CLOCK(4);
-			}
-
-			//finishVisualizeSamples(tx, ty);
-			finishReduceSamples(tx, ty, context);
+			reduceSamples(bx, cur_frag_count, context);
+			UPDATE_CLOCK(4);
 		}
+		barrier();
 
-		//rasterFragmentCounts(ty);
+		finishReduceSamples(bx, by, context);
+		//finishVisualizeSamples(by);
+		//rasterFragmentCounts(by);
 	}
 }
 

@@ -138,7 +138,7 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 						 BufferUsage::dynamic_read);
 	m_block_tri_keys.emplace(BufferType::shader_storage, max_block_tris * sizeof(u32));
 	m_scratch_32.emplace(BufferType::shader_storage,
-						 (16 * 1024) * 128 * sizeof(u32)); // TODO: control size
+						 (32 * 1024) * 128 * sizeof(u32)); // TODO: control size
 	m_scratch_64.emplace(BufferType::shader_storage,
 						 (64 * 1024) * 128 * sizeof(u64)); // TODO: control size
 	m_raster_image.emplace(BufferType::shader_storage, bin_count * square(bin_size) * sizeof(u32));

@@ -549,7 +549,7 @@ void generateBlocks(uint by) {
 		uint tri_idx = tri_info & 0xffff;
 
 		uint min_bits, count_bits, num_frags;
-		vec2 cpos = vec2(0, 0);
+		vec2 cpos;
 
 		{
 			int minx0 = max(int((tri_rows.x >> 0) & 0x3f) - startx, 0);
@@ -567,10 +567,10 @@ void generateBlocks(uint by) {
 			int count2 = max(maxx2 - minx2 + 1, 0);
 			int count3 = max(maxx3 - minx3 + 1, 0);
 
-			cpos += vec2(float(maxx0 + minx0 + 1) * 0.5, 0.5) * count0;
-			cpos += vec2(float(maxx1 + minx1 + 1) * 0.5, 1.5) * count1;
-			cpos += vec2(float(maxx2 + minx2 + 1) * 0.5, 2.5) * count2;
-			cpos += vec2(float(maxx3 + minx3 + 1) * 0.5, 3.5) * count3;
+			cpos = vec2(float(maxx0 + minx0 + 1), 1.0) * count0;
+			cpos += vec2(float(maxx1 + minx1 + 1), 3.0) * count1;
+			cpos += vec2(float(maxx2 + minx2 + 1), 5.0) * count2;
+			cpos += vec2(float(maxx3 + minx3 + 1), 7.0) * count3;
 
 			// TODO: minimize bits
 			min_bits =
@@ -578,7 +578,7 @@ void generateBlocks(uint by) {
 			count_bits = count0 | (count1 << 5) | (count2 << 10) | (count3 << 15);
 			num_frags = count0 + count1 + count2 + count3;
 		}
-		cpos /= float(num_frags);
+		cpos *= 0.5 / float(num_frags);
 		cpos += vec2(bx << 3, (by << 2));
 
 		uint scratch_tri_offset = scratch64TriOffset(tri_idx);
@@ -705,11 +705,11 @@ void loadSamples(int bx, int by, int segment_id, int frag_count) {
 
 	// TODO: group differently for better memory accesses (and measure)
 	for(uint i = (LIX & (BLOCK_STEP - 1)) >> 2; i < tri_count; i += BLOCK_STEP / 4) {
-		uint tri_header = g_scratch_32[src_offset_32 + i];
-		uvec2 tri_info = g_scratch_64[src_offset_64 + (tri_header >> 16)];
-		int tri_offset = int(tri_header & 0xffff) - first_offset;
-		int minx = int((tri_info.x >> min_shift) & 15); // TODO: too many bits
-		int count_bits = int(tri_info.y & ((1 << 20) - 1));
+		uint tri_info = g_scratch_32[src_offset_32 + i];
+		uvec2 tri_data = g_scratch_64[src_offset_64 + (tri_info >> 16)];
+		int tri_offset = int(tri_info & 0xffff) - first_offset;
+		int minx = int((tri_data.x >> min_shift) & 15); // TODO: too many bits
+		int count_bits = int(tri_data.y & ((1 << 20) - 1));
 
 		// TODO: precompute it somehow?
 		for(uint j = 0; j < y; j++) {
@@ -720,7 +720,7 @@ void loadSamples(int bx, int by, int segment_id, int frag_count) {
 		if(countx <= 0)
 			continue;
 
-		uint scratch_tri_offset = scratch64TriOffset(tri_info.x >> 16);
+		uint scratch_tri_offset = scratch64TriOffset(tri_data.x >> 16);
 
 		uint pixel_id = (y << 3) | minx;
 		uint value = pixel_id | (scratch_tri_offset << 8);

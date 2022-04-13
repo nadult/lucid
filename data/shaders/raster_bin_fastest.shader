@@ -536,22 +536,22 @@ void generateBlocks(uint by) {
 
 	uint bx = LIX >> (LSHIFT - 3);
 	uint buf_offset = bx << MAX_BLOCK_TRIS_SHIFT;
+	uint dst_offset_64 = scratch64BlockTrisOffset(bx);
 	tri_count = s_block_tri_count[bx];
 	int startx = int(bx << 3);
 
 	for(uint i = LIX & (BLOCK_STEP - 1); i < tri_count; i += BLOCK_STEP) {
-		uint idx = s_buffer[buf_offset + i];
+		uint row_idx = s_buffer[buf_offset + i];
 
 		// TODO: load these together with shuffles?
-		uint tri_info = g_scratch_32[src_offset_32 + idx];
-		uvec2 tri_rows = g_scratch_64[src_offset_64 + idx];
+		uint tri_info = g_scratch_32[src_offset_32 + row_idx];
+		uvec2 tri_rows = g_scratch_64[src_offset_64 + row_idx];
 		uint tri_idx = tri_info & 0xffff;
 
+		uint min_bits, count_bits, num_frags;
 		vec2 cpos = vec2(0, 0);
-		float weight = 0.0;
 
 		{
-			// TODO: this is counted twice...
 			int minx0 = max(int((tri_rows.x >> 0) & 0x3f) - startx, 0);
 			int minx1 = max(int((tri_rows.x >> 6) & 0x3f) - startx, 0);
 			int minx2 = max(int((tri_rows.x >> 12) & 0x3f) - startx, 0);
@@ -572,9 +572,13 @@ void generateBlocks(uint by) {
 			cpos += vec2(float(maxx2 + minx2 + 1) * 0.5, 2.5) * count2;
 			cpos += vec2(float(maxx3 + minx3 + 1) * 0.5, 3.5) * count3;
 
-			weight += count0 + count1 + count2 + count3;
+			// TODO: minimize bits
+			min_bits =
+				(minx0 & 15) | ((minx1 & 15) << 4) | ((minx2 & 15) << 8) | ((minx3 & 15) << 12);
+			count_bits = count0 | (count1 << 5) | (count2 << 10) | (count3 << 15);
+			num_frags = count0 + count1 + count2 + count3;
 		}
-		cpos /= weight;
+		cpos /= float(num_frags);
 		cpos += vec2(bx << 3, (by << 2));
 
 		uint scratch_tri_offset = scratch64TriOffset(tri_idx);
@@ -582,9 +586,14 @@ void generateBlocks(uint by) {
 		vec2 val1 = uintBitsToFloat(TRI_SCRATCH(1));
 		vec3 depth_eq = vec3(val0.x, val0.y, val1.x);
 		float ray_pos = depth_eq.x * cpos.x + (depth_eq.y * cpos.y + depth_eq.z);
-		float depth = (0x1ffff * 0.99f) * SATURATE(1.0 - inversesqrt(ray_pos + 1)); // 17 bits
+		float depth = 0x3fffe * SATURATE(1.0 - inversesqrt(ray_pos + 1)); // 18 bits
 
-		s_buffer[buf_offset + i] = idx | (uint(depth) << 15);
+		if(num_frags == 0) // This means that bx_mask is invalid
+			RECORD(0, 0, 0, 0);
+		g_scratch_64[dst_offset_64 + i] = uvec2(min_bits | (tri_idx << 16), count_bits);
+
+		// 8 bitów na index, 6 bitów na ilość sampli, 18 bitów na głębię
+		s_buffer[buf_offset + i] = i | (num_frags << 8) | (uint(depth) << 14);
 	}
 	barrier();
 	sortTileTris();
@@ -597,46 +606,10 @@ void generateBlocks(uint by) {
 			value += temp;                                                                         \
 	}
 
-	uint dst_offset_32 = scratch32BlockTrisOffset(bx);
-	uint dst_offset_64 = scratch64BlockTrisOffset(bx);
-
 	for(uint i = LIX & (BLOCK_STEP - 1); i < tri_count; i += BLOCK_STEP) {
-		uint idx = s_buffer[buf_offset + i] & 0x1fff;
-
-		// TODO: load range data in groups?
-		uint tri_info = g_scratch_32[src_offset_32 + idx];
-		uvec2 tri_rows = g_scratch_64[src_offset_64 + idx];
-		uint tri_idx = tri_info & 0xffff;
-		uint min_bits, count_bits;
-		uint num_frags;
-
-		{
-			int minx0 = max(int((tri_rows.x >> 0) & 0x3f) - startx, 0);
-			int minx1 = max(int((tri_rows.x >> 6) & 0x3f) - startx, 0);
-			int minx2 = max(int((tri_rows.x >> 12) & 0x3f) - startx, 0);
-			int minx3 = max(int((tri_rows.x >> 18) & 0x3f) - startx, 0);
-
-			int maxx0 = min(int((tri_rows.y >> 0) & 0x3f) - startx, 7);
-			int maxx1 = min(int((tri_rows.y >> 6) & 0x3f) - startx, 7);
-			int maxx2 = min(int((tri_rows.y >> 12) & 0x3f) - startx, 7);
-			int maxx3 = min(int((tri_rows.y >> 18) & 0x3f) - startx, 7);
-
-			int count0 = max(maxx0 - minx0 + 1, 0);
-			int count1 = max(maxx1 - minx1 + 1, 0);
-			int count2 = max(maxx2 - minx2 + 1, 0);
-			int count3 = max(maxx3 - minx3 + 1, 0);
-
-			// TODO: minimize bits
-			min_bits =
-				(minx0 & 15) | ((minx1 & 15) << 4) | ((minx2 & 15) << 8) | ((minx3 & 15) << 12);
-			count_bits = count0 | (count1 << 5) | (count2 << 10) | (count3 << 15);
-			num_frags = count0 + count1 + count2 + count3;
-		}
-
-		if(num_frags == 0) // This means that tx_masks are invalid
-			RECORD(0, 0, 0, 0);
-
-		g_scratch_64[dst_offset_64 + i] = uvec2(min_bits | (tri_idx << 16), count_bits);
+		uint idx = s_buffer[buf_offset + i];
+		uint num_frags = (idx >> 8) & 0x3f;
+		idx &= 0xff;
 
 		// Computing triangle-ordered sample offsets within each block
 		PREFIX_SUM_STEP(num_frags, 1);
@@ -644,14 +617,14 @@ void generateBlocks(uint by) {
 		PREFIX_SUM_STEP(num_frags, 4);
 		PREFIX_SUM_STEP(num_frags, 8);
 		PREFIX_SUM_STEP(num_frags, 16);
-		s_buffer[buf_offset + i] = num_frags;
+		s_buffer[buf_offset + i] = num_frags | (idx << 16);
 	}
 	barrier();
 
 	// Computing prefix sum across whole blocks (at most 8 * 32 elements)
 	if(LIX < 64) {
 		uint bx = LIX >> 3, warp_idx = LIX & 7, warp_offset = warp_idx << 5;
-		uint value = s_buffer[(bx << MAX_BLOCK_TRIS_SHIFT) + warp_offset + 31], temp;
+		uint value = s_buffer[(bx << MAX_BLOCK_TRIS_SHIFT) + warp_offset + 31] & 0xffff, temp;
 		temp = shuffleUpNV(value, 1, 8), value += warp_idx >= 1 ? temp : 0;
 		temp = shuffleUpNV(value, 2, 8), value += warp_idx >= 2 ? temp : 0;
 		temp = shuffleUpNV(value, 4, 8), value += warp_idx >= 4 ? temp : 0;
@@ -665,9 +638,12 @@ void generateBlocks(uint by) {
 
 	// Storing offsets to scratch mem
 	// Also finding first triangle for each segment
+	uint dst_offset_32 = scratch32BlockTrisOffset(bx);
 	for(uint i = LIX & (BLOCK_STEP - 1); i < tri_count; i += BLOCK_STEP) {
-		uint tri_offset = i == 0 ? 0 : s_buffer[buf_offset + i - 1];
-		uint tri_value = s_buffer[buf_offset + i] - tri_offset;
+		uint tri_offset = i == 0 ? 0 : s_buffer[buf_offset + i - 1] & 0xffff;
+		uint tri_value = s_buffer[buf_offset + i];
+		uint tile_tri_idx = tri_value & 0xffff0000;
+		tri_value = (tri_value & 0xffff) - tri_offset;
 
 		uint seg_id = tri_offset >> SEGMENT_SHIFT;
 		if(seg_id < MAX_SEGMENTS) { // TODO: MAX_SEGMENTS-1?
@@ -678,7 +654,7 @@ void generateBlocks(uint by) {
 				s_segments[bx][seg_id + 1] = i;
 		}
 
-		g_scratch_32[dst_offset_32 + i] = tri_offset;
+		g_scratch_32[dst_offset_32 + i] = tri_offset | tile_tri_idx;
 	}
 	barrier();
 
@@ -706,7 +682,7 @@ void generateBlocks(uint by) {
 	if(LIX < NUM_BLOCK_COLS) {
 		uint bx = LIX;
 		uint num_tris = s_block_tri_count[bx];
-		uint frag_count = num_tris == 0 ? 0 : s_buffer[bx * MAX_BLOCK_TRIS + num_tris - 1];
+		uint frag_count = num_tris == 0 ? 0 : s_buffer[bx * MAX_BLOCK_TRIS + num_tris - 1] & 0xffff;
 		//uint segment_count = (frag_count + SEGMENT_SIZE - 1) >> SEGMENT_SHIFT;
 		s_block_frag_count[bx] = frag_count;
 		if(frag_count > MAX_SEGMENTS * SEGMENT_SIZE)
@@ -720,7 +696,7 @@ void loadSamples(int bx, int by, int segment_id, int frag_count) {
 	first_tri &= 0xffff;
 
 	uint src_offset_32 = scratch32BlockTrisOffset(bx) + first_tri;
-	uint src_offset_64 = scratch64BlockTrisOffset(bx) + first_tri;
+	uint src_offset_64 = scratch64BlockTrisOffset(bx);
 	uint buf_offset = bx << SEGMENT_SHIFT;
 	int first_offset = segment_id << SEGMENT_SHIFT;
 
@@ -729,8 +705,9 @@ void loadSamples(int bx, int by, int segment_id, int frag_count) {
 
 	// TODO: group differently for better memory accesses (and measure)
 	for(uint i = (LIX & (BLOCK_STEP - 1)) >> 2; i < tri_count; i += BLOCK_STEP / 4) {
-		uvec2 tri_info = g_scratch_64[src_offset_64 + i];
-		int tri_offset = int(g_scratch_32[src_offset_32 + i]) - first_offset;
+		uint tri_header = g_scratch_32[src_offset_32 + i];
+		uvec2 tri_info = g_scratch_64[src_offset_64 + (tri_header >> 16)];
+		int tri_offset = int(tri_header & 0xffff) - first_offset;
 		int minx = int((tri_info.x >> min_shift) & 15); // TODO: too many bits
 		int count_bits = int(tri_info.y & ((1 << 20) - 1));
 

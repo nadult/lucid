@@ -11,7 +11,7 @@
 #define LSIZE 256
 #define LSHIFT 8
 
-#define BUFFER_SIZE (LSIZE * 9)
+#define BUFFER_SIZE (LSIZE * 8)
 
 #define MAX_BLOCK_ROW_TRIS 1024 // TODO: detect overflow
 #define MAX_BLOCK_TRIS 256
@@ -485,25 +485,6 @@ void processQuads() {
 	}
 }
 
-// Nowy pomysł:
-// - Zamiast przetwarzania na raz 1 kafla 16x16 operujemy na 8 blokach 8x4
-// - przetwarzamy te bloki linia po linii (16 iteracji w sumie)
-// - porządkowanie sampli nie będzie potrzebne, bo sample będą od razu uporządkowane w grupy 32-elementowe
-// - dla każdego bloku wyznaczamy niezależne segmenty po 128 sampli;
-// - w każdym bloku 8x4 może być max 256 trókątów: w segmentach można używać 8-bitowych indeksów;
-//   będzie trzeba trochę więcej miejsca na segmenty (2x albo 4x tyle)
-// - początkowa generacja powinna rozrzucać tile-row-trisy do 16 różnych grup (nie trzeba zapisywać qy)
-// - troszkę trzeba będzie zmodyfikować sortowanie
-//
-// - load, shade & reduce operują w pętli biorą po jednym segmencie z każdego bloku; bariery nie powinny być potrzebne,
-//   muszę tylko zapewnić, że wszystkie warpy we wszystkich fazach działają na tych samych danych
-//
-// - problem: przy 16x16 miałem na koniec jeden niepełny segment, teraz będę miał 8;
-//   Może to jest do rowiązania na potem ?
-// - lokalność w czasie samplowania będzie trochę gorsza, ale jeśli mam jeden materiał to nie jest to problem
-//
-// - na początek muszę powyłączać końcowe fazy i przerobić wszytko od początku jeszcze raz
-
 void generateBlocks(uint by) {
 	uint src_offset_32 = scratch32BlockRowTrisOffset(by);
 	uint src_offset_64 = scratch64BlockRowTrisOffset(by);
@@ -623,25 +604,28 @@ void generateBlocks(uint by) {
 
 	// Computing prefix sum across whole blocks (at most 8 * 32 elements)
 	if(LIX < 64) {
-		uint bx = LIX >> 3, warp_idx = LIX & 7, warp_offset = warp_idx << 5;
-		uint value = s_buffer[(bx << MAX_BLOCK_TRIS_SHIFT) + warp_offset + 31] & 0xffff, temp;
-		temp = shuffleUpNV(value, 1, 8), value += warp_idx >= 1 ? temp : 0;
-		temp = shuffleUpNV(value, 2, 8), value += warp_idx >= 2 ? temp : 0;
-		temp = shuffleUpNV(value, 4, 8), value += warp_idx >= 4 ? temp : 0;
-		s_mini_buffer[LIX] = value;
+		uint bx = LIX >> 3, warp_idx = LIX & 7;
+		uint value = s_buffer[(bx << MAX_BLOCK_TRIS_SHIFT) + (warp_idx << 5) + 31] & 0xffff;
+		uint sum = value, temp;
+		temp = shuffleUpNV(sum, 1, 8), sum += warp_idx >= 1 ? temp : 0;
+		temp = shuffleUpNV(sum, 2, 8), sum += warp_idx >= 2 ? temp : 0;
+		temp = shuffleUpNV(sum, 4, 8), sum += warp_idx >= 4 ? temp : 0;
+		s_mini_buffer[LIX] = sum - value;
 	}
-	barrier();
-
-	for(uint i = 32 + (LIX & (BLOCK_STEP - 1)); i < tri_count; i += BLOCK_STEP)
-		s_buffer[buf_offset + i] += s_mini_buffer[bx * 8 + (i >> 5) - 1];
 	barrier();
 
 	// Storing offsets to scratch mem
 	// Also finding first triangle for each segment
 	uint dst_offset_32 = scratch32BlockTrisOffset(bx);
 	for(uint i = LIX & (BLOCK_STEP - 1); i < tri_count; i += BLOCK_STEP) {
-		uint tri_offset = i == 0 ? 0 : s_buffer[buf_offset + i - 1] & 0xffff;
-		uint tri_value = s_buffer[buf_offset + i];
+		uint tri_offset = 0;
+		if(i > 0) {
+			uint prev = i - 1;
+			tri_offset = s_buffer[buf_offset + prev] & 0xffff;
+			tri_offset += s_mini_buffer[(bx << 3) + (prev >> 5)];
+		}
+
+		uint tri_value = s_buffer[buf_offset + i] + s_mini_buffer[(bx << 3) + (i >> 5)];
 		uint tile_tri_idx = tri_value & 0xffff0000;
 		tri_value = (tri_value & 0xffff) - tri_offset;
 
@@ -683,6 +667,8 @@ void generateBlocks(uint by) {
 		uint bx = LIX;
 		uint num_tris = s_block_tri_count[bx];
 		uint frag_count = num_tris == 0 ? 0 : s_buffer[bx * MAX_BLOCK_TRIS + num_tris - 1] & 0xffff;
+		frag_count += s_mini_buffer[(bx << 3) + ((num_tris - 1) >> 5)];
+
 		//uint segment_count = (frag_count + SEGMENT_SIZE - 1) >> SEGMENT_SHIFT;
 		s_block_frag_count[bx] = frag_count;
 		if(frag_count > MAX_SEGMENTS * SEGMENT_SIZE)

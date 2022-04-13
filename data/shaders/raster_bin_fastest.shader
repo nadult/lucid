@@ -170,7 +170,7 @@ void sortTileTris() {
 
 	uint gid = LIX >> (LSHIFT - 3);
 	uint lid = LIX & (BLOCK_STEP - 1);
-	uint goffset = gid * MAX_BLOCK_TRIS;
+	uint goffset = gid << MAX_BLOCK_TRIS_SHIFT;
 	uint count = s_block_tri_count[gid];
 	// TODO: max_rcount is only needed for barriers, computations should be performed up to rcount
 	// But it seems, that using rcount directly is actually a bit slower... (Sponza)
@@ -535,7 +535,7 @@ void generateBlocks(uint by) {
 	}
 
 	uint bx = LIX >> (LSHIFT - 3);
-	uint buf_offset = bx * MAX_BLOCK_TRIS;
+	uint buf_offset = bx << MAX_BLOCK_TRIS_SHIFT;
 	tri_count = s_block_tri_count[bx];
 	int startx = int(bx << 3);
 
@@ -1029,7 +1029,7 @@ void rasterBin(int bin_id) {
 		UPDATE_CLOCK(1);
 
 		if(s_raster_error != 0) {
-			ivec2 pixel_pos = ivec2(LIX & (BIN_SIZE - 1), LIX >> BIN_SHIFT);
+			ivec2 pixel_pos = ivec2(LIX & (BIN_SIZE - 1), (LIX >> BIN_SHIFT) + (by << 2));
 			uint bx = pixel_pos.x >> 3;
 			uint color = 0xff000032;
 			if((s_raster_error & (1 << bx)) != 0)

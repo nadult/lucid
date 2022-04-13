@@ -573,6 +573,19 @@ void generateBlocks(uint by) {
 			RECORD(0, 0, 0, 0);
 		g_scratch_64[dst_offset_64 + i] = uvec2(min_bits | (tri_idx << 16), count_bits);
 
+		// Jak zrobić przetwarzanie 16x4 ?
+		// - przetwarzanie na raz 2 rzędów
+		// - prefix sum musi sumować sample z dwóch różnych bloków
+		//   teraz się zmieści (wystarczy 10 bitów)
+		// - muszę mieć 2 niezależne strumienie indeksów trójkątów: dla dwóch różnych bloków
+		// - w jakiś sposób jeden strumień muszę rozdzielić na te dwa;
+		//   - czy będą się one odnosiły do tri_info 16x4 ? Na początek może tak? przerobienie loadSamples
+		//     powinno byc proste
+		// - w tym samym czasie rozbijam strumień na dwa i generuję informacje o segmentach?
+		//
+		// - Na początek wyłączę końcowe fazy i generowanie segmentów, trzeba najpierw zrobić dwa strumienie
+		//
+
 		// 8 bitów na index, 6 bitów na ilość sampli, 18 bitów na głębię
 		s_buffer[buf_offset + i] = i | (num_frags << 8) | (uint(depth) << 14);
 	}

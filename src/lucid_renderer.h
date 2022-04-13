@@ -67,6 +67,7 @@ class LucidRenderer {
 
 	auto opts() const { return m_opts; }
 
+	void printTriangleSizeHistogram() const;
 	void printHistograms() const;
 	Image masksSnapshot();
 

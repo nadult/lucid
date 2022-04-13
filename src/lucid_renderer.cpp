@@ -1727,6 +1727,39 @@ vector<int> generateMinHistogram(CSpan<float2> ranges, int res) {
 	return counts;
 }
 
+void LucidRenderer::printTriangleSizeHistogram() const {
+	HashMap<int, int> tri_height_histogram;
+
+	auto quad_aabbs = m_quad_aabbs->download<u32>(m_num_quads);
+	auto tri_aabbs = m_tri_aabbs->download<int4>(m_num_quads);
+	for(int i : intRange(quad_aabbs)) {
+		if(quad_aabbs[i] == ~0u)
+			continue;
+		auto enc = tri_aabbs[i];
+		int2 min0(u32(enc[0]) & 0xffff, u32(enc[0]) >> 16);
+		int2 max0(u32(enc[1]) & 0xffff, u32(enc[1]) >> 16);
+		int2 min1(u32(enc[2]) & 0xffff, u32(enc[2]) >> 16);
+		int2 max1(u32(enc[3]) & 0xffff, u32(enc[3]) >> 16);
+		int2 sizes[2] = {max0 - min0 + int2(1, 1), max1 - min1 + int2(1, 1)};
+		for(auto &size : sizes)
+			if(size.y > 0)
+				tri_height_histogram[size.y]++;
+	}
+
+	vector<Pair<int>> pairs;
+	int total = 0;
+	for(auto &pair : tri_height_histogram) {
+		pairs.emplace_back(pair.value, pair.key);
+		total += pair.value;
+	}
+	std::sort(begin(pairs), end(pairs), std::greater<Pair<int>>());
+
+	printf("Triangle pixel-height histogram:\n");
+	for(auto &pair : pairs) {
+		printf("%4d: %.2f%% (%d)\n", pair.second, float(pair.first) * 100.0 / total, pair.first);
+	}
+}
+
 void LucidRenderer::printHistograms() const {
 	vector<IRect> quads;
 	{

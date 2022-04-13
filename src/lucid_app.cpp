@@ -335,6 +335,9 @@ void LucidApp::doMenu() {
 		if(ImGui::Button("Print size histograms")) {
 			m_lucid_renderer->printHistograms();
 		}
+		if(ImGui::Button("Print triangle size histogram")) {
+			m_lucid_renderer->printTriangleSizeHistogram();
+		}
 		if(ImGui::Button("Analyze mask rasterizer"))
 			m_lucid_renderer->analyzeMaskRasterizer();
 

@@ -515,7 +515,7 @@ void generateBlocks(uint by) {
 			if(tri_offset < MAX_BLOCK_TRIS)
 				s_buffer[buf_offset + tri_offset] = i;
 			else
-				atomicOr(s_raster_error, 0x300 << (tx << 1));
+				atomicOr(s_raster_error, 0x100 << tx);
 		}
 		barrier();
 		if(s_raster_error != 0)
@@ -718,7 +718,7 @@ void generateBlocks(uint by) {
 		//uint segment_count = (frag_count + SEGMENT_SIZE - 1) >> SEGMENT_SHIFT;
 		s_tile_frag_count[gid] = frag_count;
 		if(max(frag_count & 0xffff, (frag_count >> 16) & 0xffff) > MAX_SEGMENTS * SEGMENT_SIZE)
-			atomicOr(s_raster_error, 3 << (gid << 1));
+			atomicOr(s_raster_error, 1 << gid);
 	}
 }
 
@@ -1048,6 +1048,18 @@ void visualizeSegments(int by) {
 	barrier();
 }
 
+void visualizeErrors(int by) {
+	ivec2 pixel_pos = ivec2(LIX & (BIN_SIZE - 1), (LIX >> BIN_SHIFT) + (by << 2));
+	uint tx = pixel_pos.x >> 4;
+	uint color = 0xff000031;
+	if((s_raster_error & (1 << tx)) != 0)
+		color += 0x32;
+	if((s_raster_error & (0x100 << tx)) != 0)
+		color += 0x64;
+	outputPixel(pixel_pos, color);
+	outputPixel(pixel_pos + ivec2(0, 4), color);
+}
+
 void rasterBin(int bin_id) {
 	INIT_CLOCK();
 
@@ -1077,21 +1089,14 @@ void rasterBin(int bin_id) {
 			groupMemoryBarrier();
 			barrier();
 			UPDATE_CLOCK(1);
-		}
 
-		if(s_raster_error != 0) {
-			ivec2 pixel_pos = ivec2(LIX & (BIN_SIZE - 1), (LIX >> BIN_SHIFT) + (by << 2));
-			uint bx = pixel_pos.x >> 3;
-			uint color = 0xff000032;
-			if((s_raster_error & (1 << bx)) != 0)
-				color += 0x32;
-			if((s_raster_error & (0x100 << bx)) != 0)
-				color += 0x64;
-			outputPixel(pixel_pos, color);
-			barrier();
-			if(LIX == 0)
-				s_raster_error = 0;
-			continue;
+			if(s_raster_error != 0) {
+				visualizeErrors(by++);
+				barrier();
+				if(LIX == 0)
+					s_raster_error = 0;
+				continue;
+			}
 		}
 
 		int segment_id = 0;

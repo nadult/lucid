@@ -26,6 +26,8 @@
 #define MAX_SEGMENTS 32
 #define MAX_SEGMENTS_SHIFT 5
 
+#define MAX_BLOCK_SAMPLES (MAX_SEGMENTS * SEGMENT_SIZE - 1)
+
 #undef BLOCK_SIZE
 #undef BLOCK_SHIFT
 
@@ -105,7 +107,7 @@ shared vec3 s_bin_ray_dir0;
 
 shared uint s_block_row_tri_count[NUM_BLOCK_ROWS];
 shared uint s_tile_tri_count[NUM_TILE_GROUPS];
-shared uint s_tile_frag_count[NUM_TILE_GROUPS];
+shared int s_block_frag_count[NUM_BLOCK_COLS * 2];
 
 shared uint s_buffer[BUFFER_SIZE + 1];
 shared uint s_mini_buffer[LSIZE];
@@ -630,22 +632,38 @@ void generateBlocks(uint by) {
 		s_buffer[buf_offset + i] = num_frags | (idx << 24);
 	}
 	barrier();
-
-	// TODO: make sure that there are no overflows in the number of samples (max 4K per block)
-
 	// Computing prefix sum across whole blocks (at most 8 * 32 elements)
-	if(LIX < 64) {
-		uint gid = LIX >> 3, warp_idx = LIX & 7;
-		uint value = s_buffer[(gid << MAX_BLOCK_TRIS_SHIFT) + (warp_idx << 5) + 31] & 0xffffff;
+	if(LIX < 8 * NUM_TILE_GROUPS) {
+		uint gid = LIX >> 3, warp_idx = LIX & 7, warp_offset = warp_idx << 5;
+		uint buf_offset = gid << MAX_BLOCK_TRIS_SHIFT;
+		uint tri_count = s_tile_tri_count[gid];
+		uint value = 0;
+
+		if(warp_offset < tri_count) {
+			uint tri_idx = min(warp_offset + 31, tri_count - 1);
+			value = s_buffer[buf_offset + tri_idx];
+		}
+		value = (value & 0xfff) | ((value & 0xfff000) << 4);
 		uint sum = value, temp;
 		temp = shuffleUpNV(sum, 1, 8), sum += warp_idx >= 1 ? temp : 0;
 		temp = shuffleUpNV(sum, 2, 8), sum += warp_idx >= 2 ? temp : 0;
 		temp = shuffleUpNV(sum, 4, 8), sum += warp_idx >= 4 ? temp : 0;
-		s_mini_buffer[LIX] = sum - value;
+
+		if(warp_idx == 7) {
+			s_block_frag_count[(gid << 1) + 0] = int(sum & 0xffff);
+			s_block_frag_count[(gid << 1) + 1] = int(sum >> 16);
+			if(max(sum & 0xffff, sum >> 16) > MAX_BLOCK_SAMPLES)
+				atomicOr(s_raster_error, 1 << gid);
+		}
+
+		sum -= value;
+		s_mini_buffer[LIX] = (sum & 0xffff) | ((sum & 0xffff0000) >> 4);
 	}
 	barrier();
+	if(s_raster_error != 0)
+		return;
 
-	// Storing offsets to scratch mem
+	// Storing triangle fragment offsets to scratch mem
 	// Also finding first triangle for each segment
 	uint dst_offset_32 = scratch32BlockTrisOffset(gid);
 	for(uint i = LIX & (BLOCK_STEP - 1); i < tri_count; i += BLOCK_STEP) {
@@ -666,7 +684,7 @@ void generateBlocks(uint by) {
 #define FILL_SEGMENT(tri_offset, tri_value, shift)                                                 \
 	{                                                                                              \
 		uint seg_id = tri_offset >> SEGMENT_SHIFT;                                                 \
-		if(seg_id < MAX_SEGMENTS && tri_value > 0) { /* TODO: MAX_SEGMENTS-1? */                   \
+		if(tri_value > 0) {                                                                        \
 			uint seg_offset = tri_offset & (SEGMENT_SIZE - 1);                                     \
 			uint bits = (i + 1) << shift;                                                          \
 			if(seg_offset == 0) /*TODO: optimize to single atomicadd*/                             \
@@ -705,19 +723,6 @@ void generateBlocks(uint by) {
 #undef PROCESS_SEGMENT
 
 		s_segments[gid][seg_id] = cur_value0 | (cur_value1 << 16);
-	}
-
-	if(LIX < NUM_TILE_GROUPS) {
-		uint gid = LIX;
-		uint num_tris = s_tile_tri_count[gid], last = num_tris - 1;
-		uint frag_count = num_tris == 0 ? 0 : s_buffer[gid * MAX_BLOCK_TRIS + last] & 0xffffff;
-		frag_count += s_mini_buffer[(gid << 3) + (last >> 5)];
-		frag_count = (frag_count & 0xfff) | ((frag_count & 0xfff000) << 4);
-
-		//uint segment_count = (frag_count + SEGMENT_SIZE - 1) >> SEGMENT_SHIFT;
-		s_tile_frag_count[gid] = frag_count;
-		if(max(frag_count & 0xffff, (frag_count >> 16) & 0xffff) > MAX_SEGMENTS * SEGMENT_SIZE)
-			atomicOr(s_raster_error, 1 << gid);
 	}
 }
 
@@ -1004,7 +1009,7 @@ void visualizeFragmentCounts(int by) {
 		ivec2 pixel_pos = ivec2(i & (BIN_SIZE - 1), by * BLOCK_HEIGHT + (i >> BIN_SHIFT));
 		uint bx = pixel_pos.x / BLOCK_WIDTH, by = pixel_pos.y / BLOCK_HEIGHT;
 		uint gid = (bx >> 1) + ((by & 1) << 2);
-		uint count = (s_tile_frag_count[gid] >> ((bx & 1) << 4)) & 0xffff;
+		uint count = s_block_frag_count[bx + ((by & 1) << 3)];
 		//count = s_tile_tri_count[gid] * 8;
 
 		vec3 color = vec3(count) / 512;
@@ -1101,8 +1106,7 @@ void rasterBin(int bin_id) {
 		int segment_id = 0;
 		int bx = int(LIX >> 5);
 		int gid = (bx >> 1) + ((by & 1) << 2);
-		int frag_count = int((s_tile_frag_count[gid] >> ((bx & 1) << 4)) & 0xffff);
-		// TODO: handle empty block?
+		int frag_count = s_block_frag_count[bx + ((by & 1) << 3)];
 
 		ReductionContext context;
 		initReduceSamples(context);
@@ -1122,9 +1126,9 @@ void rasterBin(int bin_id) {
 			reduceSamples(bx, cur_frag_count, context);
 			UPDATE_CLOCK(4);
 		}
-		barrier();
 
 		finishReduceSamples(bx, by, context);
+		barrier();
 		UPDATE_CLOCK(4);
 		//finishVisualizeSamples(by);
 		//visualizeFragmentCounts(by);

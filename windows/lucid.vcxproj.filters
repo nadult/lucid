@@ -181,5 +181,8 @@
     <None Include="..\data\shaders\raster_bin_handling_collisions.shader">
       <Filter>shaders</Filter>
     </None>
+    <None Include="..\data\shaders\raster_bin_16x16.shader">
+      <Filter>shaders</Filter>
+    </None>
   </ItemGroup>
 </Project>

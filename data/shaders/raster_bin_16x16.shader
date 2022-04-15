@@ -108,12 +108,12 @@ void outputPixel(ivec2 pixel_pos, uint color) {
 
 // Note: UPDATE_CLOCK should be called after a barrier
 #ifdef ENABLE_TIMINGS
-shared uint64_t s_timings[8];
+shared uint s_timings[8];
 #define INIT_CLOCK() uint64_t clock0 = clockARB();
 #define UPDATE_CLOCK(idx)                                                                          \
-	if(LIX == 0) {                                                                                 \
+	if((LIX & 31) == 0) {                                                                          \
 		uint64_t clock = clockARB();                                                               \
-		s_timings[idx] += clock - clock0;                                                          \
+		atomicAdd(s_timings[idx], uint((clock - clock0) >> 4));                                    \
 		clock0 = clock;                                                                            \
 	}
 

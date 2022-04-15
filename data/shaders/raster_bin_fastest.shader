@@ -160,8 +160,7 @@ uint xorBits(uint value, int bit0, int bit1) { return ((value >> bit0) ^ (value 
 
 shared uint s_sort_max_block_rcount;
 
-// TODO: rename
-void sortTileTris() {
+void prepareSortTris() {
 	if(LIX < NUM_TILE_GROUPS) {
 		uint count = s_tile_tri_count[LIX];
 		// rcount: count rounded up to next power of 2
@@ -170,22 +169,20 @@ void sortTileTris() {
 			s_sort_max_block_rcount = 0;
 		atomicMax(s_sort_max_block_rcount, rcount);
 	}
-	barrier();
+}
 
-	uint gid = LIX >> (LSHIFT - 3);
+void sortTris(uint gid, uint count, uint buf_offset) {
 	uint lid = LIX & (BLOCK_STEP - 1);
-	uint goffset = gid << MAX_BLOCK_TRIS_SHIFT;
-	uint count = s_tile_tri_count[gid];
 	// TODO: max_rcount is only needed for barriers, computations should be performed up to rcount
 	// But it seems, that using rcount directly is actually a bit slower... (Sponza)
 	uint max_rcount = s_sort_max_block_rcount;
 	for(uint i = lid + count; i < max_rcount; i += BLOCK_STEP)
-		s_buffer[goffset + i] = 0xffffffff;
+		s_buffer[buf_offset + i] = 0xffffffff;
 	barrier();
 
 #ifdef VENDOR_NVIDIA
 	for(uint i = lid; i < max_rcount; i += BLOCK_STEP) {
-		uint value = s_buffer[goffset + i];
+		uint value = s_buffer[buf_offset + i];
 		// TODO: register sort could be faster
 		value = swap(value, 0x01, xorBits(lid, 1, 0)); // K = 2
 		value = swap(value, 0x02, xorBits(lid, 2, 1)); // K = 4
@@ -202,7 +199,7 @@ void sortTileTris() {
 		//value = swap(value, 0x04, xorBits(lid, 5, 2));
 		//value = swap(value, 0x02, xorBits(lid, 5, 1));
 		//value = swap(value, 0x01, xorBits(lid, 5, 0));
-		s_buffer[goffset + i] = value;
+		s_buffer[buf_offset + i] = value;
 	}
 	barrier();
 	int start_k = 32, end_j = 32;
@@ -213,11 +210,11 @@ void sortTileTris() {
 		for(uint j = k >> 1; j >= end_j; j = j >> 1) {
 			for(uint i = lid; i < max_rcount; i += BLOCK_STEP * 2) {
 				uint idx = (i & j) != 0 ? i + BLOCK_STEP - j : i;
-				uint lvalue = s_buffer[goffset + idx];
-				uint rvalue = s_buffer[goffset + idx + j];
+				uint lvalue = s_buffer[buf_offset + idx];
+				uint rvalue = s_buffer[buf_offset + idx + j];
 				if(((idx & k) != 0) == (lvalue.x < rvalue.x)) {
-					s_buffer[goffset + idx] = rvalue;
-					s_buffer[goffset + idx + j] = lvalue;
+					s_buffer[buf_offset + idx] = rvalue;
+					s_buffer[buf_offset + idx + j] = lvalue;
 				}
 			}
 			barrier();
@@ -225,13 +222,13 @@ void sortTileTris() {
 #ifdef VENDOR_NVIDIA
 		for(uint i = lid; i < max_rcount; i += BLOCK_STEP) {
 			uint bit = (i & k) == 0 ? 0 : 1;
-			uint value = s_buffer[goffset + i];
+			uint value = s_buffer[buf_offset + i];
 			value = swap(value, 0x10, bit ^ bitExtract(lid, 4));
 			value = swap(value, 0x08, bit ^ bitExtract(lid, 3));
 			value = swap(value, 0x04, bit ^ bitExtract(lid, 2));
 			value = swap(value, 0x02, bit ^ bitExtract(lid, 1));
 			value = swap(value, 0x01, bit ^ bitExtract(lid, 0));
-			s_buffer[goffset + i] = value;
+			s_buffer[buf_offset + i] = value;
 		}
 		barrier();
 #endif
@@ -522,6 +519,8 @@ void generateBlocks(uint by) {
 			return;
 	}
 
+	prepareSortTris();
+
 	uint gid = LIX >> (LSHIFT - 3), tx = gid & 3;
 	uint buf_offset = gid << MAX_BLOCK_TRIS_SHIFT;
 	uint dst_offset_64 = scratch64BlockTrisOffset(gid);
@@ -595,8 +594,9 @@ void generateBlocks(uint by) {
 		s_buffer[buf_offset + i] = i | (uint(depth) << 12);
 	}
 	barrier();
+
 	// TODO: pass values to sort, don't recompute
-	sortTileTris();
+	sortTris(gid, tri_count, buf_offset);
 	barrier();
 	groupMemoryBarrier();
 

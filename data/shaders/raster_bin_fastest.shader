@@ -120,15 +120,14 @@ void outputPixel(ivec2 pixel_pos, uint color) {
 }
 
 // Note: UPDATE_CLOCK should be called after a barrier
-// TODO: make it more accurate
 #ifdef ENABLE_TIMINGS
 #define MAX_TIMERS 8
-shared uint64_t s_timings[MAX_TIMERS];
+shared uint s_timings[MAX_TIMERS];
 #define INIT_CLOCK() uint64_t clock0 = clockARB();
 #define UPDATE_CLOCK(idx)                                                                          \
-	if(LIX == 0) {                                                                                 \
+	if((LIX & 31) == 0) {                                                                          \
 		uint64_t clock = clockARB();                                                               \
-		s_timings[idx] += clock - clock0;                                                          \
+		atomicAdd(s_timings[idx], uint(clock - clock0) >> 4);                                      \
 		clock0 = clock;                                                                            \
 	}
 
@@ -138,7 +137,7 @@ void initTimers() {
 }
 void commitTimers() {
 	if(LIX < MAX_TIMERS)
-		atomicAdd(g_bins.timings[LIX], uint(s_timings[LIX]));
+		atomicAdd(g_bins.timings[LIX], s_timings[LIX]);
 }
 
 #else
@@ -1088,7 +1087,6 @@ void rasterBin(int bin_id) {
 			generateBlocks(by);
 			groupMemoryBarrier();
 			barrier();
-			UPDATE_CLOCK(1);
 
 			if(s_raster_error != 0) {
 				visualizeErrors(by++);
@@ -1098,6 +1096,7 @@ void rasterBin(int bin_id) {
 				continue;
 			}
 		}
+		UPDATE_CLOCK(1);
 
 		int segment_id = 0;
 		int bx = int(LIX >> 5);
@@ -1126,6 +1125,7 @@ void rasterBin(int bin_id) {
 		barrier();
 
 		finishReduceSamples(bx, by, context);
+		UPDATE_CLOCK(4);
 		//finishVisualizeSamples(by);
 		//visualizeFragmentCounts(by);
 		//visualizeSegments(by);

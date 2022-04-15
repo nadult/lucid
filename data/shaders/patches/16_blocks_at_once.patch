@@ -1,0 +1,261 @@
+diff --git a/data/shaders/raster_bin_fastest.shader b/data/shaders/raster_bin_fastest.shader
+index bb72a76..bf76280 100644
+--- a/data/shaders/raster_bin_fastest.shader
++++ b/data/shaders/raster_bin_fastest.shader
+@@ -14,8 +14,8 @@
+ #define BUFFER_SIZE (LSIZE * 8)
+ 
+ #define MAX_BLOCK_ROW_TRIS 1024 // TODO: detect overflow
+-#define MAX_BLOCK_TRIS 256
+-#define MAX_BLOCK_TRIS_SHIFT 8
++#define MAX_BLOCK_TRIS 128
++#define MAX_BLOCK_TRIS_SHIFT 7
+ 
+ #define MAX_SCRATCH_TRIS 2048
+ #define MAX_SCRATCH_TRIS_SHIFT 11
+@@ -23,8 +23,9 @@
+ #define SEGMENT_SIZE 128
+ #define SEGMENT_SHIFT 7
+ 
+-#define MAX_SEGMENTS 32
+-#define MAX_SEGMENTS_SHIFT 5
++// TODO: increase?
++#define MAX_SEGMENTS 16
++#define MAX_SEGMENTS_SHIFT 4
+ 
+ #define MAX_BLOCK_SAMPLES (MAX_SEGMENTS * SEGMENT_SIZE - 1)
+ 
+@@ -35,14 +36,11 @@
+ #define BLOCK_HEIGHT 4
+ 
+ #define NUM_TILE_COLS 4
+-#define NUM_TILE_GROUPS 8
++#define NUM_TILE_GROUPS 16
+ 
+ #define NUM_BLOCK_COLS 8
+ #define NUM_BLOCK_ROWS 16
+ 
+-// TODO: rename
+-#define BLOCK_STEP (LSIZE / NUM_BLOCK_COLS)
+-
+ layout(local_size_x = LSIZE) in;
+ 
+ layout(std430, binding = 0) buffer buf0_ { uvec4 g_tri_aabbs[]; };
+@@ -107,7 +105,7 @@ shared vec3 s_bin_ray_dir0;
+ 
+ shared uint s_block_row_tri_count[NUM_BLOCK_ROWS];
+ shared uint s_tile_tri_count[NUM_TILE_GROUPS];
+-shared int s_block_frag_count[NUM_BLOCK_COLS * 2];
++shared int s_block_frag_count[NUM_BLOCK_COLS * 4];
+ 
+ shared uint s_buffer[BUFFER_SIZE + 1];
+ shared uint s_mini_buffer[LSIZE];
+@@ -406,7 +404,7 @@ void prepareSortTris() {
+ 	if(LIX < NUM_TILE_GROUPS) {
+ 		uint count = s_tile_tri_count[LIX];
+ 		// rcount: count rounded up to next power of 2
+-		uint rcount = max(32, (count & (count - 1)) == 0 ? count : (2 << findMSB(count)));
++		uint rcount = max(16, (count & (count - 1)) == 0 ? count : (2 << findMSB(count)));
+ 		if(LIX == 0)
+ 			s_sort_max_block_rcount = 0;
+ 		atomicMax(s_sort_max_block_rcount, rcount);
+@@ -415,24 +413,29 @@ void prepareSortTris() {
+ 
+ #ifdef VENDOR_NVIDIA
+ uint swap(uint x, int mask, uint dir) {
+-	uint y = shuffleXorNV(x, mask, 32);
++	uint y = shuffleXorNV(x, mask, 16);
+ 	return uint(x < y) == dir ? y : x;
+ }
+ uint bitExtract(uint value, int boffset) { return (value >> boffset) & 1; }
+ uint xorBits(uint value, int bit0, int bit1) { return ((value >> bit0) ^ (value >> bit1)) & 1; }
+ #endif
+ 
++// TODO: rename
++#define BLOCK_STEP (LSIZE / 16)
++#define SORT_STEP (LSIZE / 16)
++
+ void sortTris(uint gid, uint count, uint buf_offset) {
+-	uint lid = LIX & (BLOCK_STEP - 1);
++	uint lid = LIX & (SORT_STEP - 1);
++
+ 	// TODO: max_rcount is only needed for barriers, computations should be performed up to rcount
+ 	// But it seems, that using rcount directly is actually a bit slower... (Sponza)
+ 	uint max_rcount = s_sort_max_block_rcount;
+-	for(uint i = lid + count; i < max_rcount; i += BLOCK_STEP)
++	for(uint i = lid + count; i < max_rcount; i += SORT_STEP)
+ 		s_buffer[buf_offset + i] = 0xffffffff;
+ 	barrier();
+ 
+ #ifdef VENDOR_NVIDIA
+-	for(uint i = lid; i < max_rcount; i += BLOCK_STEP) {
++	for(uint i = lid; i < max_rcount; i += SORT_STEP) {
+ 		uint value = s_buffer[buf_offset + i];
+ 		// TODO: register sort could be faster
+ 		value = swap(value, 0x01, xorBits(lid, 1, 0)); // K = 2
+@@ -441,10 +444,10 @@ void sortTris(uint gid, uint count, uint buf_offset) {
+ 		value = swap(value, 0x04, xorBits(lid, 3, 2)); // K = 8
+ 		value = swap(value, 0x02, xorBits(lid, 3, 1));
+ 		value = swap(value, 0x01, xorBits(lid, 3, 0));
+-		value = swap(value, 0x08, xorBits(lid, 4, 3)); // K = 16
+-		value = swap(value, 0x04, xorBits(lid, 4, 2));
+-		value = swap(value, 0x02, xorBits(lid, 4, 1));
+-		value = swap(value, 0x01, xorBits(lid, 4, 0));
++		//value = swap(value, 0x08, xorBits(lid, 4, 3)); // K = 16
++		//value = swap(value, 0x04, xorBits(lid, 4, 2));
++		//value = swap(value, 0x02, xorBits(lid, 4, 1));
++		//value = swap(value, 0x01, xorBits(lid, 4, 0));
+ 		//value = swap(value, 0x10, xorBits(lid, 5, 4)); // K = 32
+ 		//value = swap(value, 0x08, xorBits(lid, 5, 3));
+ 		//value = swap(value, 0x04, xorBits(lid, 5, 2));
+@@ -453,14 +456,14 @@ void sortTris(uint gid, uint count, uint buf_offset) {
+ 		s_buffer[buf_offset + i] = value;
+ 	}
+ 	barrier();
+-	int start_k = 32, end_j = 32;
++	int start_k = 16, end_j = 16;
+ #else
+ 	int start_k = 2, end_j = 1;
+ #endif
+ 	for(uint k = start_k; k <= max_rcount; k = 2 * k) {
+ 		for(uint j = k >> 1; j >= end_j; j = j >> 1) {
+-			for(uint i = lid; i < max_rcount; i += BLOCK_STEP * 2) {
+-				uint idx = (i & j) != 0 ? i + BLOCK_STEP - j : i;
++			for(uint i = lid; i < max_rcount; i += SORT_STEP * 2) {
++				uint idx = (i & j) != 0 ? i + SORT_STEP - j : i;
+ 				uint lvalue = s_buffer[buf_offset + idx];
+ 				uint rvalue = s_buffer[buf_offset + idx + j];
+ 				if(((idx & k) != 0) == (lvalue.x < rvalue.x)) {
+@@ -471,10 +474,10 @@ void sortTris(uint gid, uint count, uint buf_offset) {
+ 			barrier();
+ 		}
+ #ifdef VENDOR_NVIDIA
+-		for(uint i = lid; i < max_rcount; i += BLOCK_STEP) {
++		for(uint i = lid; i < max_rcount; i += SORT_STEP) {
+ 			uint bit = (i & k) == 0 ? 0 : 1;
+ 			uint value = s_buffer[buf_offset + i];
+-			value = swap(value, 0x10, bit ^ bitExtract(lid, 4));
++			//value = swap(value, 0x10, bit ^ bitExtract(lid, 4));
+ 			value = swap(value, 0x08, bit ^ bitExtract(lid, 3));
+ 			value = swap(value, 0x04, bit ^ bitExtract(lid, 2));
+ 			value = swap(value, 0x02, bit ^ bitExtract(lid, 1));
+@@ -487,7 +490,7 @@ void sortTris(uint gid, uint count, uint buf_offset) {
+ }
+ 
+ void generateBlocks(uint by) {
+-	by += LIX >> 7;
++	by += LIX >> 6;
+ 
+ 	uint src_offset_32 = scratch32BlockRowTrisOffset(by);
+ 	uint src_offset_64 = scratch64BlockRowTrisOffset(by);
+@@ -502,10 +505,10 @@ void generateBlocks(uint by) {
+ 
+ 	{
+ 		uint tx = LIX & 3, bx_bits_shift = 16 + (tx << 1);
+-		uint gid = tx + ((by & 1) << 2);
++		uint gid = tx + ((by & 3) << 2);
+ 		uint buf_offset = gid << MAX_BLOCK_TRIS_SHIFT;
+ 		// TODO: optimize this loop? iterate over bits for atomicAdd?
+-		for(uint i = (LIX & 127) >> 2; i < tri_count; i += LSIZE / 8) {
++		for(uint i = (LIX & 63) >> 2; i < tri_count; i += LSIZE / 16) {
+ 			uint bx_bits = (g_scratch_32[src_offset_32 + i] >> bx_bits_shift) & 3;
+ 			if(bx_bits == 0)
+ 				continue;
+@@ -522,7 +525,7 @@ void generateBlocks(uint by) {
+ 
+ 	prepareSortTris();
+ 
+-	uint gid = LIX >> (LSHIFT - 3), tx = gid & 3;
++	uint gid = LIX >> (LSHIFT - 4), tx = gid & 3;
+ 	uint buf_offset = gid << MAX_BLOCK_TRIS_SHIFT;
+ 	uint dst_offset_64 = scratch64BlockTrisOffset(gid);
+ 	tri_count = s_tile_tri_count[gid];
+@@ -610,10 +613,11 @@ void generateBlocks(uint by) {
+ 	}
+ #endif
+ 
++	// TODO: remove it
+ #define PREFIX_SUM_STEP(value, step)                                                               \
+ 	{                                                                                              \
+-		uint temp = shuffleUpNV(value, step, 32);                                                  \
+-		if((LIX & 31) >= step)                                                                     \
++		uint temp = shuffleUpNV(value, step, 16);                                                  \
++		if((LIX & 15) >= step)                                                                     \
+ 			value += temp;                                                                         \
+ 	}
+ 
+@@ -628,19 +632,18 @@ void generateBlocks(uint by) {
+ 		PREFIX_SUM_STEP(num_frags, 2);
+ 		PREFIX_SUM_STEP(num_frags, 4);
+ 		PREFIX_SUM_STEP(num_frags, 8);
+-		PREFIX_SUM_STEP(num_frags, 16);
+ 		s_buffer[buf_offset + i] = num_frags | (idx << 24);
+ 	}
+ 	barrier();
+ 	// Computing prefix sum across whole blocks (at most 8 * 32 elements)
+ 	if(LIX < 8 * NUM_TILE_GROUPS) {
+-		uint gid = LIX >> 3, warp_idx = LIX & 7, warp_offset = warp_idx << 5;
++		uint gid = LIX >> 3, warp_idx = LIX & 7, warp_offset = warp_idx << 4;
+ 		uint buf_offset = gid << MAX_BLOCK_TRIS_SHIFT;
+ 		uint tri_count = s_tile_tri_count[gid];
+ 		uint value = 0;
+ 
+ 		if(warp_offset < tri_count) {
+-			uint tri_idx = min(warp_offset + 31, tri_count - 1);
++			uint tri_idx = min(warp_offset + 15, tri_count - 1);
+ 			value = s_buffer[buf_offset + tri_idx];
+ 		}
+ 		value = (value & 0xfff) | ((value & 0xfff000) << 4);
+@@ -671,10 +674,10 @@ void generateBlocks(uint by) {
+ 		if(i > 0) {
+ 			uint prev = i - 1;
+ 			tri_offset = s_buffer[buf_offset + prev] & 0xffffff;
+-			tri_offset += s_mini_buffer[(gid << 3) + (prev >> 5)];
++			tri_offset += s_mini_buffer[(gid << 3) + (prev >> 4)];
+ 		}
+ 
+-		uint tri_value = s_buffer[buf_offset + i] + s_mini_buffer[(gid << 3) + (i >> 5)];
++		uint tri_value = s_buffer[buf_offset + i] + s_mini_buffer[(gid << 3) + (i >> 4)];
+ 		uint tile_tri_idx = tri_value & 0xff000000;
+ 		tri_value = (tri_value & 0xffffff) - tri_offset;
+ 
+@@ -1060,8 +1063,11 @@ void visualizeErrors(int by) {
+ 		color += 0x32;
+ 	if((s_raster_error & (0x100 << tx)) != 0)
+ 		color += 0x64;
++	// TODO: better error vis
+ 	outputPixel(pixel_pos, color);
+ 	outputPixel(pixel_pos + ivec2(0, 4), color);
++	outputPixel(pixel_pos + ivec2(0, 8), color);
++	outputPixel(pixel_pos + ivec2(0, 12), color);
+ }
+ 
+ void rasterBin(int bin_id) {
+@@ -1088,13 +1094,14 @@ void rasterBin(int bin_id) {
+ 
+ 	for(int by = 0; by < NUM_BLOCK_ROWS; by++) {
+ 		barrier();
+-		if((by & 1) == 0) {
++		if((by & 3) == 0) {
+ 			generateBlocks(by);
+ 			groupMemoryBarrier();
+ 			barrier();
+ 
+ 			if(s_raster_error != 0) {
+-				visualizeErrors(by++);
++				visualizeErrors(by);
++				by += 3;
+ 				barrier();
+ 				if(LIX == 0)
+ 					s_raster_error = 0;
+@@ -1105,8 +1112,8 @@ void rasterBin(int bin_id) {
+ 
+ 		int segment_id = 0;
+ 		int bx = int(LIX >> 5);
+-		int gid = (bx >> 1) + ((by & 1) << 2);
+-		int frag_count = s_block_frag_count[bx + ((by & 1) << 3)];
++		int gid = (bx >> 1) + ((by & 3) << 2);
++		int frag_count = s_block_frag_count[(gid << 1) + (bx & 1)];
+ 
+ 		ReductionContext context;
+ 		initReduceSamples(context);

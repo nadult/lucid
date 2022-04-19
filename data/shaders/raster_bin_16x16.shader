@@ -1114,6 +1114,7 @@ void rasterBin(int bin_id) {
 				vec4 color = vec4(value, 0.0, 0.0, 1.0);
 				fillTile(tx, ty, encodeRGBA8(color));
 			}
+			barrier();
 			if(LIX == 0)
 				s_raster_error = 0;
 			continue;

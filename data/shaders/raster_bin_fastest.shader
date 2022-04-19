@@ -1124,12 +1124,13 @@ void rasterBin(int bin_id) {
 			UPDATE_CLOCK(3);
 
 			reduceSamples(bx, cur_frag_count, context);
-			UPDATE_CLOCK(4);
+			UPDATE_CLOCK(5);
 		}
 
 		finishReduceSamples(bx, by, context);
+		UPDATE_CLOCK(6);
 		barrier();
-		UPDATE_CLOCK(4);
+
 		//finishVisualizeSamples(by);
 		//visualizeFragmentCounts(by);
 		//visualizeSegments(by);

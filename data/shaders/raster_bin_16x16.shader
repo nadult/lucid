@@ -108,7 +108,8 @@ void outputPixel(ivec2 pixel_pos, uint color) {
 
 // Note: UPDATE_CLOCK should be called after a barrier
 #ifdef ENABLE_TIMINGS
-shared uint s_timings[8];
+#define MAX_TIMERS 8
+shared uint s_timings[MAX_TIMERS];
 #define INIT_CLOCK() uint64_t clock0 = clockARB();
 #define UPDATE_CLOCK(idx)                                                                          \
 	if((LIX & 31) == 0) {                                                                          \
@@ -118,11 +119,11 @@ shared uint s_timings[8];
 	}
 
 void initTimers() {
-	if(LIX < 8)
+	if(LIX < MAX_TIMERS)
 		s_timings[LIX] = 0;
 }
 void commitTimers() {
-	if(LIX < 8)
+	if(LIX < MAX_TIMERS)
 		atomicAdd(g_bins.timings[LIX], uint(s_timings[LIX]));
 }
 
@@ -1153,14 +1154,16 @@ void rasterBin(int bin_id) {
 
 				groupSamplesForReduction(cur_frag_count);
 				barrier();
+				UPDATE_CLOCK(4);
 
 				reduceSamples(context);
 				barrier();
-				UPDATE_CLOCK(4);
+				UPDATE_CLOCK(5);
 			}
 
 			//finishVisualizeSamples(tx, ty);
 			finishReduceSamples(tx, ty, context);
+			UPDATE_CLOCK(6);
 		}
 
 		//rasterFragmentCounts(ty);

@@ -808,7 +808,7 @@ void LucidApp::printPerfStats() {
 				row.emplace_back();
 				continue;
 			}
-			row.emplace_back(stdFormat("%d", (int)round(stat.gpu_min / 1024.0)));
+			row.emplace_back(stdFormat("%d", (int)round(stat.gpu_min / 1000.0)));
 		}
 
 		if(allOf(row, ""))

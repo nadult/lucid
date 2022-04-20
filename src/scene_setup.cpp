@@ -168,6 +168,10 @@ Ex<> LoadedSetup::updateScene() {
 		render_config.scene_opacity = 0.5;
 	scene->updateRenderingData();
 
+	auto box = scene->bounding_box;
+	auto max_size = max(box.width(), box.height(), box.depth());
+	OrbitingCamera default_cam(box.center(), max_size, 0.5f, 0.8f);
+
 	views.clear();
 	if(name == "powerplant") {
 		insertBack(views,
@@ -188,16 +192,19 @@ Ex<> LoadedSetup::updateScene() {
 		views.emplace_back(OrbitingCamera{{-1.61925, 6.953201, 2.7753}, 100, -0.933333, 0.516666});
 	} else if(name == "sponza") {
 		insertBack(views,
-				   {FppCamera{{28.343906, 16.751987, -5.52777}, {-0.638277, 0.279287}, 0.147361},
+				   {FppCamera{{-4.045459, 12.368692, -4.060153}, {-0.075328, 0.69262}, 0.639028},
+					FppCamera{{28.343906, 16.751987, -5.52777}, {-0.638277, 0.279287}, 0.147361},
 					FppCamera{{30.492384, 5.880484, -1.414973}, {-0.69641, 0.020292}, 0.014028},
 					FppCamera{{21.594707, 4.578131, 5.349687}, {-0.69641, 0.020292}, 0.014028}});
 	} else if(name == "san-miguel") {
 		views.emplace_back(
 			FppCamera{{34.412136, 26.08173, 19.988665}, {-0.487458, -0.497777}, 0.814029});
+	} else if(name == "white_oak") {
+		insertBack(views,
+				   {OrbitingCamera{{-1.35474, 44.001759, -1.40296}, 32.840042, 0.483333, 0.425},
+					default_cam});
 	} else {
-		auto box = scene->bounding_box;
-		auto max_size = max(box.width(), box.height(), box.depth());
-		views.emplace_back(OrbitingCamera(box.center(), max_size, 0.5f, 0.8f));
+		views.emplace_back(default_cam);
 	}
 
 	if(isOneOf(name, "powerplant", "conference", "bunny", "dragon"))

@@ -982,7 +982,7 @@ void reduceSamples(in out ReductionContext ctx) {
 #ifdef VISUALIZE_ERRORS
 						if(ctx.prev_depths[2] < ctx.prev_depths[3]) {
 							ctx.prev_colors[0] = 0xff0000ff;
-							i = filtered_count;
+							group_offset = group_end_offset;
 							break;
 						}
 #endif

@@ -1,12 +1,13 @@
- 
- *Skupiamy się na wydajnym renderingu przezroczystości; Chcemy szybko zamknąć ten temat*
+*Skupiamy się na wydajnym renderingu przezroczystości; Chcemy szybko zamknąć ten temat*
 
- Aktualne cele:
- - przygotowanie zoptymalizowanej wersji w aktualnym schemacie renderingu
- - zrobienie wersji raster_tile i ew. raster_block
- - opisanie algorytmu
- - wrzucenie gdzieś do sieci
+Aktualne cele:
+- przygotowanie zoptymalizowanej wersji w aktualnym schemacie renderingu
+- zrobienie wersji raster_tile i ew. raster_block
+- opisanie algorytmu
+- wrzucenie gdzieś do sieci
 
+Bug: 
+- poziome linie widoczne na chestnut_tree01
 
 -----------------------------------------------------------------------------------------
                              === Pomysły na optymalizacje ===
@@ -17,8 +18,9 @@
 
 - Liczenie od przodu i przerwanie w momencie przekroczenia thresholdu alphy.
 
-- 
+- Odnoszenie się do tile-row-trisów i nie generowanie tile-rowów
 
+- 16x16 czy 16x4 ? Która wersja lepsza ?
 
 Pytania:
 - Dlaczego 16 wątków na grupę jest wolniejsze w przypadku niektórych scen ?
@@ -29,39 +31,12 @@ Pytania:
                                       === Statsy ===
 -----------------------------------------------------------------------------------------
 
-
-
-16x16:      total  setup  bins  tiles  raster_bin
-    #boxes: 2081   22     53    5      1928
-     bunny: 505    67     48    5      325   (+)     | 8.1, 25.1, 17.5, 23.6, 12.5, 8.4, 4.4
-conference: 1267   60     105   5      957           | 6.7, 15.5, 19.5, 24.4, 15.3, 13.2, 5.0
-    dragon: 918    185    66    99     242
-   gallery: 2294   212    71    122    1470
-powerplant: 5386   1932   557   1425   810
-    sponza: 5678   80     185   43     4958          | 2.3, 7.1, 11, 53, 10.2, 14.6, 1.3
-    teapot: 543    27     46    5      405
- white_oak: 2895   55     57    5      2695
-
-Wersja z przetwarzaniem 16 bloków na raz (po 16 wątków na blok)
-16x4 x2:       total  setup  bins  tiles  raster_bin
-    #boxes: 1823   22     54    5      1672  (.)
-     bunny: 592    67     50    5      408   (-)    
-conference: 1178   60     106   5      869   (++)
-    dragon: 977    183    65    99     304   (-)
-   gallery: 2601   212    73    123    1763  (-)
-powerplant: 5476   1932   565   1418   924   (-)
-    sponza: 5313   81     192   45     4626  (-)
-    teapot: 577    27     47    5      440   (-)
- white_oak: 3168   57     58    5      2959  
-
-16x4:       total  setup  bins  tiles  raster_bin
-    #boxes: 1725   22     53    5      1570  (++)
-     bunny: 556    68     48    5      374   (.)   | 9, 50, 14.7, 15.8, 0, 5.2, 4.3
-conference: 1279   59     106   5      974   (-)   | 7.1, 43.6, 16.3, 18.2, 0, 9.6, 5
-    dragon: 928    184    63    97     270   (.)
-   gallery: 2501   209    72    121    1675  (.)
-powerplant: 5432   1934   554   1421   857   (.)
-    sponza: 5143   80     190   42     4438  (++)  | 2.6, 22.7, 10.9, 51.1, 0, 11.2, 1.4
-    teapot: 534    27     47    5      393   (++)
- white_oak: 3680   55     55    5      3485 
- 
+Wersja 16x4 2560x1330 (a82143f1 20.04):
+            total  setup  bins  tiles  raster_bin
+    #boxes: 1785   24     59    5      1624
+     bunny: 571    69     52    5      382
+conference: 1324   61     111   5      1007
+    dragon: 957    187    72    100    276
+    sponza: 3864   62     124   6      3521
+    teapot: 536    28     45    5      414
+ white_oak: 14794  54     263   6      14208

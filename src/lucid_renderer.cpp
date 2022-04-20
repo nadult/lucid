@@ -185,6 +185,8 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 		defs["ADDITIVE_BLENDING"] = 1;
 	if(m_opts & Opt::visualize_errors)
 		defs["VISUALIZE_ERRORS"] = 1;
+	if(m_opts & Opt::alpha_threshold)
+		defs["ALPHA_THRESHOLD"] = 1;
 
 	raster_bin_program = EX_PASS(Program::makeCompute(
 		"raster_bin_fastest", defs, mask(m_opts & Opt::debug_raster, ProgramOpt::debug)));

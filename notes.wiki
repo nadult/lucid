@@ -8,24 +8,34 @@ Aktualne cele:
 
 Bug: 
 - poziome linie widoczne na chestnut_tree01
+- miganie na sponzie w górnej części (screenshot)
 
 -----------------------------------------------------------------------------------------
                              === Pomysły na optymalizacje ===
 -----------------------------------------------------------------------------------------
 
-- Precompute-owanie parametrów do scanline-a
-  Czy dałoby się zrobić w fixed-point 16 bit ? A może 24 bity też ma sens?
-
-- Liczenie od przodu i przerwanie w momencie przekroczenia thresholdu alphy.
-
-- Odnoszenie się do tile-row-trisów i nie generowanie tile-rowów
-
-- 16x16 czy 16x4 ? Która wersja lepsza ?
+- optymalizacja loadSamples?
 
 Pytania:
 - Dlaczego 16 wątków na grupę jest wolniejsze w przypadku niektórych scen ?
 - Dlaczego generateTiles jest dużo szybsze niż generateBlocks?
 - Może 16x4 ma gorszą koherencję danych trójkątów / tekstur niż 8x8? Coś za coś...
+
+
+-----------------------------------------------------------------------------------------
+                          === Nie działające / nie pewne pomysły ===
+-----------------------------------------------------------------------------------------
+
+
+* Odnoszenie się do tile-row-trisów i nie generowanie tile-rowów
+  BRAK PRZYSPIESZENIA w wersji 16x16, w wersji 16x4 nie da się tego łatwo zaimplementować...
+
+? Precompute-owanie parametrów do scanline-a
+  Czy dałoby się zrobić w fixed-point 16 bit ? A może 24 bity też ma sens?
+  Fakt jest taki, że cała początkowa faza (process quads) na skomlikowanych scenach zajmuje ok 1%...
+  W takim razie to chyba nie ma sensu...; Generowanie scanline-ów to pewnie mniej niż 25%...
+
+
 
 -----------------------------------------------------------------------------------------
                                       === Statsy ===
@@ -54,3 +64,5 @@ conference: 1290   61     109   5      977
  - odnoszenie się bezpośrednio do tile-rowsów jest do zrobienia
  - zmergowanie dwóch faz w generateBlocks
  - drobne optymalizacje w sort i innych miejscach
+
+

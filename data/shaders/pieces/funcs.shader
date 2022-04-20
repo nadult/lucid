@@ -105,6 +105,12 @@ vec3 decodeRGB8(uint icolor) {
 		   (1.0 / 255.0);
 }
 
+vec3 decodeRGB10(uint icolor) {
+	return vec3(float(icolor & 0x7ffu) * (1.0 / 2047.0),
+				float((icolor >> 11) & 0x7ffu) * (1.0 / 2047.0),
+				float((icolor >> 22) & 0x3ffu) * (1.0 / 1023.0));
+}
+
 uint encodeRGBA8(vec4 col) {
 	return (uint(col.r * 255.0)) | (uint(col.g * 255.0) << 8) | (uint(col.b * 255.0) << 16) |
 		   ((uint(col.a * 255.0)) << 24);
@@ -112,6 +118,10 @@ uint encodeRGBA8(vec4 col) {
 
 uint encodeRGB8(vec3 col) {
 	return (uint(col.r * 255.0)) | (uint(col.g * 255.0) << 8) | (uint(col.b * 255.0) << 16);
+}
+
+uint encodeRGB10(vec3 col) {
+	return (uint(col.r * 2047.0)) | (uint(col.g * 2047.0) << 11) | (uint(col.b * 1023.0) << 22);
 }
 
 uvec2 encodeCD(vec4 color, float depth) {

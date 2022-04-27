@@ -113,7 +113,7 @@ shared uint s_tile_frag_count[NUM_WARPS];
 
 shared uint s_buffer[BUFFER_SIZE + 1];
 shared uint s_mini_buffer[LSIZE];
-shared uint s_segments[NUM_WARPS * MAX_SEGMENTS];
+shared uint s_segments[NUM_WARPS * MAX_SEGMENTS * 2];
 shared int s_raster_error;
 
 // Only used when debugging
@@ -483,8 +483,11 @@ void generateBlocks(uint by) {
 	uint gid = LIX >> 5, tx = gid & 3;
 	uint buf_offset = gid << MAX_BLOCK_TRIS_SHIFT;
 
-	if(LIX < MAX_SEGMENTS * NUM_WARPS)
-		s_segments[LIX] = 0;
+#if MAX_SEGMENTS * NUM_WARPS != LSIZE
+#error Segment initialization invalid
+#endif
+	s_segments[LIX] = 0;
+	s_segments[LIX + LSIZE] = 0;
 
 	{
 		uint bx_bits_shift = 16 + (tx << 1);
@@ -661,7 +664,8 @@ void generateBlocks(uint by) {
 	// Storing triangle fragment offsets to scratch mem
 	// Also finding first triangle for each segment
 	uint dst_offset_32 = scratch32BlockTrisOffset(gid);
-	uint seg_group_offset = gid << MAX_SEGMENTS_SHIFT;
+	uint seg_block1_offset = gid << (MAX_SEGMENTS_SHIFT + 1);
+	uint seg_block2_offset = seg_block1_offset + MAX_SEGMENTS;
 	for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_STEP) {
 		uint tri_offset = 0;
 		if(i > 0) {
@@ -677,20 +681,20 @@ void generateBlocks(uint by) {
 		uint tri_offset0 = tri_offset & 0xfff, tri_offset1 = (tri_offset >> 12) & 0xfff;
 		uint tri_value0 = tri_value & 0xfff, tri_value1 = (tri_value >> 12) & 0xfff;
 
-#define FILL_SEGMENT(tri_offset, tri_value, shift)                                                 \
+#define FILL_SEGMENT(tri_offset, tri_value, base)                                                  \
 	{                                                                                              \
 		uint seg_id = tri_offset >> SEGMENT_SHIFT;                                                 \
 		if(tri_value > 0) {                                                                        \
 			uint seg_offset = tri_offset & (SEGMENT_SIZE - 1);                                     \
-			uint bits = (i + 1) << shift;                                                          \
-			if(seg_offset == 0) /*TODO: optimize to single atomicadd*/                             \
-				atomicOr(s_segments[seg_group_offset + seg_id], bits);                             \
+			uint value = i + 1;                                                                    \
+			if(seg_offset == 0)                                                                    \
+				s_segments[base + seg_id] = value;                                                 \
 			else if(seg_offset + tri_value > SEGMENT_SIZE)                                         \
-				atomicOr(s_segments[seg_group_offset + seg_id + 1], bits);                         \
+				s_segments[base + seg_id + 1] = value;                                             \
 		}                                                                                          \
 	}
-		FILL_SEGMENT(tri_offset0, tri_value0, 0);
-		FILL_SEGMENT(tri_offset1, tri_value1, 16);
+		FILL_SEGMENT(tri_offset0, tri_value0, seg_block1_offset);
+		FILL_SEGMENT(tri_offset1, tri_value1, seg_block2_offset);
 
 #undef FILL_SEGMENT
 
@@ -698,33 +702,27 @@ void generateBlocks(uint by) {
 	}
 	barrier();
 
-	if(LIX < MAX_SEGMENTS * NUM_WARPS) {
-		uint seg_id = LIX & (MAX_SEGMENTS - 1);
-		uint gid = LIX >> MAX_SEGMENTS_SHIFT;
-		uint tri_count = s_tile_tri_count[gid];
+	{
+		uint lbid = LIX >> 4, seg_group_offset = lbid << MAX_SEGMENTS_SHIFT;
+		uint tri_count = s_tile_tri_count[lbid >> 1];
 
-		uint cur_value = s_segments[LIX];
-		uint next_value = seg_id + 1 == MAX_SEGMENTS ? 0 : s_segments[LIX + 1];
+		for(uint seg_id = LIX & 15; seg_id < MAX_SEGMENTS; seg_id += 16) {
+			uint cur_value = s_segments[seg_group_offset + seg_id];
+			if(cur_value == 0)
+				break;
 
-		uint cur_value0 = cur_value & 0xffff, cur_value1 = (cur_value >> 16) & 0xffff;
-		uint next_value0 = next_value & 0xffff, next_value1 = (next_value >> 16) & 0xffff;
-
-#define PROCESS_SEGMENT(cur_value, next_value)                                                     \
-	next_value = next_value == 0 ? tri_count : min(tri_count, next_value);                         \
-	cur_value = cur_value == 0 ? 0 : (cur_value - 1) | ((next_value - (cur_value - 1)) << 8);
-
-		PROCESS_SEGMENT(cur_value0, next_value0)
-		PROCESS_SEGMENT(cur_value1, next_value1)
-
-#undef PROCESS_SEGMENT
-
-		s_segments[LIX] = cur_value0 | (cur_value1 << 16);
+			uint next_value =
+				seg_id + 1 == MAX_SEGMENTS ? 0 : s_segments[seg_group_offset + seg_id + 1];
+			next_value = next_value == 0 ? tri_count : min(tri_count, next_value);
+			cur_value = (cur_value - 1) | ((next_value - (cur_value - 1)) << 8);
+			s_segments[seg_group_offset + seg_id] = cur_value;
+		}
 	}
 }
 
 void loadSamples(uint bid, uint gid, int segment_id) {
-	uint segment_data = s_segments[(gid << MAX_SEGMENTS_SHIFT) + segment_id];
-	segment_data = (segment_data >> ((bid & 1) << 4)) & 0xffff;
+	uint seg_group_offset = (bid & (NUM_WARPS * 2 - 1)) << MAX_SEGMENTS_SHIFT;
+	uint segment_data = s_segments[seg_group_offset + segment_id];
 	uint tri_count = segment_data >> 8;
 	uint first_tri = segment_data & 0xff;
 
@@ -1032,16 +1030,13 @@ void visualizeFragmentCounts(int bid, ivec2 pixel_pos) {
 
 void visualizeSegments(int bid, ivec2 pixel_pos) {
 	barrier();
-	if(LIX < NUM_WARPS) {
-		uint gbid = bid & ~(NUM_WARPS - 1);
-		uint bid = gbid + LIX;
-		uint lbid = bid & (NUM_WARPS - 1);
-		uint gid = (bid >> 1) & (NUM_WARPS - 1);
-		s_mini_buffer[lbid] = 0;
+	if(LIX < NUM_WARPS * 2) {
+		uint seg_group_offset = LIX << MAX_SEGMENTS_SHIFT;
+		s_mini_buffer[LIX] = 0;
 
 		int prev_tri = -1;
 		for(int i = 0; i < MAX_SEGMENTS; i++) {
-			uint segment = s_segments[(gid << MAX_SEGMENTS_SHIFT) + i];
+			uint segment = s_segments[seg_group_offset + i];
 			segment = (segment >> ((bid & 1) * 16)) & 0xffff;
 			if(segment == 0)
 				break;
@@ -1051,11 +1046,11 @@ void visualizeSegments(int bid, ivec2 pixel_pos) {
 			if(first_tri <= prev_tri)
 				RECORD(bid, i, prev_tri, first_tri);
 			prev_tri = first_tri;
-			s_mini_buffer[lbid] += tri_count;
+			s_mini_buffer[LIX] += tri_count;
 		}
 	}
 	barrier();
-	uint lbid = bid & (NUM_WARPS - 1);
+	uint lbid = bid & (NUM_WARPS * 2 - 1);
 	uint count = s_mini_buffer[lbid] * 8;
 	vec3 color = vec3(count) / 512;
 	outputPixel(pixel_pos, encodeRGBA8(vec4(SATURATE(color), 1.0)));

@@ -8,8 +8,12 @@
 #define LIX gl_LocalInvocationIndex
 #define LID gl_LocalInvocationID
 
-#define LSIZE 256
-#define LSHIFT 8
+// Acceptable values: 128, 256, 512
+#define LSIZE 512
+#define LSHIFT 9
+
+#define NUM_WARPS (LSIZE / 32)
+#define NUM_WARPS_SHIFT (LSHIFT - 5)
 
 #define BUFFER_SIZE (LSIZE * 8)
 
@@ -35,13 +39,15 @@
 #define BLOCK_HEIGHT 4
 
 #define NUM_TILE_COLS 4
-#define NUM_TILE_GROUPS 8
+// TODO: remove
+#define NUM_TILE_GROUPS NUM_WARPS
 
 #define NUM_BLOCK_COLS 8
 #define NUM_BLOCK_ROWS 16
 
 // TODO: rename
-#define BLOCK_STEP (LSIZE / NUM_BLOCK_COLS)
+#define BLOCK_STEP 32
+#define ROWS_PER_STEP (LSIZE / 128)
 
 layout(local_size_x = LSIZE) in;
 
@@ -107,7 +113,7 @@ shared vec3 s_bin_ray_dir0;
 
 shared uint s_block_row_tri_count[NUM_BLOCK_ROWS];
 shared uint s_tile_tri_count[NUM_TILE_GROUPS];
-shared int s_block_frag_count[NUM_BLOCK_COLS * 2];
+shared uint s_tile_frag_count[NUM_TILE_GROUPS];
 
 shared uint s_buffer[BUFFER_SIZE + 1];
 shared uint s_mini_buffer[LSIZE];
@@ -115,7 +121,7 @@ shared uint s_segments[NUM_TILE_GROUPS][MAX_SEGMENTS];
 shared int s_raster_error;
 
 // Only used when debugging
-shared uint s_vis_pixels[BIN_SIZE * BLOCK_HEIGHT];
+shared uint s_vis_pixels[LSIZE];
 
 void outputPixel(ivec2 pixel_pos, uint color) {
 	g_raster_image[s_bin_raster_offset + pixel_pos.x + (pixel_pos.y << BIN_SHIFT)] = color;
@@ -501,11 +507,12 @@ void generateBlocks(uint by) {
 	barrier(); // TODO: could it be removed?
 
 	{
+		// TODO: how about gid = LIX & 7?
 		uint tx = LIX & 3, bx_bits_shift = 16 + (tx << 1);
-		uint gid = tx + ((by & 1) << 2);
+		uint gid = tx + ((LIX >> 7) << 2);
 		uint buf_offset = gid << MAX_BLOCK_TRIS_SHIFT;
 		// TODO: optimize this loop? iterate over bits for atomicAdd?
-		for(uint i = (LIX & 127) >> 2; i < tri_count; i += LSIZE / 8) {
+		for(uint i = (LIX & 127) >> 2; i < tri_count; i += BLOCK_STEP) {
 			uint bx_bits = (g_scratch_32[src_offset_32 + i] >> bx_bits_shift) & 3;
 			if(bx_bits == 0)
 				continue;
@@ -513,7 +520,7 @@ void generateBlocks(uint by) {
 			if(tri_offset < MAX_BLOCK_TRIS)
 				s_buffer[buf_offset + tri_offset] = i;
 			else
-				atomicOr(s_raster_error, 0x100 << tx);
+				atomicOr(s_raster_error, 1 << gid);
 		}
 		barrier();
 		if(s_raster_error != 0)
@@ -522,7 +529,7 @@ void generateBlocks(uint by) {
 
 	prepareSortTris();
 
-	uint gid = LIX >> (LSHIFT - 3), tx = gid & 3;
+	uint gid = LIX >> 5, tx = gid & 3;
 	uint buf_offset = gid << MAX_BLOCK_TRIS_SHIFT;
 	uint dst_offset_64 = scratch64BlockTrisOffset(gid);
 	tri_count = s_tile_tri_count[gid];
@@ -632,6 +639,7 @@ void generateBlocks(uint by) {
 		s_buffer[buf_offset + i] = num_frags | (idx << 24);
 	}
 	barrier();
+
 	// Computing prefix sum across whole blocks (at most 8 * 32 elements)
 	if(LIX < 8 * NUM_TILE_GROUPS) {
 		uint gid = LIX >> 3, warp_idx = LIX & 7, warp_offset = warp_idx << 5;
@@ -650,10 +658,9 @@ void generateBlocks(uint by) {
 		temp = shuffleUpNV(sum, 4, 8), sum += warp_idx >= 4 ? temp : 0;
 
 		if(warp_idx == 7) {
-			s_block_frag_count[(gid << 1) + 0] = int(sum & 0xffff);
-			s_block_frag_count[(gid << 1) + 1] = int(sum >> 16);
+			s_tile_frag_count[gid] = sum;
 			if(max(sum & 0xffff, sum >> 16) > MAX_BLOCK_SAMPLES)
-				atomicOr(s_raster_error, 1 << gid);
+				atomicOr(s_raster_error, 0x10000 << gid);
 		}
 
 		sum -= value;
@@ -726,14 +733,14 @@ void generateBlocks(uint by) {
 	}
 }
 
-void loadSamples(uint gid, int bx, int by, int segment_id) {
-	uint first_tri = (s_segments[gid][segment_id] >> ((bx & 1) << 4)) & 0xffff;
-	uint tri_count = first_tri >> 8;
-	first_tri &= 0xff;
+void loadSamples(uint bid, uint gid, int segment_id) {
+	uint segment_data = (s_segments[gid][segment_id] >> ((bid & 1) << 4)) & 0xffff;
+	uint tri_count = segment_data >> 8;
+	uint first_tri = segment_data & 0xff;
 
 	uint src_offset_32 = scratch32BlockTrisOffset(gid) + first_tri;
 	uint src_offset_64 = scratch64BlockTrisOffset(gid);
-	uint buf_offset = bx << SEGMENT_SHIFT;
+	uint buf_offset = (bid & (NUM_TILE_GROUPS - 1)) << SEGMENT_SHIFT;
 	int first_offset = segment_id << SEGMENT_SHIFT;
 
 	int y = int(LIX & 3);
@@ -743,12 +750,12 @@ void loadSamples(uint gid, int bx, int by, int segment_id) {
 	for(uint i = (LIX & (BLOCK_STEP - 1)) >> 2; i < tri_count; i += BLOCK_STEP / 4) {
 		uint tri_info = g_scratch_32[src_offset_32 + i];
 		uvec2 tri_data = g_scratch_64[src_offset_64 + (tri_info >> 24)];
-		int tri_offset = int((tri_info >> ((bx & 1) * 12)) & 0xfff) - first_offset;
+		int tri_offset = int((tri_info >> ((bid & 1) * 12)) & 0xfff) - first_offset;
 		int minx = int((tri_data.x >> min_shift) & 15); // TODO: too many bits
 		int countx = int((tri_data.y >> count_shift) & 31);
 		int countx0 = min(max(8 - minx, 0), countx);
 
-		if((bx & 1) == 0) {
+		if((bid & 1) == 0) {
 			countx = countx0;
 		} else {
 			countx -= countx0;
@@ -856,11 +863,13 @@ uint shadeSample(ivec2 bin_pixel_pos, uint scratch_tri_offset, out float out_dep
 	return encodeRGBA8(color);
 }
 
-void shadeSamples(uint bx, uint by, uint sample_count) {
+void shadeSamples(int bid, uint bx, uint by, uint sample_count) {
 	// TODO: what's the best way to fix broken pixels?
 	// full sort ? recreate full depth values and sort pairs?
 
-	uint buf_offset = bx << SEGMENT_SHIFT;
+	int lbid = bid & (NUM_WARPS - 1);
+	uint buf_offset = lbid << SEGMENT_SHIFT;
+
 	for(uint i = LIX & 31; i < sample_count; i += 32) {
 		uint value = s_buffer[buf_offset + i];
 		uint pixel_id = value & 31;
@@ -868,7 +877,8 @@ void shadeSamples(uint bx, uint by, uint sample_count) {
 		ivec2 pix_pos = ivec2((pixel_id & 7) + (bx << 3), (pixel_id >> 3) + (by << 2));
 		float depth;
 		s_buffer[buf_offset + i] = shadeSample(pix_pos, scratch_tri_offset, depth);
-		s_buffer[buf_offset + i + SEGMENT_SIZE * 8] = (floatBitsToUint(depth) & ~31) | pixel_id;
+		s_buffer[buf_offset + i + SEGMENT_SIZE * NUM_TILE_GROUPS] =
+			(floatBitsToUint(depth) & ~31) | pixel_id;
 	}
 }
 
@@ -895,8 +905,9 @@ void initReduceSamples(out ReductionContext ctx) {
 }
 
 // TODO: optimize
-void reduceSamples(uint bx, uint sample_count, in out ReductionContext ctx) {
-	uint buf_offset = bx << SEGMENT_SHIFT;
+void reduceSamples(uint bid, uint bx, uint sample_count, in out ReductionContext ctx) {
+	uint lbid = bid & (NUM_WARPS - 1);
+	uint buf_offset = lbid << SEGMENT_SHIFT;
 	uint mini_offset = LIX & ~31;
 	uint pixel_bit = 1u << (LIX & 31);
 	uint pixel_id = LIX & 31;
@@ -905,7 +916,8 @@ void reduceSamples(uint bx, uint sample_count, in out ReductionContext ctx) {
 	// Możemy robić od razu grupować piksele w warpach tak jak chcę: 8x4 a nie 16x2
 	for(uint i = 0; i < sample_count; i += 32) {
 		uint sample_offset = i + (LIX & 31);
-		uint sample_pixel_id = s_buffer[buf_offset + sample_offset + SEGMENT_SIZE * 8] & 31;
+		uint sample_pixel_id =
+			s_buffer[buf_offset + sample_offset + SEGMENT_SIZE * NUM_TILE_GROUPS] & 31;
 
 		s_mini_buffer[LIX] = 0;
 		if(sample_offset < sample_count)
@@ -916,7 +928,8 @@ void reduceSamples(uint bx, uint sample_count, in out ReductionContext ctx) {
 		while(j != -1) {
 			// TODO: pass through regs?
 			uint value = s_buffer[buf_offset + i + j];
-			float depth = uintBitsToFloat(s_buffer[buf_offset + i + j + SEGMENT_SIZE * 8]);
+			float depth =
+				uintBitsToFloat(s_buffer[buf_offset + i + j + SEGMENT_SIZE * NUM_TILE_GROUPS]);
 
 			bitmask &= ~(1 << j);
 			j = findLSB(bitmask);
@@ -996,86 +1009,82 @@ void finishReduceSamples(int bx, int by, ReductionContext ctx) {
 	outputPixel(ivec2((LIX & 7) + (bx << 3), ((LIX >> 3) & 3) + (by << 2)), enc_color);
 }
 
-void initVisualizeSamples() {
-	s_vis_pixels[LIX] = 0;
-	barrier();
-}
+void initVisualizeSamples() { s_vis_pixels[LIX] = 0; }
 
-void visualizeSamples(int bx, uint sample_count) {
-	int buf_offset = bx << SEGMENT_SHIFT;
+void visualizeSamples(int bid, uint sample_count) {
+	int lbid = bid & (NUM_WARPS - 1);
+	uint buf_offset = lbid << SEGMENT_SHIFT;
 	for(uint i = LIX & 31; i < sample_count; i += 32) {
-		uint value = s_buffer[buf_offset + i];
-		uint x = (value & 7) + (bx << 3), y = (value >> 3) & 3;
-		atomicAdd(s_vis_pixels[x | (y << 6)], 1);
+		uint pixel_id = s_buffer[buf_offset + i] & 31;
+		atomicAdd(s_vis_pixels[(lbid << 5) + pixel_id], 1);
 	}
 }
 
-void finishVisualizeSamples(uint by) {
-	vec3 color = vec3(s_vis_pixels[LIX]) / 32.0;
+void finishVisualizeSamples(int bid, ivec2 pixel_pos) {
+	int lbid = bid & (NUM_WARPS - 1);
+	uint pixel_id = (pixel_pos.x & 7) + ((pixel_pos.y & 3) << 3);
+	vec3 color = vec3(s_vis_pixels[(lbid << 5) + pixel_id]) / 16.0;
 	uint enc_col = encodeRGBA8(vec4(SATURATE(color), 1.0));
-	outputPixel(ivec2(LIX & 63, (LIX >> 6) + (by << 2)), enc_col);
+	outputPixel(pixel_pos, enc_col);
 }
 
-void visualizeFragmentCounts(int by) {
-	barrier();
-	for(uint i = LIX; i < BLOCK_HEIGHT * BIN_SIZE; i += LSIZE) {
-		ivec2 pixel_pos = ivec2(i & (BIN_SIZE - 1), by * BLOCK_HEIGHT + (i >> BIN_SHIFT));
-		uint bx = pixel_pos.x / BLOCK_WIDTH, by = pixel_pos.y / BLOCK_HEIGHT;
-		uint gid = (bx >> 1) + ((by & 1) << 2);
-		uint count = s_block_frag_count[bx + ((by & 1) << 3)];
-		//count = s_tile_tri_count[gid] * 8;
+void visualizeFragmentCounts(int bid, ivec2 pixel_pos) {
+	uint gid = (bid >> 1) & (NUM_WARPS - 1);
+	uint count = (s_tile_frag_count[gid] >> ((bid & 1) << 4)) & 0xffff;
+	//count = s_tile_tri_count[gid] * 8;
 
-		vec3 color = vec3(count) / 512;
-		uint enc_col = encodeRGBA8(vec4(SATURATE(color), 1.0));
-		outputPixel(pixel_pos, enc_col);
-	}
-	barrier();
+	vec3 color = vec3(count) / 512;
+	uint enc_col = encodeRGBA8(vec4(SATURATE(color), 1.0));
+	outputPixel(pixel_pos, enc_col);
 }
 
-void visualizeSegments(int by) {
+void visualizeSegments(int bid, ivec2 pixel_pos) {
 	barrier();
-	if(LIX < NUM_BLOCK_COLS) {
-		uint bx = LIX, gid = (bx >> 1) | ((by & 1) << 2);
-		s_mini_buffer[bx] = 0;
+	if(LIX < NUM_WARPS) {
+		uint gbid = bid & ~(NUM_WARPS - 1);
+		uint bid = gbid + LIX;
+		uint lbid = bid & (NUM_WARPS - 1);
+		uint gid = (bid >> 1) & (NUM_WARPS - 1);
+		s_mini_buffer[lbid] = 0;
 
 		int prev_tri = -1;
 		for(int i = 0; i < MAX_SEGMENTS; i++) {
 			uint segment = s_segments[gid][i];
-			segment = (segment >> ((bx & 1) * 16)) & 0xffff;
+			segment = (segment >> ((bid & 1) * 16)) & 0xffff;
 			if(segment == 0)
 				break;
 
 			int first_tri = int(segment & 0xff);
 			uint tri_count = (segment >> 8) & 0xff;
 			if(first_tri <= prev_tri)
-				RECORD(bx, i, prev_tri, first_tri);
+				RECORD(bid, i, prev_tri, first_tri);
 			prev_tri = first_tri;
-			s_mini_buffer[bx] += tri_count;
+			s_mini_buffer[lbid] += tri_count;
 		}
 	}
 	barrier();
-	for(uint i = LIX; i < BLOCK_HEIGHT * BIN_SIZE; i += LSIZE) {
-		ivec2 pixel_pos = ivec2(i & (BIN_SIZE - 1), by * BLOCK_HEIGHT + (i >> BIN_SHIFT));
-		uint bx = pixel_pos.x / BLOCK_WIDTH, by = pixel_pos.y / BLOCK_HEIGHT;
-		uint gid = (bx >> 1) + ((by & 1) << 2);
-		uint count = s_mini_buffer[bx] * 8;
-		vec3 color = vec3(count) / 512;
-		outputPixel(pixel_pos, encodeRGBA8(vec4(SATURATE(color), 1.0)));
-	}
+	uint lbid = bid & (NUM_WARPS - 1);
+	uint count = s_mini_buffer[lbid] * 8;
+	vec3 color = vec3(count) / 512;
+	outputPixel(pixel_pos, encodeRGBA8(vec4(SATURATE(color), 1.0)));
 	barrier();
 }
 
-void visualizeErrors(int by) {
-	ivec2 pixel_pos = ivec2(LIX & (BIN_SIZE - 1), (LIX >> BIN_SHIFT) + (by << 2));
-	uint tx = pixel_pos.x >> 4;
+void visualizeErrors(int fbid) {
+	int gid = int(LIX >> 5);
+	int bid = fbid + (gid << 1);
+	uint bx = bid & 7, by = bid >> 3;
+
 	uint color = 0xff000031;
-	if((s_raster_error & (1 << tx)) != 0)
+	if((s_raster_error & (1 << gid)) != 0)
 		color += 0x32;
-	if((s_raster_error & (0x100 << tx)) != 0)
+	if((s_raster_error & (0x10000 << gid)) != 0)
 		color += 0x64;
-	outputPixel(pixel_pos, color);
-	outputPixel(pixel_pos + ivec2(0, 4), color);
+	outputPixel(ivec2((LIX & 15) + (bx << 3), ((LIX >> 4) & 1) + (by << 2)), color);
+	outputPixel(ivec2((LIX & 15) + (bx << 3), ((LIX >> 4) & 1) + 2 + (by << 2)), color);
 }
+
+#define NUM_BIN_STEPS (64 / NUM_WARPS)
 
 void rasterBin(int bin_id) {
 	INIT_CLOCK();
@@ -1099,15 +1108,22 @@ void rasterBin(int bin_id) {
 	barrier();
 	UPDATE_CLOCK(0);
 
-	for(int by = 0; by < NUM_BLOCK_ROWS; by++) {
+	//  bid: block (8x4) id; We have 8 x 16 = 128 blocks
+	// fbid: first block id currently processed out of all warps
+	//  gid: tile (16x4) group id  TODO: better name
+	// lbid: local block id (range: 0 up to NUM_WARPS - 1)
+	for(int i = 0; i < (128 / NUM_WARPS); i++) {
+		int fbid = i << NUM_WARPS_SHIFT;
+
 		barrier();
-		if((by & 1) == 0) {
-			generateBlocks(by);
+		if((i & 1) == 0) {
+			generateBlocks(fbid >> 3);
 			groupMemoryBarrier();
 			barrier();
 
 			if(s_raster_error != 0) {
-				visualizeErrors(by++);
+				visualizeErrors(fbid);
+				i++;
 				barrier();
 				if(LIX == 0)
 					s_raster_error = 0;
@@ -1116,10 +1132,10 @@ void rasterBin(int bin_id) {
 		}
 		UPDATE_CLOCK(1);
 
+		int bid = fbid + int(LIX >> 5), gid = (bid >> 1) & (NUM_WARPS - 1);
+		int bx = bid & 7, by = (bid >> 3);
 		int segment_id = 0;
-		int bx = int(LIX >> 5);
-		int gid = (bx >> 1) + ((by & 1) << 2);
-		int frag_count = s_block_frag_count[bx + ((by & 1) << 3)];
+		int frag_count = int((s_tile_frag_count[gid] >> ((bid & 1) << 4)) & 0xffff);
 
 		ReductionContext context;
 		initReduceSamples(context);
@@ -1129,14 +1145,14 @@ void rasterBin(int bin_id) {
 			int cur_frag_count = min(frag_count, SEGMENT_SIZE);
 			frag_count -= SEGMENT_SIZE;
 
-			loadSamples(gid, bx, by, segment_id++);
+			loadSamples(bid, gid, segment_id++);
 			UPDATE_CLOCK(2);
 
-			//visualizeSamples(bx, cur_frag_count);
-			shadeSamples(bx, by, cur_frag_count);
+			//visualizeSamples(bid, cur_frag_count);
+			shadeSamples(bid, bx, by, cur_frag_count);
 			UPDATE_CLOCK(3);
 
-			reduceSamples(bx, cur_frag_count, context);
+			reduceSamples(bid, bx, cur_frag_count, context);
 			UPDATE_CLOCK(5);
 
 #ifdef ALPHA_THRESHOLD
@@ -1145,13 +1161,17 @@ void rasterBin(int bin_id) {
 #endif
 		}
 
+		ivec2 block_pos = ivec2(bid & 7, bid >> 3);
+		ivec2 pixel_pos =
+			ivec2((LIX & 7) + (block_pos.x << 3), ((LIX >> 3) & 3) + (block_pos.y << 2));
+
 		finishReduceSamples(bx, by, context);
 		UPDATE_CLOCK(6);
-		barrier();
 
-		//finishVisualizeSamples(by);
-		//visualizeFragmentCounts(by);
-		//visualizeSegments(by);
+		//finishVisualizeSamples(bid, pixel_pos);
+		//visualizeFragmentCounts(bid, pixel_pos);
+		//visualizeSegments(bid, pixel_pos);
+		barrier();
 	}
 }
 

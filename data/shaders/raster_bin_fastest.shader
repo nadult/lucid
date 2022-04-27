@@ -499,27 +499,34 @@ void generateBlocks(uint by) {
 	uint src_offset_64 = scratch64BlockRowTrisOffset(by);
 	uint tri_count = s_block_row_tri_count[by];
 
-	if(LIX < MAX_SEGMENTS * NUM_TILE_GROUPS) {
+	if(LIX < MAX_SEGMENTS * NUM_WARPS)
 		s_segments[LIX >> MAX_SEGMENTS_SHIFT][LIX & (MAX_SEGMENTS - 1)] = 0;
-		if(LIX < NUM_TILE_GROUPS)
-			s_tile_tri_count[LIX] = 0;
-	}
 	barrier(); // TODO: could it be removed?
 
 	{
-		// TODO: how about gid = LIX & 7?
-		uint tx = LIX & 3, bx_bits_shift = 16 + (tx << 1);
-		uint gid = tx + ((LIX >> 7) << 2);
+		uint gid = LIX >> 5, tx = gid & 3;
 		uint buf_offset = gid << MAX_BLOCK_TRIS_SHIFT;
-		// TODO: optimize this loop? iterate over bits for atomicAdd?
-		for(uint i = (LIX & 127) >> 2; i < tri_count; i += BLOCK_STEP) {
+		uint bx_bits_shift = 16 + (tx << 1);
+
+		uint gid_tri_count = 0;
+		uint thread_bit_mask = ~(0xffffffffu << (LIX & 31));
+		for(uint i = LIX & (BLOCK_STEP - 1); i < tri_count; i += BLOCK_STEP) {
 			uint bx_bits = (g_scratch_32[src_offset_32 + i] >> bx_bits_shift) & 3;
-			if(bx_bits == 0)
+			uint bit_mask = uint(ballotARB(bx_bits != 0));
+			if(bit_mask == 0)
 				continue;
-			uint tri_offset = atomicAdd(s_tile_tri_count[gid], 1);
-			if(tri_offset < MAX_BLOCK_TRIS)
+
+			uint warp_offset = bitCount(bit_mask & thread_bit_mask);
+			if(bx_bits != 0) {
+				uint tri_offset = (gid_tri_count + warp_offset) & ((1 << MAX_BLOCK_TRIS_SHIFT) - 1);
 				s_buffer[buf_offset + tri_offset] = i;
-			else
+			}
+			gid_tri_count += bitCount(bit_mask);
+		}
+
+		if((LIX & 31) == 0) {
+			s_tile_tri_count[gid] = gid_tri_count;
+			if(gid_tri_count > MAX_BLOCK_TRIS)
 				atomicOr(s_raster_error, 1 << gid);
 		}
 		barrier();

@@ -113,7 +113,7 @@ shared uint s_tile_frag_count[NUM_WARPS];
 
 shared uint s_buffer[BUFFER_SIZE + 1];
 shared uint s_mini_buffer[LSIZE];
-shared uint s_segments[NUM_WARPS][MAX_SEGMENTS];
+shared uint s_segments[NUM_WARPS * MAX_SEGMENTS];
 shared int s_raster_error;
 
 // Only used when debugging
@@ -484,8 +484,7 @@ void generateBlocks(uint by) {
 	uint buf_offset = gid << MAX_BLOCK_TRIS_SHIFT;
 
 	if(LIX < MAX_SEGMENTS * NUM_WARPS)
-		s_segments[LIX >> MAX_SEGMENTS_SHIFT][LIX & (MAX_SEGMENTS - 1)] = 0;
-	barrier(); // TODO: could it be removed?
+		s_segments[LIX] = 0;
 
 	{
 		uint bx_bits_shift = 16 + (tx << 1);
@@ -662,6 +661,7 @@ void generateBlocks(uint by) {
 	// Storing triangle fragment offsets to scratch mem
 	// Also finding first triangle for each segment
 	uint dst_offset_32 = scratch32BlockTrisOffset(gid);
+	uint seg_group_offset = gid << MAX_SEGMENTS_SHIFT;
 	for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_STEP) {
 		uint tri_offset = 0;
 		if(i > 0) {
@@ -684,9 +684,9 @@ void generateBlocks(uint by) {
 			uint seg_offset = tri_offset & (SEGMENT_SIZE - 1);                                     \
 			uint bits = (i + 1) << shift;                                                          \
 			if(seg_offset == 0) /*TODO: optimize to single atomicadd*/                             \
-				atomicOr(s_segments[gid][seg_id], bits);                                           \
+				atomicOr(s_segments[seg_group_offset + seg_id], bits);                             \
 			else if(seg_offset + tri_value > SEGMENT_SIZE)                                         \
-				atomicOr(s_segments[gid][seg_id + 1], bits);                                       \
+				atomicOr(s_segments[seg_group_offset + seg_id + 1], bits);                         \
 		}                                                                                          \
 	}
 		FILL_SEGMENT(tri_offset0, tri_value0, 0);
@@ -703,8 +703,8 @@ void generateBlocks(uint by) {
 		uint gid = LIX >> MAX_SEGMENTS_SHIFT;
 		uint tri_count = s_tile_tri_count[gid];
 
-		uint cur_value = s_segments[gid][seg_id];
-		uint next_value = seg_id + 1 == MAX_SEGMENTS ? 0 : s_segments[gid][seg_id + 1];
+		uint cur_value = s_segments[LIX];
+		uint next_value = seg_id + 1 == MAX_SEGMENTS ? 0 : s_segments[LIX + 1];
 
 		uint cur_value0 = cur_value & 0xffff, cur_value1 = (cur_value >> 16) & 0xffff;
 		uint next_value0 = next_value & 0xffff, next_value1 = (next_value >> 16) & 0xffff;
@@ -718,12 +718,13 @@ void generateBlocks(uint by) {
 
 #undef PROCESS_SEGMENT
 
-		s_segments[gid][seg_id] = cur_value0 | (cur_value1 << 16);
+		s_segments[LIX] = cur_value0 | (cur_value1 << 16);
 	}
 }
 
 void loadSamples(uint bid, uint gid, int segment_id) {
-	uint segment_data = (s_segments[gid][segment_id] >> ((bid & 1) << 4)) & 0xffff;
+	uint segment_data = s_segments[(gid << MAX_SEGMENTS_SHIFT) + segment_id];
+	segment_data = (segment_data >> ((bid & 1) << 4)) & 0xffff;
 	uint tri_count = segment_data >> 8;
 	uint first_tri = segment_data & 0xff;
 
@@ -1041,7 +1042,7 @@ void visualizeSegments(int bid, ivec2 pixel_pos) {
 
 		int prev_tri = -1;
 		for(int i = 0; i < MAX_SEGMENTS; i++) {
-			uint segment = s_segments[gid][i];
+			uint segment = s_segments[(gid << MAX_SEGMENTS_SHIFT) + i];
 			segment = (segment >> ((bid & 1) * 16)) & 0xffff;
 			if(segment == 0)
 				break;

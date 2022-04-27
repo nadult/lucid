@@ -494,18 +494,18 @@ void generateBlocks(uint by) {
 	uint src_offset_32 = scratch32BlockRowTrisOffset(by);
 	uint src_offset_64 = scratch64BlockRowTrisOffset(by);
 	uint tri_count = s_block_row_tri_count[by];
+	uint gid = LIX >> 5, tx = gid & 3;
+	uint buf_offset = gid << MAX_BLOCK_TRIS_SHIFT;
 
 	if(LIX < MAX_SEGMENTS * NUM_WARPS)
 		s_segments[LIX >> MAX_SEGMENTS_SHIFT][LIX & (MAX_SEGMENTS - 1)] = 0;
 	barrier(); // TODO: could it be removed?
 
 	{
-		uint gid = LIX >> 5, tx = gid & 3;
-		uint buf_offset = gid << MAX_BLOCK_TRIS_SHIFT;
 		uint bx_bits_shift = 16 + (tx << 1);
-
 		uint gid_tri_count = 0;
 		uint thread_bit_mask = ~(0xffffffffu << (LIX & 31));
+
 		for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_STEP) {
 			uint bx_bits = (g_scratch_32[src_offset_32 + i] >> bx_bits_shift) & 3;
 			uint bit_mask = uint(ballotARB(bx_bits != 0));
@@ -532,8 +532,6 @@ void generateBlocks(uint by) {
 
 	prepareSortTris();
 
-	uint gid = LIX >> 5, tx = gid & 3;
-	uint buf_offset = gid << MAX_BLOCK_TRIS_SHIFT;
 	uint dst_offset_64 = scratch64BlockTrisOffset(gid);
 	tri_count = s_tile_tri_count[gid];
 	int startx = int(tx << 4);

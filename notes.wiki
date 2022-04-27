@@ -16,6 +16,8 @@ Bug:
 
 - optymalizacja loadSamples?
 
+- podział raster bin na wersję 256 i 512; rozdzielanie w classifierze
+
 Pytania:
 - Dlaczego 16 wątków na grupę jest wolniejsze w przypadku niektórych scen ?
 - Dlaczego generateTiles jest dużo szybsze niż generateBlocks?
@@ -64,5 +66,3 @@ conference: 1290   61     109   5      977
  - odnoszenie się bezpośrednio do tile-rowsów jest do zrobienia
  - zmergowanie dwóch faz w generateBlocks
  - drobne optymalizacje w sort i innych miejscach
-
-

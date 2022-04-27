@@ -746,13 +746,14 @@ void loadSamples(uint bid, uint gid, int segment_id) {
 
 	int y = int(LIX & 3);
 	uint min_shift = y << 2, count_shift = min_shift + y;
+	uint offset_shift = (bid & 1) * 12;
 
 	// TODO: group differently for better memory accesses (and measure)
 	for(uint i = (LIX & WARP_MASK) >> 2; i < tri_count; i += WARP_STEP / 4) {
 		uint tri_info = g_scratch_32[src_offset_32 + i];
 		uvec2 tri_data = g_scratch_64[src_offset_64 + (tri_info >> 24)];
-		int tri_offset = int((tri_info >> ((bid & 1) * 12)) & 0xfff) - first_offset;
-		int minx = int((tri_data.x >> min_shift) & 15); // TODO: too many bits
+		int tri_offset = int((tri_info >> offset_shift) & 0xfff) - first_offset;
+		int minx = int((tri_data.x >> min_shift) & 15);
 		int countx = int((tri_data.y >> count_shift) & 31);
 		int countx0 = min(max(8 - minx, 0), countx);
 
@@ -770,6 +771,11 @@ void loadSamples(uint bid, uint gid, int segment_id) {
 		tri_offset += prevx;
 
 		countx = min(countx, SEGMENT_SIZE - tri_offset);
+		if(tri_offset < 0) {
+			countx += tri_offset;
+			minx -= tri_offset;
+			tri_offset = 0;
+		}
 		if(countx <= 0)
 			continue;
 
@@ -778,8 +784,7 @@ void loadSamples(uint bid, uint gid, int segment_id) {
 		uint value = pixel_id | (scratch_tri_offset << 8);
 
 		for(int j = 0; j < countx; j++) {
-			if(tri_offset >= 0) // TODO: remove this check
-				s_buffer[buf_offset + tri_offset] = value;
+			s_buffer[buf_offset + tri_offset] = value;
 			tri_offset++;
 			value++;
 		}
@@ -871,7 +876,7 @@ void shadeSamples(int bid, uint bx, uint by, uint sample_count) {
 	int lbid = bid & (NUM_WARPS - 1);
 	uint buf_offset = lbid << SEGMENT_SHIFT;
 
-	for(uint i = LIX & 31; i < sample_count; i += 32) {
+	for(uint i = LIX & WARP_MASK; i < sample_count; i += WARP_STEP) {
 		uint value = s_buffer[buf_offset + i];
 		uint pixel_id = value & 31;
 		uint scratch_tri_offset = value >> 8;

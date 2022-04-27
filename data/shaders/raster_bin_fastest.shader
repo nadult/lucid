@@ -858,18 +858,19 @@ uint shadeSample(ivec2 bin_pixel_pos, uint scratch_tri_offset, out float out_dep
 	return encodeRGBA8(color);
 }
 
-void shadeSamples(int bid, uint bx, uint by, uint sample_count) {
+void shadeSamples(int bid, uint sample_count) {
 	// TODO: what's the best way to fix broken pixels?
 	// full sort ? recreate full depth values and sort pairs?
 
 	int lbid = bid & (NUM_WARPS - 1);
 	uint buf_offset = lbid << SEGMENT_SHIFT;
+	ivec2 block_pos = ivec2((bid & 7) << 3, (bid >> 3) << 2);
 
 	for(uint i = LIX & WARP_MASK; i < sample_count; i += WARP_STEP) {
 		uint value = s_buffer[buf_offset + i];
 		uint pixel_id = value & 31;
 		uint scratch_tri_offset = value >> 8;
-		ivec2 pix_pos = ivec2((pixel_id & 7) + (bx << 3), (pixel_id >> 3) + (by << 2));
+		ivec2 pix_pos = block_pos + ivec2(pixel_id & 7, pixel_id >> 3);
 		float depth;
 		s_buffer[buf_offset + i] = shadeSample(pix_pos, scratch_tri_offset, depth);
 		s_buffer[buf_offset + i + SEGMENT_SIZE * NUM_WARPS] =
@@ -899,8 +900,7 @@ void initReduceSamples(out ReductionContext ctx) {
 	ctx.out_trans = 1.0;
 }
 
-// TODO: optimize
-void reduceSamples(uint bid, uint bx, uint sample_count, in out ReductionContext ctx) {
+void reduceSamples(uint bid, uint sample_count, in out ReductionContext ctx) {
 	uint lbid = bid & (NUM_WARPS - 1);
 	uint buf_offset = lbid << SEGMENT_SHIFT;
 	uint mini_offset = LIX & ~31;
@@ -908,7 +908,6 @@ void reduceSamples(uint bid, uint bx, uint sample_count, in out ReductionContext
 	uint pixel_id = LIX & 31;
 	vec3 out_color = decodeRGB10(ctx.out_color);
 
-	// Możemy robić od razu grupować piksele w warpach tak jak chcę: 8x4 a nie 16x2
 	for(uint i = 0; i < sample_count; i += 32) {
 		uint sample_offset = i + (LIX & 31);
 		uint sample_pixel_id = s_buffer[buf_offset + sample_offset + SEGMENT_SIZE * NUM_WARPS] & 31;
@@ -982,7 +981,7 @@ void reduceSamples(uint bid, uint bx, uint sample_count, in out ReductionContext
 	ctx.out_color = encodeRGB10(out_color);
 }
 
-void finishReduceSamples(int bx, int by, ReductionContext ctx) {
+void finishReduceSamples(ivec2 pixel_pos, ReductionContext ctx) {
 	vec3 out_color = decodeRGB10(ctx.out_color);
 
 	for(int i = 2; i >= 0; i--)
@@ -999,7 +998,7 @@ void finishReduceSamples(int bx, int by, ReductionContext ctx) {
 
 	out_color += ctx.out_trans * decodeRGB8(background_color);
 	uint enc_color = encodeRGB8(SATURATE(out_color)); // TODO: 10 bit
-	outputPixel(ivec2((LIX & 7) + (bx << 3), ((LIX >> 3) & 3) + (by << 2)), enc_color);
+	outputPixel(pixel_pos, enc_color);
 }
 
 void initVisualizeSamples() { s_vis_pixels[LIX] = 0; }
@@ -1126,9 +1125,8 @@ void rasterBin(int bin_id) {
 		UPDATE_CLOCK(1);
 
 		int bid = fbid + int(LIX >> 5), gid = (bid >> 1) & (NUM_WARPS - 1);
-		int bx = bid & 7, by = (bid >> 3);
-		int segment_id = 0;
 		int frag_count = int((s_tile_frag_count[gid] >> ((bid & 1) << 4)) & 0xffff);
+		int segment_id = 0;
 
 		ReductionContext context;
 		initReduceSamples(context);
@@ -1142,10 +1140,10 @@ void rasterBin(int bin_id) {
 			UPDATE_CLOCK(2);
 
 			//visualizeSamples(bid, cur_frag_count);
-			shadeSamples(bid, bx, by, cur_frag_count);
+			shadeSamples(bid, cur_frag_count);
 			UPDATE_CLOCK(3);
 
-			reduceSamples(bid, bx, cur_frag_count, context);
+			reduceSamples(bid, cur_frag_count, context);
 			UPDATE_CLOCK(5);
 
 #ifdef ALPHA_THRESHOLD
@@ -1157,8 +1155,7 @@ void rasterBin(int bin_id) {
 		ivec2 block_pos = ivec2(bid & 7, bid >> 3);
 		ivec2 pixel_pos =
 			ivec2((LIX & 7) + (block_pos.x << 3), ((LIX >> 3) & 3) + (block_pos.y << 2));
-
-		finishReduceSamples(bx, by, context);
+		finishReduceSamples(pixel_pos, context);
 		UPDATE_CLOCK(6);
 
 		//finishVisualizeSamples(bid, pixel_pos);

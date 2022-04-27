@@ -8,7 +8,7 @@
 #define LIX gl_LocalInvocationIndex
 #define LID gl_LocalInvocationID
 
-// Acceptable values: 128, 256, 512
+// Acceptable values: 128, 256, 512, 1024
 #define LSIZE 512
 #define LSHIFT 9
 
@@ -39,15 +39,11 @@
 #define BLOCK_HEIGHT 4
 
 #define NUM_TILE_COLS 4
-// TODO: remove
-#define NUM_TILE_GROUPS NUM_WARPS
-
 #define NUM_BLOCK_COLS 8
 #define NUM_BLOCK_ROWS 16
 
-// TODO: rename
-#define BLOCK_STEP 32
-#define ROWS_PER_STEP (LSIZE / 128)
+#define WARP_STEP 32
+#define WARP_MASK 31
 
 layout(local_size_x = LSIZE) in;
 
@@ -112,12 +108,12 @@ shared ivec2 s_bin_pos;
 shared vec3 s_bin_ray_dir0;
 
 shared uint s_block_row_tri_count[NUM_BLOCK_ROWS];
-shared uint s_tile_tri_count[NUM_TILE_GROUPS];
-shared uint s_tile_frag_count[NUM_TILE_GROUPS];
+shared uint s_tile_tri_count[NUM_WARPS];
+shared uint s_tile_frag_count[NUM_WARPS];
 
 shared uint s_buffer[BUFFER_SIZE + 1];
 shared uint s_mini_buffer[LSIZE];
-shared uint s_segments[NUM_TILE_GROUPS][MAX_SEGMENTS];
+shared uint s_segments[NUM_WARPS][MAX_SEGMENTS];
 shared int s_raster_error;
 
 // Only used when debugging
@@ -409,7 +405,7 @@ void processQuads() {
 shared uint s_sort_max_block_rcount;
 
 void prepareSortTris() {
-	if(LIX < NUM_TILE_GROUPS) {
+	if(LIX < NUM_WARPS) {
 		uint count = s_tile_tri_count[LIX];
 		// rcount: count rounded up to next power of 2
 		uint rcount = max(32, (count & (count - 1)) == 0 ? count : (2 << findMSB(count)));
@@ -429,16 +425,16 @@ uint xorBits(uint value, int bit0, int bit1) { return ((value >> bit0) ^ (value 
 #endif
 
 void sortTris(uint gid, uint count, uint buf_offset) {
-	uint lid = LIX & (BLOCK_STEP - 1);
+	uint lid = LIX & WARP_MASK;
 	// TODO: max_rcount is only needed for barriers, computations should be performed up to rcount
 	// But it seems, that using rcount directly is actually a bit slower... (Sponza)
 	uint max_rcount = s_sort_max_block_rcount;
-	for(uint i = lid + count; i < max_rcount; i += BLOCK_STEP)
+	for(uint i = lid + count; i < max_rcount; i += WARP_STEP)
 		s_buffer[buf_offset + i] = 0xffffffff;
 	barrier();
 
 #ifdef VENDOR_NVIDIA
-	for(uint i = lid; i < max_rcount; i += BLOCK_STEP) {
+	for(uint i = lid; i < max_rcount; i += WARP_STEP) {
 		uint value = s_buffer[buf_offset + i];
 		// TODO: register sort could be faster
 		value = swap(value, 0x01, xorBits(lid, 1, 0)); // K = 2
@@ -465,8 +461,8 @@ void sortTris(uint gid, uint count, uint buf_offset) {
 #endif
 	for(uint k = start_k; k <= max_rcount; k = 2 * k) {
 		for(uint j = k >> 1; j >= end_j; j = j >> 1) {
-			for(uint i = lid; i < max_rcount; i += BLOCK_STEP * 2) {
-				uint idx = (i & j) != 0 ? i + BLOCK_STEP - j : i;
+			for(uint i = lid; i < max_rcount; i += WARP_STEP * 2) {
+				uint idx = (i & j) != 0 ? i + WARP_STEP - j : i;
 				uint lvalue = s_buffer[buf_offset + idx];
 				uint rvalue = s_buffer[buf_offset + idx + j];
 				if(((idx & k) != 0) == (lvalue.x < rvalue.x)) {
@@ -477,7 +473,7 @@ void sortTris(uint gid, uint count, uint buf_offset) {
 			barrier();
 		}
 #ifdef VENDOR_NVIDIA
-		for(uint i = lid; i < max_rcount; i += BLOCK_STEP) {
+		for(uint i = lid; i < max_rcount; i += WARP_STEP) {
 			uint bit = (i & k) == 0 ? 0 : 1;
 			uint value = s_buffer[buf_offset + i];
 			value = swap(value, 0x10, bit ^ bitExtract(lid, 4));
@@ -510,7 +506,7 @@ void generateBlocks(uint by) {
 
 		uint gid_tri_count = 0;
 		uint thread_bit_mask = ~(0xffffffffu << (LIX & 31));
-		for(uint i = LIX & (BLOCK_STEP - 1); i < tri_count; i += BLOCK_STEP) {
+		for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_STEP) {
 			uint bx_bits = (g_scratch_32[src_offset_32 + i] >> bx_bits_shift) & 3;
 			uint bit_mask = uint(ballotARB(bx_bits != 0));
 			if(bit_mask == 0)
@@ -542,7 +538,7 @@ void generateBlocks(uint by) {
 	tri_count = s_tile_tri_count[gid];
 	int startx = int(tx << 4);
 
-	for(uint i = LIX & (BLOCK_STEP - 1); i < tri_count; i += BLOCK_STEP) {
+	for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_STEP) {
 		uint row_idx = s_buffer[buf_offset + i];
 
 		// TODO: load these together with shuffles?
@@ -616,7 +612,7 @@ void generateBlocks(uint by) {
 	groupMemoryBarrier();
 
 #ifdef SHADER_DEBUG
-	for(uint i = LIX & (BLOCK_STEP - 1); i < tri_count; i += BLOCK_STEP) {
+	for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_STEP) {
 		uint value = s_buffer[buf_offset + i];
 		uint prev_value = i == 0 ? 0 : s_buffer[buf_offset + i - 1];
 		if(value <= prev_value)
@@ -631,7 +627,7 @@ void generateBlocks(uint by) {
 			value += temp;                                                                         \
 	}
 
-	for(uint i = LIX & (BLOCK_STEP - 1); i < tri_count; i += BLOCK_STEP) {
+	for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_STEP) {
 		uint idx = s_buffer[buf_offset + i] & 0xff;
 		uint counts = g_scratch_64[dst_offset_64 + idx].y >> 20;
 		uint num_left_frags = counts & 63, num_right_frags = (counts >> 6) & 63;
@@ -648,7 +644,7 @@ void generateBlocks(uint by) {
 	barrier();
 
 	// Computing prefix sum across whole blocks (at most 8 * 32 elements)
-	if(LIX < 8 * NUM_TILE_GROUPS) {
+	if(LIX < 8 * NUM_WARPS) {
 		uint gid = LIX >> 3, warp_idx = LIX & 7, warp_offset = warp_idx << 5;
 		uint buf_offset = gid << MAX_BLOCK_TRIS_SHIFT;
 		uint tri_count = s_tile_tri_count[gid];
@@ -680,7 +676,7 @@ void generateBlocks(uint by) {
 	// Storing triangle fragment offsets to scratch mem
 	// Also finding first triangle for each segment
 	uint dst_offset_32 = scratch32BlockTrisOffset(gid);
-	for(uint i = LIX & (BLOCK_STEP - 1); i < tri_count; i += BLOCK_STEP) {
+	for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_STEP) {
 		uint tri_offset = 0;
 		if(i > 0) {
 			uint prev = i - 1;
@@ -716,7 +712,7 @@ void generateBlocks(uint by) {
 	}
 	barrier();
 
-	if(LIX < MAX_SEGMENTS * NUM_TILE_GROUPS) {
+	if(LIX < MAX_SEGMENTS * NUM_WARPS) {
 		uint seg_id = LIX & (MAX_SEGMENTS - 1);
 		uint gid = LIX >> MAX_SEGMENTS_SHIFT;
 		uint tri_count = s_tile_tri_count[gid];
@@ -747,14 +743,14 @@ void loadSamples(uint bid, uint gid, int segment_id) {
 
 	uint src_offset_32 = scratch32BlockTrisOffset(gid) + first_tri;
 	uint src_offset_64 = scratch64BlockTrisOffset(gid);
-	uint buf_offset = (bid & (NUM_TILE_GROUPS - 1)) << SEGMENT_SHIFT;
+	uint buf_offset = (bid & (NUM_WARPS - 1)) << SEGMENT_SHIFT;
 	int first_offset = segment_id << SEGMENT_SHIFT;
 
 	int y = int(LIX & 3);
 	uint min_shift = y << 2, count_shift = min_shift + y;
 
 	// TODO: group differently for better memory accesses (and measure)
-	for(uint i = (LIX & (BLOCK_STEP - 1)) >> 2; i < tri_count; i += BLOCK_STEP / 4) {
+	for(uint i = (LIX & WARP_MASK) >> 2; i < tri_count; i += WARP_STEP / 4) {
 		uint tri_info = g_scratch_32[src_offset_32 + i];
 		uvec2 tri_data = g_scratch_64[src_offset_64 + (tri_info >> 24)];
 		int tri_offset = int((tri_info >> ((bid & 1) * 12)) & 0xfff) - first_offset;
@@ -884,7 +880,7 @@ void shadeSamples(int bid, uint bx, uint by, uint sample_count) {
 		ivec2 pix_pos = ivec2((pixel_id & 7) + (bx << 3), (pixel_id >> 3) + (by << 2));
 		float depth;
 		s_buffer[buf_offset + i] = shadeSample(pix_pos, scratch_tri_offset, depth);
-		s_buffer[buf_offset + i + SEGMENT_SIZE * NUM_TILE_GROUPS] =
+		s_buffer[buf_offset + i + SEGMENT_SIZE * NUM_WARPS] =
 			(floatBitsToUint(depth) & ~31) | pixel_id;
 	}
 }
@@ -923,8 +919,7 @@ void reduceSamples(uint bid, uint bx, uint sample_count, in out ReductionContext
 	// Możemy robić od razu grupować piksele w warpach tak jak chcę: 8x4 a nie 16x2
 	for(uint i = 0; i < sample_count; i += 32) {
 		uint sample_offset = i + (LIX & 31);
-		uint sample_pixel_id =
-			s_buffer[buf_offset + sample_offset + SEGMENT_SIZE * NUM_TILE_GROUPS] & 31;
+		uint sample_pixel_id = s_buffer[buf_offset + sample_offset + SEGMENT_SIZE * NUM_WARPS] & 31;
 
 		s_mini_buffer[LIX] = 0;
 		if(sample_offset < sample_count)
@@ -935,8 +930,7 @@ void reduceSamples(uint bid, uint bx, uint sample_count, in out ReductionContext
 		while(j != -1) {
 			// TODO: pass through regs?
 			uint value = s_buffer[buf_offset + i + j];
-			float depth =
-				uintBitsToFloat(s_buffer[buf_offset + i + j + SEGMENT_SIZE * NUM_TILE_GROUPS]);
+			float depth = uintBitsToFloat(s_buffer[buf_offset + i + j + SEGMENT_SIZE * NUM_WARPS]);
 
 			bitmask &= ~(1 << j);
 			j = findLSB(bitmask);

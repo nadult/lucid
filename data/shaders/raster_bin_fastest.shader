@@ -587,7 +587,7 @@ void generateBlocks(uint by) {
 		uint frag_bits = (num_frags_left << 20) | (num_frags_right << 26);
 		g_scratch_64[dst_offset_64 + i] = uvec2(min_bits | (tri_idx << 16), count_bits | frag_bits);
 
-		// 12 bitów na index, 20 bitów na głębię
+		// 12 bits for tile-tri index, 20 bits for depth
 		s_buffer[buf_offset + i] = i | (uint(depth) << 12);
 	}
 	barrier();

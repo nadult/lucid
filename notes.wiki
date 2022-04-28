@@ -54,15 +54,15 @@ conference: 1324   61     111   5      1007
  white_oak: 14794  54     263   6      14208
 
 
- 16x16:     total  setup  bins  tiles  raster_bin
-    #boxes: 2118   24     54    5      1951
-     bunny: 516    69     53    5      329
-conference: 1290   61     109   5      977
-    sponza: 4342   62     123   5      3988
-    teapot: 550    28     48    5      411
- white_oak: 16848  50     248   6      15644
-
- W 16x16 mogę jeszcze zrobić:
- - odnoszenie się bezpośrednio do tile-rowsów jest do zrobienia
- - zmergowanie dwóch faz w generateBlocks
- - drobne optymalizacje w sort i innych miejscach
+Wersja 16x4 2560x1330 raster_timings wyłączone (ae7a84ca 28.04):
+             total  setup  bins  tiles  raster_bin  raster_tile  raster_block
+     #boxes: 1705   23     57    5      1541        4            4
+      bunny: 490    70     49    5      303         4            4
+ conference: 1342   61     109   5      1028        4            4
+conf-e(256): 1267   61     108   5      953         4            4
+     dragon: 918    188    66    100    236         246          10
+    gallery: 2451   216    75    121    1588        253          10
+     sponza: 3920   62     124   6      3568        4            4
+sponza(256): 3864   62     125   6      3510        4            4
+     teapot: 475    28     48    5      340         4            4
+  white_oak: 14091  51     251   6      13512       4            4

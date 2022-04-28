@@ -37,8 +37,6 @@ Pytania:
   Fakt jest taki, że cała początkowa faza (process quads) na skomlikowanych scenach zajmuje ok 1%...
   W takim razie to chyba nie ma sensu...; Generowanie scanline-ów to pewnie mniej niż 25%...
 
-
-
 -----------------------------------------------------------------------------------------
                                       === Statsy ===
 -----------------------------------------------------------------------------------------

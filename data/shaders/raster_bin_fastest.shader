@@ -936,7 +936,7 @@ void reduceSamples(uint bid, uint sample_count, in out ReductionContext ctx) {
 
 #ifdef VISUALIZE_ERRORS
 						if(ctx.prev_depths[2] > ctx.prev_depths[3]) {
-							ctx.prev_colors[0] = 0xff0000ff;
+							ctx.prev_colors[2] = 0xff0000ff;
 							i = sample_count;
 							break;
 						}

@@ -1021,11 +1021,23 @@ void finishVisualizeSamples(int bid, ivec2 pixel_pos) {
 void visualizeFragmentCounts(int bid, ivec2 pixel_pos) {
 	uint gid = (bid >> 1) & (NUM_WARPS - 1);
 	uint count = (s_tile_frag_count[gid] >> ((bid & 1) << 4)) & 0xffff;
-	//count = s_tile_tri_count[gid] * 8;
+	vec4 color = vec4(SATURATE(vec3(count) / 512.0), 1.0);
+	outputPixel(pixel_pos, encodeRGBA8(color));
+}
 
-	vec3 color = vec3(count) / 512;
-	uint enc_col = encodeRGBA8(vec4(SATURATE(color), 1.0));
-	outputPixel(pixel_pos, enc_col);
+void visualizeTriangleCounts(int bid, ivec2 pixel_pos) {
+	uint gid = (bid >> 1) & (NUM_WARPS - 1);
+	uint count = s_tile_tri_count[gid];
+	vec3 color;
+	if(count == 0)
+		color = vec3(0);
+	else if(count < 16)
+		color = vec3(count + 16, 0, 0) / 32.0;
+	else if(count < 64)
+		color = vec3(count + 32, count + 32, 0) / 96.0;
+	else
+		color = vec3(0, count, 0.0) / 256.0;
+	outputPixel(pixel_pos, encodeRGBA8(vec4(SATURATE(color), 1.0)));
 }
 
 void visualizeSegments(int bid, ivec2 pixel_pos) {
@@ -1155,6 +1167,7 @@ void rasterBin(int bin_id) {
 
 		//finishVisualizeSamples(bid, pixel_pos);
 		//visualizeFragmentCounts(bid, pixel_pos);
+		//visualizeTriangleCounts(bid, pixel_pos);
 		//visualizeSegments(bid, pixel_pos);
 		barrier();
 	}

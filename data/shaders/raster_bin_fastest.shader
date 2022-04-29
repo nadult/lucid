@@ -536,7 +536,7 @@ void generateBlocks(uint bid) {
 		uvec2 tri_maxs = g_scratch_64[src_offset_64 + row_idx + MAX_BLOCK_ROW_TRIS];
 		uint tri_idx = (tri_maxs.x >> 24) | ((tri_maxs.y >> 16) & 0xff00);
 
-		uint min_bits, count_bits;
+		uvec2 bits;
 		uvec2 num_frags;
 		vec2 cpos = vec2(0);
 
@@ -560,16 +560,15 @@ void generateBlocks(uint bid) {
 
 		{
 			PROCESS_ROWS(x);
-			min_bits = (min0 & 7) | ((min1 & 7) << 3) | ((min2 & 7) << 6) | ((min3 & 7) << 9);
-			count_bits = count0 | (count1 << 4) | (count2 << 8) | (count3 << 12);
 			num_frags.x = count0 + count1 + count2 + count3;
+			bits.x = (min0 & 7) | ((min1 & 7) << 3) | ((min2 & 7) << 6) | ((min3 & 7) << 9) |
+					 (count0 << 16) | (count1 << 20) | (count2 << 24) | (count3 << 28);
 		}
 		{
 			PROCESS_ROWS(y);
-			min_bits |=
-				((min0 & 7) << 12) | ((min1 & 7) << 15) | ((min2 & 7) << 18) | ((min3 & 7) << 21);
-			count_bits |= (count0 << 16) | (count1 << 20) | (count2 << 24) | (count3 << 28);
 			num_frags.y = count0 + count1 + count2 + count3;
+			bits.y = (min0 & 7) | ((min1 & 7) << 3) | ((min2 & 7) << 6) | ((min3 & 7) << 9) |
+					 (count0 << 16) | (count1 << 20) | (count2 << 24) | (count3 << 28);
 		}
 
 		uint num_all_frags = num_frags.x + num_frags.y;
@@ -586,7 +585,7 @@ void generateBlocks(uint bid) {
 		if(num_all_frags == 0) // This means that bx_mask is invalid
 			RECORD(0, 0, 0, 0);
 		uint frag_bits = (num_frags.x << 20) | (num_frags.y << 26);
-		g_scratch_64[dst_offset_64 + i] = uvec2(min_bits, count_bits);
+		g_scratch_64[dst_offset_64 + i] = bits;
 		g_scratch_32[dst_offset_32 + i] = tri_idx | frag_bits;
 
 		// 12 bits for tile-tri index, 20 bits for depth
@@ -708,13 +707,9 @@ void generateBlocks(uint bid) {
 		uint tri_idx = g_scratch_32[src_offset_32 + tile_tri_idx] & 0xffff;
 		uvec2 tri_data = g_scratch_64[src_offset_64 + tile_tri_idx];
 
-		// TODO: group min & count bits earlier
-		// TODO: just store plain bits
-		g_scratch_64[dst_offset_64 + i] = uvec2(
-			tri_idx | (tri_offset0 << 16), (tri_data.x & 0xfff) | ((tri_data.y & 0xffff) << 16));
+		g_scratch_64[dst_offset_64 + i] = uvec2(tri_idx | (tri_offset0 << 16), tri_data.x);
 		g_scratch_64[dst_offset_64 + i + MAX_BLOCK_TRIS] =
-			uvec2(tri_idx | (tri_offset1 << 16),
-				  ((tri_data.x & 0xfff000) >> 12) | (tri_data.y & 0xffff0000));
+			uvec2(tri_idx | (tri_offset1 << 16), tri_data.y);
 	}
 	barrier();
 
@@ -749,6 +744,7 @@ void loadSamples(uint bid, uint hbid, int segment_id) {
 
 	int y = int(LIX & 3);
 	uint count_shift = 16 + (y << 2), min_shift = (y << 1) + y;
+	int mask1 = y >= 1 ? ~0 : 0, mask2 = y >= 2 ? ~0 : 0;
 
 	// TODO: group differently for better memory accesses (and measure)
 	for(uint i = (LIX & WARP_MASK) >> 2; i < tri_count; i += WARP_STEP / 4) {
@@ -758,12 +754,9 @@ void loadSamples(uint bid, uint hbid, int segment_id) {
 
 		int minx = int((tri_data.y >> min_shift) & 7);
 		int countx = int((tri_data.y >> count_shift) & 15);
-
-		int prevx = countx, temp;
-		temp = shuffleUpNV(prevx, 1, 4), prevx += y >= 1 ? temp : 0;
-		temp = shuffleUpNV(prevx, 2, 4), prevx += y >= 2 ? temp : 0;
-		prevx -= countx;
-		tri_offset += prevx;
+		int prevx = countx + (shuffleUpNV(countx, 1, 4) & mask1);
+		prevx += (shuffleUpNV(prevx, 2, 4) & mask2);
+		tri_offset += prevx - countx;
 
 		countx = min(countx, SEGMENT_SIZE - tri_offset);
 		if(tri_offset < 0) {

@@ -1,0 +1,146 @@
+diff --git a/data/shaders/raster_bin_fastest.shader b/data/shaders/raster_bin_fastest.shader
+index 130b851..bc9b2df 100644
+--- a/data/shaders/raster_bin_fastest.shader
++++ b/data/shaders/raster_bin_fastest.shader
+@@ -536,42 +536,41 @@ void generateBlocks(uint bid) {
+ 		uvec2 tri_maxs = g_scratch_64[src_offset_64 + row_idx + MAX_BLOCK_ROW_TRIS];
+ 		uint tri_idx = (tri_maxs.x >> 24) | ((tri_maxs.y >> 16) & 0xff00);
+ 
+-		uint min_bits, count_bits;
+-		uvec2 num_frags;
++		uvec2 bits;
+ 		vec2 cpos = vec2(0);
+ 
+ #define PROCESS_ROWS(e)                                                                            \
+-	int min0 = max(int((tri_mins.e >> 0) & 63) - startx, 0);                                       \
+-	int min1 = max(int((tri_mins.e >> 6) & 63) - startx, 0);                                       \
+-	int min2 = max(int((tri_mins.e >> 12) & 63) - startx, 0);                                      \
+-	int min3 = max(int((tri_mins.e >> 18) & 63) - startx, 0);                                      \
+-	int max0 = min(int((tri_maxs.e >> 0) & 63) - startx, 7);                                       \
+-	int max1 = min(int((tri_maxs.e >> 6) & 63) - startx, 7);                                       \
+-	int max2 = min(int((tri_maxs.e >> 12) & 63) - startx, 7);                                      \
+-	int max3 = min(int((tri_maxs.e >> 18) & 63) - startx, 7);                                      \
+-	int count0 = max(max0 - min0 + 1, 0);                                                          \
+-	int count1 = max(max1 - min1 + 1, 0);                                                          \
+-	int count2 = max(max2 - min2 + 1, 0);                                                          \
+-	int count3 = max(max3 - min3 + 1, 0);                                                          \
+-	cpos += vec2(float(count0 + (min0 << 1)), 1.0) * count0;                                       \
+-	cpos += vec2(float(count1 + (min1 << 1)), 3.0) * count1;                                       \
+-	cpos += vec2(float(count2 + (min2 << 1)), 5.0) * count2;                                       \
+-	cpos += vec2(float(count3 + (min3 << 1)), 7.0) * count3;
+-
+-		{
+-			PROCESS_ROWS(x);
+-			min_bits = (min0 & 7) | ((min1 & 7) << 3) | ((min2 & 7) << 6) | ((min3 & 7) << 9);
+-			count_bits = count0 | (count1 << 4) | (count2 << 8) | (count3 << 12);
+-			num_frags.x = count0 + count1 + count2 + count3;
+-		}
+-		{
+-			PROCESS_ROWS(y);
+-			min_bits |=
+-				((min0 & 7) << 12) | ((min1 & 7) << 15) | ((min2 & 7) << 18) | ((min3 & 7) << 21);
+-			count_bits |= (count0 << 16) | (count1 << 20) | (count2 << 24) | (count3 << 28);
+-			num_frags.y = count0 + count1 + count2 + count3;
+-		}
++	{                                                                                              \
++		int min0 = max(int((tri_mins.e >> 0) & 63) - startx, 0);                                   \
++		int min1 = max(int((tri_mins.e >> 6) & 63) - startx, 0);                                   \
++		int min2 = max(int((tri_mins.e >> 12) & 63) - startx, 0);                                  \
++		int min3 = max(int((tri_mins.e >> 18) & 63) - startx, 0);                                  \
++		int max0 = min(int((tri_maxs.e >> 0) & 63) - startx, 7);                                   \
++		int max1 = min(int((tri_maxs.e >> 6) & 63) - startx, 7);                                   \
++		int max2 = min(int((tri_maxs.e >> 12) & 63) - startx, 7);                                  \
++		int max3 = min(int((tri_maxs.e >> 18) & 63) - startx, 7);                                  \
++		int count0 = max(max0 - min0 + 1, 0);                                                      \
++		int count1 = max(max1 - min1 + 1, 0);                                                      \
++		int count2 = max(max2 - min2 + 1, 0);                                                      \
++		int count3 = max(max3 - min3 + 1, 0);                                                      \
++		cpos += vec2(float(count0 + (min0 << 1)), 1.0) * count0;                                   \
++		cpos += vec2(float(count1 + (min1 << 1)), 3.0) * count1;                                   \
++		cpos += vec2(float(count2 + (min2 << 1)), 5.0) * count2;                                   \
++		cpos += vec2(float(count3 + (min3 << 1)), 7.0) * count3;                                   \
++		uint mask0 = (min0 <= max0 ? ~0u : 0);                                                     \
++		uint mask1 = (min1 <= max1 ? ~0u : 0);                                                     \
++		uint mask2 = (min2 <= max2 ? ~0u : 0);                                                     \
++		uint mask3 = (min3 <= max3 ? ~0u : 0);                                                     \
++		bits.e = (mask0 & (0x000000ffu << min0) & (0x000000ffu >> (7 - max0))) |                   \
++				 (mask1 & (0x0000ff00u << min1) & (0x0000ff00u >> (7 - max1))) |                   \
++				 (mask2 & (0x00ff0000u << min2) & (0x00ff0000u >> (7 - max2))) |                   \
++				 (mask3 & (0xff000000u << min3) & (0xff000000u >> (7 - max3)));                    \
++	}
++		// TODO: remove masks ?
++		PROCESS_ROWS(x);
++		PROCESS_ROWS(y);
+ 
++		uvec2 num_frags = bitCount(bits);
+ 		uint num_all_frags = num_frags.x + num_frags.y;
+ 		cpos *= 0.5 / float(num_all_frags);
+ 		cpos += vec2(bx << 3, by << 3);
+@@ -586,7 +585,7 @@ void generateBlocks(uint bid) {
+ 		if(num_all_frags == 0) // This means that bx_mask is invalid
+ 			RECORD(0, 0, 0, 0);
+ 		uint frag_bits = (num_frags.x << 20) | (num_frags.y << 26);
+-		g_scratch_64[dst_offset_64 + i] = uvec2(min_bits, count_bits);
++		g_scratch_64[dst_offset_64 + i] = bits;
+ 		g_scratch_32[dst_offset_32 + i] = tri_idx | frag_bits;
+ 
+ 		// 12 bits for tile-tri index, 20 bits for depth
+@@ -706,15 +705,10 @@ void generateBlocks(uint bid) {
+ #undef FILL_SEGMENT
+ 
+ 		uint tri_idx = g_scratch_32[src_offset_32 + tile_tri_idx] & 0xffff;
+-		uvec2 tri_data = g_scratch_64[src_offset_64 + tile_tri_idx];
+-
+-		// TODO: group min & count bits earlier
+-		// TODO: just store plain bits
+-		g_scratch_64[dst_offset_64 + i] = uvec2(
+-			tri_idx | (tri_offset0 << 16), (tri_data.x & 0xfff) | ((tri_data.y & 0xffff) << 16));
++		uvec2 tri_bits = g_scratch_64[src_offset_64 + tile_tri_idx];
++		g_scratch_64[dst_offset_64 + i] = uvec2(tri_idx | (tri_offset0 << 16), tri_bits.x);
+ 		g_scratch_64[dst_offset_64 + i + MAX_BLOCK_TRIS] =
+-			uvec2(tri_idx | (tri_offset1 << 16),
+-				  ((tri_data.x & 0xfff000) >> 12) | (tri_data.y & 0xffff0000));
++			uvec2(tri_idx | (tri_offset1 << 16), tri_bits.y);
+ 	}
+ 	barrier();
+ 
+@@ -748,22 +742,24 @@ void loadSamples(uint bid, uint hbid, int segment_id) {
+ 	int first_offset = segment_id << SEGMENT_SHIFT;
+ 
+ 	int y = int(LIX & 3);
+-	uint count_shift = 16 + (y << 2), min_shift = (y << 1) + y;
++	uint cur_shift = y << 3, prev_mask = ~(0xffffffff << cur_shift);
+ 
+ 	// TODO: group differently for better memory accesses (and measure)
+ 	for(uint i = (LIX & WARP_MASK) >> 2; i < tri_count; i += WARP_STEP / 4) {
+ 		uvec2 tri_data = g_scratch_64[src_offset_64 + i];
+ 		uint tri_idx = tri_data.x & 0xffff;
++		uint prev_bits = tri_data.y & prev_mask, cur_bits = (tri_data.y >> cur_shift) & 0xff;
+ 		int tri_offset = int(tri_data.x >> 16) - first_offset;
+ 
+-		int minx = int((tri_data.y >> min_shift) & 7);
+-		int countx = int((tri_data.y >> count_shift) & 15);
++		int minx = findLSB(cur_bits);
++		int countx = bitCount(cur_bits);
+ 
+-		int prevx = countx, temp;
++		// This is broken for some reason...
++		tri_offset += bitCount(tri_data.y & prev_bits);
++		/*int prevx = countx, temp;
+ 		temp = shuffleUpNV(prevx, 1, 4), prevx += y >= 1 ? temp : 0;
+ 		temp = shuffleUpNV(prevx, 2, 4), prevx += y >= 2 ? temp : 0;
+-		prevx -= countx;
+-		tri_offset += prevx;
++		tri_offset += prevx - countx;*/
+ 
+ 		countx = min(countx, SEGMENT_SIZE - tri_offset);
+ 		if(tri_offset < 0) {
+@@ -1017,7 +1013,7 @@ void visualizeSamples(uint sample_count) {
+ 
+ void finishVisualizeSamples(int bid, ivec2 pixel_pos) {
+ 	uint pixel_id = (pixel_pos.x & 7) + ((pixel_pos.y & 3) << 3);
+-	vec3 color = vec3(s_vis_pixels[(LIX & ~31) + pixel_id]) / 32.0;
++	vec3 color = vec3(s_vis_pixels[(LIX & ~31) + pixel_id]) / 16.0;
+ 	uint enc_col = encodeRGBA8(vec4(SATURATE(color), 1.0));
+ 	outputPixel(pixel_pos, enc_col);
+ }

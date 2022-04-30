@@ -24,10 +24,47 @@ Pytania:
 - Może 16x4 ma gorszą koherencję danych trójkątów / tekstur niż 8x8? Coś za coś...
 
 
+Może mógłbym grupować instancje z 4 różnych bloków np.?
+ merguję po dwa dopóki suma jest < 128?
+ Musiałbym w pierwszej fazie zliczać trisy w poszczególnych blokach?
+
+
+
+Lepiej przetwarzać 8 rzędów na raz zamiast 4?
+- rowsy zajmują: 12 bitów na min+max; 48 bitów na 4, 96 bitów na 8
+- tilesy 16x4: 4 bity na min, 5 bitów na count; 16 bitów na 4xmin, 20 bitów na 4xcount
+- tilesy 8x8: 3 bity na min, 4 bity na count; 24 bity na 8xmin, 32 bity na 8xcount
+- tilesy 8x8 (bitmaska): 64 bity
+
+loadSamples zajmuje dużo mniej niż generateBlocks, bo jest mała liczba segmentów w porównaniu do liczby trisów?
+Czy to oznacza, że w generateBlocks mam bardzo mało trisów na blok? Czasami tak
+Ale w niektórychh sytuacjach trisów jest dużo... Są duże różnice między blokami... czy da się zrobić
+algorytm który dobry działa w każdym wypadku?
+
+Jest dużo bloków gdzie mamy mniej niż 16 trisów. Bloki gdzie jest więcej ni 64 są bardzo żadkie. W takich
+sytuacjach już własciwie przechodzimy na raster_tile .
+
+Mogę zmniejszyć wielkość paczki z 3 x 32 bity do 2x32 . A następnie przetwarzać więcej bloków na raz ?
+
+A może podzielić generateBlocks na dwie fazy?
+W pierwszej generuję bloki 8x8 albo nawet 16x8, sortuję je i wrzucam do SMEM
+W drugiej generuję segmenty, offsety i docelowe bloki 8x4 (2x32 bity każdy)
+
+Czyli kolejna wersja:
+- wątki z różnych grup naprzemiennie; jedynie jest problem z użyciem SMEM i sortowaniem
+- czy da się wydajniej robić sortowanie? łączyć grupy?
+- 16x4 od razu rozbijać na dwa strumienie 8x4, każdy element ma 2x32 bity: 32 bity na bitmapę, 16 bitów na offset i 16 bit na tri-idx
+- robić to dwoma niezależnymi wątkami naprzemiennie? chodzi o to, żeby warpy były jak najlepie wypełnione
+
+Pytanie czy jest sens robić na 8 rzędów ?
+możemy spróbować a następnie zrobić pozostałe pomysły ?
+
+Zamieniamy teraz 16x4 na 8x8 ? czy na 16x8? 8x8 i tak będziemy musieli rozbijać na 2, na 4 byłoby barfziej skomplikowane...
+
+
 -----------------------------------------------------------------------------------------
                           === Nie działające / nie pewne pomysły ===
 -----------------------------------------------------------------------------------------
-
 
 * Odnoszenie się do tile-row-trisów i nie generowanie tile-rowów
   BRAK PRZYSPIESZENIA w wersji 16x16, w wersji 16x4 nie da się tego łatwo zaimplementować...
@@ -53,14 +90,28 @@ conference: 1324   61     111   5      1007
 
 
 Wersja 16x4 2560x1330 raster_timings wyłączone (ae7a84ca 28.04):
-             total  setup  bins  tiles  raster_bin  raster_tile  raster_block
-     #boxes: 1705   23     57    5      1541        4            4
-      bunny: 490    70     49    5      303         4            4
- conference: 1342   61     109   5      1028        4            4
-conf-e(256): 1267   61     108   5      953         4            4
-     dragon: 918    188    66    100    236         246          10
-    gallery: 2451   216    75    121    1588        253          10
-     sponza: 3920   62     124   6      3568        4            4
-sponza(256): 3864   62     125   6      3510        4            4
-     teapot: 475    28     48    5      340         4            4
-  white_oak: 14091  51     251   6      13512       4            4
+             total  setup  bins  tiles  raster_bin
+     #boxes: 1705   23     57    5      1541      
+      bunny: 490    70     49    5      303       
+ conference: 1342   61     109   5      1028      
+conf-e(256): 1267   61     108   5      953       
+     dragon: 918    188    66    100    236       
+    gallery: 2451   216    75    121    1588      
+     sponza: 3920   62     124   6      3568      
+sponza(256): 3864   62     125   6      3510      
+     teapot: 475    28     48    5      340       
+  white_oak: 14091  51     251   6      13512     
+
+
+Wersja 8x8 2560x1330 raster_timings wyłączone:
+            total  setup  bins  tiles  raster_bin 
+     #boxes: 1666   24     58    5      1512      (-2%)
+      bunny: 500    69     49    5      300       (-1%)
+ conference: 1343   62     110   5      1025      
+conf-e(256): 1250   61     110   5      934       (-2%)
+     dragon: 935    188    72    100    254       
+    gallery: 2516   217    79    125    1650      
+     sponza: 3892   63     126   6      3533      
+sponza(256): 3818   63     123   6      3473      (-1%)
+     teapot: 460    28     46    5      329       
+  white_oak: 13962  51     254   7      13388     (-1%)

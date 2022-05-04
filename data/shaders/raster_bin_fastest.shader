@@ -540,36 +540,24 @@ void generateBlocks(uint bid) {
 		uvec2 num_frags;
 		vec2 cpos = vec2(0);
 
-#define PROCESS_ROWS(e)                                                                            \
-	int min0 = max(int((tri_mins.e >> 0) & 63) - startx, 0);                                       \
-	int min1 = max(int((tri_mins.e >> 6) & 63) - startx, 0);                                       \
-	int min2 = max(int((tri_mins.e >> 12) & 63) - startx, 0);                                      \
-	int min3 = max(int((tri_mins.e >> 18) & 63) - startx, 0);                                      \
-	int max0 = min(int((tri_maxs.e >> 0) & 63) - startx, 7);                                       \
-	int max1 = min(int((tri_maxs.e >> 6) & 63) - startx, 7);                                       \
-	int max2 = min(int((tri_maxs.e >> 12) & 63) - startx, 7);                                      \
-	int max3 = min(int((tri_maxs.e >> 18) & 63) - startx, 7);                                      \
-	int count0 = max(max0 - min0 + 1, 0);                                                          \
-	int count1 = max(max1 - min1 + 1, 0);                                                          \
-	int count2 = max(max2 - min2 + 1, 0);                                                          \
-	int count3 = max(max3 - min3 + 1, 0);                                                          \
-	cpos += vec2(float(count0 + (min0 << 1)), 1.0) * count0;                                       \
-	cpos += vec2(float(count1 + (min1 << 1)), 3.0) * count1;                                       \
-	cpos += vec2(float(count2 + (min2 << 1)), 5.0) * count2;                                       \
-	cpos += vec2(float(count3 + (min3 << 1)), 7.0) * count3;
+#define PROCESS_4_ROWS(e)                                                                          \
+	{                                                                                              \
+		ivec4 xmin = max(((ivec4(tri_mins.e) >> ivec4(0, 6, 12, 18)) & 63) - startx, 0);           \
+		ivec4 xmax = min(((ivec4(tri_maxs.e) >> ivec4(0, 6, 12, 18)) & 63) - startx, 7);           \
+		ivec4 count = max(xmax - xmin + 1, 0);                                                     \
+		vec4 cpx = vec4(xmin * 2 + count) * count;                                                 \
+		vec4 cpy = vec4(1.0, 3.0, 5.0, 7.0) * count;                                               \
+		cpos += vec2(cpx[0] + cpx[1] + cpx[2] + cpx[3], cpy[0] + cpy[1] + cpy[2] + cpy[3]);        \
+		num_frags.e = count[0] + count[1] + count[2] + count[3];                                   \
+		uint min_bits =                                                                            \
+			(xmin[0] & 7) | ((xmin[1] & 7) << 3) | ((xmin[2] & 7) << 6) | ((xmin[3] & 7) << 9);    \
+		uint count_bits =                                                                          \
+			(count[0] << 16) | (count[1] << 20) | (count[2] << 24) | (count[3] << 28);             \
+		bits.e = min_bits | count_bits;                                                            \
+	}
 
-		{
-			PROCESS_ROWS(x);
-			num_frags.x = count0 + count1 + count2 + count3;
-			bits.x = (min0 & 7) | ((min1 & 7) << 3) | ((min2 & 7) << 6) | ((min3 & 7) << 9) |
-					 (count0 << 16) | (count1 << 20) | (count2 << 24) | (count3 << 28);
-		}
-		{
-			PROCESS_ROWS(y);
-			num_frags.y = count0 + count1 + count2 + count3;
-			bits.y = (min0 & 7) | ((min1 & 7) << 3) | ((min2 & 7) << 6) | ((min3 & 7) << 9) |
-					 (count0 << 16) | (count1 << 20) | (count2 << 24) | (count3 << 28);
-		}
+		PROCESS_4_ROWS(x);
+		PROCESS_4_ROWS(y);
 
 		uint num_all_frags = num_frags.x + num_frags.y;
 		cpos *= 0.5 / float(num_all_frags);

@@ -18,48 +18,9 @@ Bug:
 
 - podział raster bin na wersję 256 i 512; rozdzielanie w classifierze
 
-Pytania:
-- Dlaczego 16 wątków na grupę jest wolniejsze w przypadku niektórych scen ?
-- Dlaczego generateTiles jest dużo szybsze niż generateBlocks?
-- Może 16x4 ma gorszą koherencję danych trójkątów / tekstur niż 8x8? Coś za coś...
+- co dalej? czy chcę jeszcze przyspieszać raster_bin ?
 
-
-Może mógłbym grupować instancje z 4 różnych bloków np.?
- merguję po dwa dopóki suma jest < 128?
- Musiałbym w pierwszej fazie zliczać trisy w poszczególnych blokach?
-
-
-
-Lepiej przetwarzać 8 rzędów na raz zamiast 4?
-- rowsy zajmują: 12 bitów na min+max; 48 bitów na 4, 96 bitów na 8
-- tilesy 16x4: 4 bity na min, 5 bitów na count; 16 bitów na 4xmin, 20 bitów na 4xcount
-- tilesy 8x8: 3 bity na min, 4 bity na count; 24 bity na 8xmin, 32 bity na 8xcount
-- tilesy 8x8 (bitmaska): 64 bity
-
-loadSamples zajmuje dużo mniej niż generateBlocks, bo jest mała liczba segmentów w porównaniu do liczby trisów?
-Czy to oznacza, że w generateBlocks mam bardzo mało trisów na blok? Czasami tak
-Ale w niektórychh sytuacjach trisów jest dużo... Są duże różnice między blokami... czy da się zrobić
-algorytm który dobry działa w każdym wypadku?
-
-Jest dużo bloków gdzie mamy mniej niż 16 trisów. Bloki gdzie jest więcej ni 64 są bardzo żadkie. W takich
-sytuacjach już własciwie przechodzimy na raster_tile .
-
-Mogę zmniejszyć wielkość paczki z 3 x 32 bity do 2x32 . A następnie przetwarzać więcej bloków na raz ?
-
-A może podzielić generateBlocks na dwie fazy?
-W pierwszej generuję bloki 8x8 albo nawet 16x8, sortuję je i wrzucam do SMEM
-W drugiej generuję segmenty, offsety i docelowe bloki 8x4 (2x32 bity każdy)
-
-Czyli kolejna wersja:
-- wątki z różnych grup naprzemiennie; jedynie jest problem z użyciem SMEM i sortowaniem
-- czy da się wydajniej robić sortowanie? łączyć grupy?
-- 16x4 od razu rozbijać na dwa strumienie 8x4, każdy element ma 2x32 bity: 32 bity na bitmapę, 16 bitów na offset i 16 bit na tri-idx
-- robić to dwoma niezależnymi wątkami naprzemiennie? chodzi o to, żeby warpy były jak najlepie wypełnione
-
-Pytanie czy jest sens robić na 8 rzędów ?
-możemy spróbować a następnie zrobić pozostałe pomysły ?
-
-Zamieniamy teraz 16x4 na 8x8 ? czy na 16x8? 8x8 i tak będziemy musieli rozbijać na 2, na 4 byłoby barfziej skomplikowane...
+- mogłbym teraz zrobić raster_tile, tak, żeby rozwiązanie było pełne
 
 
 -----------------------------------------------------------------------------------------

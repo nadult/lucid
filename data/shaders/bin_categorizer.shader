@@ -27,30 +27,27 @@ void main() {
 	//       da się to jakoś oszacować? co najmniej w tile dispatcherze...
 	for(uint i = LIX; i < BIN_COUNT; i += LSIZE) {
 		int num_quads = g_bins.bin_quad_counts[i];
-		
+
 		// TODO: we need accurate count :(
 		int num_tris = num_quads * 2;
 		if(num_tris == 0) {
 			int id = atomicAdd(s_num_empty_bins, 1);
 			if(tile_all_bins)
 				g_bins.tiled_bins[atomicAdd(s_num_tiled_bins, 1)] = int(i);
-		}
-		else if(num_tris < 2048) {
+		} else if(num_tris < 2048 * 0) {
 			g_bins.small_bins[atomicAdd(s_num_small_bins, 1)] = int(i);
 			if(tile_all_bins)
 				g_bins.tiled_bins[atomicAdd(s_num_tiled_bins, 1)] = int(i);
-		}
-		else if(num_tris < 6 * 1024) {
+		} else if(num_tris < 32 * 1024) {
 			g_bins.medium_bins[atomicAdd(s_num_medium_bins, 1)] = int(i);
 			g_bins.tiled_bins[atomicAdd(s_num_tiled_bins, 1)] = int(i);
-		}
-		else if(true) {
+		} else if(true) {
 			g_bins.big_bins[atomicAdd(s_num_big_bins, 1)] = int(i);
 			g_bins.tiled_bins[atomicAdd(s_num_tiled_bins, 1)] = int(i);
 		}
 
 		uint bin_id = i << 16;
-		uint mask = num_tris == 0? 0 : 0xffffffff;
+		uint mask = num_tris == 0 ? 0 : 0xffffffff;
 		g_bin_quads[i * 4 + 0] = mask & (bin_id);
 		g_bin_quads[i * 4 + 1] = mask & (bin_id + (BIN_SIZE << 8));
 		g_bin_quads[i * 4 + 2] = mask & (bin_id + BIN_SIZE + (BIN_SIZE << 8));

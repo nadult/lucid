@@ -6,7 +6,7 @@ Aktualne cele:
 - opisanie algorytmu
 - wrzucenie gdzieś do sieci
 
-Bug: 
+Bugi: 
 - poziome linie widoczne na chestnut_tree01
 - miganie na sponzie w górnej części (screenshot)
 

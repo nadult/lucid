@@ -191,7 +191,7 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	raster_bin_program = EX_PASS(Program::makeCompute(
 		"raster_bin_fastest", defs, mask(m_opts & Opt::debug_raster, ProgramOpt::debug)));
 	raster_tile_program = EX_PASS(Program::makeCompute(
-		"raster_tile", defs, mask(m_opts & Opt::debug_raster, ProgramOpt::debug)));
+		"raster_tile_fastest", defs, mask(m_opts & Opt::debug_raster, ProgramOpt::debug)));
 	raster_block_program = EX_PASS(Program::makeCompute(
 		"raster_block", defs, mask(m_opts & Opt::debug_raster, ProgramOpt::debug)));
 	//	sort_program = EX_PASS(Program::makeCompute(
@@ -1440,7 +1440,7 @@ void LucidRenderer::rasterTile(const Context &ctx) {
 	// - Inny debugger dla compute i inny dla pozostałych shaderów
 	// - możliwość przekazywania konkretnych wartości (np. 4 różne wartości?)
 	// - jakaś klasa do prostej introspekcji linii kodu programu
-	glDispatchCompute(64, 1, 1);
+	glDispatchCompute(128, 1, 1);
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 
 	if(m_opts & Opt::debug_raster) {

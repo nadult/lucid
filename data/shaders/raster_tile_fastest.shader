@@ -24,7 +24,7 @@
 
 #define BUFFER_SIZE (LSIZE * 8)
 
-#define MAX_HBLOCK_TRIS 2048
+#define MAX_HBLOCK_TRIS 256 // TODO: 2048
 #define MAX_HBLOCK_TRIS_SHIFT 10
 
 // TODO: per block or per tile ?
@@ -309,7 +309,7 @@ int generateHBlockTris(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, int min_by
 			if(boffset < MAX_HBLOCK_TRIS)
 				g_scratch_64[dst_offset_64 + boffset + bid * MAX_HBLOCK_TRIS] = value;
 			else
-				s_raster_error |= 1 << bid;
+				atomicOr(s_raster_error, 1 << bid);
 		}
 		if(count1 != 0) {
 			uint bid = (by << 1) + 1;
@@ -321,7 +321,7 @@ int generateHBlockTris(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, int min_by
 			if(boffset < MAX_HBLOCK_TRIS)
 				g_scratch_64[dst_offset_64 + boffset + bid * MAX_HBLOCK_TRIS] = value;
 			else
-				s_raster_error |= 1 << bid;
+				atomicOr(s_raster_error, 1 << bid);
 		}
 	}
 	return tile_tri_idx;
@@ -1043,20 +1043,15 @@ void visualizeSegments(int bid, int hbid, ivec2 pixel_pos) {
 	barrier();
 }*/
 
-void visualizeErrors(int bid) {
-	int lbid = int(LIX >> 5);
-	bid += lbid;
-
+void visualizeErrors() {
+	uint bid = LIX >> 5, bx = bid & 1, by = bid >> 1;
+	ivec2 pixel_pos = ivec2((LIX & 7) + bx * 8, ((LIX >> 3) & 3) + by * 4);
 	uint color = 0xff000031;
-	if((s_raster_error & (1 << lbid)) != 0)
+	if((s_raster_error & (1 << bid)) != 0)
 		color += 0x32;
-	if((s_raster_error & (0x10000 << lbid)) != 0)
+	if((s_raster_error & (0x10000 << bid)) != 0)
 		color += 0x64;
-
-	uint bx = bid & 7, by = bid >> 3;
-	ivec2 pixel_pos = ivec2((LIX & 7) + (bx << 3), ((LIX >> 3) & 3) + (by << 3));
 	outputPixel(pixel_pos, color);
-	outputPixel(pixel_pos + ivec2(0, 4), color);
 }
 
 #define NUM_BIN_STEPS (64 / NUM_WARPS)
@@ -1097,6 +1092,13 @@ void rasterBin(int bin_id) {
 		processInputTris();
 		groupMemoryBarrier();
 		barrier();
+		if(s_raster_error != 0) {
+			visualizeErrors();
+			barrier();
+			if(LIX == 0)
+				s_raster_error = 0;
+			continue;
+		}
 		generateBlocks();
 		barrier();
 		groupMemoryBarrier();
@@ -1104,67 +1106,6 @@ void rasterBin(int bin_id) {
 
 		visualizeHBlockTriangleCounts();
 		//visualizeHBlockFragmentCounts();
-
-		/*
-		for(int fbid = 0; fbid < 64; fbid += NUM_WARPS / 2) {
-			barrier();
-			if((fbid & NUM_WARPS / 2) == 0) {
-				generateBlocks(fbid);
-				groupMemoryBarrier();
-				barrier();
-
-				if(s_raster_error != 0) {
-					visualizeErrors(fbid);
-					fbid += NUM_WARPS;
-					barrier();
-					if(LIX == 0)
-						s_raster_error = 0;
-					continue;
-				}
-			}
-			UPDATE_CLOCK(1);
-
-			int bid = fbid + int(LIX >> 6), hbid = int((LIX >> 5) & 1);
-			int frag_count =
-				int((s_block_frag_count[bid & (NUM_WARPS - 1)] >> (hbid << 4)) & 0xffff);
-			int segment_id = 0;
-
-			ReductionContext context;
-			initReduceSamples(context);
-			//initVisualizeSamples();
-
-			while(frag_count > 0) {
-				int cur_frag_count = min(frag_count, SEGMENT_SIZE);
-				frag_count -= SEGMENT_SIZE;
-
-				loadSamples(bid, hbid, segment_id++);
-				UPDATE_CLOCK(2);
-
-				//visualizeSamples(cur_frag_count);
-				shadeSamples(bid, hbid, cur_frag_count);
-				UPDATE_CLOCK(3);
-
-				reduceSamples(bid, cur_frag_count, context);
-				UPDATE_CLOCK(5);
-
-#ifdef ALPHA_THRESHOLD
-				if(allInvocationsARB(context.out_trans < 1.0 / 255.0))
-					break;
-#endif
-			}
-
-			ivec2 pixel_pos =
-				ivec2((LIX & 7) + ((bid & 7) << 3), ((LIX >> 3) & 3) + (bid & ~7) + (hbid << 2));
-			finishReduceSamples(pixel_pos, context);
-			UPDATE_CLOCK(6);
-
-			//finishVisualizeSamples(bid, pixel_pos);
-			//visualizeFragmentCounts(bid, hbid, pixel_pos);
-			//visualizeTriangleCounts(bid, pixel_pos);
-			//visualizeSegments(bid, hbid, pixel_pos);
-			//UPDATE_CLOCK(7);
-			barrier();
-		}*/
 	}
 }
 

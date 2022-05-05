@@ -2,6 +2,14 @@
 
 // In this rasterizer we're processing half-blocks (8x4); We have 8 hblocks in a tile
 
+// TODO: use more threads per bin (better data coherency);
+// at least 512, 1024 if possible? process 2-4 tiles at once
+//
+// TODO: we should limit scratch memory size as much as possible; in case of large number of SMs
+// we would need a lot memory just for scratch; and it would be mostly unused;
+//
+// Maybe we could allocate this memory dynamically somehow?
+
 #define LIX gl_LocalInvocationIndex
 #define LID gl_LocalInvocationID
 
@@ -351,13 +359,20 @@ void processInputTris() {
 	}
 }
 
-shared uint s_sort_rcount[NUM_WARPS];
+shared uint s_sort_rcount[NUM_HBLOCKS];
+shared uint s_sort_max_rcount;
 
 void prepareSortTris() {
-	if(LIX < NUM_WARPS) {
+	if(LIX < NUM_HBLOCKS) {
 		uint count = s_hblock_counts[LIX] & 0xffff;
-		// rcount: count rounded up to next power of 2, minimum: 32
-		s_sort_rcount[LIX] = max(32, (count & (count - 1)) == 0 ? count : (2 << findMSB(count)));
+		// rcount: count rounded up to next power of 2
+		uint rcount = max(32, (count & (count - 1)) == 0 ? count : (2 << findMSB(count)));
+		uint max_rcount = rcount;
+		max_rcount = max(max_rcount, shuffleXorNV(max_rcount, 1, 8));
+		max_rcount = max(max_rcount, shuffleXorNV(max_rcount, 2, 8));
+		max_rcount = max(max_rcount, shuffleXorNV(max_rcount, 4, 8));
+		if(LIX == 0)
+			s_sort_max_rcount = max_rcount;
 	}
 }
 
@@ -370,14 +385,17 @@ uint bitExtract(uint value, int boffset) { return (value >> boffset) & 1; }
 uint xorBits(uint value, int bit0, int bit1) { return ((value >> bit0) ^ (value >> bit1)) & 1; }
 #endif
 
-void sortTris(uint lbid, uint count, uint buf_offset) {
-	uint lid = LIX & WARP_MASK;
-	uint rcount = s_sort_rcount[lbid];
-	for(uint i = lid + count; i < rcount; i += WARP_STEP)
+void sortTris(uint bid, uint count, uint buf_offset) {
+	barrier();
+
+	uint max_rcount = s_sort_max_rcount;
+	uint lid = LIX & 31;
+	for(uint i = lid + count; i < max_rcount; i += LSIZE / 8)
 		s_buffer[buf_offset + i] = 0xffffffff;
+	barrier();
 
 #ifdef VENDOR_NVIDIA
-	for(uint i = lid; i < rcount; i += WARP_STEP) {
+	for(uint i = lid; i < max_rcount; i += LSIZE / 8) {
 		uint value = s_buffer[buf_offset + i];
 		// TODO: register sort could be faster
 		value = swap(value, 0x01, xorBits(lid, 1, 0)); // K = 2
@@ -392,14 +410,15 @@ void sortTris(uint lbid, uint count, uint buf_offset) {
 		value = swap(value, 0x01, xorBits(lid, 4, 0));
 		s_buffer[buf_offset + i] = value;
 	}
+	barrier();
 	int start_k = 32, end_j = 32;
 #else
 	int start_k = 2, end_j = 1;
 #endif
-	for(uint k = start_k; k <= rcount; k = 2 * k) {
+	for(uint k = start_k; k <= max_rcount; k = 2 * k) {
 		for(uint j = k >> 1; j >= end_j; j = j >> 1) {
-			for(uint i = lid; i < rcount; i += WARP_STEP * 2) {
-				uint idx = (i & j) != 0 ? i + WARP_STEP - j : i;
+			for(uint i = lid; i < max_rcount; i += (LSIZE / 8) * 2) {
+				uint idx = (i & j) != 0 ? i + (LSIZE / 8) - j : i;
 				uint lvalue = s_buffer[buf_offset + idx];
 				uint rvalue = s_buffer[buf_offset + idx + j];
 				if(((idx & k) != 0) == (lvalue.x < rvalue.x)) {
@@ -407,9 +426,10 @@ void sortTris(uint lbid, uint count, uint buf_offset) {
 					s_buffer[buf_offset + idx + j] = lvalue;
 				}
 			}
+			barrier();
 		}
 #ifdef VENDOR_NVIDIA
-		for(uint i = lid; i < rcount; i += WARP_STEP) {
+		for(uint i = lid; i < max_rcount; i += LSIZE / 8) {
 			uint bit = (i & k) == 0 ? 0 : 1;
 			uint value = s_buffer[buf_offset + i];
 			value = swap(value, 0x10, bit ^ bitExtract(lid, 4));
@@ -419,6 +439,7 @@ void sortTris(uint lbid, uint count, uint buf_offset) {
 			value = swap(value, 0x01, bit ^ bitExtract(lid, 0));
 			s_buffer[buf_offset + i] = value;
 		}
+		barrier();
 #endif
 	}
 }

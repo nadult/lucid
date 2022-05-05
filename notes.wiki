@@ -9,6 +9,55 @@ Aktualne cele:
 Bugi: 
 - poziome linie widoczne na chestnut_tree01
 - miganie na sponzie w górnej części (screenshot)
+- niedokładne wyznaczanie ilości trisów per tile (dużo więcej niż faktycznie)
+
+
+-----------------------------------------------------------------------------------------
+                             === Jak ma działać raster_tile ===
+-----------------------------------------------------------------------------------------
+
+- Na razie po prostu używamy indeksów wygenerowanych przez tile_dispatcher; docelowo moglibyśmy
+  w sumie generować sobie takie indeksy i dodatkowo może nawet od razu rasteryzować trókąty
+  dla 4 tile-i (dla całego rzędu)
+
+  Może na razie po prostu z jednej listy trójkątów generuję listy per blok a następnie każdą z nich
+  jeden po drugim sortuję (optymalizacje potem?)
+  A jak z precomputeowaniem danych trókątów ?
+  Chyba robię to per-blok ...; Duża różnica: wcześnej było per-bin
+  Zróbmy wersję która obsłuży wszystkie case-y najpierw
+
+  Najpierw generujemy rzędy a potem docelowe bloki? W tile-u mamy max 4 rzędy
+  Może od razu bloki?
+
+  Jak zminimalizować operacje na pamięci ?
+
+  Średni case:
+  - San Miguel: 1024 trisów na tile, 32 trisy na blok
+  - PowerPlant: 
+
+
+  Może łatwiej będzie przerobić raster_bin na raster_tile:
+  - tak samo, tylko używam indeksów tile-owych
+
+
+  A może łatwiej byłoby przerobić w jakiś sposób raster_bin?
+  - napoczątku musiałbym dodać fazę filtrującą trókąty albo renderującą je rząd po rzędzie?
+
+- Sortowanie robiłbym na jak dużych blokach? W tym wypadku chyba na 4x4, żbo to jest sytuacja z
+  potencjalnie dużą liczbą trókątów. Nie mogę zakładać, że mi się zmieszczą...
+
+  Jakie mam limity ?
+  Max 64K na bin, max 2K na tile?
+  Max 512 na blok ? Blok 8x4 czy 4x4?
+  Na hairballu jest nawet 2K
+  Jeśli będę przetwarzać 1 tile na raz to nie będzie problemu, zmiesci się...
+  sortowanie robię jak?
+  W takiej sytuacji muszę wszystkie wątki oddelegować do sortowania jednego bloku,
+  bo równocześnie więcej w SMEM się nie zmieści. Po prostu dynamicznie alokuję wątki do bloków?
+  Opcje: 1/2/4/8/16 bloków na raz ? zależnie od max(block count)?
+  Czy max 2k na tile to nie jest za mało?
+
+  Na hairballu jest 68K...
 
 -----------------------------------------------------------------------------------------
                              === Pomysły na optymalizacje ===
@@ -21,6 +70,10 @@ Bugi:
 - co dalej? czy chcę jeszcze przyspieszać raster_bin ?
 
 - mogłbym teraz zrobić raster_tile, tak, żeby rozwiązanie było pełne
+
+- różne segmenty mogą mieć różną ilość pracy do wykonania; niektóre mogą kończyć szybciej, inne później
+  czy da się jakoś zmienić pipeline aby praca była bardziej wyrównana?
+
 
 
 -----------------------------------------------------------------------------------------

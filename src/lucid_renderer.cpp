@@ -1630,8 +1630,8 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 									num_rejected[2], num_rejected[3]);
 
 	vector<StatsRow> timings;
-	Str timer_names[] = {"generate rows",	"generate blocks", "load samples", "shade samples",
-						 "reorder samples", "reduce samples",  "finish reduce"};
+	Str timer_names[] = {"generate rows", "generate blocks", "load samples",
+						 "shade samples", "reduce samples",	 "finish reduce"};
 	u64 total = 0;
 	for(int i : intRange(timer_names))
 		total += bin_counters[15 + i];

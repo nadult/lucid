@@ -1137,7 +1137,7 @@ void rasterBin(int bin_id) {
 			UPDATE_CLOCK(3);
 
 			reduceSamples(bid, cur_frag_count, context);
-			UPDATE_CLOCK(5);
+			UPDATE_CLOCK(4);
 
 #ifdef ALPHA_THRESHOLD
 			if(allInvocationsARB(context.out_trans < 1.0 / 255.0))
@@ -1148,13 +1148,12 @@ void rasterBin(int bin_id) {
 		ivec2 pixel_pos =
 			ivec2((LIX & 7) + ((bid & 7) << 3), ((LIX >> 3) & 3) + (bid & ~7) + (hbid << 2));
 		finishReduceSamples(pixel_pos, context);
-		UPDATE_CLOCK(6);
+		UPDATE_CLOCK(5);
 
 		//finishVisualizeSamples(bid, pixel_pos);
 		//visualizeFragmentCounts(bid, hbid, pixel_pos);
 		//visualizeTriangleCounts(bid, pixel_pos);
 		//visualizeSegments(bid, hbid, pixel_pos);
-		//UPDATE_CLOCK(7);
 		barrier();
 	}
 }

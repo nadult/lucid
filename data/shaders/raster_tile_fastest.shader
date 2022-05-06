@@ -946,6 +946,7 @@ void rasterBin(int bin_id) {
 		processInputTris();
 		groupMemoryBarrier();
 		barrier();
+		UPDATE_CLOCK(0);
 
 		// TODO: handle tri_count == 0
 
@@ -959,7 +960,7 @@ void rasterBin(int bin_id) {
 		generateBlocks();
 		barrier();
 		groupMemoryBarrier();
-		UPDATE_CLOCK(0);
+		UPDATE_CLOCK(1);
 
 		ReductionContext context;
 		initReduction(context);
@@ -974,14 +975,18 @@ void rasterBin(int bin_id) {
 				findSegments(bid, segment_id);
 			uint cur_samples = min(SEGMENT_SIZE, num_frags - segment_id * SEGMENT_SIZE);
 			loadSamples(bid, segment_id);
+			UPDATE_CLOCK(2);
 			//visualizeSamples(bid, cur_samples);
 			shadeSamples(bid, cur_samples);
+			UPDATE_CLOCK(3);
 			reduceSamples(bid, cur_samples, context);
+			UPDATE_CLOCK(4);
 		}
 
 		uint bx = bid & 1, by = bid >> 1;
 		ivec2 pixel_pos = ivec2((LIX & 7) + bx * 8, ((LIX >> 3) & 3) + by * 4);
 		finishReduction(pixel_pos, context);
+		UPDATE_CLOCK(5);
 		//finishVisualizeSamples(bid, pixel_pos);
 		//visualizeHBlockTriangleCounts(bid, pixel_pos);
 		//visualizeHBlockFragmentCounts(bid, pixel_pos);

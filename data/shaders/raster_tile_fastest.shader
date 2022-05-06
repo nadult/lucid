@@ -637,9 +637,6 @@ uint shadeSample(ivec2 tile_pixel_pos, uint scratch_tri_offset, out float out_de
 	getTriangleParams(scratch_tri_offset, depth_eq, bary_params, edge0_eq, edge1_eq, instance_id,
 					  instance_flags);
 
-	uint unormal, v0, v1, v2;
-	getTriangleSecondaryParams(scratch_tri_offset, unormal, v0, v1, v2);
-
 	float inv_ray_pos = depth_eq.x * px + (depth_eq.y * py + depth_eq.z);
 	out_depth = inv_ray_pos;
 	float ray_pos = 1.0 / inv_ray_pos;
@@ -658,11 +655,15 @@ uint shadeSample(ivec2 tile_pixel_pos, uint scratch_tri_offset, out float out_de
 	}
 	bary -= bary_params;
 
+	uint unormal, v0, v1, v2;
+	getTriangleSecondaryParams(scratch_tri_offset, unormal, v0, v1, v2);
+
 	uint instance_color = g_instances[instance_id].color;
 	vec4 color = decodeRGBA8(instance_color);
-	/*if((instance_flags & INST_HAS_TEXTURE) != 0) {
-		vec2 tex0, tex1, tex2;
-		getTriangleVertexTexCoords(scratch_tri_offset, tex0, tex1, tex2);
+	if((instance_flags & INST_HAS_TEXTURE) != 0) {
+		vec2 tex0 = g_tex_coords[v0];
+		vec2 tex1 = g_tex_coords[v1] - tex0;
+		vec2 tex2 = g_tex_coords[v2] - tex0;
 
 		vec2 tex_coord = bary[0] * tex1 + (bary[1] * tex2 + tex0);
 		vec2 tex_dx = bary_dx[0] * tex1 + bary_dx[1] * tex2;
@@ -683,23 +684,24 @@ uint shadeSample(ivec2 tile_pixel_pos, uint scratch_tri_offset, out float out_de
 	}
 
 	if((instance_flags & INST_HAS_VERTEX_COLORS) != 0) {
-		vec4 col0, col1, col2;
-		getTriangleVertexColors(scratch_tri_offset, col0, col1, col2);
+		vec4 col0 = decodeRGBA8(g_colors[v0]);
+		vec4 col1 = decodeRGBA8(g_colors[v1]);
+		vec4 col2 = decodeRGBA8(g_colors[v2]);
 		color *= (1.0 - bary[0] - bary[1]) * col0 + (bary[0] * col1 + bary[1] * col2);
-	}*/
+	}
 
 	if(color.a == 0.0)
 		return 0;
 
 	vec3 normal;
-	/*if((instance_flags & INST_HAS_VERTEX_NORMALS) != 0) {
-		vec3 nrm0, nrm1, nrm2;
-		getTriangleVertexNormals(scratch_tri_offset, nrm0, nrm1, nrm2);
-		nrm1 -= nrm0;
-		nrm2 -= nrm0;
+	if((instance_flags & INST_HAS_VERTEX_NORMALS) != 0) {
+		vec3 nrm0 = decodeNormalUint(g_normals[v0]);
+		vec3 nrm1 = decodeNormalUint(g_normals[v1]) - nrm0;
+		vec3 nrm2 = decodeNormalUint(g_normals[v2]) - nrm0;
 		normal = bary[0] * nrm1 + (bary[1] * nrm2 + nrm0);
-	} else*/
-	{ normal = decodeNormalUint(unormal); }
+	} else {
+		normal = decodeNormalUint(unormal);
+	}
 
 	float light_value = max(0.0, dot(-lighting.sun_dir, normal) * 0.7 + 0.3);
 	color.rgb = SATURATE(finalShading(color.rgb, light_value));

@@ -136,9 +136,6 @@
     <None Include="..\data\shaders\raster_block.shader">
       <Filter>shaders</Filter>
     </None>
-    <None Include="..\data\shaders\raster_tile.shader">
-      <Filter>shaders</Filter>
-    </None>
     <None Include="..\data\shaders\setup.shader">
       <Filter>shaders</Filter>
     </None>

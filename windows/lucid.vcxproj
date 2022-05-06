@@ -153,7 +153,6 @@
     <None Include="..\data\shaders\raster_bin_mixed.shader" />
     <None Include="..\data\shaders\raster_bin_reduction_samples.shader" />
     <None Include="..\data\shaders\raster_block.shader" />
-    <None Include="..\data\shaders\raster_tile.shader" />
     <None Include="..\data\shaders\raster_tile_fastest.shader" />
     <None Include="..\data\shaders\setup.shader" />
     <None Include="..\data\shaders\simple.shader" />

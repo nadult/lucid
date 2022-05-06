@@ -19,6 +19,7 @@
 #define NUM_WARPS (LSIZE / 32)
 #define NUM_WARPS_SHIFT (LSHIFT - 5)
 
+#define WARP_SIZE 32
 #define WARP_STEP 32
 #define WARP_MASK 31
 
@@ -33,9 +34,6 @@
 
 #define SEGMENT_SIZE 128
 #define SEGMENT_SHIFT 7
-
-#define MAX_SEGMENTS 32
-#define MAX_SEGMENTS_SHIFT 5
 
 #define NUM_HBLOCKS 8
 #define NUM_HBLOCK_ROWS 4
@@ -83,7 +81,7 @@ uint scratch64TriOffset(uint tri_idx) {
 }
 
 uint scratch64InitialHBlockOffset(uint bid) {
-	return (gl_WorkGroupID.x << WORKGROUP_32_SCRATCH_SHIFT) + 32 * 1024 + bid * MAX_HBLOCK_TRIS;
+	return (gl_WorkGroupID.x << WORKGROUP_64_SCRATCH_SHIFT) + 32 * 1024 + bid * MAX_HBLOCK_TRIS;
 }
 
 uint scratch64SortedHBlockTrisOffset(uint bid) {
@@ -105,7 +103,7 @@ shared uint s_buffer[BUFFER_SIZE + 1];
 shared uint s_mini_buffer[LSIZE];
 
 // TODO: how many segments? Should we recreate them every 256 tris?
-shared uint s_segments[NUM_WARPS * MAX_SEGMENTS * 2];
+shared uint s_segments[NUM_HBLOCKS * WARP_SIZE];
 shared int s_raster_error;
 
 // Only used when debugging
@@ -167,6 +165,7 @@ void storeTriangle(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, uint v0, uint 
 
 	uint instance_flags = g_instances[instance_id].flags;
 	uint instance_color = g_instances[instance_id].color;
+	// TODO: flag for instance color?
 
 	// Nice optimization for barycentric computations:
 	// dot(cross(edge, dir), normal) == dot(dir, cross(normal, edge))
@@ -275,7 +274,7 @@ int generateHBlockTris(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, int min_by
 	int min##id = int(max(max(scan_min[0], scan_min[1]), max(scan_min[2], 0.0)));                  \
 	int max##id = int(min(min(scan_max[0], scan_max[1]), min(scan_max[2], TILE_SIZE))) - 1;        \
 	if(min##id > max##id)                                                                          \
-		min##id = 63, max##id = 0;                                                                 \
+		min##id = TILE_SIZE - 1, max##id = 0;                                                      \
 	scan_min += scan_step, scan_max += scan_step;
 		SCAN_STEP(0);
 		SCAN_STEP(1);
@@ -291,6 +290,8 @@ int generateHBlockTris(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, int min_by
 		ivec4 qmin1 = max(ivec4(min0, min1, min2, min3) - 8, 0);
 		ivec4 qmax1 = min(ivec4(max0, max1, max2, max3) - 8, 7);
 		ivec4 qcount1 = max(qmax1 - qmin1 + 1, 0);
+		qmin1 &= 7;
+		qmin0 &= 7;
 		uint count1 = qcount1[0] + qcount1[1] + qcount1[2] + qcount1[3];
 
 		if(count0 + count1 == 0)
@@ -354,7 +355,8 @@ void processInputTris() {
 					frustum.ws_shared_origin;
 
 		int tile_tri_idx = generateHBlockTris(i, tri0, tri1, tri2, min_by, max_by);
-		if(tile_tri_idx < MAX_SCRATCH_TRIS)
+		// TODO: separate this ?
+		if(tile_tri_idx < MAX_SCRATCH_TRIS && tile_tri_idx != -1)
 			storeTriangle(tile_tri_idx, tri0, tri1, tri2, v0, v1, v2, instance_id);
 	}
 }
@@ -476,13 +478,9 @@ void generateBlocks() {
 		// 12 bits for tile-tri index, 20 bits for depth
 		s_buffer[buf_offset + i] = i | (uint(depth) << 12);
 	}
+
 	barrier();
-
 	sortTris(tri_count, buf_offset);
-
-	if(tri_count < 99999999)
-		return;
-
 	barrier();
 	groupMemoryBarrier();
 
@@ -541,41 +539,73 @@ void generateBlocks() {
 
 		uint block_tri_idx = s_buffer[buf_offset + i] & 0xffff;
 		uvec2 tri_data = g_scratch_64[src_offset_64 + block_tri_idx];
-		tri_data.y = (tri_data.y & 0xffff) | (tri_offset << 16);
+		tri_data.y = (tri_data.y & 0xffff) | (tri_offset << 16); // TODO: opt
 		g_scratch_64[dst_offset_64 + i] = tri_data;
 	}
 	barrier();
 }
 
-void prepareSegments(int first_tri) {}
+// Jak chcemy generowaæ segmenty ?
+// Max 32 segmenty i po prostu mamy jakiœ startowy tris?
+void findSegments(uint bid, uint first_segment_id) {
+	uint segment_id = first_segment_id + (LIX & 31);
+	uint target_frag_offset = segment_id * SEGMENT_SIZE;
+	uint src_offset_64 = scratch64SortedHBlockTrisOffset(bid);
 
-/*
-void loadSamples(uint bid, uint hbid, int segment_id) {
-	uint sbid = ((bid << 1) + hbid) & (NUM_WARPS * 2 - 1); // TODO: describe
-	uint seg_group_offset = sbid << MAX_SEGMENTS_SHIFT;
-	uint segment_data = s_segments[seg_group_offset + segment_id];
-	uint tri_count = segment_data >> 8;
-	uint first_tri = segment_data & 0xff;
+	// TODO: this can be greatly optimized
+	uint tri_count = s_hblock_counts[bid] & 0xffff;
+	int min_tri_id = 0, max_tri_id = int(tri_count) - 1;
+	while(min_tri_id + 1 < max_tri_id) {
+		int mid = (min_tri_id + max_tri_id) >> 1;
+		uint value = g_scratch_64[src_offset_64 + mid].y >> 16;
+		if(value > target_frag_offset)
+			max_tri_id = target_frag_offset + 32 <= value ? mid - 1 : mid;
+		else
+			min_tri_id = value + 32 <= target_frag_offset ? mid + 1 : mid;
+	}
 
-	uint src_offset_64 = scratch64HalfBlockTrisOffset(sbid) + first_tri;
-	uint buf_offset = (LIX >> 5) << SEGMENT_SHIFT;
-	int first_offset = segment_id << SEGMENT_SHIFT;
+	int tri_id = min_tri_id;
+	while(tri_id < tri_count) {
+		uvec2 tri_data = g_scratch_64[src_offset_64 + tri_id];
+		// Maybe it's cheaper to just compare with next value?
+		uvec4 qcount = (uvec4(tri_data.x) >> uvec4(16, 20, 24, 28)) & 15;
+		uint cur_count = qcount.x + qcount.y + qcount.z + qcount.w;
+		uint cur_offset = tri_data.y >> 16;
+		if(target_frag_offset < cur_offset + cur_count)
+			break;
+		tri_id++;
+	}
+
+	s_segments[bid * WARP_SIZE + (LIX & 31)] = tri_id;
+}
+
+void loadSamples(uint bid, uint segment_id) {
+	uint first_tri = s_segments[bid * WARP_SIZE + segment_id];
+	uint tri_count = min((s_hblock_counts[bid] & 0xffff) - first_tri, SEGMENT_SIZE);
+	first_tri = 0;
+	tri_count = s_hblock_counts[bid] & 0xffff;
+
+	uint src_offset_64 = scratch64SortedHBlockTrisOffset(bid) + first_tri;
+	uint buf_offset = bid << SEGMENT_SHIFT;
+	int first_offset = int(segment_id << SEGMENT_SHIFT);
 
 	int y = int(LIX & 3);
-	uint count_shift = 16 + (y << 2), min_shift = (y << 1) + y;
+	uint count_shift = 16 + (y << 2), min_shift = (y << 2);
 	int mask1 = y >= 1 ? ~0 : 0, mask2 = y >= 2 ? ~0 : 0;
 
 	// TODO: group differently for better memory accesses (and measure)
 	for(uint i = (LIX & WARP_MASK) >> 2; i < tri_count; i += WARP_STEP / 4) {
 		uvec2 tri_data = g_scratch_64[src_offset_64 + i];
-		uint tri_idx = tri_data.x & 0xffff;
-		int tri_offset = int(tri_data.x >> 16) - first_offset;
+		uint tri_idx = tri_data.y & 0xffff;
+		int tri_offset = int(tri_data.y >> 16) - first_offset;
 
-		int minx = int((tri_data.y >> min_shift) & 7);
-		int countx = int((tri_data.y >> count_shift) & 15);
+		int minx = int((tri_data.x >> min_shift) & 7);
+		int countx = int((tri_data.x >> count_shift) & 15);
 		int prevx = countx + (shuffleUpNV(countx, 1, 4) & mask1);
-		prevx += (shuffleUpNV(prevx, 2, 4) & mask2);
+		prevx += shuffleUpNV(prevx, 2, 4) & mask2;
 		tri_offset += prevx - countx;
+		//if(tri_offset > SEGMENT_SIZE) // TODO
+		//break;
 
 		countx = min(countx, SEGMENT_SIZE - tri_offset);
 		if(tri_offset < 0) {
@@ -589,7 +619,6 @@ void loadSamples(uint bid, uint hbid, int segment_id) {
 		uint scratch_tri_offset = scratch64TriOffset(tri_idx);
 		uint pixel_id = (y << 3) | minx;
 		uint value = pixel_id | (scratch_tri_offset << 8);
-
 		for(int j = 0; j < countx; j++) {
 			s_buffer[buf_offset + tri_offset] = value;
 			tri_offset++;
@@ -599,8 +628,8 @@ void loadSamples(uint bid, uint hbid, int segment_id) {
 }
 
 // TODO: Can we improve speed of loading vertex data?
-uint shadeSample(ivec2 bin_pixel_pos, uint scratch_tri_offset, out float out_depth) {
-	float px = float(bin_pixel_pos.x), py = float(bin_pixel_pos.y);
+uint shadeSample(ivec2 tile_pixel_pos, uint scratch_tri_offset, out float out_depth) {
+	float px = float(tile_pixel_pos.x), py = float(tile_pixel_pos.y);
 
 	vec3 depth_eq, edge0_eq, edge1_eq;
 	uint instance_id, instance_flags;
@@ -629,8 +658,9 @@ uint shadeSample(ivec2 bin_pixel_pos, uint scratch_tri_offset, out float out_dep
 	}
 	bary -= bary_params;
 
+	uint instance_color = g_instances[instance_id].color;
 	vec4 color = decodeRGBA8(instance_color);
-	if((instance_flags & INST_HAS_TEXTURE) != 0) {
+	/*if((instance_flags & INST_HAS_TEXTURE) != 0) {
 		vec2 tex0, tex1, tex2;
 		getTriangleVertexTexCoords(scratch_tri_offset, tex0, tex1, tex2);
 
@@ -656,33 +686,32 @@ uint shadeSample(ivec2 bin_pixel_pos, uint scratch_tri_offset, out float out_dep
 		vec4 col0, col1, col2;
 		getTriangleVertexColors(scratch_tri_offset, col0, col1, col2);
 		color *= (1.0 - bary[0] - bary[1]) * col0 + (bary[0] * col1 + bary[1] * col2);
-	}
+	}*/
 
 	if(color.a == 0.0)
 		return 0;
 
 	vec3 normal;
-	if((instance_flags & INST_HAS_VERTEX_NORMALS) != 0) {
+	/*if((instance_flags & INST_HAS_VERTEX_NORMALS) != 0) {
 		vec3 nrm0, nrm1, nrm2;
 		getTriangleVertexNormals(scratch_tri_offset, nrm0, nrm1, nrm2);
 		nrm1 -= nrm0;
 		nrm2 -= nrm0;
 		normal = bary[0] * nrm1 + (bary[1] * nrm2 + nrm0);
-	} else {
-		normal = decodeNormalUint(unormal);
-	}
+	} else*/
+	{ normal = decodeNormalUint(unormal); }
 
 	float light_value = max(0.0, dot(-lighting.sun_dir, normal) * 0.7 + 0.3);
 	color.rgb = SATURATE(finalShading(color.rgb, light_value));
 	return encodeRGBA8(color);
 }
 
-void shadeSamples(int bid, int hbid, uint sample_count) {
+void shadeSamples(uint bid, uint sample_count) {
 	// TODO: what's the best way to fix broken pixels?
 	// full sort ? recreate full depth values and sort pairs?
 
-	uint buf_offset = (LIX >> 5) << SEGMENT_SHIFT;
-	ivec2 half_block_pos = ivec2((bid & 7) << 3, (bid & ~7) + (hbid << 2));
+	uint buf_offset = bid << SEGMENT_SHIFT;
+	ivec2 half_block_pos = ivec2((bid & 1) << 3, (bid >> 1) << 2);
 
 	for(uint i = LIX & WARP_MASK; i < sample_count; i += WARP_STEP) {
 		uint value = s_buffer[buf_offset + i];
@@ -707,7 +736,7 @@ struct ReductionContext {
 	uint out_color;
 };
 
-void initReduceSamples(out ReductionContext ctx) {
+void initReduction(out ReductionContext ctx) {
 #ifdef VISUALIZE_ERRORS
 	ctx.prev_depths = vec4(999999999.0);
 #else
@@ -719,7 +748,7 @@ void initReduceSamples(out ReductionContext ctx) {
 }
 
 void reduceSamples(uint bid, uint sample_count, in out ReductionContext ctx) {
-	uint buf_offset = (LIX >> 5) << SEGMENT_SHIFT;
+	uint buf_offset = bid << SEGMENT_SHIFT;
 	uint mini_offset = LIX & ~31;
 	uint pixel_bit = 1u << (LIX & 31);
 	uint pixel_id = LIX & 31;
@@ -798,7 +827,7 @@ void reduceSamples(uint bid, uint sample_count, in out ReductionContext ctx) {
 	ctx.out_color = encodeRGB10(out_color);
 }
 
-void finishReduceSamples(ivec2 pixel_pos, ReductionContext ctx) {
+void finishReduction(ivec2 pixel_pos, ReductionContext ctx) {
 	vec3 out_color = decodeRGB10(ctx.out_color);
 
 	for(int i = 2; i >= 0; i--)
@@ -820,27 +849,20 @@ void finishReduceSamples(ivec2 pixel_pos, ReductionContext ctx) {
 
 void initVisualizeSamples() { s_vis_pixels[LIX] = 0; }
 
-void visualizeSamples(uint sample_count) {
-	uint buf_offset = (LIX >> 5) << SEGMENT_SHIFT;
+void visualizeSamples(uint bid, uint sample_count) {
+	uint buf_offset = bid << SEGMENT_SHIFT;
 	for(uint i = LIX & 31; i < sample_count; i += 32) {
 		uint pixel_id = s_buffer[buf_offset + i] & 31;
 		atomicAdd(s_vis_pixels[(LIX & ~31) + pixel_id], 1);
 	}
 }
 
-void finishVisualizeSamples(int bid, ivec2 pixel_pos) {
+void finishVisualizeSamples(uint bid, ivec2 pixel_pos) {
 	uint pixel_id = (pixel_pos.x & 7) + ((pixel_pos.y & 3) << 3);
 	vec3 color = vec3(s_vis_pixels[(LIX & ~31) + pixel_id]) / 32.0;
 	uint enc_col = encodeRGBA8(vec4(SATURATE(color), 1.0));
 	outputPixel(pixel_pos, enc_col);
 }
-
-void visualizeFragmentCounts(int bid, int hbid, ivec2 pixel_pos) {
-	int lbid = bid & (NUM_WARPS - 1);
-	uint count = (s_block_frag_count[lbid] >> (hbid << 4)) & 0xffff;
-	vec4 color = vec4(SATURATE(vec3(count) / 512.0), 1.0);
-	outputPixel(pixel_pos, encodeRGBA8(color));
-}*/
 
 vec3 colorizeValue(uint value, uvec4 steps) {
 	vec3 color;
@@ -859,9 +881,7 @@ vec3 colorizeValue(uint value, uvec4 steps) {
 	return color;
 }
 
-void visualizeHBlockTriangleCounts() {
-	uint bid = LIX >> 5, bx = bid & 1, by = bid >> 1;
-	ivec2 pixel_pos = ivec2((LIX & 7) + bx * 8, ((LIX >> 3) & 3) + by * 4);
+void visualizeHBlockTriangleCounts(uint bid, ivec2 pixel_pos) {
 	uint count = s_hblock_counts[bid] & 0xffff;
 	//count = s_tile_tri_count;
 	vec3 color = colorizeValue(count, uvec4(256, 512, 1024, 2048));
@@ -870,44 +890,13 @@ void visualizeHBlockTriangleCounts() {
 	outputPixel(pixel_pos, encodeRGBA8(vec4(SATURATE(color), 1.0)));
 }
 
-void visualizeHBlockFragmentCounts() {
-	uint bid = LIX >> 5, bx = bid & 1, by = bid >> 1;
-	ivec2 pixel_pos = ivec2((LIX & 7) + bx * 8, ((LIX >> 3) & 3) + by * 4);
+void visualizeHBlockFragmentCounts(uint bid, ivec2 pixel_pos) {
 	uint count = s_hblock_counts[bid] >> 16;
 	vec3 color = colorizeValue(count, uvec4(256, 1024, 2048, 4096));
 	if(s_tile_tri_count > MAX_SCRATCH_TRIS)
 		color = vec3(1, 0, 0);
 	outputPixel(pixel_pos, encodeRGBA8(vec4(SATURATE(color), 1.0)));
 }
-
-/*
-void visualizeSegments(int bid, int hbid, ivec2 pixel_pos) {
-	barrier();
-	if(LIX < NUM_WARPS * 2) {
-		uint seg_group_offset = LIX << MAX_SEGMENTS_SHIFT;
-		s_mini_buffer[LIX] = 0;
-
-		int prev_tri = -1;
-		for(int i = 0; i < MAX_SEGMENTS; i++) {
-			uint segment = s_segments[seg_group_offset + i];
-			if(segment == 0)
-				break;
-
-			int first_tri = int(segment & 0xff);
-			uint tri_count = (segment >> 8) & 0xff;
-			if(first_tri <= prev_tri)
-				RECORD(bid, i, prev_tri, first_tri);
-			prev_tri = first_tri;
-			s_mini_buffer[LIX] += tri_count;
-		}
-	}
-	barrier();
-	int sbid = (bid * 2 + hbid) & (NUM_WARPS * 2 - 1);
-	uint count = s_mini_buffer[sbid] * 8;
-	vec3 color = vec3(count) / 512;
-	outputPixel(pixel_pos, encodeRGBA8(vec4(SATURATE(color), 1.0)));
-	barrier();
-}*/
 
 void visualizeErrors() {
 	uint bid = LIX >> 5, bx = bid & 1, by = bid >> 1;
@@ -958,6 +947,9 @@ void rasterBin(int bin_id) {
 		processInputTris();
 		groupMemoryBarrier();
 		barrier();
+
+		// TODO: handle tri_count == 0
+
 		if(s_raster_error != 0) {
 			visualizeErrors();
 			barrier();
@@ -970,9 +962,33 @@ void rasterBin(int bin_id) {
 		groupMemoryBarrier();
 		UPDATE_CLOCK(0);
 
-		visualizeHBlockTriangleCounts();
-		//visualizeHBlockFragmentCounts();
+		ReductionContext context;
+		initReduction(context);
+		//initVisualizeSamples();
+
+		uint bid = LIX >> 5;
+		uint num_frags = s_hblock_counts[bid] >> 16;
+		uint num_segments = (num_frags + SEGMENT_SIZE - 1) >> SEGMENT_SHIFT;
+
+		for(uint segment_id = 0; segment_id < num_segments; segment_id++) {
+			if((segment_id & 31) == 0)
+				findSegments(bid, segment_id);
+			uint cur_samples = min(SEGMENT_SIZE, num_frags - segment_id * SEGMENT_SIZE);
+			loadSamples(bid, segment_id);
+			//visualizeSamples(bid, cur_samples);
+			shadeSamples(bid, cur_samples);
+			reduceSamples(bid, cur_samples, context);
+		}
+
+		uint bx = bid & 1, by = bid >> 1;
+		ivec2 pixel_pos = ivec2((LIX & 7) + bx * 8, ((LIX >> 3) & 3) + by * 4);
+		finishReduction(pixel_pos, context);
+		//finishVisualizeSamples(bid, pixel_pos);
+
+		//visualizeHBlockTriangleCounts(bid, pixel_pos);
+		//visualizeHBlockFragmentCounts(bid, pixel_pos);
 	}
+	barrier();
 }
 
 int loadNextBin() {

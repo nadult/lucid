@@ -198,10 +198,11 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	//		"mask_sort", defs, mask(m_opts & Opt::debug_masks, ProgramOpt::debug)));
 	dummy_program = EX_PASS(Program::makeCompute("dummy", defs));
 
-	if(auto disas = raster_bin_program.getDisassembly()) {
-		mkdirRecursive("temp").ignore();
+	mkdirRecursive("temp").ignore();
+	if(auto disas = raster_bin_program.getDisassembly())
 		saveFile("temp/raster_bin.asm", *disas).ignore();
-	}
+	if(auto disas = raster_tile_program.getDisassembly())
+		saveFile("temp/raster_tile.asm", *disas).ignore();
 
 	compose_program = EX_PASS(Program::make("compose", "", {"in_pos"}));
 
@@ -1430,6 +1431,7 @@ void LucidRenderer::rasterTile(const Context &ctx) {
 	raster_tile_program.setFrustum(ctx.camera);
 	raster_tile_program.setViewport(ctx.camera, m_size);
 	raster_tile_program.setShadows(ctx.shadows.matrix, ctx.shadows.enable);
+	raster_tile_program["background_color"] = u32(ctx.config.background_color);
 	ctx.lighting.setUniforms(raster_tile_program.glProgram());
 
 	if(m_opts & Opt::debug_raster)

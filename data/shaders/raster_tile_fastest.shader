@@ -582,8 +582,6 @@ void findSegments(uint bid, uint first_segment_id) {
 void loadSamples(uint bid, uint segment_id) {
 	uint first_tri = s_segments[bid * WARP_SIZE + segment_id];
 	uint tri_count = min((s_hblock_counts[bid] & 0xffff) - first_tri, SEGMENT_SIZE);
-	first_tri = 0;
-	tri_count = s_hblock_counts[bid] & 0xffff;
 
 	uint src_offset_64 = scratch64SortedHBlockTrisOffset(bid) + first_tri;
 	uint buf_offset = bid << SEGMENT_SHIFT;
@@ -598,14 +596,14 @@ void loadSamples(uint bid, uint segment_id) {
 		uvec2 tri_data = g_scratch_64[src_offset_64 + i];
 		uint tri_idx = tri_data.y & 0xffff;
 		int tri_offset = int(tri_data.y >> 16) - first_offset;
+		if(tri_offset > SEGMENT_SIZE)
+			break;
 
 		int minx = int((tri_data.x >> min_shift) & 7);
 		int countx = int((tri_data.x >> count_shift) & 15);
 		int prevx = countx + (shuffleUpNV(countx, 1, 4) & mask1);
 		prevx += shuffleUpNV(prevx, 2, 4) & mask2;
 		tri_offset += prevx - countx;
-		//if(tri_offset > SEGMENT_SIZE) // TODO
-		//break;
 
 		countx = min(countx, SEGMENT_SIZE - tri_offset);
 		if(tri_offset < 0) {
@@ -627,7 +625,6 @@ void loadSamples(uint bid, uint segment_id) {
 	}
 }
 
-// TODO: Can we improve speed of loading vertex data?
 uint shadeSample(ivec2 tile_pixel_pos, uint scratch_tri_offset, out float out_depth) {
 	float px = float(tile_pixel_pos.x), py = float(tile_pixel_pos.y);
 
@@ -986,7 +983,6 @@ void rasterBin(int bin_id) {
 		ivec2 pixel_pos = ivec2((LIX & 7) + bx * 8, ((LIX >> 3) & 3) + by * 4);
 		finishReduction(pixel_pos, context);
 		//finishVisualizeSamples(bid, pixel_pos);
-
 		//visualizeHBlockTriangleCounts(bid, pixel_pos);
 		//visualizeHBlockFragmentCounts(bid, pixel_pos);
 	}

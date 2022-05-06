@@ -256,8 +256,10 @@ void LucidApp::showRasterStats(const Scene &scene) {
 		if(!group.title.empty())
 			ImGui::Text("%s", group.title.c_str());
 		showStatsRows(group.rows, format("_group%", i), group.label_width * m_gui.dpiScale());
-		if(i + 1 < groups.size())
+		if(i + 1 < groups.size()) {
 			ImGui::Separator();
+			ImGui::Separator();
+		}
 	}
 }
 

@@ -1620,7 +1620,7 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 	}
 
 	int num_rejected[4];
-	for(int i = 0; i < 4; i++)
+	for(int i = 0; i < arraySize(num_rejected); i++)
 		num_rejected[i] = bin_counters[4 + i];
 	num_rejected[0] += num_rejected[1] + num_rejected[2] + num_rejected[3];
 
@@ -1628,6 +1628,11 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 		stdFormat("%d (%.2f %%)", num_rejected[0], double(num_rejected[0]) / num_input_quads * 100);
 	auto rejection_details = format("backface: %\nfrustum: %\nbetween-samples: %", num_rejected[1],
 									num_rejected[2], num_rejected[3]);
+
+	int num_bins[4];
+	for(int i = 0; i < arraySize(num_bins); i++)
+		num_bins[i] = bin_counters[8 + i];
+	int sum_bins = num_bins[0] + num_bins[1] + num_bins[2] + num_bins[3];
 
 	vector<StatsRow> timings;
 	Str timer_names[] = {"generate rows", "generate blocks", "load samples",
@@ -1640,6 +1645,13 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 			auto value = bin_counters[15 + i];
 			timings.emplace_back(timer_names[i], stdFormat("%.2f %%", double(value) / total * 100));
 		}
+
+	vector<StatsRow> bin_rows = {
+		{"empty bins", stdFormat("%d (%.0f %%)", num_bins[0], num_bins[0] * 100.0 / sum_bins)},
+		{"small bins", stdFormat("%d (%.0f %%)", num_bins[1], num_bins[1] * 100.0 / sum_bins)},
+		{"medium bins", stdFormat("%d (%.0f %%)", num_bins[2], num_bins[2] * 100.0 / sum_bins)},
+		{"big bins", stdFormat("%d (%.0f %%)", num_bins[3], num_bins[3] * 100.0 / sum_bins)},
+	};
 
 	vector<StatsRow> basic_rows = {
 		{"input instances", toString(m_num_instances)},
@@ -1696,6 +1708,7 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 
 	if(timings)
 		out.emplace_back(move(timings), "", 130);
+	out.emplace_back(move(bin_rows), "", 130);
 	out.emplace_back(move(basic_rows), "", 130);
 	out.emplace_back(move(avg_rows), "Averages per non-empty bin/tile", 130);
 	out.emplace_back(move(max_rows), "", 130);

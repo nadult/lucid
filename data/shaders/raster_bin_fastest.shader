@@ -673,13 +673,12 @@ void generateBlocks(uint bid) {
 
 		uint max_seg_id0 = tri_offset0 >> SEGMENT_SHIFT;
 		uint max_seg_id1 = tri_offset1 >> SEGMENT_SHIFT;
-		bool first_seg0 = seg_offset0 == 0, first_seg1 = seg_offset1 == 0;
 		if(seg_offset0 + tri_value0 > SEGMENT_SIZE)
-			max_seg_id0++, first_seg0 = true;
+			max_seg_id0++;
 		if(seg_offset1 + tri_value1 > SEGMENT_SIZE)
-			max_seg_id1++, first_seg1 = true;
-		uint seg_bits0 = (max_seg_id0 & 127) | (first_seg0 ? 0x80 : 0);
-		uint seg_bits1 = (max_seg_id1 & 127) | (first_seg1 ? 0x80 : 0);
+			max_seg_id1++;
+		uint seg_bits0 = max_seg_id0 & 255;
+		uint seg_bits1 = max_seg_id1 & 255;
 
 		g_scratch_64[dst_offset_64 + i] =
 			uvec2(tri_idx | ((tri_data.x & 0xfff) << 12) | (seg_bits0 << 24),
@@ -695,10 +694,11 @@ shared uint s_last_tri[NUM_WARPS];
 void loadSamples(uint hbid, int segment_id, uint tri_count) {
 	uint src_offset_64 = scratch64HalfBlockTrisOffset(hbid & (NUM_WARPS * 2 - 1));
 	uint first_tri = segment_id == 0 ? 0 : s_last_tri[LIX >> 5];
-	uint next_segment_bits = (0x80 | ((segment_id + 1) & 127));
+	uint next_segment_bits = (segment_id + 1) & 255;
 	src_offset_64 += first_tri;
 	tri_count -= first_tri;
 
+	// Finding first triangle belonging to next segment
 	for(uint ti = 0; ti < tri_count; ti += WARP_STEP) {
 		uint i = ti + (LIX & WARP_MASK);
 		bool is_last =

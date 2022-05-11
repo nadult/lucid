@@ -34,11 +34,11 @@ void main() {
 			int id = atomicAdd(s_num_empty_bins, 1);
 			if(tile_all_bins)
 				g_bins.tiled_bins[atomicAdd(s_num_tiled_bins, 1)] = int(i);
-		} else if(num_tris < 2048 * 0) {
+		} else if(num_tris < 2048) {
 			g_bins.small_bins[atomicAdd(s_num_small_bins, 1)] = int(i);
 			if(tile_all_bins)
 				g_bins.tiled_bins[atomicAdd(s_num_tiled_bins, 1)] = int(i);
-		} else if(num_tris < 32 * 1024) {
+		} else if(num_tris < 16 * 1024) {
 			g_bins.medium_bins[atomicAdd(s_num_medium_bins, 1)] = int(i);
 			g_bins.tiled_bins[atomicAdd(s_num_tiled_bins, 1)] = int(i);
 		} else if(true) {

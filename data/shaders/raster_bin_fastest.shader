@@ -8,7 +8,6 @@
 #define LIX gl_LocalInvocationIndex
 #define LID gl_LocalInvocationID
 
-// TODO: consider uneven nr of warps (like 16 + 2)
 // Acceptable values: 128, 256, 512
 #define LSIZE 512
 
@@ -28,12 +27,6 @@
 
 #define SEGMENT_SIZE 128
 #define SEGMENT_SHIFT 7
-
-#define MAX_SEGMENTS 32
-#define MAX_SEGMENTS_SHIFT 5
-
-// TODO: half block?
-#define MAX_BLOCK_SAMPLES (MAX_SEGMENTS * SEGMENT_SIZE - 1)
 
 // TODO: opiz gdzie uzywamy pelne bloki a gdize polowki, jakie sa wymiary, etc.
 #define NUM_BLOCK_COLS 8
@@ -632,9 +625,6 @@ void generateBlocks(uint bid) {
 		if(warp_idx == 7) {
 			s_hblock_counts[lbid * 2 + 0] = ((sum & 0xffff) << 16) | tri_count;
 			s_hblock_counts[lbid * 2 + 1] = (sum & 0xffff0000) | tri_count;
-			// TODO: this check shouldn't be needed
-			if(max(sum & 0xffff, sum >> 16) > MAX_BLOCK_SAMPLES)
-				atomicOr(s_raster_error, 0x10000 << lbid);
 		}
 
 		sum -= value;
@@ -1019,8 +1009,6 @@ void visualizeErrors(uint bid) {
 
 	uint color = 0xff000031;
 	if((s_raster_error & (1 << lbid)) != 0)
-		color += 0x32;
-	if((s_raster_error & (0x10000 << lbid)) != 0)
 		color += 0x64;
 
 	uint bx = bid & 7, by = bid >> 3;

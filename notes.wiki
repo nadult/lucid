@@ -87,3 +87,15 @@ conf-e(256): 1250   61     110   5      934       (-2%)
 sponza(256): 3818   63     123   6      3473      (-1%)
      teapot: 460    28     46    5      329       
   white_oak: 13962  51     254   7      13388     (-1%)
+
+Shade zmergowane z reduce 2560x1330 rastertimings wyłączone:
+            total  setup  bins  tiles  raster_bin  raster_tile  raster_block
+    #boxes: 1656   24     59    5      1493        4            4
+     bunny: 509    70     52    5      316         4            4
+conference: 1346   62     112   5      1029        4            4
+    dragon: 1087   188    72    99     253         400          4
+   gallery: 3367   215    73    123    1666        1122         10
+powerplant: 8724   1979   581   1454   771         3642         11
+    sponza: 3872   63     126   6      3518        5            4
+    teapot: 480    29     52    5      333         5            4
+ white_oak: 13533  49     248   5      13084       5            4

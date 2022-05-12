@@ -688,6 +688,7 @@ void loadSamples(uint hbid, int segment_id, uint tri_count) {
 	src_offset_64 += first_tri;
 	tri_count -= first_tri;
 
+	// TODO: it's still better to just precompute these? if we're not going to use SMEM anyways...
 	// Finding first triangle belonging to next segment
 	for(uint ti = 0; ti < tri_count; ti += WARP_STEP) {
 		uint i = ti + (LIX & WARP_MASK);
@@ -851,6 +852,7 @@ void shadeAndReduceSamples(uint hbid, uint sample_count, in out ReductionContext
 	vec3 out_color = decodeRGB10(ctx.out_color);
 
 	for(uint i = 0; i < sample_count; i += WARP_STEP) {
+		// TODO: we don't need s_mini_buffer here, we can use s_buffer, thus decreasing mini_buffer size
 		s_mini_buffer[LIX] = 0;
 		uvec2 sample_s;
 		uint sample_id = i + (LIX & 31);
@@ -1060,7 +1062,6 @@ void rasterBin(int bin_id) {
 		initReduceSamples(context);
 		//initVisualizeSamples();
 
-		// TODO: optimize loop, use only frag_count?
 		for(int segment_id = 0;; segment_id++) {
 			uint counts = s_hblock_counts[hbid & (NUM_WARPS * 2 - 1)];
 			int frag_count = min(SEGMENT_SIZE, int(counts >> 16) - (segment_id << SEGMENT_SHIFT));

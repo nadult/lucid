@@ -99,3 +99,15 @@ powerplant: 8724   1979   581   1454   771         3642         11
     sponza: 3872   63     126   6      3518        5            4
     teapot: 480    29     52    5      333         5            4
  white_oak: 13533  49     248   5      13084       5            4
+
+Przywrócone segmenty 2560x1330 rastertimings wyłączone:
+            total  setup  bins  tiles  raster_bin  raster_tile  raster_block
+    #boxes: 1628   24     59    5      1466        4            4
+     bunny: 486    70     48    5      303         4            4
+conference: 1325   61     113   5      1011        4            4
+    dragon: 1078   188    69    99     253         397          4
+   gallery: 3398   217    74    126    1648        1130         10
+powerplant: 8678   1990   568   1450   751         3683         11
+    sponza: 3783   62     124   5      3429        4            4
+    teapot: 468    27     49    5      327         4            4
+ white_oak: 13352  51     252   6      12898       5            4

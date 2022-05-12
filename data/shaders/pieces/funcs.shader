@@ -14,6 +14,8 @@
 
 #define PI 3.14159265359
 
+#define SATURATE(val) clamp(val, 0.0, 1.0)
+
 // decode/encode source: http://aras-p.info/texts/CompactNormalStorage.html
 // TODO: this encoding is wrong for z == -1.0
 vec3 decodeNormal(vec2 enc) {
@@ -122,6 +124,12 @@ uint encodeRGB8(vec3 col) {
 
 uint encodeRGB10(vec3 col) {
 	return (uint(col.r * 2047.0)) | (uint(col.g * 2047.0) << 11) | (uint(col.b * 1023.0) << 22);
+}
+
+uint tintColor(uint enc_color, vec3 tint, float strength) {
+	vec3 color = decodeRGB8(enc_color);
+	color = color * (1.0 - strength) + tint * strength;
+	return encodeRGB8(SATURATE(color));
 }
 
 uvec2 encodeCD(vec4 color, float depth) {

@@ -110,10 +110,10 @@ shared int s_raster_error;
 shared uint s_vis_pixels[LSIZE];
 
 void outputPixel(ivec2 pixel_pos, uint color) {
+	//color = tintColor(color, vec3(0, 1, 0), 0.2);
 	g_raster_image[s_tile_raster_offset + pixel_pos.x + (pixel_pos.y << BIN_SHIFT)] = color;
 }
 
-// Note: UPDATE_CLOCK should be called after a barrier
 #ifdef ENABLE_TIMINGS
 #define MAX_TIMERS 8
 shared uint s_timings[MAX_TIMERS];

@@ -62,8 +62,6 @@ layout(binding = 1) uniform sampler2D transparent_texture;
 // then read it and use depth to optimize drawing
 uniform uint background_color;
 
-#define SATURATE(val) clamp(val, 0.0, 1.0)
-
 #define WORKGROUP_32_SCRATCH_SIZE (32 * 1024)
 #define WORKGROUP_32_SCRATCH_SHIFT 15
 
@@ -111,10 +109,10 @@ shared int s_raster_error;
 shared uint s_vis_pixels[LSIZE];
 
 void outputPixel(ivec2 pixel_pos, uint color) {
+	//color = tintColor(color, vec3(1, 0, 0), 0.2);
 	g_raster_image[s_bin_raster_offset + pixel_pos.x + (pixel_pos.y << BIN_SHIFT)] = color;
 }
 
-// Note: UPDATE_CLOCK should be called after a barrier
 #ifdef ENABLE_TIMINGS
 #define MAX_TIMERS 8
 shared uint s_timings[MAX_TIMERS];

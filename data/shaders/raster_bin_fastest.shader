@@ -28,6 +28,9 @@
 #define SEGMENT_SIZE 256
 #define SEGMENT_SHIFT 8
 
+#define MAX_SEGMENTS_SHIFT 5
+#define MAX_SEGMENTS WARP_STEP
+
 // TODO: opiz gdzie uzywamy pelne bloki a gdize polowki, jakie sa wymiary, etc.
 #define NUM_BLOCK_COLS 8
 #define NUM_BLOCK_ROWS 8
@@ -101,6 +104,7 @@ shared uint s_hblock_counts[NUM_WARPS * 2];
 
 shared uint s_buffer[BUFFER_SIZE + 1];
 shared uint s_mini_buffer[LSIZE];
+shared uint s_segments[LSIZE * 2];
 shared int s_raster_error;
 
 // Only used when debugging
@@ -478,6 +482,9 @@ void generateBlocks(uint bid) {
 	uint tri_count = s_block_row_tri_count[by];
 	uint buf_offset = lbid << MAX_BLOCK_TRIS_SHIFT;
 
+	s_segments[LIX] = 0;
+	s_segments[LIX + LSIZE] = 0;
+
 	{
 		uint bx_bits_shift = 24 + bx;
 		uint block_tri_count = 0;
@@ -640,6 +647,8 @@ void generateBlocks(uint bid) {
 	src_offset_64 = dst_offset_64;
 	dst_offset_64 = scratch64HalfBlockTrisOffset(lbid << 1);
 
+	uint seg_block1_offset = lbid << (MAX_SEGMENTS_SHIFT + 1);
+	uint seg_block2_offset = seg_block1_offset + MAX_SEGMENTS;
 	// TODO: split this loop into two
 	for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_STEP) {
 		uint tri_offset = 0;
@@ -655,57 +664,57 @@ void generateBlocks(uint bid) {
 
 		uint tri_offset0 = tri_offset & 0xfff, tri_offset1 = (tri_offset >> 12) & 0xfff;
 		uint tri_value0 = tri_value & 0xfff, tri_value1 = (tri_value >> 12) & 0xfff;
+
 		uint seg_offset0 = tri_offset0 & (SEGMENT_SIZE - 1);
 		uint seg_offset1 = tri_offset1 & (SEGMENT_SIZE - 1);
+		uint seg_id0 = tri_offset0 >> SEGMENT_SHIFT;
+		uint seg_id1 = tri_offset1 >> SEGMENT_SHIFT;
+		bool first_seg0 = seg_offset0 == 0;
+		bool first_seg1 = seg_offset1 == 0;
+		if(seg_offset0 + tri_value0 > SEGMENT_SIZE)
+			seg_id0++, first_seg0 = true;
+		if(seg_offset1 + tri_value1 > SEGMENT_SIZE)
+			seg_id1++, first_seg1 = true;
+
+		if(first_seg0 && tri_value0 > 0)
+			s_segments[seg_block1_offset + seg_id0] = i + 1;
+		if(first_seg1 && tri_value1 > 0)
+			s_segments[seg_block2_offset + seg_id1] = i + 1;
 
 		uint tri_idx = g_scratch_32[src_offset_32 + tile_tri_idx] & 0xffff;
 		uvec2 tri_data = g_scratch_64[src_offset_64 + tile_tri_idx];
-
-		uint max_seg_id0 = tri_offset0 >> SEGMENT_SHIFT;
-		uint max_seg_id1 = tri_offset1 >> SEGMENT_SHIFT;
-		if(seg_offset0 + tri_value0 > SEGMENT_SIZE)
-			max_seg_id0++;
-		if(seg_offset1 + tri_value1 > SEGMENT_SIZE)
-			max_seg_id1++;
-		uint seg_bits0 = max_seg_id0 & 255;
-		uint seg_bits1 = max_seg_id1 & 255;
-
-		g_scratch_64[dst_offset_64 + i] =
-			uvec2(tri_idx | ((tri_data.x & 0xfff) << 12) | (seg_bits0 << 24),
-				  tri_offset0 | (tri_data.x & 0xffff0000));
+		g_scratch_64[dst_offset_64 + i] = uvec2(tri_idx | (tri_offset0 << 16), tri_data.x);
 		g_scratch_64[dst_offset_64 + i + MAX_BLOCK_TRIS] =
-			uvec2(tri_idx | ((tri_data.y & 0xfff) << 12) | (seg_bits1 << 24),
-				  tri_offset1 | (tri_data.y & 0xffff0000));
+			uvec2(tri_idx | (tri_offset1 << 16), tri_data.y);
+	}
+	barrier();
+	{
+		uint sbid = LIX >> 4, seg_group_offset = sbid << MAX_SEGMENTS_SHIFT;
+		uint tri_count = s_block_tri_count[sbid >> 1];
+
+		for(uint seg_id = LIX & 15; seg_id < MAX_SEGMENTS; seg_id += 16) {
+			uint cur_value = s_segments[seg_group_offset + seg_id];
+			if(cur_value == 0)
+				break;
+
+			uint next_value =
+				seg_id + 1 == MAX_SEGMENTS ? 0 : s_segments[seg_group_offset + seg_id + 1];
+			next_value = next_value == 0 ? tri_count : min(tri_count, next_value);
+			cur_value = (cur_value - 1) | ((next_value - (cur_value - 1)) << 8);
+			s_segments[seg_group_offset + seg_id] = cur_value;
+		}
 	}
 }
 
-shared uint s_last_tri[NUM_WARPS];
-
-void loadSamples(uint hbid, int segment_id, uint tri_count) {
-	uint src_offset_64 = scratch64HalfBlockTrisOffset(hbid & (NUM_WARPS * 2 - 1));
-	uint first_tri = segment_id == 0 ? 0 : s_last_tri[LIX >> 5];
-	uint next_segment_bits = (segment_id + 1) & 255;
-	src_offset_64 += first_tri;
-	tri_count -= first_tri;
-
-	// TODO: it's still better to just precompute these? if we're not going to use SMEM anyways...
-	// Finding first triangle belonging to next segment
-	for(uint ti = 0; ti < tri_count; ti += WARP_STEP) {
-		uint i = ti + (LIX & WARP_MASK);
-		bool is_last =
-			i < tri_count && (g_scratch_64[src_offset_64 + i].x >> 24) == next_segment_bits;
-		uint sub_bits = uint(ballotARB(is_last));
-		if(sub_bits != 0) {
-			uint sub_idx = ti + findLSB(sub_bits);
-			if((LIX & 31) == 0)
-				s_last_tri[LIX >> 5] = first_tri + sub_idx;
-			tri_count = sub_idx + 1;
-			break;
-		}
-	}
+void loadSamples(uint hbid, int segment_id) {
+	uint sbid = hbid & (NUM_WARPS * 2 - 1); // TODO: describe
+	uint seg_group_offset = sbid << MAX_SEGMENTS_SHIFT;
+	uint segment_data = s_segments[seg_group_offset + segment_id];
+	uint tri_count = segment_data >> 8, first_tri = segment_data & 0xff;
+	uint src_offset_64 = scratch64HalfBlockTrisOffset(hbid & (NUM_WARPS * 2 - 1)) + first_tri;
 
 	int y = int(LIX & 3);
-	uint count_shift = 16 + (y << 2), min_shift = 12 + ((y << 1) + y);
+	uint count_shift = 16 + (y << 2), min_shift = (y << 1) + y;
 	int mask1 = y >= 1 ? ~0 : 0, mask2 = y >= 2 ? ~0 : 0;
 	int first_offset = segment_id << SEGMENT_SHIFT;
 	uint buf_offset = (LIX >> 5) << SEGMENT_SHIFT;
@@ -713,10 +722,10 @@ void loadSamples(uint hbid, int segment_id, uint tri_count) {
 	// TODO: group differently for better memory accesses (and measure)
 	for(uint i = (LIX & WARP_MASK) >> 2; i < tri_count; i += WARP_STEP / 4) {
 		uvec2 tri_data = g_scratch_64[src_offset_64 + i];
-		int tri_offset = int(tri_data.y & 0xffff) - first_offset;
+		int tri_offset = int(tri_data.x >> 16) - first_offset;
 		uint tri_idx = tri_data.x & 0xfff;
 
-		int minx = int((tri_data.x >> min_shift) & 7);
+		int minx = int((tri_data.y >> min_shift) & 7);
 		int countx = int((tri_data.y >> count_shift) & 15);
 		int prevx = countx + (shuffleUpNV(countx, 1, 4) & mask1);
 		prevx += (shuffleUpNV(prevx, 2, 4) & mask2);
@@ -1068,7 +1077,7 @@ void rasterBin(int bin_id) {
 			if(frag_count <= 0)
 				break;
 
-			loadSamples(hbid, segment_id, counts & 0xffff);
+			loadSamples(hbid, segment_id);
 			UPDATE_CLOCK(2);
 
 			shadeAndReduceSamples(hbid, frag_count, context);

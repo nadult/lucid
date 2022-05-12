@@ -1,12 +1,9 @@
-// $$include funcs lighting frustum viewport data
+// $$include funcs lighting frustum viewport data raster
 
 // TODO: add synthetic test: 256 planes one after another
 // TODO: cleanup in the beginning (group definitions)
 
 // NOTE: converting integer multiplications to shifts does not increase perf
-
-#define LIX gl_LocalInvocationIndex
-#define LID gl_LocalInvocationID
 
 // Acceptable values: 128, 256, 512
 #define LSIZE 512
@@ -37,30 +34,7 @@
 
 layout(local_size_x = LSIZE) in;
 
-layout(std430, binding = 0) buffer buf0_ { uvec4 g_tri_aabbs[]; };
-layout(std430, binding = 1) buffer buf1_ { uint g_quad_indices[]; };
-
-layout(std430, binding = 2) readonly buffer buf2_ { float g_verts[]; };
-layout(std430, binding = 3) readonly buffer buf3_ { vec2 g_tex_coords[]; };
-layout(std430, binding = 4) readonly buffer buf4_ { uint g_colors[]; };
-layout(std430, binding = 5) readonly buffer buf5_ { uint g_normals[]; };
-
-layout(std430, binding = 6) buffer buf6_ { BinCounters g_bins; };
 layout(std430, binding = 8) buffer buf8_ { uint g_bin_quads[]; };
-
-layout(std430, binding = 9) coherent buffer buf9_ { uint g_scratch_32[]; };
-layout(std430, binding = 10) coherent buffer buf10_ { uvec2 g_scratch_64[]; };
-
-layout(std430, binding = 11) readonly buffer buf11_ { InstanceData g_instances[]; };
-layout(std430, binding = 12) readonly buffer buf12_ { vec4 g_uv_rects[]; };
-layout(std430, binding = 13) writeonly buffer buf13_ { uint g_raster_image[]; };
-
-layout(binding = 0) uniform sampler2D opaque_texture;
-layout(binding = 1) uniform sampler2D transparent_texture;
-
-// TODO: separate opaque and transparent objects, draw opaque objects first to texture
-// then read it and use depth to optimize drawing
-uniform uint background_color;
 
 #define WORKGROUP_32_SCRATCH_SIZE (32 * 1024)
 #define WORKGROUP_32_SCRATCH_SHIFT 15
@@ -109,37 +83,9 @@ shared int s_raster_error;
 shared uint s_vis_pixels[LSIZE];
 
 void outputPixel(ivec2 pixel_pos, uint color) {
-	//color = tintColor(color, vec3(1, 0, 0), 0.2);
+	//color = tintColor(color, vec3(0.2, 0.3, 0.4), 0.8);
 	g_raster_image[s_bin_raster_offset + pixel_pos.x + (pixel_pos.y << BIN_SHIFT)] = color;
 }
-
-#ifdef ENABLE_TIMINGS
-#define MAX_TIMERS 8
-shared uint s_timings[MAX_TIMERS];
-#define INIT_CLOCK() uint64_t clock0 = clockARB();
-#define UPDATE_CLOCK(idx)                                                                          \
-	if((LIX & 31) == 0) {                                                                          \
-		uint64_t clock = clockARB();                                                               \
-		atomicAdd(s_timings[idx], uint(clock - clock0) >> 4);                                      \
-		clock0 = clock;                                                                            \
-	}
-
-void initTimers() {
-	if(LIX < MAX_TIMERS)
-		s_timings[LIX] = 0;
-}
-void commitTimers() {
-	if(LIX < MAX_TIMERS)
-		atomicAdd(g_bins.timings[LIX], s_timings[LIX]);
-}
-
-#else
-#define INIT_CLOCK()
-#define UPDATE_CLOCK(idx)
-
-void initTimers() {}
-void commitTimers() {}
-#endif
 
 // TODO: don't store triangles which generate very small number of samples in scratch,
 // instead precompute them directly when sampling; We would have to somehow group those triangles together
@@ -267,46 +213,11 @@ void getTriangleVertexTexCoords(uint scratch_tri_offset, out vec2 tex0, out vec2
 	tex2 = uintBitsToFloat(val2);
 }
 
-uint computeScanlineParams(vec3 tri0, vec3 tri1, vec3 tri2, out vec3 scan_base,
-						   out vec3 scan_step) {
-	vec3 nrm0 = cross(tri2, tri1 - tri2);
-	vec3 nrm1 = cross(tri0, tri2 - tri0);
-	vec3 nrm2 = cross(tri1, tri0 - tri1);
-	float volume = dot(tri0, nrm0);
-	if(volume < 0)
-		nrm0 = -nrm0, nrm1 = -nrm1, nrm2 = -nrm2;
-
-	vec3 edges[3] = {
-		vec3(dot(nrm0, frustum.ws_dirx), dot(nrm0, frustum.ws_diry), dot(nrm0, frustum.ws_dir0)),
-		vec3(dot(nrm1, frustum.ws_dirx), dot(nrm1, frustum.ws_diry), dot(nrm1, frustum.ws_dir0)),
-		vec3(dot(nrm2, frustum.ws_dirx), dot(nrm2, frustum.ws_diry), dot(nrm2, frustum.ws_dir0)),
-	};
-
-	float inv_ex[3] = {1.0 / edges[0].x, 1.0 / edges[1].x, 1.0 / edges[2].x};
-	scan_base = -vec3(edges[0].z * inv_ex[0], edges[1].z * inv_ex[1], edges[2].z * inv_ex[2]);
-	scan_step = -vec3(edges[0].y * inv_ex[0], edges[1].y * inv_ex[1], edges[2].y * inv_ex[2]);
-	return (edges[0].x < 0.0 ? 1 : 0) | (edges[1].x < 0.0 ? 2 : 0) | (edges[2].x < 0.0 ? 4 : 0);
-}
-
 void generateRowTris(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, int min_by, int max_by) {
-	// Inspired by Nanite scanline rasterizer
+
+	vec2 scan_start = vec2(s_bin_pos) + vec2(-0.5f, float(min_by) * 8.0 + 0.5f);
 	vec3 scan_min, scan_max, scan_step;
-
-	{
-		float sx = s_bin_pos.x - 0.5f;
-		float sy = s_bin_pos.y + (float(min_by) * 8.0 + 0.5f);
-
-		vec3 scan_base;
-		uint sign_mask = computeScanlineParams(tri0, tri1, tri2, scan_base, scan_step);
-
-		vec3 scan = scan_step * sy + scan_base - vec3(sx, sx, sx);
-		scan_min = vec3((sign_mask & 1) == 0 ? scan[0] : -1.0 / 0.0,
-						(sign_mask & 2) == 0 ? scan[1] : -1.0 / 0.0,
-						(sign_mask & 4) == 0 ? scan[2] : -1.0 / 0.0);
-		scan_max = vec3((sign_mask & 1) != 0 ? scan[0] : 1.0 / 0.0,
-						(sign_mask & 2) != 0 ? scan[1] : 1.0 / 0.0,
-						(sign_mask & 4) != 0 ? scan[2] : 1.0 / 0.0);
-	}
+	computeScanlineParams(tri0, tri1, tri2, scan_start, scan_min, scan_max, scan_step);
 
 	uint dst_offset_64 = scratch64BlockRowTrisOffset(0);
 

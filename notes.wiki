@@ -12,8 +12,14 @@ Bugi:
 - niedokładne wyznaczanie ilości trisów per tile (dużo więcej niż faktycznie)
 
 -----------------------------------------------------------------------------------------
-                             === Pomysły na optymalizacje ===
+                                 === Co dalej ===
 -----------------------------------------------------------------------------------------
+
+- Poprawna obsługa sytuacji gdy limity są przekraczane; Nie mogę robić za dużo wariantów, bo
+  w efekcie będzie wolniej a nie szybciej
+
+- Problem: jak sensownie obługiwać tile-e z dużą ilością trisów ?
+  Czy wogóle chcę robić computeTiles, czy może lepiej generować to z poziomu raster_tile ?
 
 - optymalizacja loadSamples?
 

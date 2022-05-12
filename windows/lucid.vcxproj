@@ -145,6 +145,7 @@
     <None Include="..\data\shaders\pieces\funcs.shader" />
     <None Include="..\data\shaders\pieces\lighting.shader" />
     <None Include="..\data\shaders\pieces\macros.shader" />
+    <None Include="..\data\shaders\pieces\raster.shader" />
     <None Include="..\data\shaders\pieces\rect.shader" />
     <None Include="..\data\shaders\pieces\viewport.shader" />
     <None Include="..\data\shaders\raster_bin_16x16.shader" />

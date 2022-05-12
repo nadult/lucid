@@ -184,5 +184,8 @@
     <None Include="..\data\shaders\raster_tile_fastest.shader">
       <Filter>shaders</Filter>
     </None>
+    <None Include="..\data\shaders\pieces\raster.shader">
+      <Filter>shaders\pieces</Filter>
+    </None>
   </ItemGroup>
 </Project>

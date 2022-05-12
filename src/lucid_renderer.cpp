@@ -1635,14 +1635,16 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 	int sum_bins = num_bins[0] + num_bins[1] + num_bins[2] + num_bins[3];
 
 	vector<StatsRow> timings;
-	Str timer_names[] = {"generate rows", "generate blocks", "load samples",
-						 "shade samples", "reduce samples",	 "finish reduce"};
+	Str timer_names[] = {"generate rows",  "generate blocks",  "load samples", "shade samples",
+						 "reduce samples", "shade and reduce", "finish reduce"};
 	u64 total = 0;
 	for(int i : intRange(timer_names))
 		total += bin_counters[15 + i];
 	if(total)
 		for(int i : intRange(timer_names)) {
 			auto value = bin_counters[15 + i];
+			if(value == 0)
+				continue;
 			timings.emplace_back(timer_names[i], stdFormat("%.2f %%", double(value) / total * 100));
 		}
 

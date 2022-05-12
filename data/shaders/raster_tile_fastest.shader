@@ -986,7 +986,7 @@ void rasterBin(int bin_id) {
 		uint bx = bid & 1, by = bid >> 1;
 		ivec2 pixel_pos = ivec2((LIX & 7) + bx * 8, ((LIX >> 3) & 3) + by * 4);
 		finishReduction(pixel_pos, context);
-		UPDATE_CLOCK(5);
+		UPDATE_CLOCK(6);
 		//finishVisualizeSamples(bid, pixel_pos);
 		//visualizeHBlockTriangleCounts(bid, pixel_pos);
 		//visualizeHBlockFragmentCounts(bid, pixel_pos);

@@ -25,8 +25,8 @@
 #define MAX_SCRATCH_TRIS 2048
 #define MAX_SCRATCH_TRIS_SHIFT 11
 
-#define SEGMENT_SIZE 128
-#define SEGMENT_SHIFT 7
+#define SEGMENT_SIZE 256
+#define SEGMENT_SHIFT 8
 
 // TODO: opiz gdzie uzywamy pelne bloki a gdize polowki, jakie sa wymiary, etc.
 #define NUM_BLOCK_COLS 8
@@ -820,26 +820,6 @@ uint shadeSample(ivec2 bin_pixel_pos, uint scratch_tri_offset, out float out_dep
 	return encodeRGBA8(color);
 }
 
-void shadeSamples(uint hbid, uint sample_count) {
-	// TODO: what's the best way to fix broken pixels?
-	// full sort ? recreate full depth values and sort pairs?
-
-	uint buf_offset = (LIX >> 5) << SEGMENT_SHIFT;
-	uint bx = (hbid >> 1) & 7, hby = (hbid & 1) + ((hbid >> 4) << 1);
-	ivec2 half_block_pos = ivec2(bx << 3, hby << 2);
-
-	for(uint i = LIX & WARP_MASK; i < sample_count; i += WARP_STEP) {
-		uint value = s_buffer[buf_offset + i];
-		uint pixel_id = value & 31;
-		uint scratch_tri_offset = value >> 8;
-		ivec2 pix_pos = half_block_pos + ivec2(pixel_id & 7, pixel_id >> 3);
-		float depth;
-		s_buffer[buf_offset + i] = shadeSample(pix_pos, scratch_tri_offset, depth);
-		s_buffer[buf_offset + i + SEGMENT_SIZE * NUM_WARPS] =
-			(floatBitsToUint(depth) & ~31) | pixel_id;
-	}
-}
-
 struct ReductionContext {
 #ifdef VISUALIZE_ERRORS
 	vec4 prev_depths;
@@ -862,33 +842,43 @@ void initReduceSamples(out ReductionContext ctx) {
 	ctx.out_trans = 1.0;
 }
 
-void reduceSamples(uint bid, uint sample_count, in out ReductionContext ctx) {
+void shadeAndReduceSamples(uint hbid, uint sample_count, in out ReductionContext ctx) {
 	uint buf_offset = (LIX >> 5) << SEGMENT_SHIFT;
+	uint bx = (hbid >> 1) & 7, hby = (hbid & 1) + ((hbid >> 4) << 1);
 	uint mini_offset = LIX & ~31;
-	uint pixel_bit = 1u << (LIX & 31);
-	uint pixel_id = LIX & 31;
+	uint reduce_pixel_bit = 1u << (LIX & 31);
+	ivec2 half_block_pos = ivec2(bx << 3, hby << 2);
 	vec3 out_color = decodeRGB10(ctx.out_color);
 
-	for(uint i = 0; i < sample_count; i += 32) {
-		uint sample_offset = i + (LIX & 31);
-		uint sample_pixel_id = s_buffer[buf_offset + sample_offset + SEGMENT_SIZE * NUM_WARPS] & 31;
-
+	for(uint i = 0; i < sample_count; i += WARP_STEP) {
 		s_mini_buffer[LIX] = 0;
-		if(sample_offset < sample_count)
-			atomicOr(s_mini_buffer[mini_offset + sample_pixel_id], pixel_bit);
+		uvec2 sample_s;
+		uint sample_id = i + (LIX & 31);
+		if(sample_id < sample_count) {
+			uint value = s_buffer[buf_offset + sample_id];
+			uint sample_pixel_id = value & 31;
+			uint scratch_tri_offset = value >> 8;
+			ivec2 pix_pos = half_block_pos + ivec2(sample_pixel_id & 7, sample_pixel_id >> 3);
+			float sample_depth;
+			uint sample_color = shadeSample(pix_pos, scratch_tri_offset, sample_depth);
+			sample_s = uvec2(sample_color, floatBitsToUint(sample_depth));
+			atomicOr(s_mini_buffer[mini_offset + sample_pixel_id], reduce_pixel_bit);
+		}
 
-		uint bitmask = s_mini_buffer[mini_offset + pixel_id];
+		uint bitmask = s_mini_buffer[LIX];
 		int j = findLSB(bitmask);
-		while(j != -1) {
-			// TODO: pass through regs?
-			uint value = s_buffer[buf_offset + i + j];
-			float depth = uintBitsToFloat(s_buffer[buf_offset + i + j + SEGMENT_SIZE * NUM_WARPS]);
+		while(anyInvocationARB(j != -1)) {
+			uvec2 value = shuffleNV(sample_s, j, 32);
+			uint color = value.x;
+			float depth = uintBitsToFloat(value.y);
 
+			if(j == -1)
+				continue;
 			bitmask &= ~(1 << j);
 			j = findLSB(bitmask);
 
 			if(depth > ctx.prev_depths[0]) {
-				SWAP_UINT(value, ctx.prev_colors[0]);
+				SWAP_UINT(color, ctx.prev_colors[0]);
 				SWAP_FLOAT(depth, ctx.prev_depths[0]);
 				if(ctx.prev_depths[0] > ctx.prev_depths[1]) {
 					SWAP_UINT(ctx.prev_colors[1], ctx.prev_colors[0]);
@@ -934,7 +924,7 @@ void reduceSamples(uint bid, uint sample_count, in out ReductionContext ctx) {
 
 			ctx.prev_colors[2] = ctx.prev_colors[1];
 			ctx.prev_colors[1] = ctx.prev_colors[0];
-			ctx.prev_colors[0] = value;
+			ctx.prev_colors[0] = color;
 		}
 	}
 
@@ -1080,12 +1070,8 @@ void rasterBin(int bin_id) {
 			loadSamples(hbid, segment_id, counts & 0xffff);
 			UPDATE_CLOCK(2);
 
-			//visualizeSamples(frag_count);
-			shadeSamples(hbid, frag_count);
-			UPDATE_CLOCK(3);
-
-			reduceSamples(hbid, frag_count, context);
-			UPDATE_CLOCK(4);
+			shadeAndReduceSamples(hbid, frag_count, context);
+			UPDATE_CLOCK(5);
 
 #ifdef ALPHA_THRESHOLD
 			if(allInvocationsARB(context.out_trans < 1.0 / 255.0))
@@ -1096,7 +1082,7 @@ void rasterBin(int bin_id) {
 		uint bx = (hbid >> 1) & 7, hby = (hbid & 1) + ((hbid >> 4) << 1);
 		ivec2 pixel_pos = ivec2((LIX & 7) + (bx << 3), ((LIX >> 3) & 3) + (hby << 2));
 		finishReduceSamples(pixel_pos, context);
-		UPDATE_CLOCK(5);
+		UPDATE_CLOCK(6);
 
 		//finishVisualizeSamples(pixel_pos);
 		//visualizeFragmentCounts(hbid, pixel_pos);

@@ -689,8 +689,9 @@ void generateBlocks(uint bid) {
 	}
 	barrier();
 	{
-		uint sbid = LIX >> 4, seg_group_offset = sbid << MAX_SEGMENTS_SHIFT;
-		uint tri_count = s_block_tri_count[sbid >> 1];
+		uint hbid = LIX >> 4, seg_group_offset = hbid << MAX_SEGMENTS_SHIFT;
+		uint counts = s_hblock_counts[hbid] & 0xffff;
+		uint tri_count = counts & 0xffff;
 
 		for(uint seg_id = LIX & 15; seg_id < MAX_SEGMENTS; seg_id += 16) {
 			uint cur_value = s_segments[seg_group_offset + seg_id];
@@ -700,15 +701,14 @@ void generateBlocks(uint bid) {
 			uint next_value =
 				seg_id + 1 == MAX_SEGMENTS ? 0 : s_segments[seg_group_offset + seg_id + 1];
 			next_value = next_value == 0 ? tri_count : min(tri_count, next_value);
-			cur_value = (cur_value - 1) | ((next_value - (cur_value - 1)) << 8);
-			s_segments[seg_group_offset + seg_id] = cur_value;
+			uint seg_tri_count = next_value - (cur_value - 1);
+			s_segments[seg_group_offset + seg_id] = (cur_value - 1) | (seg_tri_count << 8);
 		}
 	}
 }
 
 void loadSamples(uint hbid, int segment_id) {
-	uint sbid = hbid & (NUM_WARPS * 2 - 1); // TODO: describe
-	uint seg_group_offset = sbid << MAX_SEGMENTS_SHIFT;
+	uint seg_group_offset = (hbid & (NUM_WARPS * 2 - 1)) << MAX_SEGMENTS_SHIFT;
 	uint segment_data = s_segments[seg_group_offset + segment_id];
 	uint tri_count = segment_data >> 8, first_tri = segment_data & 0xff;
 	uint src_offset_64 = scratch64HalfBlockTrisOffset(hbid & (NUM_WARPS * 2 - 1)) + first_tri;

@@ -22,18 +22,15 @@
 
 #define BUFFER_SIZE (LSIZE * 8)
 
-#define MAX_HBLOCK_TRIS 256 // TODO: 2048
-#define MAX_HBLOCK_TRIS_SHIFT 8
+#define MAX_HBLOCK_TRIS 1024
 
-// TODO: per block or per tile ?
-#define MAX_SCRATCH_TRIS 2048
-#define MAX_SCRATCH_TRIS_SHIFT 11
+#define MAX_SCRATCH_TRIS 4096
+#define MAX_SCRATCH_TRIS_SHIFT 12
 
 #define SEGMENT_SIZE 128
 #define SEGMENT_SHIFT 7
 
-#define NUM_HBLOCKS 8
-#define NUM_HBLOCK_ROWS 4
+#define HBLOCKS_PER_TILE 8
 
 layout(local_size_x = LSIZE) in;
 
@@ -67,14 +64,16 @@ shared int s_tile_tri_counts[TILES_PER_BIN];
 shared int s_tile_tri_offsets[TILES_PER_BIN];
 shared vec3 s_tile_ray_dirs0[TILES_PER_BIN], s_tile_ray_dir0;
 
+shared uint s_group_size, s_group_shift, s_group_step, s_group_max_shift;
+
 // Low 16-bits: triangle count, High 16-bits: fragment count
-shared uint s_hblock_counts[NUM_HBLOCKS];
+shared uint s_hblock_counts[HBLOCKS_PER_TILE];
 
 shared uint s_buffer[BUFFER_SIZE + 1];
 shared uint s_mini_buffer[LSIZE];
 
 // TODO: how many segments? Should we recreate them every 256 tris?
-shared uint s_segments[NUM_HBLOCKS * WARP_SIZE];
+shared uint s_segments[HBLOCKS_PER_TILE * WARP_SIZE];
 shared int s_raster_error;
 
 // Only used when debugging
@@ -267,11 +266,12 @@ void processInputTris() {
 	}
 }
 
-shared uint s_sort_rcount[NUM_HBLOCKS];
+shared uint s_sort_rcount[HBLOCKS_PER_TILE];
 shared uint s_sort_max_rcount;
 
 void prepareSortTris() {
-	if(LIX < NUM_HBLOCKS) {
+	// TODO: optimize: take groups into account
+	if(LIX < HBLOCKS_PER_TILE) {
 		uint count = s_hblock_counts[LIX] & 0xffff;
 		// rcount: count rounded up to next power of 2
 		uint rcount = max(32, (count & (count - 1)) == 0 ? count : (2 << findMSB(count)));
@@ -298,12 +298,14 @@ void sortTris(uint count, uint buf_offset) {
 	barrier();
 
 	uint max_rcount = s_sort_max_rcount;
-	uint lid = LIX & WARP_MASK;
-	for(uint i = lid + count; i < max_rcount; i += WARP_STEP)
+	uint group_step = WARP_STEP << s_group_shift;
+	uint lid = LIX & (group_step - 1);
+
+	for(uint i = lid + count; i < max_rcount; i += group_step)
 		s_buffer[buf_offset + i] = 0xffffffff;
 	barrier();
 #ifdef VENDOR_NVIDIA
-	for(uint i = lid; i < max_rcount; i += WARP_STEP) {
+	for(uint i = lid; i < max_rcount; i += group_step) {
 		uint value = s_buffer[buf_offset + i];
 		// TODO: register sort could be faster
 		value = swap(value, 0x01, xorBits(lid, 1, 0)); // K = 2
@@ -319,14 +321,16 @@ void sortTris(uint count, uint buf_offset) {
 		s_buffer[buf_offset + i] = value;
 	}
 	barrier();
+
 	int start_k = 32, end_j = 32;
 #else
 	int start_k = 2, end_j = 1;
 #endif
+
 	for(uint k = start_k; k <= max_rcount; k = 2 * k) {
 		for(uint j = k >> 1; j >= end_j; j = j >> 1) {
-			for(uint i = lid; i < max_rcount; i += WARP_STEP * 2) {
-				uint idx = (i & j) != 0 ? i + WARP_STEP - j : i;
+			for(uint i = lid; i < max_rcount; i += group_step * 2) {
+				uint idx = (i & j) != 0 ? i + group_step - j : i;
 				uint lvalue = s_buffer[buf_offset + idx];
 				uint rvalue = s_buffer[buf_offset + idx + j];
 				if(((idx & k) != 0) == (lvalue.x < rvalue.x)) {
@@ -337,7 +341,7 @@ void sortTris(uint count, uint buf_offset) {
 			barrier();
 		}
 #ifdef VENDOR_NVIDIA
-		for(uint i = lid; i < max_rcount; i += WARP_STEP) {
+		for(uint i = lid; i < max_rcount; i += group_step) {
 			uint bit = (i & k) == 0 ? 0 : 1;
 			uint value = s_buffer[buf_offset + i];
 			value = swap(value, 0x10, bit ^ bitExtract(lid, 4));
@@ -353,16 +357,17 @@ void sortTris(uint count, uint buf_offset) {
 }
 
 // TODO: process groups of 1, 2, 4 or 8 blocks (in case of large number of tris/block)
-void generateBlocks() {
-	uint bid = LIX >> 5, by = bid >> 1, bx = bid & 1;
-	prepareSortTris();
+void generateBlocks(uint bid) {
+	uint by = bid >> 1, bx = bid & 1;
 
 	uint src_offset_64 = scratch64InitialHBlockOffset(bid);
 	uint dst_offset_64 = scratch64SortedHBlockTrisOffset(bid);
 	uint tri_count = s_hblock_counts[bid] & 0xffff;
-	uint buf_offset = bid << MAX_HBLOCK_TRIS_SHIFT;
+	uint buf_offset = (bid & (s_group_step - 1)) << s_group_max_shift;
+	uint group_step = WARP_STEP << s_group_shift;
+	uint group_mask = group_step - 1;
 
-	for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_STEP) {
+	for(uint i = LIX & group_mask; i < tri_count; i += group_step) {
 		uvec2 tri_data = g_scratch_64[src_offset_64 + i];
 		uint tri_idx = tri_data.y & 0xffff;
 		uint num_frags = tri_data.y >> 16;
@@ -381,17 +386,16 @@ void generateBlocks() {
 		float ray_pos = depth_eq.x * cpos.x + (depth_eq.y * cpos.y + depth_eq.z);
 		float depth = 0xffffe * SATURATE(inversesqrt(ray_pos + 1)); // 20 bits
 
-		// 12 bits for tile-tri index, 20 bits for depth
+		// 12 bits for block-tri index, 20 bits for depth
 		s_buffer[buf_offset + i] = i | (uint(depth) << 12);
 	}
 
 	barrier();
 	sortTris(tri_count, buf_offset);
 	barrier();
-	groupMemoryBarrier();
 
 #ifdef SHADER_DEBUG
-	for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_STEP) {
+	for(uint i = LIX & group_mask; i < tri_count; i += group_step) {
 		uint value = s_buffer[buf_offset + i];
 		uint prev_value = i == 0 ? 0 : s_buffer[buf_offset + i - 1];
 		if(value <= prev_value)
@@ -399,7 +403,7 @@ void generateBlocks() {
 	}
 #endif
 
-	for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_STEP) {
+	for(uint i = LIX & group_mask; i < tri_count; i += group_step) {
 		uint block_tri_idx = s_buffer[buf_offset + i] & 0xfff;
 		uint value = g_scratch_64[src_offset_64 + block_tri_idx].y >> 16;
 
@@ -416,10 +420,15 @@ void generateBlocks() {
 
 	// TODO: increase max elems to 1024 (2048 is too much?)
 	// Computing prefix sum across whole blocks (at most 8 * 32 elements)
-	if(LIX < 8 * NUM_HBLOCKS) {
-		uint bid = LIX >> 3, warp_idx = LIX & 7, warp_offset = warp_idx << 5;
-		uint buf_offset = bid << MAX_HBLOCK_TRIS_SHIFT;
-		uint tri_count = s_hblock_counts[bid] & 0xffff;
+	// TODO: make it work for all group sizes
+	if(LIX < 64) {
+		uint group_warp_shift = 3 + s_group_shift;
+		uint group_warp_mask = (1 << group_warp_shift) - 1;
+		uint fbid = bid & ~(s_group_step - 1);
+		uint bid = LIX >> group_warp_shift;
+		uint warp_idx = LIX & group_warp_mask, warp_offset = warp_idx << 5;
+		uint buf_offset = bid << s_group_max_shift;
+		uint tri_count = s_hblock_counts[fbid + bid] & 0xffff;
 		uint value = 0;
 
 		if(warp_offset < tri_count) {
@@ -427,20 +436,23 @@ void generateBlocks() {
 			value = s_buffer[buf_offset + tri_idx] >> 16;
 		}
 		uint sum = value, temp;
-		temp = shuffleUpNV(sum, 1, 8), sum += warp_idx >= 1 ? temp : 0;
-		temp = shuffleUpNV(sum, 2, 8), sum += warp_idx >= 2 ? temp : 0;
-		temp = shuffleUpNV(sum, 4, 8), sum += warp_idx >= 4 ? temp : 0;
+		temp = shuffleUpNV(sum, 1, 32), sum += warp_idx >= 1 ? temp : 0;
+		temp = shuffleUpNV(sum, 2, 32), sum += warp_idx >= 2 ? temp : 0;
+		temp = shuffleUpNV(sum, 4, 32), sum += warp_idx >= 4 ? temp : 0;
+		temp = shuffleUpNV(sum, 8, 32), sum += warp_idx >= 8 ? temp : 0;
+		temp = shuffleUpNV(sum, 16, 32), sum += warp_idx >= 16 ? temp : 0;
 		s_mini_buffer[LIX] = sum - value;
 	}
 	barrier();
 
 	// Storing triangle fragment offsets to scratch mem
-	for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_STEP) {
+	uint mini_offset = buf_offset >> 5;
+	for(uint i = LIX & group_mask; i < tri_count; i += group_step) {
 		uint tri_offset = 0;
 		if(i > 0) {
 			uint prev = i - 1;
 			tri_offset = s_buffer[buf_offset + prev] >> 16;
-			tri_offset += s_mini_buffer[(bid << 3) + (prev >> 5)];
+			tri_offset += s_mini_buffer[mini_offset + (prev >> 5)];
 		}
 
 		uint block_tri_idx = s_buffer[buf_offset + i] & 0xffff;
@@ -835,7 +847,7 @@ void rasterBin(int bin_id) {
 
 	for(int tile_id = 0; tile_id < TILES_PER_BIN; tile_id++) {
 		barrier();
-		if(LIX < NUM_HBLOCKS) {
+		if(LIX < HBLOCKS_PER_TILE) {
 			s_hblock_counts[LIX] = 0;
 			if(LIX == 0) {
 				s_tile_tri_count = s_tile_tri_counts[tile_id];
@@ -852,6 +864,24 @@ void rasterBin(int bin_id) {
 		processInputTris();
 		groupMemoryBarrier();
 		barrier();
+		if(LIX < HBLOCKS_PER_TILE) {
+			uint max_num_tris = s_hblock_counts[LIX] & 0xffff;
+			max_num_tris = max(max_num_tris, shuffleXorNV(max_num_tris, 1, 8));
+			max_num_tris = max(max_num_tris, shuffleXorNV(max_num_tris, 2, 8));
+			max_num_tris = max(max_num_tris, shuffleXorNV(max_num_tris, 4, 8));
+
+			if(LIX == 0) {
+				s_group_size = max_num_tris <= 256 ? 1 : max_num_tris <= 512 ? 2 : 4;
+				uint group_shift = max_num_tris <= 256 ? 0 : max_num_tris <= 512 ? 1 : 2;
+				s_group_shift = group_shift;
+				s_group_step = 8 >> group_shift;
+				s_group_max_shift = 8 + group_shift;
+			}
+		}
+
+		// TODO: merge it with preceeding if block
+		prepareSortTris();
+		barrier();
 		UPDATE_CLOCK(0);
 
 		// TODO: handle tri_count == 0
@@ -863,18 +893,20 @@ void rasterBin(int bin_id) {
 				s_raster_error = 0;
 			continue;
 		}
-		generateBlocks();
+
+		for(uint bid = LIX >> (5 + s_group_shift); bid < HBLOCKS_PER_TILE; bid += s_group_step)
+			generateBlocks(bid);
 		barrier();
 		groupMemoryBarrier();
 		UPDATE_CLOCK(1);
 
-		ReductionContext context;
-		initReduction(context);
-		//initVisualizeSamples();
-
 		uint bid = LIX >> 5;
 		uint num_frags = s_hblock_counts[bid] >> 16;
 		uint num_segments = (num_frags + SEGMENT_SIZE - 1) >> SEGMENT_SHIFT;
+
+		ReductionContext context;
+		initReduction(context);
+		//initVisualizeSamples();
 
 		for(uint segment_id = 0; segment_id < num_segments; segment_id++) {
 			if((segment_id & 31) == 0)
@@ -889,10 +921,10 @@ void rasterBin(int bin_id) {
 			UPDATE_CLOCK(4);
 		}
 
-		uint bx = bid & 1, by = bid >> 1;
-		ivec2 pixel_pos = ivec2((LIX & 7) + bx * 8, ((LIX >> 3) & 3) + by * 4);
+		ivec2 pixel_pos = ivec2((LIX & 7) + ((bid & 1) << 3), ((LIX >> 3) & 3) + ((bid >> 1) << 2));
 		finishReduction(pixel_pos, context);
 		UPDATE_CLOCK(6);
+
 		//finishVisualizeSamples(bid, pixel_pos);
 		//visualizeHBlockTriangleCounts(bid, pixel_pos);
 		//visualizeHBlockFragmentCounts(bid, pixel_pos);

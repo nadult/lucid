@@ -20,25 +20,19 @@ Bugi:
 
 - Problem: jak sensownie obługiwać tile-e z dużą ilością trisów ?
   Czy wogóle chcę robić computeTiles, czy może lepiej generować to z poziomu raster_tile ?
+  musiałbym sprawdzić?
 
-- optymalizacja loadSamples?
+- Muszę zwiększyć ilość wątków na raster_tile, żeby opóźnienie w przypadku przejścia bin -> tile było mniejsze
 
-- podział raster bin na wersję 256 i 512; rozdzielanie w classifierze
+- Chcę najpierw generować listy tile-sów lokalnie per bin?
 
-- co dalej? czy chcę jeszcze przyspieszać raster_bin ?
+Jak to zrobić ? mam listę trisów per-bin. Jak ją efektywnie przerobić? rzędami tak jak wcześniej?
+tzn. po 4 rzędy na raz i wrzucamy do 4 kolejek; od razu generujemy listy dla 4 tile-i na raz;
+te 4 kolejki musiałby być wszystkie przetwarzane w przypadku każdego tile-a
 
-- mogłbym teraz zrobić raster_tile, tak, żeby rozwiązanie było pełne
+- Max 16K trójkątów ?
 
-- różne segmenty mogą mieć różną ilość pracy do wykonania; niektóre mogą kończyć szybciej, inne później
-  czy da się jakoś zmienić pipeline aby praca była bardziej wyrównana?
-
-- jak radzić sobie z sytuacją gdy mamy 1 bin medium a pozostałe small ? Na razie to jest strasznie wolne...
-  musi być możliwość wykonywania w tym samym czasie różnych rodzajów shaderów ?
-
-  Chyba tylko async compute wchodzi w grę ?
-  Jeśli nie to musiałbym obsługiwać wszystko jednym shaderem ?
-  Mogłbym też robić większe thread-grupy. Ale więcej niż 512 może mnie ograniczać ?
-
+Musimy najpierw zwiększyć limit trókątów na blok, 256 to za mało.
 
 -----------------------------------------------------------------------------------------
                           === Nie działające / nie pewne pomysły ===

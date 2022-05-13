@@ -26,8 +26,8 @@
 #define MAX_HBLOCK_TRIS_SHIFT 8
 
 // TODO: per block or per tile ?
-#define MAX_SCRATCH_TRIS 4096
-#define MAX_SCRATCH_TRIS_SHIFT 12
+#define MAX_SCRATCH_TRIS 2048
+#define MAX_SCRATCH_TRIS_SHIFT 11
 
 #define SEGMENT_SIZE 128
 #define SEGMENT_SHIFT 7
@@ -260,7 +260,9 @@ void processInputTris() {
 
 		int tile_tri_idx = generateHBlockTris(i, tri0, tri1, tri2, min_by, max_by);
 		// TODO: separate this ?
-		if(tile_tri_idx < MAX_SCRATCH_TRIS && tile_tri_idx != -1)
+		if(tile_tri_idx >= MAX_SCRATCH_TRIS)
+			atomicOr(s_raster_error, 0x80000000);
+		else if(tile_tri_idx != -1)
 			storeTriangle(tile_tri_idx, tri0, tri1, tri2, v0, v1, v2, instance_id);
 	}
 }
@@ -807,8 +809,8 @@ void visualizeErrors() {
 	uint color = 0xff000031;
 	if((s_raster_error & (1 << bid)) != 0)
 		color += 0x32;
-	if((s_raster_error & (0x10000 << bid)) != 0)
-		color += 0x64;
+	if((s_raster_error & 0x80000000) != 0)
+		color += 0x80;
 	outputPixel(pixel_pos, color);
 }
 

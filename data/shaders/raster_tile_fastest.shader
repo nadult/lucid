@@ -919,6 +919,11 @@ void rasterBin(int bin_id) {
 			UPDATE_CLOCK(3);
 			reduceSamples(bid, cur_samples, context);
 			UPDATE_CLOCK(4);
+
+#ifdef ALPHA_THRESHOLD
+			if(allInvocationsARB(context.out_trans < 1.0 / 255.0))
+				break;
+#endif
 		}
 
 		ivec2 pixel_pos = ivec2((LIX & 7) + ((bid & 1) << 3), ((LIX >> 3) & 3) + ((bid >> 1) << 2));

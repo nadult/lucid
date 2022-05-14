@@ -9,7 +9,7 @@
 // There is definitely space for optimization here
 
 layout(local_size_x = LSIZE) in;
-layout(std430, binding = 1) buffer buf1_ { BinCounters  g_bins; };
+layout(std430, binding = 1) buffer buf1_ { BinCounters g_bins; };
 layout(std430, binding = 2) buffer buf2_ { TileCounters g_tiles; };
 layout(std430, binding = 3) buffer buf3_ { uint g_bin_quads[]; };
 layout(std430, binding = 4) buffer buf4_ { uint g_tile_tris[]; };
@@ -18,14 +18,15 @@ layout(std430, binding = 6) buffer buf6_ { uint g_quad_indices[]; };
 layout(std430, binding = 7) buffer buf7_ { uvec4 g_tri_aabbs[]; };
 
 shared uint s_bin_offset, s_total_count;
-shared uint s_tile_counts [TILES_PER_BIN];
-shared uint s_tile_buffer [TILES_PER_BIN];
+shared uint s_tile_counts[TILES_PER_BIN];
+shared uint s_tile_buffer[TILES_PER_BIN];
 shared uint s_tile_offsets[TILES_PER_BIN], s_tile_base_offsets[TILES_PER_BIN];
 
 shared vec2 s_bin_pos;
 shared ivec2 s_bin_ipos;
 
-uint computeScanlineParams(vec3 tri0, vec3 tri1, vec3 tri2, out vec3 scan_base, out vec3 scan_step) {
+uint computeScanlineParams(vec3 tri0, vec3 tri1, vec3 tri2, out vec3 scan_base,
+						   out vec3 scan_step) {
 	vec3 nrm0 = cross(tri2, tri1 - tri2);
 	vec3 nrm1 = cross(tri0, tri2 - tri0);
 	vec3 nrm2 = cross(tri1, tri0 - tri1);
@@ -39,11 +40,13 @@ uint computeScanlineParams(vec3 tri0, vec3 tri1, vec3 tri2, out vec3 scan_base, 
 		vec3(dot(nrm2, frustum.ws_dirx), dot(nrm2, frustum.ws_diry), dot(nrm2, frustum.ws_dir0)),
 	};
 
-	float inv_ex[3] = { 1.0 / edges[0].x, 1.0 / edges[1].x, 1.0 / edges[2].x };
+	float inv_ex[3] = {1.0 / edges[0].x, 1.0 / edges[1].x, 1.0 / edges[2].x};
 	scan_base = -vec3(edges[0].z * inv_ex[0], edges[1].z * inv_ex[1], edges[2].z * inv_ex[2]);
 	scan_step = -vec3(edges[0].y * inv_ex[0], edges[1].y * inv_ex[1], edges[2].y * inv_ex[2]);
-	uint xsigns = (edges[0].x < 0.0? 1 : 0) | (edges[1].x < 0.0? 2 : 0) | (edges[2].x < 0.0? 4 : 0);
-	uint ysigns = (edges[0].y < 0.0? 8 : 0) | (edges[1].y < 0.0? 16 : 0) | (edges[2].y < 0.0? 32 : 0);
+	uint xsigns =
+		(edges[0].x < 0.0 ? 1 : 0) | (edges[1].x < 0.0 ? 2 : 0) | (edges[2].x < 0.0 ? 4 : 0);
+	uint ysigns =
+		(edges[0].y < 0.0 ? 8 : 0) | (edges[1].y < 0.0 ? 16 : 0) | (edges[2].y < 0.0 ? 32 : 0);
 	return xsigns | ysigns;
 }
 
@@ -62,18 +65,18 @@ uint testTriangle(vec3 tri0, vec3 tri1, vec3 tri2, int tsx, int tsy, int tex, in
 		uint sign_mask = computeScanlineParams(tri0, tri1, tri2, scan_base, scan_step);
 
 		float tile_offset = TILE_SIZE - 0.989;
-		vec3 scan = vec3(
-				scan_step[0] * (sy + ((sign_mask &  8) == 0? tile_offset : 0.0)) + scan_base[0] - (sx + ((sign_mask & 1) == 0? tile_offset : 0.0)),
-				scan_step[1] * (sy + ((sign_mask & 16) == 0? tile_offset : 0.0)) + scan_base[1] - (sx + ((sign_mask & 2) == 0? tile_offset : 0.0)),
-				scan_step[2] * (sy + ((sign_mask & 32) == 0? tile_offset : 0.0)) + scan_base[2] - (sx + ((sign_mask & 4) == 0? tile_offset : 0.0)));
-		scan_min = vec3(
-				(sign_mask & 1) == 0? scan[0] : -1.0 / 0.0,
-				(sign_mask & 2) == 0? scan[1] : -1.0 / 0.0,
-				(sign_mask & 4) == 0? scan[2] : -1.0 / 0.0);
-		scan_max = vec3(
-				(sign_mask & 1) != 0? scan[0] : 1.0 / 0.0,
-				(sign_mask & 2) != 0? scan[1] : 1.0 / 0.0,
-				(sign_mask & 4) != 0? scan[2] : 1.0 / 0.0);
+		vec3 scan = vec3(scan_step[0] * (sy + ((sign_mask & 8) == 0 ? tile_offset : 0.0)) +
+							 scan_base[0] - (sx + ((sign_mask & 1) == 0 ? tile_offset : 0.0)),
+						 scan_step[1] * (sy + ((sign_mask & 16) == 0 ? tile_offset : 0.0)) +
+							 scan_base[1] - (sx + ((sign_mask & 2) == 0 ? tile_offset : 0.0)),
+						 scan_step[2] * (sy + ((sign_mask & 32) == 0 ? tile_offset : 0.0)) +
+							 scan_base[2] - (sx + ((sign_mask & 4) == 0 ? tile_offset : 0.0)));
+		scan_min = vec3((sign_mask & 1) == 0 ? scan[0] : -1.0 / 0.0,
+						(sign_mask & 2) == 0 ? scan[1] : -1.0 / 0.0,
+						(sign_mask & 4) == 0 ? scan[2] : -1.0 / 0.0);
+		scan_max = vec3((sign_mask & 1) != 0 ? scan[0] : 1.0 / 0.0,
+						(sign_mask & 2) != 0 ? scan[1] : 1.0 / 0.0,
+						(sign_mask & 4) != 0 ? scan[2] : 1.0 / 0.0);
 	}
 
 	// Trivial reject test
@@ -123,7 +126,7 @@ void dispatchBinTris(int bin_id) {
 		if(i + LIX >= tri_count)
 			continue;
 		uint tile_ranges = g_bin_quads[tri_offset + i + LIX] >> 24;
-		uint tsx = (tile_ranges)      & 0x3, tsy = (tile_ranges >> 2) & 0x3;
+		uint tsx = (tile_ranges)&0x3, tsy = (tile_ranges >> 2) & 0x3;
 		uint tex = (tile_ranges >> 4) & 0x3, tey = (tile_ranges >> 6);
 
 		for(uint ty = tsy; ty <= tey; ty++)
@@ -139,14 +142,19 @@ void dispatchBinTris(int bin_id) {
 	barrier();
 	if(LIX < TILES_PER_BIN)
 		atomicAdd(s_total_count, s_tile_counts[LIX]);
-	if(LIX < TILES_PER_BIN) s_tile_buffer [LIX] = s_tile_counts [LIX] + (LIX >= 1? s_tile_counts [LIX - 1] : 0);
+	if(LIX < TILES_PER_BIN)
+		s_tile_buffer[LIX] = s_tile_counts[LIX] + (LIX >= 1 ? s_tile_counts[LIX - 1] : 0);
 	barrier();
-	if(LIX < TILES_PER_BIN) s_tile_offsets[LIX] = s_tile_buffer [LIX] + (LIX >= 2? s_tile_buffer [LIX - 2] : 0);
+	if(LIX < TILES_PER_BIN)
+		s_tile_offsets[LIX] = s_tile_buffer[LIX] + (LIX >= 2 ? s_tile_buffer[LIX - 2] : 0);
 	barrier();
-	if(LIX < TILES_PER_BIN)  s_tile_buffer[LIX] = s_tile_offsets[LIX] + (LIX >= 4? s_tile_offsets[LIX - 4] : 0);
+	if(LIX < TILES_PER_BIN)
+		s_tile_buffer[LIX] = s_tile_offsets[LIX] + (LIX >= 4 ? s_tile_offsets[LIX - 4] : 0);
 	barrier();
-	if(LIX < TILES_PER_BIN) s_tile_offsets[LIX] = s_tile_buffer [LIX] + (LIX >= 8? s_tile_buffer [LIX - 8] : 0);
-	if(LIX == 0) s_bin_offset = atomicAdd(g_tiles.num_tile_tris, s_total_count);
+	if(LIX < TILES_PER_BIN)
+		s_tile_offsets[LIX] = s_tile_buffer[LIX] + (LIX >= 8 ? s_tile_buffer[LIX - 8] : 0);
+	if(LIX == 0)
+		s_bin_offset = atomicAdd(g_tiles.num_tile_tris, s_total_count);
 	barrier();
 	if(LIX < TILES_PER_BIN)
 		s_tile_offsets[LIX] += s_bin_offset - s_tile_counts[LIX];
@@ -160,7 +168,7 @@ void dispatchBinTris(int bin_id) {
 	for(uint i = LIX; i < tri_count; i += LSIZE) {
 		uint tri_idx = g_bin_quads[tri_offset + i];
 		uint tile_ranges = tri_idx >> 24;
-		uint tsx = (tile_ranges)      & 0x3, tsy = (tile_ranges >> 2) & 0x3;
+		uint tsx = (tile_ranges)&0x3, tsy = (tile_ranges >> 2) & 0x3;
 		uint tex = (tile_ranges >> 4) & 0x3, tey = (tile_ranges >> 6);
 		tri_idx &= 0xffffff;
 
@@ -170,13 +178,17 @@ void dispatchBinTris(int bin_id) {
 		uint v2 = g_quad_indices[tri_idx * 4 + 2] & 0x03ffffff;
 		uint v3 = g_quad_indices[tri_idx * 4 + 3] & 0x03ffffff;
 
-		uint mask0 = 0xffff, mask1 = v2 == v3? 0 : 0xffff;
+		uint mask0 = 0xffff, mask1 = v2 == v3 ? 0 : 0xffff;
 		// TODO: thread divergence here; can we decrease it somehow?
 		// Best way to add separate pass for small triangles?
-		vec3 quad0 = vec3(g_verts[v0 * 3 + 0], g_verts[v0 * 3 + 1], g_verts[v0 * 3 + 2]) - frustum.ws_shared_origin;
-		vec3 quad1 = vec3(g_verts[v1 * 3 + 0], g_verts[v1 * 3 + 1], g_verts[v1 * 3 + 2]) - frustum.ws_shared_origin;
-		vec3 quad2 = vec3(g_verts[v2 * 3 + 0], g_verts[v2 * 3 + 1], g_verts[v2 * 3 + 2]) - frustum.ws_shared_origin;
-		vec3 quad3 = vec3(g_verts[v3 * 3 + 0], g_verts[v3 * 3 + 1], g_verts[v3 * 3 + 2]) - frustum.ws_shared_origin;
+		vec3 quad0 = vec3(g_verts[v0 * 3 + 0], g_verts[v0 * 3 + 1], g_verts[v0 * 3 + 2]) -
+					 frustum.ws_shared_origin;
+		vec3 quad1 = vec3(g_verts[v1 * 3 + 0], g_verts[v1 * 3 + 1], g_verts[v1 * 3 + 2]) -
+					 frustum.ws_shared_origin;
+		vec3 quad2 = vec3(g_verts[v2 * 3 + 0], g_verts[v2 * 3 + 1], g_verts[v2 * 3 + 2]) -
+					 frustum.ws_shared_origin;
+		vec3 quad3 = vec3(g_verts[v3 * 3 + 0], g_verts[v3 * 3 + 1], g_verts[v3 * 3 + 2]) -
+					 frustum.ws_shared_origin;
 
 		// AABB here helps only on hairball
 		uvec4 aabb = g_tri_aabbs[tri_idx];
@@ -207,7 +219,6 @@ void dispatchBinTris(int bin_id) {
 		g_tiles.tile_tri_counts[bin_id][LIX] = num_tris;
 		atomicMax(g_tiles.max_tris_per_tile, num_tris);
 	}
-
 }
 
 shared int s_num_bins, s_bin_id;
@@ -215,7 +226,7 @@ shared int s_num_bins, s_bin_id;
 int loadNextBin() {
 	if(LIX == 0) {
 		uint bin_idx = atomicAdd(g_tiles.tiled_bin_counter, 1);
-		s_bin_id = bin_idx < s_num_bins? g_bins.tiled_bins[bin_idx] : -1;
+		s_bin_id = bin_idx < s_num_bins ? g_bins.tiled_bins[bin_idx] : -1;
 	}
 	barrier();
 	return s_bin_id;

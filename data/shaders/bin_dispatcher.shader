@@ -53,16 +53,17 @@ void main() {
 			uint quad_idx = tris_offset + LSIZE * i + LIX;
 			if(quad_idx >= num_input_quads)
 				break;
-			
+
 			uint aabb = g_quad_aabbs[quad_idx];
 			if(aabb == ~0u)
 				continue;
-			int tsx = int(aabb         & 0xff), tsy = int((aabb >>  8) & 0xff);
-			int tex = int((aabb >> 16) & 0xff), tey = int((aabb >> 24)       );
+			int tsx = int(aabb & 0xff), tsy = int((aabb >> 8) & 0xff);
+			int tex = int((aabb >> 16) & 0xff), tey = int((aabb >> 24));
 			int bsx = tsx >> 2, bsy = tsy >> 2;
 			int bex = tex >> 2, bey = tey >> 2;
 			// Encodes tile ranges within a single bin
-			uint tile_ranges = (tsx & 0x3) | ((tsy & 0x3) << 2) | ((tex & 0x3) << 4) | ((tey & 0x3) << 6);
+			uint tile_ranges =
+				(tsx & 0x3) | ((tsy & 0x3) << 2) | ((tex & 0x3) << 4) | ((tey & 0x3) << 6);
 
 			// 6 bits per bin dimension = max 64 bins in X/Y
 			// 6 * 4 = 24 bits total per whole bin dimension
@@ -83,23 +84,25 @@ void main() {
 				s_offsets[li] = atomicAdd(g_bins.bin_quad_offsets_temp[li], int(s_counts[li]));
 		}
 		barrier();
-		
+
 		for(uint i = 0; i < TRIS_PER_THREAD; i++) {
 			if(lbins[i] == ~0u)
 				continue;
 			uint quad_idx = tris_offset + LSIZE * i + LIX;
-			int bsx = int((lbins[i]      ) & 0x3f);
-			int bsy = int((lbins[i] >>  6) & 0x3f);
+			int bsx = int((lbins[i]) & 0x3f);
+			int bsy = int((lbins[i] >> 6) & 0x3f);
 			int bex = int((lbins[i] >> 12) & 0x3f);
 			int bey = int((lbins[i] >> 18) & 0x3f);
 			uint tile_ranges = lbins[i] >> 24;
 
 			for(int by = bsy; by <= bey; by++) {
-				uint tile_ranges_cury = (tile_ranges | (by < bey? 0xc0 : 0)) & (by > bsy? 0xf3 : 0xff);
+				uint tile_ranges_cury =
+					(tile_ranges | (by < bey ? 0xc0 : 0)) & (by > bsy ? 0xf3 : 0xff);
 				for(int bx = bsx; bx <= bex; bx++) {
 					int bin_id = bx + by * BIN_COUNT_X;
 					uint quad_offset = atomicAdd(s_offsets[bin_id], 1);
-					uint tile_ranges_cur = (tile_ranges_cury | (bx < bex? 0x30 : 0)) & (bx > bsx? 0xfc : 0xff);
+					uint tile_ranges_cur =
+						(tile_ranges_cury | (bx < bex ? 0x30 : 0)) & (bx > bsx ? 0xfc : 0xff);
 					g_bin_quads[quad_offset] = (quad_idx & 0xffffff) | (tile_ranges_cur << 24);
 				}
 			}

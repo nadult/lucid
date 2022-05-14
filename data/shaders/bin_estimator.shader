@@ -25,7 +25,7 @@
 
 layout(local_size_x = LSIZE) in;
 layout(std430, binding = 0) buffer buf0_ { uint g_quad_aabbs[]; };
-layout(std430, binding = 1) buffer buf1_ { BinCounters  g_bins; };
+layout(std430, binding = 1) buffer buf1_ { BinCounters g_bins; };
 layout(std430, binding = 2) buffer buf2_ { TileCounters g_tiles; };
 
 shared int s_num_input_quads;
@@ -38,14 +38,14 @@ void countTri(uint quad_idx) {
 	uint aabb = g_quad_aabbs[quad_idx];
 	if(aabb == ~0u)
 		return;
-	int tsx = int(aabb         & 0xff), tsy = int((aabb >>  8) & 0xff);
-	int tex = int((aabb >> 16) & 0xff), tey = int((aabb >> 24)       );
+	int tsx = int(aabb & 0xff), tsy = int((aabb >> 8) & 0xff);
+	int tex = int((aabb >> 16) & 0xff), tey = int((aabb >> 24));
 
 	int bsx = tsx >> 2, bsy = tsy >> 2;
 	int bex = tex >> 2, bey = tey >> 2;
 	// ASSERT(bsx >= 0 && bsy >= 0);
 	// ASSERT(bex <= BIN_COUNT_X && bey <= BIN_COUNT_Y);
-	
+
 	for(int by = bsy; by <= bey; by++)
 		for(int bx = bsx; bx <= bex; bx++)
 			atomicAdd(s_counts[bx + by * BIN_COUNT_X], 1);

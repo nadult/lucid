@@ -15,6 +15,11 @@ Bugi:
                                  === Co dalej ===
 -----------------------------------------------------------------------------------------
 
+- Na niektórych scenach bardziej opłaca się odpalić tylko wersję tile (jest szybciej)
+  z czego to wynika?
+  Opłaca się na: dragon, san-miguel
+  Nie opłaca się na: sponza, conference, bunny
+
 - Poprawna obsługa sytuacji gdy limity są przekraczane; Nie mogę robić za dużo wariantów, bo
   w efekcie będzie wolniej a nie szybciej
 
@@ -30,12 +35,39 @@ Jak to zrobić ? mam listę trisów per-bin. Jak ją efektywnie przerobić? rzę
 tzn. po 4 rzędy na raz i wrzucamy do 4 kolejek; od razu generujemy listy dla 4 tile-i na raz;
 te 4 kolejki musiałby być wszystkie przetwarzane w przypadku każdego tile-a
 
-- Max 16K trójkątów ?
+4 rzedy po max 64 pixele. 12 bitów na rząd; 48 bitów w sumie; 12-13 bitów na id trókąta.
+8 bitów potrzebne na bx-maskę...
 
-Musimy najpierw zwiększyć limit trókątów na blok, 256 to za mało.
+Może biny są za duże ? Lepsze by były 32x32 ?
+- mniejsza ilość elementów per bin
+- grupy wątków mają 4x więcej elementów do przetworzenia
+Problem: liczniki dla rozdzielczości 4096x4096 zajmą 64KB. Mógłbym zrobić podział trókątów
+na grupy (powiedzmy 512x512?) i każdą grupę bym rozpatrywał oddzielnie?
+Na razie chyba zostajemy z binami...
+
+Co zrobić z sytuacjami gdy mamy bardzo dużo trisów? 128K quadów -> >64K trisów/tile
+- przechowywanie 128K rzędów wymaga 128 * 1024 * 8 = 1MB
+- przechowanie mapy bitów dla pokrywanych tile-i: 128 * 1024 * 2 = 256K
+
+Jakaś forma alokacji pamięci ? Ale jak to później zwalniać? co najmniej musiałbym mieć jakiś
+buddy allocator, ale to jest wolne...
+
+Rozwiązanie nie musi być perfekcyjne od samego początku... 
+
+Może się zdarzyć, że wszystkie trisy wylądują w tym samym tile-u. I co wtedy? Bail ? po prostu
+nie obsługuję wszystkich sytuacji i tyle ? wszystkie inne algorytmy też mają jakieś ograniczenia
+(nie licząc hardware-u).
+
+Powiedzmy, że chcemy mieć możliwość zrenderowania hairballa i powerplant i tyle. Więcej trisów obsługiwać
+nie muszę!
+
+A może max rozdziałka 2560x2048 ? 5000
+
+Plan:
+- zmniejszamy wielkość bina do 32x32 i tile-a do 8x8; blok: 4x4
 
 -----------------------------------------------------------------------------------------
-                          === Nie działające / nie pewne pomysły ===
+                         === Nie działające / nie pewne pomysły ===                      
 -----------------------------------------------------------------------------------------
 
 * Odnoszenie się do tile-row-trisów i nie generowanie tile-rowów
@@ -111,3 +143,11 @@ powerplant: 8678   1990   568   1450   751         3683         11
     sponza: 3783   62     124   5      3429        4            4
     teapot: 468    27     49    5      327         4            4
  white_oak: 13352  51     252   6      12898       5            4
+
+
+ Tylko raster_tile 2560x1330 bez raster_timings:
+             total  setup  bins  tiles  raster_bin  raster_tile  raster_block
+    dragon: 1002   188    71    125    6           545          4
+  hairball: 6148   552    198   1509   6           3743         16
+powerplant: 9149   1980   578   1491   6           4862         11
+san-miguel: 7807   1081   268   740    6           5505         11

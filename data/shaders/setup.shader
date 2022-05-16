@@ -14,9 +14,9 @@ uniform int enable_backface_culling;
 uniform int num_instances;
 
 // TODO: check if readonly/restrict makes a differencr
-layout(std430, binding = 0) readonly  restrict buffer buf0_ { uint g_input_indices[]; };
-layout(std430, binding = 1) readonly  restrict buffer buf1_ { InstanceData g_instances[]; };
-layout(std430, binding = 2) readonly  restrict buffer buf2_ { float g_input_verts[]; };
+layout(std430, binding = 0) readonly restrict buffer buf0_ { uint g_input_indices[]; };
+layout(std430, binding = 1) readonly restrict buffer buf1_ { InstanceData g_instances[]; };
+layout(std430, binding = 2) readonly restrict buffer buf2_ { float g_input_verts[]; };
 
 layout(std430, binding = 3) buffer buf4_ { BinCounters g_bins; };
 layout(std430, binding = 4) buffer buf3_ { uint g_quad_indices[]; };
@@ -50,16 +50,14 @@ shared uint s_rejected_quads[REJECTED_TYPE_COUNT];
 //       byłyby przycinane do konkretnych bloków
 
 vec3 vertexLoad(uint vindex) {
-	return vec3(g_input_verts[vindex * 3 + 0], g_input_verts[vindex * 3 + 1], g_input_verts[vindex * 3 + 2]);
+	return vec3(g_input_verts[vindex * 3 + 0], g_input_verts[vindex * 3 + 1],
+				g_input_verts[vindex * 3 + 2]);
 }
 
 uint vertexClipMask(vec4 pos) {
-	return  (pos.x < -pos.w? 0x001 : 0) |
-			(pos.x >  pos.w? 0x002 : 0) |
-			(pos.y < -pos.w? 0x004 : 0) |
-			(pos.y >  pos.w? 0x008 : 0) |
-			(pos.z < -pos.w? 0x010 : 0) |
-			(pos.z >  pos.w? 0x020 : 0);
+	return (pos.x < -pos.w ? 0x001 : 0) | (pos.x > pos.w ? 0x002 : 0) |
+		   (pos.y < -pos.w ? 0x004 : 0) | (pos.y > pos.w ? 0x008 : 0) |
+		   (pos.z < -pos.w ? 0x010 : 0) | (pos.z > pos.w ? 0x020 : 0);
 }
 
 // Computing AABBs for tris crossing Z-near clip plane is tricky
@@ -77,7 +75,7 @@ vec4 computeClippedAABB(vec4 v0, vec4 v1, vec4 v2, vec3 inv_w, uint clipmask) {
 		if((cur_clipmask & 0x3) == 0) {
 			any_vis |= 0x1;
 			if(vndc[i].x - aabb[0] * vndc[i].w < 0)
-				aabb[0] = vndc[i].x  * inv_w[i];
+				aabb[0] = vndc[i].x * inv_w[i];
 			if(vndc[i].x - aabb[2] * vndc[i].w > 0)
 				aabb[2] = vndc[i].x * inv_w[i];
 		}
@@ -92,8 +90,7 @@ vec4 computeClippedAABB(vec4 v0, vec4 v1, vec4 v2, vec3 inv_w, uint clipmask) {
 	if((any_vis & 0x0f) == 0) {
 		aabb[0] = -1.0;
 		aabb[2] = 1.0;
-	}
-	else if((or_clipmask & 0x3) != 0) {
+	} else if((or_clipmask & 0x3) != 0) {
 		for(int i = 0; i < 3; i++) {
 			uint cur_clipmask = clipmask >> (i * 8);
 			if((cur_clipmask & 0x1) != 0 && vndc[i].x - aabb[0] * vndc[i].w < 0.0)
@@ -106,8 +103,7 @@ vec4 computeClippedAABB(vec4 v0, vec4 v1, vec4 v2, vec3 inv_w, uint clipmask) {
 	if((any_vis & 0xf0) == 0) {
 		aabb[1] = -1.0;
 		aabb[3] = 1.0;
-	}
-	else if((or_clipmask & 0xc) != 0) {
+	} else if((or_clipmask & 0xc) != 0) {
 		for(int i = 0; i < 3; i++) {
 			uint cur_clipmask = clipmask >> (i * 8);
 			if((cur_clipmask & 0x4) != 0 && vndc[i].y - aabb[1] * vndc[i].w < 0.0)
@@ -122,9 +118,8 @@ vec4 computeClippedAABB(vec4 v0, vec4 v1, vec4 v2, vec3 inv_w, uint clipmask) {
 
 // AABB: xmin, ymin, xmax, ymax
 vec4 computeAABB(vec3 v0, vec3 v1, vec3 v2) {
-	return vec4(
-		min(min(v0.x, v1.x), v2.x), min(min(v0.y, v1.y), v2.y),
-		max(max(v0.x, v1.x), v2.x), max(max(v0.y, v1.y), v2.y));
+	return vec4(min(min(v0.x, v1.x), v2.x), min(min(v0.y, v1.y), v2.y), max(max(v0.x, v1.x), v2.x),
+				max(max(v0.y, v1.y), v2.y));
 }
 
 void processQuad(uint quad_id, uint v0, uint v1, uint v2, uint v3, uint instance_id) {
@@ -140,7 +135,7 @@ void processQuad(uint quad_id, uint v0, uint v1, uint v2, uint v3, uint instance
 		return;
 	}
 
-	vec3 vws[4] = { vertexLoad(v0), vertexLoad(v1), vertexLoad(v2), vertexLoad(v3) };
+	vec3 vws[4] = {vertexLoad(v0), vertexLoad(v1), vertexLoad(v2), vertexLoad(v3)};
 
 	// TODO: on conference a piece of chair disappears
 	if(enable_backface_culling != 0) {
@@ -161,14 +156,16 @@ void processQuad(uint quad_id, uint v0, uint v1, uint v2, uint v3, uint instance
 	}
 
 	vec4 vndc[4] = {
-		view_proj_matrix * vec4(vws[0], 1.0), view_proj_matrix * vec4(vws[1], 1.0),
-		view_proj_matrix * vec4(vws[2], 1.0), view_proj_matrix * vec4(vws[3], 1.0),
+		view_proj_matrix * vec4(vws[0], 1.0),
+		view_proj_matrix * vec4(vws[1], 1.0),
+		view_proj_matrix * vec4(vws[2], 1.0),
+		view_proj_matrix * vec4(vws[3], 1.0),
 	};
 
-	uint clipmask =  vertexClipMask(vndc[0])        | (vertexClipMask(vndc[1]) << 8) |
-		             (vertexClipMask(vndc[2]) << 16) | (vertexClipMask(vndc[3]) << 24);
+	uint clipmask = vertexClipMask(vndc[0]) | (vertexClipMask(vndc[1]) << 8) |
+					(vertexClipMask(vndc[2]) << 16) | (vertexClipMask(vndc[3]) << 24);
 	uint and_clipmask = clipmask & (clipmask >> 8) & (clipmask >> 16) & (clipmask >> 24) & 0xff;
-	uint  or_clipmask = clipmask | (clipmask >> 8) | (clipmask >> 16) | (clipmask >> 24);
+	uint or_clipmask = clipmask | (clipmask >> 8) | (clipmask >> 16) | (clipmask >> 24);
 
 	// Culling triangles outside of one of clipping planes
 	if(and_clipmask != 0) {
@@ -184,9 +181,10 @@ void processQuad(uint quad_id, uint v0, uint v1, uint v2, uint v3, uint instance
 	// Algorithm source: Calculating Screen Coverage (Jim Blinn's Corner, 1996)
 	if((or_clipmask & 0x30) != 0) {
 		aabb0 = computeClippedAABB(vndc[0], vndc[1], vndc[2], inv_w.xyz, clipmask);
-		aabb1 = computeClippedAABB(vndc[0], vndc[2], vndc[3], inv_w.xzw, (clipmask & 0xff) | ((clipmask & 0xffff0000) >> 8));
+		aabb1 = computeClippedAABB(vndc[0], vndc[2], vndc[3], inv_w.xzw,
+								   (clipmask & 0xff) | ((clipmask & 0xffff0000) >> 8));
 	}
-	
+
 	vndc[0].xyz *= inv_w[0];
 	vndc[1].xyz *= inv_w[1];
 	vndc[2].xyz *= inv_w[2];
@@ -205,7 +203,7 @@ void processQuad(uint quad_id, uint v0, uint v1, uint v2, uint v3, uint instance
 		aabb0 = (aabb0 + vec4(1.0)) * vec4(ndc_to_screen, ndc_to_screen);
 		aabb1 = (aabb1 + vec4(1.0)) * vec4(ndc_to_screen, ndc_to_screen);
 		vec4 aabb = vec4(min(aabb0.xy, aabb1.xy), max(aabb0.zw, aabb1.zw));
-	
+
 		// Killing quads which fall between samples
 		// TODO: smaller range in MSAA mode
 		// TODO: why -0.5? are samples positioned incorrectly?
@@ -217,20 +215,24 @@ void processQuad(uint quad_id, uint v0, uint v1, uint v2, uint v3, uint instance
 		}
 
 		// TODO: don't forget to change it in MSAA mode
-		aabb0 = clamp(aabb0 + vec4(0.49, 0.49, -0.49, -0.49), vec4(0.0), vec4(max_screen_pos, max_screen_pos));
-		aabb1 = clamp(aabb1 + vec4(0.49, 0.49, -0.49, -0.49), vec4(0.0), vec4(max_screen_pos, max_screen_pos));
-		aabb = clamp(aabb + vec4(0.49, 0.49, -0.49, -0.49), vec4(0.0), vec4(max_screen_pos, max_screen_pos));
+		aabb0 = clamp(aabb0 + vec4(0.49, 0.49, -0.49, -0.49), vec4(0.0),
+					  vec4(max_screen_pos, max_screen_pos));
+		aabb1 = clamp(aabb1 + vec4(0.49, 0.49, -0.49, -0.49), vec4(0.0),
+					  vec4(max_screen_pos, max_screen_pos));
+		aabb = clamp(aabb + vec4(0.49, 0.49, -0.49, -0.49), vec4(0.0),
+					 vec4(max_screen_pos, max_screen_pos));
 
 		uvec4 iaabb = uvec4(aabb.xy, aabb.zw);
-		uint enc_aabb = (((iaabb[0] >> TILE_SHIFT) & 0xff))       | (((iaabb[1] >> TILE_SHIFT) & 0xff) << 8) |
-						(((iaabb[2] >> TILE_SHIFT) & 0xff) << 16) | (((iaabb[3] >> TILE_SHIFT) & 0xff) << 24);
+		uint enc_aabb =
+			(((iaabb[0] >> TILE_SHIFT) & 0xff)) | (((iaabb[1] >> TILE_SHIFT) & 0xff) << 8) |
+			(((iaabb[2] >> TILE_SHIFT) & 0xff) << 16) | (((iaabb[3] >> TILE_SHIFT) & 0xff) << 24);
 		g_quad_aabbs[quad_id] = enc_aabb;
 
 		uvec4 iaabb0 = uvec4(aabb0);
 		uvec4 iaabb1 = uvec4(aabb1);
 		g_tri_aabbs[quad_id] = uvec4(encodeAABB(uvec4(aabb0)), encodeAABB(uvec4(aabb1)));
 	}
-	
+
 	// TODO: cull second degenerate triangle
 
 	// Encode AABB+instance in 64-bit ?
@@ -254,8 +256,7 @@ void main() {
 			s_index_offset[LIX] = g_instances[instance_id].index_offset;
 			s_quad_offset[LIX] = atomicAdd(g_bins.num_input_quads, num_quads);
 			s_instance_id[LIX] = instance_id;
-		}
-		else {
+		} else {
 			s_num_quads[LIX] = 0;
 		}
 	}

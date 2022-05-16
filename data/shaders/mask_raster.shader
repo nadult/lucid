@@ -1,4 +1,5 @@
 // $$include funcs frustum viewport data
+// clang-format off
 
 #define LIX gl_LocalInvocationIndex
 #define LID gl_LocalInvocationID
@@ -19,8 +20,7 @@ layout(std430, binding =  2) buffer buf2_ { uvec4 g_tri_aabbs[]; };
 layout(std430, binding =  3) buffer buf3_ { float g_verts[]; };
 layout(std430, binding =  4) buffer buf4_ { uint g_quad_indices[]; };
 
-layout(std430, binding =  5) buffer buf5_ { BinCounters g_bins; };
-layout(std430, binding =  6) buffer buf6_ { TileCounters g_tiles; };
+TILE_COUNTERS_BUFFER(6);
 layout(std430, binding =  7) buffer buf7_ { uint g_block_counts[]; }; // TODO: 16-bits?
 layout(std430, binding =  8) buffer buf8_ { uint g_block_offsets[]; }; // TODO: keep count|index<<16 in single value
 
@@ -387,8 +387,8 @@ void generateTileMasks() {
 //       nawet jeśli to jest to pomysł na później jak już wszystko inne będzie szybciej działać
 void generateBinMasks(int bin_id) {
 	if(LIX < TILES_PER_BIN) {
-		s_tile_tri_counts [LIX] = int(g_tiles.tile_tri_counts[bin_id][LIX]);
-		s_tile_tri_offsets[LIX] = int(g_tiles.tile_tri_offsets[bin_id][LIX]);
+		s_tile_tri_counts [LIX] = int(TILE_TRI_COUNTS(bin_id, LIX));
+		s_tile_tri_offsets[LIX] = int(TILE_TRI_OFFSETS(bin_id, LIX));
 		if(LIX == 0)
 			s_bin_pos = ivec2(bin_id % BIN_COUNT_X, bin_id / BIN_COUNT_X) * BIN_SIZE;
 	}
@@ -418,8 +418,8 @@ void generateBinMasks(int bin_id) {
 				uint blocktri_offset = atomicAdd(g_tiles.num_block_tris, blocktri_count);
 				s_tile_blocktri_offset = blocktri_offset;
 				// TODO: write to smem first? then use all threads to write all in one go
-				g_tiles.tile_block_tri_counts[bin_id][tile_id] = blocktri_count;
-				g_tiles.tile_block_tri_offsets[bin_id][tile_id] = blocktri_offset;
+				TILE_BLOCK_TRI_COUNTS(bin_id, tile_id) = blocktri_count;
+				TILE_BLOCK_TRI_OFFSETS(bin_id, tile_id) = blocktri_offset;
 			}
 			// TODO: make sure it works when warp size < 16
 			s_block_tri_counts[LIX] = min(s_block_tri_counts[LIX], MAX_BLOCK_TRIS);

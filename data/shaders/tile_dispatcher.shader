@@ -9,8 +9,9 @@
 // There is definitely space for optimization here
 
 layout(local_size_x = LSIZE) in;
-layout(std430, binding = 1) buffer buf1_ { BinCounters g_bins; };
-layout(std430, binding = 2) buffer buf2_ { TileCounters g_tiles; };
+
+BIN_COUNTERS_BUFFER(1);
+TILE_COUNTERS_BUFFER(2);
 layout(std430, binding = 3) buffer buf3_ { uint g_bin_quads[]; };
 layout(std430, binding = 4) buffer buf4_ { uint g_tile_tris[]; };
 layout(std430, binding = 5) buffer buf5_ { float g_verts[]; };
@@ -115,8 +116,8 @@ void dispatchBinTris(int bin_id) {
 		}
 	}
 
-	int tri_count = g_bins.bin_quad_counts[bin_id];
-	int tri_offset = g_bins.bin_quad_offsets[bin_id];
+	int tri_count = BIN_QUAD_COUNTS(bin_id);
+	int tri_offset = BIN_QUAD_OFFSETS(bin_id);
 	barrier();
 
 	bin_sx *= BIN_SIZE / TILE_SIZE;
@@ -161,7 +162,7 @@ void dispatchBinTris(int bin_id) {
 	barrier();
 	if(LIX < TILES_PER_BIN) {
 		s_tile_base_offsets[LIX] = s_tile_offsets[LIX];
-		g_tiles.tile_tri_offsets[bin_id][LIX] = s_tile_offsets[LIX];
+		TILE_TRI_OFFSETS(bin_id, LIX) = s_tile_offsets[LIX];
 	}
 	barrier();
 
@@ -216,7 +217,7 @@ void dispatchBinTris(int bin_id) {
 	barrier();
 	if(LIX < TILES_PER_BIN) {
 		uint num_tris = s_tile_offsets[LIX] - s_tile_base_offsets[LIX];
-		g_tiles.tile_tri_counts[bin_id][LIX] = num_tris;
+		TILE_TRI_COUNTS(bin_id, LIX) = num_tris;
 		atomicMax(g_tiles.max_tris_per_tile, num_tris);
 	}
 }
@@ -226,7 +227,7 @@ shared int s_num_bins, s_bin_id;
 int loadNextBin() {
 	if(LIX == 0) {
 		uint bin_idx = atomicAdd(g_tiles.tiled_bin_counter, 1);
-		s_bin_id = bin_idx < s_num_bins ? g_bins.tiled_bins[bin_idx] : -1;
+		s_bin_id = bin_idx < s_num_bins ? BIN_TILED_BINS(bin_idx) : -1;
 	}
 	barrier();
 	return s_bin_id;

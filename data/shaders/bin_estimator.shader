@@ -25,8 +25,7 @@
 
 layout(local_size_x = LSIZE) in;
 layout(std430, binding = 0) buffer buf0_ { uint g_quad_aabbs[]; };
-layout(std430, binding = 1) buffer buf1_ { BinCounters g_bins; };
-layout(std430, binding = 2) buffer buf2_ { TileCounters g_tiles; };
+BIN_COUNTERS_BUFFER(1);
 
 shared int s_num_input_quads;
 
@@ -92,7 +91,7 @@ void estimateBins() {
 
 	for(int i = 0; i < BIN_COUNT; i += LSIZE)
 		if(i + LIX < BIN_COUNT && s_counts[i + LIX] > 0)
-			atomicAdd(g_bins.bin_quad_counts[i + LIX], s_counts[i + LIX]);
+			atomicAdd(BIN_QUAD_COUNTS(i + LIX), s_counts[i + LIX]);
 }
 
 // TODO: separate shader instead of phase
@@ -100,7 +99,7 @@ void computeOffsets() {
 	// Loading tri counts
 	for(int i = 0; i < BIN_COUNT; i += LSIZE)
 		if(i + LIX < BIN_COUNT)
-			s_counts[i + LIX] = g_bins.bin_quad_counts[i + LIX];
+			s_counts[i + LIX] = BIN_QUAD_COUNTS(i + LIX);
 	barrier();
 
 	// Computing per-bin tri offsets
@@ -120,9 +119,9 @@ void computeOffsets() {
 	barrier();
 	for(int i = 0; i < BIN_COUNT; i += LSIZE)
 		if(i + LIX < BIN_COUNT) {
-			int cur_offset = s_counts[i + LIX] - g_bins.bin_quad_counts[i + LIX];
-			g_bins.bin_quad_offsets     [i + LIX] = cur_offset;
-			g_bins.bin_quad_offsets_temp[i + LIX] = cur_offset;
+			int cur_offset = s_counts[i + LIX] - BIN_QUAD_COUNTS(i + LIX);
+			BIN_QUAD_OFFSETS(i + LIX) = cur_offset;
+			BIN_QUAD_OFFSETS_TEMP(i + LIX) = cur_offset;
 		}
 	barrier();
 

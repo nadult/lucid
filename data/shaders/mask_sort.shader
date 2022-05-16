@@ -19,8 +19,7 @@ layout(std430, binding = 3) buffer buf3_ { uint g_block_keys[]; };
 shared uint s_tile_inst_count, s_tile_inst_offset;
 shared uvec2 s_sort_buffer[MAX_BLOCK_TRIS];
 
-void sortTileBlocks()
-{
+void sortTileBlocks() {
 	uint N = s_tile_inst_count;
 	// TODO: fix this
 	uint TN = 32;
@@ -69,8 +68,8 @@ void sortBinMasks(int bin_id) {
 		barrier();
 		if(LIX < BLOCKS_PER_TILE) {
 			if(LIX == 0) {
-				s_tile_inst_count  = g_tiles.tile_block_tri_counts[bin_id][tile_id];
-				s_tile_inst_offset = g_tiles.tile_block_tri_offsets[bin_id][tile_id];
+				s_tile_inst_count = TILE_BLOCK_TRI_COUNTS(bin_id, tile_id);
+				s_tile_inst_offset = TILE_BLOCK_TRI_OFFSETS(bin_id, tile_id);
 			}
 		}
 		barrier();

@@ -5,7 +5,8 @@
 #define LSIZE 128
 
 layout(local_size_x = LSIZE) in;
-layout(std430, binding = 1) buffer buf1_ { BinCounters g_bins; };
+
+BIN_COUNTERS_BUFFER(1);
 layout(std430, binding = 2) buffer buf2_ { uint g_bin_quads[]; };
 
 shared int s_num_empty_bins, s_num_small_bins, s_num_medium_bins;
@@ -26,24 +27,25 @@ void main() {
 	// TODO: problem w tym, że aby dobrze porozdzielac taski musimy znac liczbe sampli...
 	//       da się to jakoś oszacować? co najmniej w tile dispatcherze...
 	for(uint i = LIX; i < BIN_COUNT; i += LSIZE) {
-		int num_quads = g_bins.bin_quad_counts[i];
+		int num_quads = BIN_QUAD_COUNTS(i);
 
 		// TODO: we need accurate count :(
 		int num_tris = num_quads * 2;
 		if(num_tris == 0) {
+			// TODO: we're not using BIN_EMPTY_BINS ?
 			int id = atomicAdd(s_num_empty_bins, 1);
 			if(tile_all_bins)
-				g_bins.tiled_bins[atomicAdd(s_num_tiled_bins, 1)] = int(i);
+				BIN_TILED_BINS(atomicAdd(s_num_tiled_bins, 1)) = int(i);
 		} else if(num_tris < 2048) {
-			g_bins.small_bins[atomicAdd(s_num_small_bins, 1)] = int(i);
+			BIN_SMALL_BINS(atomicAdd(s_num_small_bins, 1)) = int(i);
 			if(tile_all_bins)
-				g_bins.tiled_bins[atomicAdd(s_num_tiled_bins, 1)] = int(i);
+				BIN_TILED_BINS(atomicAdd(s_num_tiled_bins, 1)) = int(i);
 		} else if(num_tris < 16 * 1024) {
-			g_bins.medium_bins[atomicAdd(s_num_medium_bins, 1)] = int(i);
-			g_bins.tiled_bins[atomicAdd(s_num_tiled_bins, 1)] = int(i);
+			BIN_MEDIUM_BINS(atomicAdd(s_num_medium_bins, 1)) = int(i);
+			BIN_TILED_BINS(atomicAdd(s_num_tiled_bins, 1)) = int(i);
 		} else if(true) {
-			g_bins.big_bins[atomicAdd(s_num_big_bins, 1)] = int(i);
-			g_bins.tiled_bins[atomicAdd(s_num_tiled_bins, 1)] = int(i);
+			BIN_BIG_BINS(atomicAdd(s_num_big_bins, 1)) = int(i);
+			BIN_TILED_BINS(atomicAdd(s_num_tiled_bins, 1)) = int(i);
 		}
 
 		uint bin_id = i << 16;

@@ -10,7 +10,7 @@
 
 layout(local_size_x = LSIZE) in;
 layout(std430, binding = 0) buffer buf0_ { uint g_quad_aabbs[]; };
-layout(std430, binding = 1) buffer buf1_ { BinCounters g_bins; };
+BIN_COUNTERS_BUFFER(1);
 layout(std430, binding = 3) buffer buf2_ { uint g_bin_quads[]; };
 
 shared int s_num_input_quads;
@@ -81,7 +81,7 @@ void main() {
 		for(uint i = 0; i < BIN_COUNT; i += LSIZE) {
 			uint li = i + LIX;
 			if(li < BIN_COUNT && s_counts[li] > 0)
-				s_offsets[li] = atomicAdd(g_bins.bin_quad_offsets_temp[li], int(s_counts[li]));
+				s_offsets[li] = atomicAdd(BIN_QUAD_OFFSETS_TEMP(li), int(s_counts[li]));
 		}
 		barrier();
 

@@ -34,7 +34,7 @@ layout(std430, binding = 3) readonly buffer buf3_ { vec2 g_tex_coords[]; };
 layout(std430, binding = 4) readonly buffer buf4_ { uint g_colors[]; };
 layout(std430, binding = 5) readonly buffer buf5_ { uint g_normals[]; };
 
-layout(std430, binding = 6) buffer buf6_ { TileCounters g_tiles; };
+TILE_COUNTERS_BUFFER(6);
 layout(std430, binding = 7) buffer buf7_ { uint g_block_counts[]; }; // TODO: 16-bits?
 layout(std430, binding = 8) buffer buf8_ { uint g_block_offsets[]; };
 
@@ -324,8 +324,8 @@ void rasterizeBlocks(ivec2 tile_pos) {
 void rasterizeBin(int bin_id) {
 	const ivec2 bin_pos = ivec2(bin_id % BIN_COUNT_X, bin_id / BIN_COUNT_X);
 	if(LIX < TILES_PER_BIN) {
-		s_tile_tri_counts [LIX] = int(g_tiles.tile_tri_counts[bin_id][LIX]);
-		s_tile_tri_offsets[LIX] = int(g_tiles.tile_tri_offsets[bin_id][LIX]);
+		s_tile_tri_counts [LIX] = int(TILE_TRI_COUNTS(bin_id, LIX));
+		s_tile_tri_offsets[LIX] = int(TILE_TRI_OFFSETS(bin_id, LIX));
 		ivec2 tile_pos = ivec2(LIX & 3, LIX >> 2) * TILE_SIZE;
 		s_tile_raster_offsets[LIX] = (bin_id << (BIN_SHIFT * 2)) + tile_pos.x + (tile_pos.y << BIN_SHIFT);
 	}

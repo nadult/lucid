@@ -832,8 +832,8 @@ void rasterBin(int bin_id) {
 	INIT_CLOCK();
 
 	if(LIX < TILES_PER_BIN) {
-		s_tile_tri_counts[LIX] = int(g_tiles.tile_tri_counts[bin_id][LIX]);
-		s_tile_tri_offsets[LIX] = int(g_tiles.tile_tri_offsets[bin_id][LIX]);
+		s_tile_tri_counts[LIX] = int(TILE_TRI_COUNTS(bin_id, LIX));
+		s_tile_tri_offsets[LIX] = int(TILE_TRI_OFFSETS(bin_id, LIX));
 		ivec2 bin_pos = ivec2(bin_id % BIN_COUNT_X, bin_id / BIN_COUNT_X) * BIN_SIZE;
 		ivec2 tile_pos = bin_pos + ivec2(LIX & 3, LIX >> 2) * TILE_SIZE;
 		s_tile_ray_dirs0[LIX] = frustum.ws_dir0 + frustum.ws_dirx * (tile_pos.x + 0.5) +
@@ -940,7 +940,7 @@ void rasterBin(int bin_id) {
 int loadNextBin() {
 	if(LIX == 0) {
 		uint bin_idx = atomicAdd(g_tiles.medium_bin_counter, 1);
-		s_bin_id = bin_idx < s_num_bins ? g_bins.medium_bins[bin_idx] : -1;
+		s_bin_id = bin_idx < s_num_bins ? BIN_MEDIUM_BINS(bin_idx) : -1;
 		s_bin_raster_offset = s_bin_id << (BIN_SHIFT * 2);
 	}
 	barrier();

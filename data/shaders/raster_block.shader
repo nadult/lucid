@@ -1,4 +1,5 @@
 // $$include funcs lighting frustum viewport data
+// clang-format off
 
 #define LIX gl_LocalInvocationIndex
 #define LID gl_LocalInvocationID
@@ -41,8 +42,8 @@ layout(std430, binding = 3) readonly buffer buf3_ { vec2 g_tex_coords[]; };
 layout(std430, binding = 4) readonly buffer buf4_ { uint g_colors[]; };
 layout(std430, binding = 5) readonly buffer buf5_ { uint g_normals[]; };
 
-layout(std430, binding = 6) buffer buf6_ { BinCounters g_bins; };
-layout(std430, binding = 7) buffer buf7_ { TileCounters g_tiles; };
+BIN_COUNTERS_BUFFER(6);
+TILE_COUNTERS_BUFFER(7);
 
 layout(std430, binding = 8) buffer buf8_ { uint g_tile_tris[]; };
 layout(std430, binding = 10) coherent buffer buf10_ { uvec2 g_scratch[]; };
@@ -530,8 +531,8 @@ void shadeTileRows() {
 
 void rasterBins(int bin_id) {
 	if(LIX < TILES_PER_BIN) {
-		s_tile_tri_counts [LIX] = int(g_tiles.tile_tri_counts[bin_id][LIX]);
-		s_tile_tri_offsets[LIX] = int(g_tiles.tile_tri_offsets[bin_id][LIX]);
+		s_tile_tri_counts [LIX] = int(TILE_TRI_COUNTS(bin_id, LIX));
+		s_tile_tri_offsets[LIX] = int(TILE_TRI_OFFSETS(bin_id, LIX));
 		ivec2 bin_pos = ivec2(bin_id % BIN_COUNT_X, bin_id / BIN_COUNT_X) * BIN_SIZE;
 		ivec2 tile_pos = bin_pos + ivec2(LIX & 3, LIX >> 2) * TILE_SIZE;
 		s_tile_ray_dirs0[LIX] = frustum.ws_dir0 + frustum.ws_dirx * (tile_pos.x + 0.5)
@@ -587,7 +588,7 @@ shared int s_num_bins, s_bin_id;
 int loadNextBin() {
 	if(LIX == 0) {
 		uint bin_idx = atomicAdd(g_tiles.big_bin_counter, 1);
-		s_bin_id = bin_idx < s_num_bins? g_bins.big_bins[bin_idx] : -1;
+		s_bin_id = bin_idx < s_num_bins? BIN_BIG_BINS(bin_idx) : -1;
 	}
 	barrier();
 	return s_bin_id;

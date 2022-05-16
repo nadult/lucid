@@ -18,8 +18,8 @@
 
 layout(local_size_x = LSIZE) in;
 
-layout(std430, binding = 0) buffer buf0_ { BinCounters g_bins; };
-layout(std430, binding = 1) buffer buf1_ { TileCounters g_tiles; };
+BIN_COUNTERS_BUFFER(0);
+TILE_COUNTERS_BUFFER(1);
 
 // Using this SMEM variable directly increases running time by 7%
 shared int s_bin_id;
@@ -27,7 +27,7 @@ shared uint s_bin_tri_count;
 
 void countTris(int bin_id) {
 	if(LIX < 16)
-		atomicAdd(s_bin_tri_count, g_tiles.tile_tri_counts[bin_id][LIX]);
+		atomicAdd(s_bin_tri_count, TILE_TRI_COUNTS(bin_id, LIX));
 }
 
 int loadNextBin() {

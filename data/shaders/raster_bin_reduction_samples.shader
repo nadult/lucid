@@ -1145,8 +1145,8 @@ void rasterBin(int bin_id) {
 			if(LIX == 0) {
 				ivec2 bin_pos = ivec2(bin_id % BIN_COUNT_X, bin_id / BIN_COUNT_X) * BIN_SIZE;
 				s_bin_pos = bin_pos;
-				s_bin_quad_count = g_bins.bin_quad_counts[bin_id];
-				s_bin_quad_offset = g_bins.bin_quad_offsets[bin_id];
+				s_bin_quad_count = BIN_QUAD_COUNTS(bin_id);
+				s_bin_quad_offset = BIN_QUAD_OFFSETS(bin_id);
 				s_bin_ray_dir0 = frustum.ws_dir0 + frustum.ws_dirx * (bin_pos.x + 0.5) +
 								 frustum.ws_diry * (bin_pos.y + 0.5);
 			}

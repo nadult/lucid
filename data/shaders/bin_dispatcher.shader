@@ -5,7 +5,7 @@
 
 #define LSIZE 512
 
-#define TRIS_PER_THREAD 8
+#define TRIS_PER_THREAD 2
 #define MAX_GROUP_QUADS (LSIZE * TRIS_PER_THREAD)
 
 layout(local_size_x = LSIZE) in;

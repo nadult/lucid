@@ -4,36 +4,21 @@
 #define LIX gl_LocalInvocationIndex
 #define WGID gl_WorkGroupID
 
-// TODO: this is too small for big number of bins!
+// TODO: this is too small for large number of bins!
 #define LSIZE 512
-#define TRIS_PER_THREAD 4
-#define MAX_GROUP_QUADS (LSIZE * TRIS_PER_THREAD)
-
-// Przydałaby się możliwość debugowania tego
-// Jeśli moglibyśmy odpalić to np. na CPU
-// Ale co zrobić z wątkami ?
-// Zrobilibyśmy wirutalną maszynę operującą na 32-elementowych wektorach?
-// moglibyśmy w takim kodzie dodać tyle assertów ile chcę
-// problemem byłaby symulacja współbieżności?
-// Zrobilibyśmy to normalnie na wątkach chyba
-//
-// Dużo łatwiej będzie zaimplementować lepsze asserty na gpu;
-
-// TODO: be wary of bugs with barriers
-// TODO: lepszy sposób na przechowywanie danych i share-owanie ich między C++ a glsl?
-// TODO: rename tris to quads
 
 layout(local_size_x = LSIZE) in;
 layout(std430, binding = 0) buffer buf0_ { uint g_quad_aabbs[]; };
 BIN_COUNTERS_BUFFER(1);
 
-shared int s_num_quads;
+shared int s_num_quads, s_max_quads;
+shared int s_quads_offset;
+shared uint s_num_finished;
 
-// TODO: zrobić na shortach? powinno sie zmiescic
 shared int s_counts[BIN_COUNT];
 shared int s_rows[BIN_COUNT_Y];
 
-void countTri(uint quad_idx) {
+void countQuadBins(uint quad_idx) {
 	uint aabb = g_quad_aabbs[quad_idx];
 	int tsx = int(aabb & 0xff), tsy = int((aabb >> 8) & 0xff);
 	int tex = int((aabb >> 16) & 0xff), tey = int((aabb >> 24));
@@ -48,55 +33,34 @@ void countTri(uint quad_idx) {
 			atomicAdd(s_counts[bx + by * BIN_COUNT_X], 1);
 }
 
-shared bool finish;
-shared uint s_quads_offset;
-
 void estimateBins() {
-	{
-		s_num_quads = g_bins.num_visible_quads;
-		if(LIX == 0)
-			finish = g_bins.num_binned_quads >= s_num_quads;
-		barrier();
-		if(finish)
-			return;
-	}
-
-	for(int i = 0; i < BIN_COUNT; i += LSIZE)
-		if(i + LIX < BIN_COUNT)
-			s_counts[i + LIX] = 0;
+	int max_quads = s_max_quads;
 	if(LIX == 0)
-		s_quads_offset = atomicAdd(g_bins.num_binned_quads, MAX_GROUP_QUADS);
+		s_quads_offset = atomicAdd(g_bins.num_binned_quads, max_quads);
 	barrier();
 
-	uint tris_offset = s_quads_offset;
-	int num_quads = s_num_quads;
+	int quads_offset = s_quads_offset;
+	int num_quads = clamp(s_num_quads - quads_offset, 0, max_quads);
+	if(num_quads == 0)
+		return;
 
-	while(tris_offset < num_quads) {
-		for(uint i = 0; i < TRIS_PER_THREAD; i++) {
-			uint quad_idx = tris_offset + LSIZE * i + LIX;
-			if(quad_idx < num_quads)
-				countTri(quad_idx);
-		}
-
-		barrier();
-		if(LIX == 0)
-			s_quads_offset = atomicAdd(g_bins.num_binned_quads, MAX_GROUP_QUADS);
-		barrier();
-		tris_offset = s_quads_offset;
-	}
-
+	for(uint i = LIX; i < BIN_COUNT; i += LSIZE)
+		s_counts[i] = 0;
 	barrier();
 
-	for(int i = 0; i < BIN_COUNT; i += LSIZE)
-		if(i + LIX < BIN_COUNT && s_counts[i + LIX] > 0)
-			atomicAdd(BIN_QUAD_COUNTS(i + LIX), s_counts[i + LIX]);
+	for(int i = int(LIX); i < num_quads; i += LSIZE)
+		countQuadBins(quads_offset + i);
+	barrier();
+
+	for(uint i = LIX; i < BIN_COUNT; i += LSIZE)
+		if(s_counts[i] > 0)
+			atomicAdd(BIN_QUAD_COUNTS(i), s_counts[i]);
 }
 
 void computeOffsets() {
 	// Loading tri counts
-	for(int i = 0; i < BIN_COUNT; i += LSIZE)
-		if(i + LIX < BIN_COUNT)
-			s_counts[i + LIX] = BIN_QUAD_COUNTS(i + LIX);
+	for(uint i = LIX; i < BIN_COUNT; i += LSIZE)
+		s_counts[i] = BIN_QUAD_COUNTS(i);
 	barrier();
 
 	// Computing per-bin tri offsets
@@ -114,12 +78,11 @@ void computeOffsets() {
 		}
 	}
 	barrier();
-	for(int i = 0; i < BIN_COUNT; i += LSIZE)
-		if(i + LIX < BIN_COUNT) {
-			int cur_offset = s_counts[i + LIX] - BIN_QUAD_COUNTS(i + LIX);
-			BIN_QUAD_OFFSETS(i + LIX) = cur_offset;
-			BIN_QUAD_OFFSETS_TEMP(i + LIX) = cur_offset;
-		}
+	for(uint i = LIX; i < BIN_COUNT; i += LSIZE) {
+		int cur_offset = s_counts[i] - BIN_QUAD_COUNTS(i);
+		BIN_QUAD_OFFSETS(i) = cur_offset;
+		BIN_QUAD_OFFSETS_TEMP(i) = cur_offset;
+	}
 	barrier();
 
 	if(LIX == 0) {
@@ -128,17 +91,24 @@ void computeOffsets() {
 	}
 }
 
-shared uint s_finished_groups;
-
 void main() {
+	if(LIX == 0) {
+		int num_quads = g_bins.num_visible_quads;
+		s_num_quads = num_quads;
+		// TODO: does it make sense to make this value smaller than LSIZE ?
+		int quads_per_wg = int((num_quads + gl_NumWorkGroups.x - 1) / gl_NumWorkGroups.x);
+		s_max_quads = max(quads_per_wg, LSIZE);
+	}
+	barrier();
+
 	estimateBins();
 	barrier();
 	if(LIX == 0)
-		s_finished_groups = atomicAdd(g_bins.num_finished_bin_groups, 1);
+		s_num_finished = atomicAdd(g_bins.num_finished_bin_groups, 1);
 	barrier();
 
 	// Last group is responsible for computing offsets
-	if(s_finished_groups == gl_NumWorkGroups.x - 1) {
+	if(s_num_finished == gl_NumWorkGroups.x - 1) {
 		groupMemoryBarrier();
 		computeOffsets();
 	}

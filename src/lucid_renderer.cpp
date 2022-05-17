@@ -383,11 +383,11 @@ void LucidRenderer::computeBins(const Context &ctx) {
 	if(m_opts & Opt::check_bins)
 		shaderDebugUseBuffer(m_errors);
 
-	PERF_CHILD_SCOPE("estimator");
+	PERF_CHILD_SCOPE("estimator phase");
 	glDispatchCompute(max_dispatches, 1, 1);
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 
-	PERF_SIBLING_SCOPE("bin dispatching phase");
+	PERF_SIBLING_SCOPE("dispatcher phase");
 	// Why adding more slows everything down?
 	// TODO: how to optimize this ?
 	// 1ms for now for dragon...
@@ -397,7 +397,7 @@ void LucidRenderer::computeBins(const Context &ctx) {
 	glDispatchCompute(max_dispatches, 1, 1);
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 
-	PERF_SIBLING_SCOPE("bin categorizing phase");
+	PERF_SIBLING_SCOPE("categorizer phase");
 	bin_categorizer_program.use();
 	bin_categorizer_program["tile_all_bins"] = !(m_opts & Opt::new_raster);
 	m_compose_quads->bindIndexAs(2, BufferType::shader_storage);

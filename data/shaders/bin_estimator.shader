@@ -27,7 +27,7 @@ layout(local_size_x = LSIZE) in;
 layout(std430, binding = 0) buffer buf0_ { uint g_quad_aabbs[]; };
 BIN_COUNTERS_BUFFER(1);
 
-shared int s_num_input_quads;
+shared int s_num_quads;
 
 // TODO: zrobić na shortach? powinno sie zmiescic
 shared int s_counts[BIN_COUNT];
@@ -35,8 +35,6 @@ shared int s_rows[BIN_COUNT_Y];
 
 void countTri(uint quad_idx) {
 	uint aabb = g_quad_aabbs[quad_idx];
-	if(aabb == ~0u)
-		return;
 	int tsx = int(aabb & 0xff), tsy = int((aabb >> 8) & 0xff);
 	int tex = int((aabb >> 16) & 0xff), tey = int((aabb >> 24));
 
@@ -55,9 +53,9 @@ shared uint s_quads_offset;
 
 void estimateBins() {
 	{
-		s_num_input_quads = g_bins.num_input_quads;
+		s_num_quads = g_bins.num_visible_quads;
 		if(LIX == 0)
-			finish = g_bins.num_binned_quads >= s_num_input_quads;
+			finish = g_bins.num_binned_quads >= s_num_quads;
 		barrier();
 		if(finish)
 			return;
@@ -71,12 +69,12 @@ void estimateBins() {
 	barrier();
 
 	uint tris_offset = s_quads_offset;
-	int num_input_quads = s_num_input_quads;
+	int num_quads = s_num_quads;
 
-	while(tris_offset < num_input_quads) {
+	while(tris_offset < num_quads) {
 		for(uint i = 0; i < TRIS_PER_THREAD; i++) {
 			uint quad_idx = tris_offset + LSIZE * i + LIX;
-			if(quad_idx < num_input_quads)
+			if(quad_idx < num_quads)
 				countTri(quad_idx);
 		}
 

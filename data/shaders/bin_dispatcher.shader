@@ -13,7 +13,7 @@ layout(std430, binding = 0) buffer buf0_ { uint g_quad_aabbs[]; };
 BIN_COUNTERS_BUFFER(1);
 layout(std430, binding = 3) buffer buf2_ { uint g_bin_quads[]; };
 
-shared int s_num_input_quads;
+shared int s_num_quads;
 
 // TODO: treat 1x1, 1x2, 2x1 & 2x2 cases separately
 // TODO: filter big tris here (with bin-rasterization similarily to Laine's?)
@@ -27,9 +27,9 @@ shared uint s_quads_offset;
 
 void main() {
 	if(LIX == 0)
-		s_num_input_quads = g_bins.num_input_quads;
+		s_num_quads = g_bins.num_visible_quads;
 	barrier();
-	int num_input_quads = s_num_input_quads;
+	int num_quads = s_num_quads;
 
 	while(true) {
 		barrier();
@@ -41,7 +41,7 @@ void main() {
 		barrier();
 
 		uint tris_offset = s_quads_offset;
-		if(tris_offset >= num_input_quads)
+		if(tris_offset >= num_quads)
 			break;
 
 		uint lbins[TRIS_PER_THREAD];
@@ -51,12 +51,10 @@ void main() {
 
 		for(uint i = 0; i < TRIS_PER_THREAD; i++) {
 			uint quad_idx = tris_offset + LSIZE * i + LIX;
-			if(quad_idx >= num_input_quads)
+			if(quad_idx >= num_quads)
 				break;
 
 			uint aabb = g_quad_aabbs[quad_idx];
-			if(aabb == ~0u)
-				continue;
 			int tsx = int(aabb & 0xff), tsy = int((aabb >> 8) & 0xff);
 			int tex = int((aabb >> 16) & 0xff), tey = int((aabb >> 24));
 			int bsx = tsx >> 2, bsy = tsy >> 2;

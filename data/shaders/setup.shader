@@ -1,5 +1,7 @@
 // $$include funcs data frustum
 
+// ~80% of time goes to data loading
+
 #define LSIZE MAX_LSIZE
 layout(local_size_x = LSIZE) in;
 
@@ -26,6 +28,15 @@ layout(std430, binding = 6) buffer buf6_ { uvec4 g_tri_aabbs[]; };
 shared uint s_instance_id[MAX_INSTANCES];
 
 shared uint s_rejected_quads[REJECTED_TYPE_COUNT];
+
+shared uint s_quad_aabbs[LSIZE];
+shared uvec4 s_tri_aabbs[LSIZE];
+shared uvec4 s_quad_indices[LSIZE];
+
+shared int s_num_quads[MAX_INSTANCES], s_index_offset[MAX_INSTANCES];
+shared int s_quad_offset[MAX_INSTANCES], s_vertex_offset[MAX_INSTANCES];
+shared int s_num_visible[MAX_INSTANCES];
+shared int s_out_offset;
 
 // TODO: do something about divergence in input data
 // TODO: muszę też mieć możliwość dodawania nowych wierzchołków
@@ -122,7 +133,7 @@ vec4 computeAABB(vec3 v0, vec3 v1, vec3 v2) {
 				max(max(v0.y, v1.y), v2.y));
 }
 
-void processQuad(uint quad_id, uint v0, uint v1, uint v2, uint v3, uint instance_id) {
+void processQuad(uint quad_id, uint v0, uint v1, uint v2, uint v3, uint local_instance_id) {
 	// Clipping: https://www.casual-effects.com/research/McGuire2011Clipping/McGuire-Clipping.pdf
 	// clipped triangle might be a polygon of up to 7 vertices...
 	// TODO: we have to do culling, otherwise triangles behind camera can waste a lot of cycles
@@ -130,7 +141,6 @@ void processQuad(uint quad_id, uint v0, uint v1, uint v2, uint v3, uint instance
 	// in later phases; We have to cut them as early as possible!
 
 	if(v0 == v2 || ((v0 == v1 || v1 == v2) && (v2 == v3 || (v3 == v0)))) {
-		g_quad_aabbs[quad_id] = ~0u;
 		atomicAdd(s_rejected_quads[REJECTED_OTHER], 1);
 		return;
 	}
@@ -149,7 +159,6 @@ void processQuad(uint quad_id, uint v0, uint v1, uint v2, uint v3, uint instance
 		// TODO: what about orthogonal projection?
 		// TODO: is this really a good way to back-face cull?
 		if(dot(nrm1, point) < 0.0 && ((v3 == v2) || dot(nrm2, point) <= 0.0)) {
-			g_quad_aabbs[quad_id] = ~0u;
 			atomicAdd(s_rejected_quads[REJECTED_BACKFACE], 1);
 			return;
 		}
@@ -169,7 +178,6 @@ void processQuad(uint quad_id, uint v0, uint v1, uint v2, uint v3, uint instance
 
 	// Culling triangles outside of one of clipping planes
 	if(and_clipmask != 0) {
-		g_quad_aabbs[quad_id] = ~0u;
 		atomicAdd(s_rejected_quads[REJECTED_FRUSTUM], 1);
 		return;
 	}
@@ -196,57 +204,65 @@ void processQuad(uint quad_id, uint v0, uint v1, uint v2, uint v3, uint instance
 		aabb1 = computeAABB(vndc[0].xyz, vndc[2].xyz, vndc[3].xyz);
 	}
 
-	{ // Computing AABBs in screen coordinates
-		const vec2 ndc_to_screen = vec2(float(VIEWPORT_SIZE_X) * 0.5, float(VIEWPORT_SIZE_Y) * 0.5);
-		const ivec2 max_screen_pos = ivec2(VIEWPORT_SIZE_X - 1, VIEWPORT_SIZE_Y - 1);
+	// Computing AABBs in screen coordinates
+	const vec2 ndc_to_screen = vec2(float(VIEWPORT_SIZE_X) * 0.5, float(VIEWPORT_SIZE_Y) * 0.5);
+	const ivec2 max_screen_pos = ivec2(VIEWPORT_SIZE_X - 1, VIEWPORT_SIZE_Y - 1);
 
-		aabb0 = (aabb0 + vec4(1.0)) * vec4(ndc_to_screen, ndc_to_screen);
-		aabb1 = (aabb1 + vec4(1.0)) * vec4(ndc_to_screen, ndc_to_screen);
-		vec4 aabb = vec4(min(aabb0.xy, aabb1.xy), max(aabb0.zw, aabb1.zw));
+	aabb0 = (aabb0 + vec4(1.0)) * vec4(ndc_to_screen, ndc_to_screen);
+	aabb1 = (aabb1 + vec4(1.0)) * vec4(ndc_to_screen, ndc_to_screen);
+	vec4 aabb = vec4(min(aabb0.xy, aabb1.xy), max(aabb0.zw, aabb1.zw));
 
-		// Killing quads which fall between samples
-		// TODO: smaller range in MSAA mode
-		// TODO: why -0.5? are samples positioned incorrectly?
-		if(ceil(aabb[0] - 0.5001) == floor(aabb[2] + 0.5001) ||
-		   ceil(aabb[1] - 0.5001) == floor(aabb[3] + 0.5001)) {
-			g_quad_aabbs[quad_id] = ~0u;
-			atomicAdd(s_rejected_quads[REJECTED_BETWEEN_SAMPLES], 1);
-			return;
-		}
-
-		// TODO: don't forget to change it in MSAA mode
-		aabb0 = clamp(aabb0 + vec4(0.49, 0.49, -0.49, -0.49), vec4(0.0),
-					  vec4(max_screen_pos, max_screen_pos));
-		aabb1 = clamp(aabb1 + vec4(0.49, 0.49, -0.49, -0.49), vec4(0.0),
-					  vec4(max_screen_pos, max_screen_pos));
-		aabb = clamp(aabb + vec4(0.49, 0.49, -0.49, -0.49), vec4(0.0),
-					 vec4(max_screen_pos, max_screen_pos));
-
-		uvec4 iaabb = uvec4(aabb.xy, aabb.zw);
-		uint enc_aabb =
-			(((iaabb[0] >> TILE_SHIFT) & 0xff)) | (((iaabb[1] >> TILE_SHIFT) & 0xff) << 8) |
-			(((iaabb[2] >> TILE_SHIFT) & 0xff) << 16) | (((iaabb[3] >> TILE_SHIFT) & 0xff) << 24);
-		g_quad_aabbs[quad_id] = enc_aabb;
-
-		uvec4 iaabb0 = uvec4(aabb0);
-		uvec4 iaabb1 = uvec4(aabb1);
-		g_tri_aabbs[quad_id] = uvec4(encodeAABB(uvec4(aabb0)), encodeAABB(uvec4(aabb1)));
+	// Killing quads which fall between samples
+	// TODO: smaller range in MSAA mode
+	// TODO: why -0.5? are samples positioned incorrectly?
+	if(ceil(aabb[0] - 0.5001) == floor(aabb[2] + 0.5001) ||
+	   ceil(aabb[1] - 0.5001) == floor(aabb[3] + 0.5001)) {
+		atomicAdd(s_rejected_quads[REJECTED_BETWEEN_SAMPLES], 1);
+		return;
 	}
 
-	// TODO: cull second degenerate triangle
+	// TODO: cull second degenerate triangle?
+
+	uint out_idx = atomicAdd(s_num_visible[local_instance_id], 1);
+
+	// TODO: don't forget to change it in MSAA mode
+	aabb0 = clamp(aabb0 + vec4(0.49, 0.49, -0.49, -0.49), vec4(0.0),
+				  vec4(max_screen_pos, max_screen_pos));
+	aabb1 = clamp(aabb1 + vec4(0.49, 0.49, -0.49, -0.49), vec4(0.0),
+				  vec4(max_screen_pos, max_screen_pos));
+	aabb = clamp(aabb + vec4(0.49, 0.49, -0.49, -0.49), vec4(0.0),
+				 vec4(max_screen_pos, max_screen_pos));
+
+	uvec4 iaabb = uvec4(aabb);
+	uint enc_aabb = (((iaabb[0] >> TILE_SHIFT) & 0xff)) | (((iaabb[1] >> TILE_SHIFT) & 0xff) << 8) |
+					(((iaabb[2] >> TILE_SHIFT) & 0xff) << 16) |
+					(((iaabb[3] >> TILE_SHIFT) & 0xff) << 24);
+
+	s_quad_aabbs[out_idx] = enc_aabb;
+	s_tri_aabbs[out_idx] = uvec4(encodeAABB(uvec4(aabb0)), encodeAABB(uvec4(aabb1)));
+	s_quad_indices[out_idx] = uvec4(v0, v1, v2, v3);
+}
+
+void addVisibleQuad(uint idx, uint local_instance_id) {
+	uint instance_id = s_instance_id[local_instance_id];
 
 	// Encode AABB+instance in 64-bit ?
 	// Max verts: 2^26, max_instances: 2^18
-	g_quad_indices[quad_id * 4 + 0] = (v0 & 0x03ffffff) | ((instance_id & 0x3f) << 26);
-	g_quad_indices[quad_id * 4 + 1] = (v1 & 0x03ffffff) | ((instance_id & 0xfc0) << 20);
-	g_quad_indices[quad_id * 4 + 2] = (v2 & 0x03ffffff) | ((instance_id & 0x3f000) << 14);
-	g_quad_indices[quad_id * 4 + 3] = (v3 & 0x03ffffff);
+	uint v0 = (s_quad_indices[LIX].x & 0x03ffffff) | ((instance_id & 0x3f) << 26);
+	uint v1 = (s_quad_indices[LIX].y & 0x03ffffff) | ((instance_id & 0xfc0) << 20);
+	uint v2 = (s_quad_indices[LIX].z & 0x03ffffff) | ((instance_id & 0x3f000) << 14);
+	uint v3 = s_quad_indices[LIX].w & 0x03ffffff;
+	g_quad_indices[idx * 4 + 0] = v0;
+	g_quad_indices[idx * 4 + 1] = v1;
+	g_quad_indices[idx * 4 + 2] = v2;
+	g_quad_indices[idx * 4 + 3] = v3;
+
+	g_quad_aabbs[idx] = s_quad_aabbs[LIX];
+	g_tri_aabbs[idx] = s_tri_aabbs[LIX];
 }
 
-shared int s_num_quads[MAX_INSTANCES], s_index_offset[MAX_INSTANCES];
-shared int s_quad_offset[MAX_INSTANCES], s_vertex_offset[MAX_INSTANCES];
-
 void main() {
+	// TODO: drop MAX_INSTANCES ? just use 1 ?
 	if(LIX < MAX_INSTANCES) {
 		int instance_id = int(WGID.x * MAX_INSTANCES + LIX);
 		if(instance_id < num_instances) {
@@ -259,6 +275,7 @@ void main() {
 		} else {
 			s_num_quads[LIX] = 0;
 		}
+		s_num_visible[LIX] = 0;
 	}
 	if(LIX < REJECTED_TYPE_COUNT)
 		s_rejected_quads[LIX] = 0;
@@ -267,7 +284,6 @@ void main() {
 		if(LIX < s_num_quads[i]) {
 			int vertex_offset = s_vertex_offset[i];
 			int index_offset = s_index_offset[i] + int(LIX) * 4;
-			uint instance_id = s_instance_id[i];
 
 			// Note: loading indices to SMEM first is a bit slower
 			uint v0 = g_input_indices[index_offset + 0] + vertex_offset;
@@ -275,8 +291,14 @@ void main() {
 			uint v2 = g_input_indices[index_offset + 2] + vertex_offset;
 			uint v3 = g_input_indices[index_offset + 3] + vertex_offset;
 
-			processQuad(s_quad_offset[i] + int(LIX), v0, v1, v2, v3, instance_id);
+			processQuad(s_quad_offset[i] + int(LIX), v0, v1, v2, v3, i);
 		}
+		barrier();
+		if(LIX == 0)
+			s_out_offset = atomicAdd(g_bins.num_visible_quads, s_num_visible[i]);
+		barrier();
+		if(LIX < s_num_visible[i])
+			addVisibleQuad(s_out_offset + LIX, i);
 	}
 	barrier();
 	if(LIX < REJECTED_TYPE_COUNT)

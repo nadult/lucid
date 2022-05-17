@@ -1592,6 +1592,7 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 		((m_size.x + block_size - 1) / block_size) * ((m_size.y + block_size - 1) / block_size);
 
 	int num_input_quads = bin_counters[1];
+	int num_visible_quads = bin_counters[23];
 	int num_invalid_pixels = tile_counters[10];
 	int num_invalid_blocks = tile_counters[11];
 	int num_invalid_tiles = tile_counters[12];
@@ -1624,6 +1625,8 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 		num_rejected[i] = bin_counters[4 + i];
 	num_rejected[0] += num_rejected[1] + num_rejected[2] + num_rejected[3];
 
+	auto visible_info = stdFormat("%d (%.2f %%)", num_visible_quads,
+								  double(num_visible_quads) / num_input_quads * 100);
 	auto rejected_info =
 		stdFormat("%d (%.2f %%)", num_rejected[0], double(num_rejected[0]) / num_input_quads * 100);
 	auto rejection_details = format("backface: %\nfrustum: %\nbetween-samples: %", num_rejected[1],
@@ -1658,6 +1661,7 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 	vector<StatsRow> basic_rows = {
 		{"input instances", toString(m_num_instances)},
 		{"input quads", toString(num_input_quads)},
+		{"visible quads", visible_info},
 		{"rejected quads", rejected_info, rejection_details},
 		{"bin-quads", toString(num_bin_quads), "Per-bin quads"},
 		{"tile-tris", toString(num_tile_tris), "Per-tile triangles"},

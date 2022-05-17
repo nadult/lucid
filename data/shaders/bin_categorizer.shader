@@ -29,6 +29,7 @@ void main() {
 	for(uint i = LIX; i < BIN_COUNT; i += LSIZE) {
 		int num_quads = BIN_QUAD_COUNTS(i);
 
+		// TODO: add micro phase (< 32?)
 		// TODO: we need accurate count :(
 		int num_tris = num_quads * 2;
 		if(num_tris == 0) {

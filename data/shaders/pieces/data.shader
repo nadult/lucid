@@ -40,7 +40,10 @@ struct BinCounters {
 	uint small_bin_counter;
 
 	uint timings[8];
-	int temp[9];
+
+	int num_visible_quads; // TODO: move
+
+	int temp[8];
 };
 
 #define BIN_COUNTERS_BUFFER(idx)                                                                   \

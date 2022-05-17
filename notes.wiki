@@ -120,7 +120,7 @@ sponza(256): 3818   63     123   6      3473      (-1%)
      teapot: 460    28     46    5      329       
   white_oak: 13962  51     254   7      13388     (-1%)
 
-Shade zmergowane z reduce 2560x1330 rastertimings wyłączone:
+Shade zmergowane z reduce 2560x1330 raster_timings wyłączone:
             total  setup  bins  tiles  raster_bin  raster_tile  raster_block
     #boxes: 1656   24     59    5      1493        4            4
      bunny: 509    70     52    5      316         4            4
@@ -132,7 +132,7 @@ powerplant: 8724   1979   581   1454   771         3642         11
     teapot: 480    29     52    5      333         5            4
  white_oak: 13533  49     248   5      13084       5            4
 
-Przywrócone segmenty 2560x1330 rastertimings wyłączone:
+Przywrócone segmenty 2560x1330 raster_timings wyłączone:
             total  setup  bins  tiles  raster_bin  raster_tile  raster_block
     #boxes: 1628   24     59    5      1466        4            4
      bunny: 486    70     48    5      303         4            4
@@ -144,10 +144,18 @@ powerplant: 8678   1990   568   1450   751         3683         11
     teapot: 468    27     49    5      327         4            4
  white_oak: 13352  51     252   6      12898       5            4
 
-
- Tylko raster_tile 2560x1330 bez raster_timings:
-             total  setup  bins  tiles  raster_bin  raster_tile  raster_block
-    dragon: 1002   188    71    125    6           545          4
-  hairball: 6148   552    198   1509   6           3743         16
-powerplant: 9149   1980   578   1491   6           4862         11
-san-miguel: 7807   1081   268   740    6           5505         11
+Optymalizacja setup & bins 2560x1330 raster_timings wyłączone:
+            total  setup  bins  tiles  raster_bin  raster_tile  raster_block
+    #boxes: 1648   24     56    5      1476        5            4
+     bunny: 459    30     51    5      307         5            4
+conference: 1347   45     136   5      1021        5            4
+con-e(256): 1260   46     138   5      929         5            4
+    dragon: 1050   136    60    105    261         419          4
+   gallery: 3374   182    71    128    1656        1154         10
+  hairball: 6285   543    199   1519   281         3616         16
+powerplant: 8302   1511   195   1273   760         4317         11
+san-miguel: 8197   944    199   697    1793        4347         11
+    sponza: 3817   61     150   6      3450        5            4
+spnza(256): 3756   61     151   6      3379        5            4
+    teapot: 458    25     47    5      330         5            4
+ white_oak: 13608  23     281   6      13127       5            4

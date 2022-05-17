@@ -362,7 +362,7 @@ void LucidRenderer::setupQuads(const Context &ctx) {
 	program.setFrustum(ctx.camera);
 	program.use();
 
-	glDispatchCompute((m_num_instances + 31) / 32, 1, 1);
+	glDispatchCompute((m_num_instances + 3) / 4, 1, 1);
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 }
 

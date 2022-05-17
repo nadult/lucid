@@ -7,7 +7,7 @@ layout(local_size_x = LSIZE) in;
 #define LIX gl_LocalInvocationIndex
 #define WGID gl_WorkGroupID
 
-#define MAX_INSTANCES 32
+#define MAX_INSTANCES 4
 
 uniform mat4 view_proj_matrix;
 uniform int enable_backface_culling;

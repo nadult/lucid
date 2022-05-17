@@ -42,8 +42,9 @@ struct BinCounters {
 	uint timings[8];
 
 	int num_visible_quads; // TODO: move
+	int num_finished_bin_groups;
 
-	int temp[8];
+	int temp[7];
 };
 
 #define BIN_COUNTERS_BUFFER(idx)                                                                   \

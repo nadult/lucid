@@ -5,8 +5,8 @@
 #define WGID gl_WorkGroupID
 
 // TODO: this is too small for big number of bins!
-#define LSIZE 128
-#define TRIS_PER_THREAD 32
+#define LSIZE 512
+#define TRIS_PER_THREAD 4
 #define MAX_GROUP_QUADS (LSIZE * TRIS_PER_THREAD)
 
 // Przydałaby się możliwość debugowania tego
@@ -92,7 +92,6 @@ void estimateBins() {
 			atomicAdd(BIN_QUAD_COUNTS(i + LIX), s_counts[i + LIX]);
 }
 
-// TODO: separate shader instead of phase
 void computeOffsets() {
 	// Loading tri counts
 	for(int i = 0; i < BIN_COUNT; i += LSIZE)
@@ -129,11 +128,18 @@ void computeOffsets() {
 	}
 }
 
-uniform uint phase;
+shared uint s_finished_groups;
 
 void main() {
-	if(phase == 1)
-		estimateBins();
-	else if(phase == 2)
+	estimateBins();
+	barrier();
+	if(LIX == 0)
+		s_finished_groups = atomicAdd(g_bins.num_finished_bin_groups, 1);
+	barrier();
+
+	// Last group is responsible for computing offsets
+	if(s_finished_groups == gl_NumWorkGroups.x - 1) {
+		groupMemoryBarrier();
 		computeOffsets();
+	}
 }

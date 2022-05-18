@@ -161,15 +161,16 @@ spnza(256): 3756   61     151   6      3379        5            4
  white_oak: 13608  23     281   6      13127       5            4
 
 Optymalizacja estymatora binów 2560x1330 raster_timings wyłączone:
-            total  setup  bins  tiles  raster_bin  raster_tile  raster_block
-    #boxes: 1623   24     29    5      1494        5            4
-     bunny: 431    30     26    5      305         5            4
-conference: 1324   46     108   5      1027        4            4
-    dragon: 1025   135    43    101    260         421          4
-   gallery: 3369   181    59    128    1655        1159         10
-  hairball: 6223   542    193   1511   278         3571         16
-powerplant: 8230   1513   186   1254   769         4297         11
-san-miguel: 8134   944    179   687    1792        4305         11
-    sponza: 3759   61     108   5      3425        4            4
-    teapot: 443    25     24    5      329         4            4
- white_oak: 13304  24     181   6      12953       5            4
+            total  setup  bins  tiles  raster_bin  raster_tile quads bin-quads est    div
+    #boxes: 1623   24     29    5      1494        5           6K     23K      11.2    4.86
+     bunny: 431    30     26    5      305         5           29K    43K      12.3    2.86
+conference: 1324   46     108   5      1027        4           11K    20K      35.8   17.9
+    dragon: 1025   135    43    101    260         421        190K   248K      19.5    0.78
+   gallery: 3369   181    59    128    1655        1159       314K   357K      24      0.067
+  hairball: 6223   542    193   1511   278         3571      1484K  2304K      70      0.038
+                                                             1050K   444K      95      0.213
+powerplant: 8230   1513   186   1254   769         4297      1075K  1678K      63      0.037
+san-miguel: 8134   944    179   687    1792        4305      1125K  1270K      69      0.054
+    sponza: 3759   61     108   5      3425        4           24K    51K      41      0.8
+    teapot: 443    25     24    5      329         4            8K    14K      11      0.78
+ white_oak: 13304  24     181   6      12953       5           10K   126K      64      0.50

@@ -897,9 +897,10 @@ void visualizeFragmentCounts(uint hbid, ivec2 pixel_pos) {
 	outputPixel(pixel_pos, encodeRGBA8(color));
 }
 
-void visualizeTriangleCounts(int hbid, ivec2 pixel_pos) {
+void visualizeTriangleCounts(uint hbid, ivec2 pixel_pos) {
 	uint count = s_block_tri_count[(hbid >> 1) & (NUM_WARPS - 1)];
 	//count = s_block_row_tri_count[(hbid >> 1) >> 3];
+	//count = s_bin_quad_count;
 
 	vec3 color;
 	if(count == 0)

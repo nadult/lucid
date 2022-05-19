@@ -8,8 +8,10 @@ Aktualne cele:
 
 Bugi: 
 - poziome linie widoczne na chestnut_tree01
+- poziome linie widoczne na desktopie na white_oak
 - miganie na sponzie w górnej części (screenshot)
 - niedokładne wyznaczanie ilości trisów per tile (dużo więcej niż faktycznie)
+- przycinki przy niskiej kamerze na white oak
 
 -----------------------------------------------------------------------------------------
                                  === Co dalej ===
@@ -164,7 +166,7 @@ Optymalizacja estymatora binów 2560x1330 raster_timings wyłączone:
             total  setup  bins  tiles  raster_bin  raster_tile quads bin-quads est    div
     #boxes: 1623   24     29    5      1494        5           6K     23K      11.2    4.86
      bunny: 431    30     26    5      305         5           29K    43K      12.3    2.86
-conference: 1324   46     108   5      1027        4           11K    20K      35.8   17.9
+conference: 1324   46     108   5      1027        4           11K    20K      35.8    17.9
     dragon: 1025   135    43    101    260         421        190K   248K      19.5    0.78
    gallery: 3369   181    59    128    1655        1159       314K   357K      24      0.067
   hairball: 6223   542    193   1511   278         3571      1484K  2304K      70      0.038

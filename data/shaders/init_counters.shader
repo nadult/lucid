@@ -4,7 +4,7 @@
 #define LIX gl_LocalInvocationIndex
 #define WGID gl_WorkGroupID
 
-#define LSIZE 64
+#define LSIZE 128
 
 BIN_COUNTERS_BUFFER(0);
 TILE_COUNTERS_BUFFER(1);
@@ -17,6 +17,8 @@ void main() {
 		g_bins_plain[LIX] = 0;
 		g_tiles_plain[LIX] = 0;
 	}
-	for(uint i = LIX; i < BIN_COUNT; i += LSIZE)
+	for(uint i = LIX; i < BIN_COUNT; i += LSIZE) {
 		BIN_QUAD_COUNTS(i) = 0;
+		BIN_QUAD_OFFSETS(i) = 0;
+	}
 }

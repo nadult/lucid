@@ -179,3 +179,18 @@ san-miguel: 8134   944    179   687    1792        4305      1125K  1270K      6
     sponza: 3759   61     108   5      3425        4           24K    51K      41      0.8
     teapot: 443    25     24    5      329         4            8K    14K      11      0.78
  white_oak: 13304  24     181   6      12953       5           10K   126K      64      0.50
+
+
+Podział na duże/małe trisy 2560x1330 raster_timings wyłączone:
+            total  setup  bins  (small) tiles  raster_bin  raster_tile
+    #boxes: 1613   24     31    100%    5      1479        4
+     bunny: 450    29     35     95%    5      318         4
+conference: 1288   46     85     36%    5      1020        4
+    dragon: 1026   137    49     97%    101    259         411
+   gallery: 3378   182    70     88%    130    1656        1153
+  hairball: 6444   544    207    93%    1577   278         3723
+powerplant: 8324   1528   175    73%    1257   764         4369
+san-miguel: 8365   958    200    70%    688    1848        4417
+    sponza: 3814   65     93     32%    6      3497        5
+    teapot: 445    25     30     93%    5      333         5
+ white_oak: 13492  25     136    25%    6      13182       5

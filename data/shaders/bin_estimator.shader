@@ -18,7 +18,23 @@ shared int s_rows[BIN_COUNT_Y];
 //#define COMPUTE_WARP_DIVERGENCE
 shared int s_warp_divergence;
 
-void countQuadBins(uint quad_idx) {
+void countSmallQuadBins(uint quad_idx) {
+	uint aabb = g_quad_aabbs[quad_idx];
+	int tsx = int(aabb & 0xff), tsy = int((aabb >> 8) & 0xff);
+	int tex = int((aabb >> 16) & 0xff), tey = int((aabb >> 24));
+	int bsx = tsx >> 2, bsy = tsy >> 2;
+	int bex = tex >> 2, bey = tey >> 2;
+
+	// Handling only tris with bin area 1 to 3:
+	atomicAdd(s_counts[bsy * BIN_COUNT_X + bsx], 1);
+	if(bex != bsx || bey != bsy)
+		atomicAdd(s_counts[bey * BIN_COUNT_X + bex], 1);
+	int bmx = (bsx + bex) >> 1, bmy = (bsy + bey) >> 1;
+	if(bmx > bsx || bmy > bsy)
+		atomicAdd(s_counts[bmy * BIN_COUNT_X + bmx], 1);
+}
+
+void countLargeQuadBins(uint quad_idx) {
 	uint aabb = g_quad_aabbs[quad_idx];
 	int tsx = int(aabb & 0xff), tsy = int((aabb >> 8) & 0xff);
 	int tex = int((aabb >> 16) & 0xff), tey = int((aabb >> 24));
@@ -41,15 +57,42 @@ void countQuadBins(uint quad_idx) {
 	atomicAdd(s_warp_divergence, int(32.0 * abs(float(area) - float(avg_area) / bitCount(mask))));
 #endif
 
-	for(int by = bsy; by <= bey; by++)
-		for(int bx = bsx; bx <= bex; bx++)
-			atomicAdd(s_counts[bx + by * BIN_COUNT_X], 1);
+	bex++, bey++;
+	atomicAdd(s_counts[bsx + bsy * BIN_COUNT_X], 1);
+	if(bex < BIN_COUNT_X)
+		atomicAdd(s_counts[bex + bsy * BIN_COUNT_X], -1);
+	if(bey < BIN_COUNT_Y)
+		atomicAdd(s_counts[bsx + bey * BIN_COUNT_X], -1);
+	if(bex < BIN_COUNT_X && bey < BIN_COUNT_Y)
+		atomicAdd(s_counts[bex + bey * BIN_COUNT_X], 1);
 }
 
 void computeOffsets() {
-	// Loading tri counts
+	// Accumulating large quad counts
 	for(uint i = LIX; i < BIN_COUNT; i += LSIZE)
-		s_counts[i] = BIN_QUAD_COUNTS(i);
+		s_counts[i] = BIN_QUAD_OFFSETS(i);
+	barrier();
+	if(LIX < BIN_COUNT_X) {
+		int accum = 0;
+		for(uint y = 0; y < BIN_COUNT_Y; y++) {
+			accum += s_counts[LIX + y * BIN_COUNT_X];
+			s_counts[LIX + y * BIN_COUNT_X] = accum;
+		}
+	}
+	barrier();
+	if(LIX < BIN_COUNT_Y) {
+		int accum = 0;
+		for(uint x = 0; x < BIN_COUNT_X; x++) {
+			accum += s_counts[x + LIX * BIN_COUNT_X];
+			s_counts[x + LIX * BIN_COUNT_X] = accum;
+		}
+	}
+	barrier();
+	// Adding small quad counts; updating final quad counts
+	for(uint i = LIX; i < BIN_COUNT; i += LSIZE) {
+		s_counts[i] += BIN_QUAD_COUNTS(i);
+		BIN_QUAD_COUNTS(i) = s_counts[i];
+	}
 	barrier();
 
 	// Computing per-bin tri offsets
@@ -97,8 +140,6 @@ void main() {
 		s_counts[i] = 0;
 	barrier();
 
-	// TODO: start with big tris ?
-
 	// Processing small tris
 	int num_quads = s_num_quads[0];
 	while(true) {
@@ -112,10 +153,16 @@ void main() {
 
 		int quad_idx = quad_offset + int(LIX);
 		if(quad_idx < num_quads)
-			countQuadBins(quad_idx);
+			countSmallQuadBins(quad_idx);
 		barrier();
 	}
 
+	// Adding small bin counters to global memory buffer
+	for(uint i = LIX; i < BIN_COUNT; i += LSIZE)
+		if(s_counts[i] > 0) {
+			atomicAdd(BIN_QUAD_COUNTS(i), s_counts[i]);
+			s_counts[i] = 0;
+		}
 	barrier();
 
 	// Processing big tris
@@ -131,14 +178,15 @@ void main() {
 
 		int quad_idx = quad_offset + int(LIX);
 		if(quad_idx < num_quads)
-			countQuadBins((MAX_QUADS - 1) - quad_idx);
+			countLargeQuadBins((MAX_QUADS - 1) - quad_idx);
 		barrier();
 	}
 
-	// Adding bin counters to global memory buffer
+	// Adding large bin counters to global memory buffer;
+	// We're storing it temporarily in offsets buffer
 	for(uint i = LIX; i < BIN_COUNT; i += LSIZE)
-		if(s_counts[i] > 0)
-			atomicAdd(BIN_QUAD_COUNTS(i), s_counts[i]);
+		if(s_counts[i] != 0)
+			atomicAdd(BIN_QUAD_OFFSETS(i), s_counts[i]);
 
 #ifdef COMPUTE_WARP_DIVERGENCE
 	if(LIX == 0)

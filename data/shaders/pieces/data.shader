@@ -49,9 +49,13 @@ struct BinCounters {
 	int num_finished_setup_groups;
 	int num_finished_bin_groups;
 
-	uint num_binning_dispatches[3];
+	uint num_binning_dispatches[3]; // 31
+	uint num_tiling_dispatches[3]; // 34
+	uint num_bin_raster_dispatches[3]; // 37
+	uint num_tile_raster_dispatches[3]; // 40
+	uint num_block_raster_dispatches[3]; // 43
 
-	int temp[30];
+	int temp[18];
 };
 
 #define BIN_COUNTERS_BUFFER(idx)                                                                   \

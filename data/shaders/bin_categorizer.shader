@@ -64,5 +64,19 @@ void main() {
 		g_bins.num_medium_bins = s_num_medium_bins;
 		g_bins.num_big_bins = s_num_big_bins;
 		g_bins.num_tiled_bins = s_num_tiled_bins;
+
+#define SET_NUM_DISPATCHES(name, value)                                                            \
+	{                                                                                              \
+		g_bins.name[0] = min((value), MAX_DISPATCHES);                                             \
+		g_bins.name[1] = 1;                                                                        \
+		g_bins.name[2] = 1;                                                                        \
+	}
+
+		SET_NUM_DISPATCHES(num_tiling_dispatches, s_num_tiled_bins);
+		SET_NUM_DISPATCHES(num_bin_raster_dispatches, s_num_small_bins);
+		SET_NUM_DISPATCHES(num_tile_raster_dispatches, s_num_medium_bins);
+		SET_NUM_DISPATCHES(num_block_raster_dispatches, s_num_big_bins);
+
+#undef SET_NUM_DISPATCHES
 	}
 }

@@ -238,6 +238,7 @@ void LucidRenderer::render(const Context &ctx) {
 
 	m_bin_counters->invalidate();
 	m_tile_counters->invalidate();
+	glBindBuffer(GL_DISPATCH_INDIRECT_BUFFER, m_bin_counters->id());
 
 	m_view_proj_matrix = ctx.camera.matrix();
 	m_frustum_rays = ctx.camera;
@@ -273,6 +274,7 @@ void LucidRenderer::render(const Context &ctx) {
 
 	// TODO: is this needed?
 	glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_SHADER_STORAGE_BARRIER_BIT);
+	glBindBuffer(GL_DISPATCH_INDIRECT_BUFFER, 0);
 
 	compose(ctx);
 	testGlError("LucidRenderer::render finish");
@@ -369,7 +371,11 @@ void LucidRenderer::setupQuads(const Context &ctx) {
 	program.use();
 
 	glDispatchCompute((m_num_instances + 3) / 4, 1, 1);
-	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_COMMAND_BARRIER_BIT);
+}
+
+static void dispatchIndirect(int bin_counters_offset) {
+	glDispatchComputeIndirect((GLintptr)(bin_counters_offset * sizeof(int)));
 }
 
 void LucidRenderer::computeBins(const Context &ctx) {
@@ -380,15 +386,12 @@ void LucidRenderer::computeBins(const Context &ctx) {
 	m_tile_counters->bindIndex(2);
 	m_bin_quads->bindIndex(3);
 
-	glBindBuffer(GL_DISPATCH_INDIRECT_BUFFER, m_bin_counters->id());
-	auto dispatch_offset = (GLintptr)(31 * sizeof(uint));
-
 	bin_estimator_program.use();
 	if(m_opts & Opt::check_bins)
 		shaderDebugUseBuffer(m_errors);
 
 	PERF_CHILD_SCOPE("estimator phase");
-	glDispatchComputeIndirect(dispatch_offset);
+	dispatchIndirect(31);
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 
 	PERF_SIBLING_SCOPE("dispatcher phase");
@@ -398,25 +401,20 @@ void LucidRenderer::computeBins(const Context &ctx) {
 	bin_dispatcher_program.use();
 	if(m_opts & Opt::check_bins)
 		shaderDebugUseBuffer(m_errors);
-	glDispatchComputeIndirect(dispatch_offset);
+	dispatchIndirect(31);
+
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
-	glBindBuffer(GL_DISPATCH_INDIRECT_BUFFER, 0);
 
 	PERF_SIBLING_SCOPE("categorizer phase");
 	bin_categorizer_program.use();
 	bin_categorizer_program["tile_all_bins"] = !(m_opts & Opt::new_raster);
 	m_compose_quads->bindIndexAs(2, BufferType::shader_storage);
 	glDispatchCompute(1, 1, 1);
-	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_COMMAND_BARRIER_BIT);
 }
 
 void LucidRenderer::computeTiles(const Context &ctx) {
 	PERF_GPU_SCOPE();
-
-	// TODO: Why adding more on intel causes problems?
-	// TODO: properly get number of compute units (use opencl?)
-	// https://tinyurl.com/o7s9ph3
-	int max_dispatches = gl_info->vendor == GlVendor::intel ? 32 : 128;
 
 	m_bin_counters->bindIndex(1);
 	m_tile_counters->bindIndex(2);
@@ -432,7 +430,7 @@ void LucidRenderer::computeTiles(const Context &ctx) {
 	tile_dispatcher_program.setFrustum(ctx.camera);
 	if(m_opts & Opt::check_tiles)
 		shaderDebugUseBuffer(m_errors);
-	glDispatchCompute(max_dispatches, 1, 1);
+	dispatchIndirect(34);
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 }
 
@@ -1413,7 +1411,7 @@ void LucidRenderer::rasterBlock(const Context &ctx) {
 	raster_block_program.setShadows(ctx.shadows.matrix, ctx.shadows.enable);
 	ctx.lighting.setUniforms(raster_block_program.glProgram());
 
-	glDispatchCompute(64, 1, 1);
+	dispatchIndirect(43);
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 }
 
@@ -1440,7 +1438,7 @@ void LucidRenderer::rasterTile(const Context &ctx) {
 	// - Inny debugger dla compute i inny dla pozostałych shaderów
 	// - możliwość przekazywania konkretnych wartości (np. 4 różne wartości?)
 	// - jakaś klasa do prostej introspekcji linii kodu programu
-	glDispatchCompute(128, 1, 1);
+	dispatchIndirect(40);
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 
 	if(m_opts & Opt::debug_raster) {
@@ -1474,7 +1472,7 @@ void LucidRenderer::rasterBin(const Context &ctx) {
 	if(m_opts & Opt::debug_raster)
 		shaderDebugUseBuffer(m_errors);
 
-	glDispatchCompute(128, 1, 1);
+	dispatchIndirect(37);
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 	m_tile_tris->bindIndex(8);
 

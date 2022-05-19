@@ -35,8 +35,10 @@ shared uvec4 s_quad_indices[LSIZE];
 
 shared int s_num_quads[MAX_INSTANCES], s_index_offset[MAX_INSTANCES];
 shared int s_quad_offset[MAX_INSTANCES], s_vertex_offset[MAX_INSTANCES];
-shared int s_num_visible[MAX_INSTANCES];
-shared int s_out_offset;
+
+// For each instance we count two types of triangles: small and big
+shared int s_num_visible[MAX_INSTANCES * 2];
+shared int s_out_offset[2];
 
 // TODO: do something about divergence in input data
 // TODO: muszę też mieć możliwość dodawania nowych wierzchołków
@@ -223,8 +225,6 @@ void processQuad(uint quad_id, uint v0, uint v1, uint v2, uint v3, uint local_in
 
 	// TODO: cull second degenerate triangle?
 
-	uint out_idx = atomicAdd(s_num_visible[local_instance_id], 1);
-
 	// TODO: don't forget to change it in MSAA mode
 	aabb0 = clamp(aabb0 + vec4(0.49, 0.49, -0.49, -0.49), vec4(0.0),
 				  vec4(max_screen_pos, max_screen_pos));
@@ -233,10 +233,17 @@ void processQuad(uint quad_id, uint v0, uint v1, uint v2, uint v3, uint local_in
 	aabb = clamp(aabb + vec4(0.49, 0.49, -0.49, -0.49), vec4(0.0),
 				 vec4(max_screen_pos, max_screen_pos));
 
-	uvec4 iaabb = uvec4(aabb);
-	uint enc_aabb = (((iaabb[0] >> TILE_SHIFT) & 0xff)) | (((iaabb[1] >> TILE_SHIFT) & 0xff) << 8) |
-					(((iaabb[2] >> TILE_SHIFT) & 0xff) << 16) |
-					(((iaabb[3] >> TILE_SHIFT) & 0xff) << 24);
+	uvec4 tile_aabb = uvec4(aabb) >> TILE_SHIFT;
+
+	uint enc_aabb = ((tile_aabb[0] & 0xff) << 0) | ((tile_aabb[1] & 0xff) << 8) |
+					((tile_aabb[2] & 0xff) << 16) | ((tile_aabb[3] & 0xff) << 24);
+
+	uvec4 bin_aabb = tile_aabb >> 2;
+	uvec2 bin_size = uvec2(bin_aabb[2] - bin_aabb[0] + 1, bin_aabb[3] - bin_aabb[1] + 1);
+	int size_type_idx = bin_size.x * bin_size.y <= 4 ? 0 : 1;
+	uint out_idx = atomicAdd(s_num_visible[local_instance_id * 2 + size_type_idx], 1);
+	if(size_type_idx == 1)
+		out_idx = (LSIZE - 1) - out_idx;
 
 	s_quad_aabbs[out_idx] = enc_aabb;
 	s_tri_aabbs[out_idx] = uvec4(encodeAABB(uvec4(aabb0)), encodeAABB(uvec4(aabb1)));
@@ -275,8 +282,9 @@ void main() {
 		} else {
 			s_num_quads[LIX] = 0;
 		}
-		s_num_visible[LIX] = 0;
 	}
+	if(LIX < MAX_INSTANCES * 2)
+		s_num_visible[LIX] = 0;
 	if(LIX < REJECTED_TYPE_COUNT)
 		s_rejected_quads[LIX] = 0;
 	barrier();
@@ -294,13 +302,38 @@ void main() {
 			processQuad(s_quad_offset[i] + int(LIX), v0, v1, v2, v3, i);
 		}
 		barrier();
-		if(LIX == 0)
-			s_out_offset = atomicAdd(g_bins.num_visible_quads, s_num_visible[i]);
+		if(LIX < 2)
+			s_out_offset[LIX] =
+				atomicAdd(g_bins.num_visible_quads[LIX], s_num_visible[i * 2 + LIX]);
 		barrier();
-		if(LIX < s_num_visible[i])
-			addVisibleQuad(s_out_offset + LIX, i);
+
+		int out_offset = -1;
+		if(LIX < s_num_visible[i * 2 + 0])
+			out_offset = s_out_offset[0] + int(LIX);
+		// TODO: hole in the middle makes it a bit less effective
+		else if(LIX >= LSIZE - s_num_visible[i * 2 + 1]) {
+			int idx = s_out_offset[1] + int((LSIZE - 1) - LIX);
+			out_offset = (MAX_QUADS - 1) - idx;
+		}
+
+		if(out_offset != -1)
+			addVisibleQuad(out_offset, i);
 	}
 	barrier();
 	if(LIX < REJECTED_TYPE_COUNT)
 		atomicAdd(g_bins.num_rejected_quads[LIX], s_rejected_quads[LIX]);
+
+	// Last group computes number of dispatches for binning phase
+	if(LIX == 0) {
+		uint num_finished = atomicAdd(g_bins.num_finished_setup_groups, 1);
+		if(num_finished == gl_NumWorkGroups.x - 1) {
+			groupMemoryBarrier();
+			int num_quads = g_bins.num_visible_quads[0] + g_bins.num_visible_quads[1];
+			const int dispatch_size = 512;
+			int num_dispatches = (num_quads + (dispatch_size - 1)) / dispatch_size;
+			g_bins.num_binning_dispatches[0] = uint(clamp(num_dispatches, 4, MAX_DISPATCHES));
+			g_bins.num_binning_dispatches[1] = 1;
+			g_bins.num_binning_dispatches[2] = 1;
+		}
+	}
 }

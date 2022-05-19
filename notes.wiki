@@ -80,6 +80,9 @@ Plan:
   Fakt jest taki, że cała początkowa faza (process quads) na skomlikowanych scenach zajmuje ok 1%...
   W takim razie to chyba nie ma sensu...; Generowanie scanline-ów to pewnie mniej niż 25%...
 
+* Prosta wersja alokatora pamięci bazującego na spin-locku w bin_dispatcherze jest wolniejsza
+  niż nie do końca zoptymalizowana estymacja (powerplant: 100us vs 65us)
+
 -----------------------------------------------------------------------------------------
                                       === Statsy ===
 -----------------------------------------------------------------------------------------

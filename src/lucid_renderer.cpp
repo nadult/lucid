@@ -164,6 +164,12 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	defs["BLOCKS_PER_TILE"] = blocks_per_tile;
 	defs["BLOCKS_PER_BIN"] = blocks_per_bin;
 	defs["MAX_LSIZE"] = gl_info->limits[GlLimit::max_compute_work_group_invocations];
+	defs["MAX_QUADS"] = max_quads;
+
+	// TODO: Why adding more on intel causes problems?
+	// TODO: properly get number of compute units (use opencl?)
+	// https://tinyurl.com/o7s9ph3
+	defs["MAX_DISPATCHES"] = gl_info->vendor == GlVendor::intel ? 32 : 128;
 
 	init_counters_program = EX_PASS(Program::makeCompute("init_counters", defs));
 	setup_program = EX_PASS(Program::makeCompute("setup", defs));
@@ -369,22 +375,20 @@ void LucidRenderer::setupQuads(const Context &ctx) {
 void LucidRenderer::computeBins(const Context &ctx) {
 	PERF_GPU_SCOPE();
 
-	// TODO: Why adding more on intel causes problems?
-	// TODO: properly get number of compute units (use opencl?)
-	// https://tinyurl.com/o7s9ph3
-	int max_dispatches = gl_info->vendor == GlVendor::intel ? 32 : 128;
-
 	m_quad_aabbs->bindIndex(0);
 	m_bin_counters->bindIndex(1);
 	m_tile_counters->bindIndex(2);
 	m_bin_quads->bindIndex(3);
+
+	glBindBuffer(GL_DISPATCH_INDIRECT_BUFFER, m_bin_counters->id());
+	auto dispatch_offset = (GLintptr)(31 * sizeof(uint));
 
 	bin_estimator_program.use();
 	if(m_opts & Opt::check_bins)
 		shaderDebugUseBuffer(m_errors);
 
 	PERF_CHILD_SCOPE("estimator phase");
-	glDispatchCompute(max_dispatches, 1, 1);
+	glDispatchComputeIndirect(dispatch_offset);
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 
 	PERF_SIBLING_SCOPE("dispatcher phase");
@@ -394,8 +398,9 @@ void LucidRenderer::computeBins(const Context &ctx) {
 	bin_dispatcher_program.use();
 	if(m_opts & Opt::check_bins)
 		shaderDebugUseBuffer(m_errors);
-	glDispatchCompute(max_dispatches, 1, 1);
+	glDispatchComputeIndirect(dispatch_offset);
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+	glBindBuffer(GL_DISPATCH_INDIRECT_BUFFER, 0);
 
 	PERF_SIBLING_SCOPE("categorizer phase");
 	bin_categorizer_program.use();
@@ -440,7 +445,7 @@ void LucidRenderer::checkBins() {
 		auto vals = m_bin_counters->map<int>(AccessMode::read_only);
 		num_input_quads = vals[1];
 		num_binned_quads = vals[2];
-		vals = vals.subSpan(32);
+		vals = vals.subSpan(bin_counters_offset);
 		bin_quad_counts = vals.subSpan(bin_count * 0, bin_count * 1);
 		bin_quad_offsets = vals.subSpan(bin_count * 1, bin_count * 2);
 		bin_quad_offsets2 = vals.subSpan(bin_count * 2, bin_count * 3);
@@ -485,7 +490,7 @@ void LucidRenderer::checkTiles() {
 	vector<int> tile_tri_counts;
 	{
 		auto vals = m_tile_counters->map<int>(AccessMode::read_only);
-		vals = vals.subSpan(32);
+		vals = vals.subSpan(tile_counters_offset);
 		tile_tri_counts = vals.subSpan(0, bin_count * tiles_per_bin);
 		m_tile_counters->unmap();
 	}
@@ -1585,7 +1590,7 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 		((m_size.x + block_size - 1) / block_size) * ((m_size.y + block_size - 1) / block_size);
 
 	int num_input_quads = bin_counters[1];
-	int num_visible_quads = bin_counters[23];
+	int num_visible_quads[2] = {(int)bin_counters[23], (int)bin_counters[24]};
 	int num_invalid_pixels = tile_counters[10];
 	int num_invalid_blocks = tile_counters[11];
 	int num_invalid_tiles = tile_counters[12];
@@ -1618,8 +1623,12 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 		num_rejected[i] = bin_counters[4 + i];
 	num_rejected[0] += num_rejected[1] + num_rejected[2] + num_rejected[3];
 
-	auto visible_info = stdFormat("%d (%.2f %%)", num_visible_quads,
-								  double(num_visible_quads) / num_input_quads * 100);
+	int visible_sum = num_visible_quads[0] + num_visible_quads[1];
+	auto visible_info =
+		stdFormat("%d (%.2f %%)", visible_sum, double(visible_sum) / num_input_quads * 100);
+	auto visible_details =
+		stdFormat("%d small; %d big", num_visible_quads[0], num_visible_quads[1]);
+
 	auto rejected_info =
 		stdFormat("%d (%.2f %%)", num_rejected[0], double(num_rejected[0]) / num_input_quads * 100);
 	auto rejection_details = format("backface: %\nfrustum: %\nbetween-samples: %", num_rejected[1],
@@ -1654,7 +1663,7 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 	vector<StatsRow> basic_rows = {
 		{"input instances", toString(m_num_instances)},
 		{"input quads", toString(num_input_quads)},
-		{"visible quads", visible_info},
+		{"visible quads", visible_info, visible_details},
 		{"rejected quads", rejected_info, rejection_details},
 		{"bin-quads", toString(num_bin_quads), "Per-bin quads"},
 		{"tile-tris", toString(num_tile_tris), "Per-tile triangles"},

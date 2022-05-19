@@ -14,6 +14,8 @@ BIN_COUNTERS_BUFFER(1);
 layout(std430, binding = 3) buffer buf2_ { uint g_bin_quads[]; };
 
 shared int s_num_quads;
+shared int s_size_type;
+shared int s_quads_offset;
 
 // TODO: treat 1x1, 1x2, 2x1 & 2x2 cases separately
 // TODO: filter big tris here (with bin-rasterization similarily to Laine's?)
@@ -21,28 +23,45 @@ shared int s_num_quads;
 // TODO: there are surely more ways to optimize this
 // TODO: rename tris to quads
 
+// Offsets have to be 32-bit...
+
 shared uint s_offsets[BIN_COUNT];
 shared uint s_counts[BIN_COUNT];
-shared uint s_quads_offset;
+
+int getWorkItem() {
+	if(LIX == 0) {
+		int size_type = s_size_type;
+		int quads_offset =
+			atomicAdd(g_bins.num_dispatched_visible_quads[size_type], MAX_GROUP_QUADS);
+		if(size_type == 0 && quads_offset >= s_num_quads) {
+			quads_offset = atomicAdd(g_bins.num_dispatched_visible_quads[1], MAX_GROUP_QUADS);
+			s_num_quads = g_bins.num_visible_quads[1];
+			s_size_type = 1;
+		}
+		s_quads_offset = quads_offset;
+	}
+	barrier();
+	return s_quads_offset;
+}
 
 void main() {
-	if(LIX == 0)
-		s_num_quads = g_bins.num_visible_quads;
+	if(LIX == 0) {
+		s_num_quads = g_bins.num_visible_quads[0];
+		s_size_type = 0;
+	}
 	barrier();
-	int num_quads = s_num_quads;
 
 	while(true) {
 		barrier();
-		if(LIX == 0)
-			s_quads_offset = atomicAdd(g_bins.num_binned_quads, MAX_GROUP_QUADS);
-		for(int i = 0; i < BIN_COUNT; i += LSIZE)
-			if(i + LIX < BIN_COUNT)
-				s_counts[i + LIX] = 0;
-		barrier();
-
-		uint tris_offset = s_quads_offset;
-		if(tris_offset >= num_quads)
+		int quads_offset = getWorkItem();
+		int num_quads = s_num_quads;
+		int size_type = s_size_type;
+		if(quads_offset >= num_quads)
 			break;
+
+		for(uint i = LIX; i < BIN_COUNT; i += LSIZE)
+			s_counts[i] = 0;
+		barrier();
 
 		uint lbins[TRIS_PER_THREAD];
 		for(uint i = 0; i < TRIS_PER_THREAD; i++)
@@ -50,9 +69,11 @@ void main() {
 		// TODO: pojedyncze trojkaty w ramach bin-a to nie te same co w ramach tile-a
 
 		for(uint i = 0; i < TRIS_PER_THREAD; i++) {
-			uint quad_idx = tris_offset + LSIZE * i + LIX;
+			uint quad_idx = quads_offset + LSIZE * i + LIX;
 			if(quad_idx >= num_quads)
 				break;
+			if(size_type == 1)
+				quad_idx = (MAX_QUADS - 1) - quad_idx;
 
 			uint aabb = g_quad_aabbs[quad_idx];
 			int tsx = int(aabb & 0xff), tsy = int((aabb >> 8) & 0xff);
@@ -76,17 +97,18 @@ void main() {
 		}
 
 		barrier();
-		for(uint i = 0; i < BIN_COUNT; i += LSIZE) {
-			uint li = i + LIX;
-			if(li < BIN_COUNT && s_counts[li] > 0)
-				s_offsets[li] = atomicAdd(BIN_QUAD_OFFSETS_TEMP(li), int(s_counts[li]));
-		}
+		for(uint i = LIX; i < BIN_COUNT; i += LSIZE)
+			if(s_counts[i] > 0)
+				s_offsets[i] = atomicAdd(BIN_QUAD_OFFSETS_TEMP(i), int(s_counts[i]));
 		barrier();
 
 		for(uint i = 0; i < TRIS_PER_THREAD; i++) {
 			if(lbins[i] == ~0u)
 				continue;
-			uint quad_idx = tris_offset + LSIZE * i + LIX;
+			uint quad_idx = quads_offset + LSIZE * i + LIX;
+			if(size_type == 1)
+				quad_idx = (MAX_QUADS - 1) - quad_idx;
+
 			int bsx = int((lbins[i]) & 0x3f);
 			int bsy = int((lbins[i] >> 6) & 0x3f);
 			int bex = int((lbins[i] >> 12) & 0x3f);

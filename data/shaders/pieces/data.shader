@@ -15,15 +15,16 @@ struct InstanceData {
 	// TODO: materials?
 };
 
-#define REJECTED_OTHER				0
-#define REJECTED_BACKFACE			1
-#define REJECTED_FRUSTUM			2
-#define REJECTED_BETWEEN_SAMPLES	3
+#define REJECTED_OTHER 0
+#define REJECTED_BACKFACE 1
+#define REJECTED_FRUSTUM 2
+#define REJECTED_BETWEEN_SAMPLES 3
 
-#define REJECTED_TYPE_COUNT			4
+#define REJECTED_TYPE_COUNT 4
 
+// Shared source file for .cpp and .shader code ?
 struct BinCounters {
-	int num_binned_quads;
+	int num_binned_quads; // TODO: remove
 	int num_input_quads;
 	int num_estimated_quads;
 	int num_verts;
@@ -41,10 +42,16 @@ struct BinCounters {
 
 	uint timings[8];
 
-	int num_visible_quads; // TODO: move
+	int num_visible_quads[2]; // TODO: move
+	int num_estimated_visible_quads[2]; // TODO: naming
+	int num_dispatched_visible_quads[2];
+
+	int num_finished_setup_groups;
 	int num_finished_bin_groups;
 
-	int temp[7];
+	uint num_binning_dispatches[3];
+
+	int temp[30];
 };
 
 #define BIN_COUNTERS_BUFFER(idx)                                                                   \

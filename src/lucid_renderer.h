@@ -47,6 +47,9 @@ class LucidRenderer {
 	static constexpr int max_width = 2560, max_height = 2048;
 	static constexpr int max_quads = 10 * 1024 * 1024, max_verts = 12 * 1024 * 1024;
 
+	// TODO: use shared structure between C++ and shader code
+	static constexpr int bin_counters_offset = 64, tile_counters_offset = 32;
+
 	static_assert(isPowerOfTwo(bin_size));
 
 	LucidRenderer();

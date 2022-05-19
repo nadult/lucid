@@ -1,22 +1,22 @@
 // $$include data
 
+// TODO: don't run too many groups if we have small amount of data (indirect dispatch)
+
 #define LID gl_LocalInvocationID
 #define LIX gl_LocalInvocationIndex
 #define WGID gl_WorkGroupID
 
-// TODO: this is too small for large number of bins!
 #define LSIZE 512
 
 layout(local_size_x = LSIZE) in;
 layout(std430, binding = 0) buffer buf0_ { uint g_quad_aabbs[]; };
-BIN_COUNTERS_BUFFER(1);
-
-shared int s_num_quads, s_max_quads;
-shared int s_quads_offset;
-shared uint s_num_finished;
+BIN_COUNTERS_BUFFER(1); // TODO: coherent ?
 
 shared int s_counts[BIN_COUNT];
 shared int s_rows[BIN_COUNT_Y];
+
+//#define COMPUTE_WARP_DIVERGENCE
+shared int s_warp_divergence;
 
 void countQuadBins(uint quad_idx) {
 	uint aabb = g_quad_aabbs[quad_idx];
@@ -28,33 +28,22 @@ void countQuadBins(uint quad_idx) {
 	// ASSERT(bsx >= 0 && bsy >= 0);
 	// ASSERT(bex <= BIN_COUNT_X && bey <= BIN_COUNT_Y);
 
+#ifdef COMPUTE_WARP_DIVERGENCE
+	// Estimating divergence within warp
+	int area = (bex - bsx + 1) * (bey - bsy + 1);
+	int avg_area = int(area);
+	uint mask = uint(ballotARB(true)), cur_bit = LIX & 31;
+	avg_area += ((mask & (cur_bit ^ 1)) != 0 ? 0xffffffff : 0) & shuffleXorNV(avg_area, 1, 32);
+	avg_area += ((mask & (cur_bit ^ 2)) != 0 ? 0xffffffff : 0) & shuffleXorNV(avg_area, 2, 32);
+	avg_area += ((mask & (cur_bit ^ 4)) != 0 ? 0xffffffff : 0) & shuffleXorNV(avg_area, 4, 32);
+	avg_area += ((mask & (cur_bit ^ 8)) != 0 ? 0xffffffff : 0) & shuffleXorNV(avg_area, 8, 32);
+	avg_area += ((mask & (cur_bit ^ 16)) != 0 ? 0xffffffff : 0) & shuffleXorNV(avg_area, 16, 32);
+	atomicAdd(s_warp_divergence, int(32.0 * abs(float(area) - float(avg_area) / bitCount(mask))));
+#endif
+
 	for(int by = bsy; by <= bey; by++)
 		for(int bx = bsx; bx <= bex; bx++)
 			atomicAdd(s_counts[bx + by * BIN_COUNT_X], 1);
-}
-
-void estimateBins() {
-	int max_quads = s_max_quads;
-	if(LIX == 0)
-		s_quads_offset = atomicAdd(g_bins.num_binned_quads, max_quads);
-	barrier();
-
-	int quads_offset = s_quads_offset;
-	int num_quads = clamp(s_num_quads - quads_offset, 0, max_quads);
-	if(num_quads == 0)
-		return;
-
-	for(uint i = LIX; i < BIN_COUNT; i += LSIZE)
-		s_counts[i] = 0;
-	barrier();
-
-	for(int i = int(LIX); i < num_quads; i += LSIZE)
-		countQuadBins(quads_offset + i);
-	barrier();
-
-	for(uint i = LIX; i < BIN_COUNT; i += LSIZE)
-		if(s_counts[i] > 0)
-			atomicAdd(BIN_QUAD_COUNTS(i), s_counts[i]);
 }
 
 void computeOffsets() {
@@ -91,18 +80,75 @@ void computeOffsets() {
 	}
 }
 
+shared int s_num_quads[2];
+shared int s_quads_offset;
+shared uint s_num_finished;
+
 void main() {
-	if(LIX == 0) {
-		int num_quads = g_bins.num_visible_quads;
-		s_num_quads = num_quads;
-		// TODO: does it make sense to make this value smaller than LSIZE ?
-		int quads_per_wg = int((num_quads + gl_NumWorkGroups.x - 1) / gl_NumWorkGroups.x);
-		s_max_quads = max(quads_per_wg, LSIZE);
+	if(LIX < 2) {
+		s_num_quads[LIX] = g_bins.num_visible_quads[LIX];
+#ifdef COMPUTE_WARP_DIVERGENCE
+		s_warp_divergence = 0;
+#endif
 	}
+
+	// Initializing bin counters
+	for(uint i = LIX; i < BIN_COUNT; i += LSIZE)
+		s_counts[i] = 0;
 	barrier();
 
-	estimateBins();
+	// TODO: start with big tris ?
+
+	// Processing small tris
+	int num_quads = s_num_quads[0];
+	while(true) {
+		if(LIX == 0)
+			s_quads_offset = atomicAdd(g_bins.num_estimated_visible_quads[0], LSIZE);
+		barrier();
+
+		int quad_offset = s_quads_offset;
+		if(quad_offset >= num_quads)
+			break;
+
+		int quad_idx = quad_offset + int(LIX);
+		if(quad_idx < num_quads)
+			countQuadBins(quad_idx);
+		barrier();
+	}
+
 	barrier();
+
+	// Processing big tris
+	num_quads = s_num_quads[1];
+	while(true) {
+		if(LIX == 0)
+			s_quads_offset = atomicAdd(g_bins.num_estimated_visible_quads[1], LSIZE);
+		barrier();
+
+		int quad_offset = s_quads_offset;
+		if(quad_offset >= num_quads)
+			break;
+
+		int quad_idx = quad_offset + int(LIX);
+		if(quad_idx < num_quads)
+			countQuadBins((MAX_QUADS - 1) - quad_idx);
+		barrier();
+	}
+
+	// Adding bin counters to global memory buffer
+	for(uint i = LIX; i < BIN_COUNT; i += LSIZE)
+		if(s_counts[i] > 0)
+			atomicAdd(BIN_QUAD_COUNTS(i), s_counts[i]);
+
+#ifdef COMPUTE_WARP_DIVERGENCE
+	if(LIX == 0)
+		atomicAdd(g_bins.temp[0], s_warp_divergence >> 5);
+#endif
+
+	// TODO: additional group memory barrier to make sure that changes in mem are propagated to all other groups?
+	barrier();
+
+	// TODO: kill redundant work groups earlier
 	if(LIX == 0)
 		s_num_finished = atomicAdd(g_bins.num_finished_bin_groups, 1);
 	barrier();

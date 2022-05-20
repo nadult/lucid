@@ -68,34 +68,12 @@ void countLargeQuadBins(uint quad_idx) {
 }
 
 void computeOffsets() {
-	// Accumulating large quad counts
+	// Getting per-bin quad counts
 	for(uint i = LIX; i < BIN_COUNT; i += LSIZE)
-		s_counts[i] = BIN_QUAD_OFFSETS(i);
-	barrier();
-	if(LIX < BIN_COUNT_X) {
-		int accum = 0;
-		for(uint y = 0; y < BIN_COUNT_Y; y++) {
-			accum += s_counts[LIX + y * BIN_COUNT_X];
-			s_counts[LIX + y * BIN_COUNT_X] = accum;
-		}
-	}
-	barrier();
-	if(LIX < BIN_COUNT_Y) {
-		int accum = 0;
-		for(uint x = 0; x < BIN_COUNT_X; x++) {
-			accum += s_counts[x + LIX * BIN_COUNT_X];
-			s_counts[x + LIX * BIN_COUNT_X] = accum;
-		}
-	}
-	barrier();
-	// Adding small quad counts; updating final quad counts
-	for(uint i = LIX; i < BIN_COUNT; i += LSIZE) {
-		s_counts[i] += BIN_QUAD_COUNTS(i);
-		BIN_QUAD_COUNTS(i) = s_counts[i];
-	}
+		s_counts[i] = BIN_QUAD_COUNTS(i);
 	barrier();
 
-	// Computing per-bin tri offsets
+	// Computing per-bin quad offsets
 	if(LIX < BIN_COUNT_Y) {
 		for(int x = 1; x < BIN_COUNT_X; x++)
 			s_counts[x + LIX * BIN_COUNT_X] += s_counts[x - 1 + LIX * BIN_COUNT_X];
@@ -110,13 +88,13 @@ void computeOffsets() {
 		}
 	}
 	barrier();
+
+	// Storing per-bin quad offsets
 	for(uint i = LIX; i < BIN_COUNT; i += LSIZE) {
 		int cur_offset = s_counts[i] - BIN_QUAD_COUNTS(i);
 		BIN_QUAD_OFFSETS(i) = cur_offset;
 		BIN_QUAD_OFFSETS_TEMP(i) = cur_offset;
 	}
-	barrier();
-
 	if(LIX == 0) {
 		g_bins.num_estimated_quads = s_counts[BIN_COUNT - 1];
 		g_bins.num_binned_quads = 0;
@@ -140,33 +118,8 @@ void main() {
 		s_counts[i] = 0;
 	barrier();
 
-	// Processing small tris
-	int num_quads = s_num_quads[0];
-	while(true) {
-		if(LIX == 0)
-			s_quads_offset = atomicAdd(g_bins.num_estimated_visible_quads[0], LSIZE);
-		barrier();
-
-		int quad_offset = s_quads_offset;
-		if(quad_offset >= num_quads)
-			break;
-
-		int quad_idx = quad_offset + int(LIX);
-		if(quad_idx < num_quads)
-			countSmallQuadBins(quad_idx);
-		barrier();
-	}
-
-	// Adding small bin counters to global memory buffer
-	for(uint i = LIX; i < BIN_COUNT; i += LSIZE)
-		if(s_counts[i] > 0) {
-			atomicAdd(BIN_QUAD_COUNTS(i), s_counts[i]);
-			s_counts[i] = 0;
-		}
-	barrier();
-
-	// Processing big tris
-	num_quads = s_num_quads[1];
+	// Processing big quads
+	int num_quads = s_num_quads[1];
 	while(true) {
 		if(LIX == 0)
 			s_quads_offset = atomicAdd(g_bins.num_estimated_visible_quads[1], LSIZE);
@@ -182,20 +135,53 @@ void main() {
 		barrier();
 	}
 
-	// Adding large bin counters to global memory buffer;
-	// We're storing it temporarily in offsets buffer
+	barrier();
+	// Accumulating large quad counts across columns
+	if(LIX < BIN_COUNT_X) {
+		int accum = 0;
+		for(uint y = 0; y < BIN_COUNT_Y; y++) {
+			accum += s_counts[LIX + y * BIN_COUNT_X];
+			s_counts[LIX + y * BIN_COUNT_X] = accum;
+		}
+	}
+	barrier();
+	// Accumulating large quad counts across rows
+	if(LIX < BIN_COUNT_Y) {
+		int accum = 0;
+		for(uint x = 0; x < BIN_COUNT_X; x++) {
+			accum += s_counts[x + LIX * BIN_COUNT_X];
+			s_counts[x + LIX * BIN_COUNT_X] = accum;
+		}
+	}
+	barrier();
+
+	// Processing small quads
+	num_quads = s_num_quads[0];
+	while(true) {
+		if(LIX == 0)
+			s_quads_offset = atomicAdd(g_bins.num_estimated_visible_quads[0], LSIZE);
+		barrier();
+
+		int quad_offset = s_quads_offset;
+		if(quad_offset >= num_quads)
+			break;
+
+		int quad_idx = quad_offset + int(LIX);
+		if(quad_idx < num_quads)
+			countSmallQuadBins(quad_idx);
+		barrier();
+	}
+
+	// Copying bin counters to global memory buffer
 	for(uint i = LIX; i < BIN_COUNT; i += LSIZE)
-		if(s_counts[i] != 0)
-			atomicAdd(BIN_QUAD_OFFSETS(i), s_counts[i]);
+		if(s_counts[i] > 0)
+			atomicAdd(BIN_QUAD_COUNTS(i), s_counts[i]);
+	barrier();
 
 #ifdef COMPUTE_WARP_DIVERGENCE
 	if(LIX == 0)
 		atomicAdd(g_bins.temp[0], s_warp_divergence >> 5);
 #endif
-
-	// TODO: additional group memory barrier to make sure that changes in mem are propagated to all other groups?
-	barrier();
-
 	// TODO: kill redundant work groups earlier
 	if(LIX == 0)
 		s_num_finished = atomicAdd(g_bins.num_finished_bin_groups, 1);

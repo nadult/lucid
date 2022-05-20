@@ -17,8 +17,6 @@ void main() {
 		g_bins_plain[LIX] = 0;
 	if(LIX < 32)
 		g_tiles_plain[LIX] = 0;
-	for(uint i = LIX; i < BIN_COUNT; i += LSIZE) {
+	for(uint i = LIX; i < BIN_COUNT; i += LSIZE)
 		BIN_QUAD_COUNTS(i) = 0;
-		BIN_QUAD_OFFSETS(i) = 0;
-	}
 }

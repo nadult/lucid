@@ -83,6 +83,9 @@ Plan:
 * Prosta wersja alokatora pamięci bazującego na spin-locku w bin_dispatcherze jest wolniejsza
   niż nie do końca zoptymalizowana estymacja (powerplant: 100us vs 65us)
 
+* Próby zbalansowania pracy przy binowaniu dużych quadów poprzez grupowanie quadów po wielkościach
+  na 128 różnych grup praktycznie nic nie dały. Może dywergencja wielkości nie jest tak dużym problemem ?
+
 -----------------------------------------------------------------------------------------
                                       === Statsy ===
 -----------------------------------------------------------------------------------------

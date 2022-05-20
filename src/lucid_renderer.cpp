@@ -117,16 +117,23 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	uint max_tile_tris = max_quads * 3;
 	uint max_block_tris = max_quads * 2;
 
+	// TODO: Why adding more on intel causes problems?
+	// TODO: properly get number of compute units (use opencl?)
+	// https://tinyurl.com/o7s9ph3
+	int max_dispatches = gl_info->vendor == GlVendor::intel ? 32 : 128;
+	int max_bin_workgroup_items = 256; // TODO: tune
+
 	// TODO: LucidRenderer constructed 2x at the beginning
 
 	m_quad_indices.emplace(BufferType::shader_storage, max_quads * 4 * sizeof(u32));
 	m_quad_aabbs.emplace(BufferType::shader_storage, max_quads * sizeof(u32));
 	m_tri_aabbs.emplace(BufferType::shader_storage, max_quads * sizeof(int4));
 
-	uint bin_counters_size = (bin_count * 8 + 256) * sizeof(u32);
-	uint tile_counters_size = (bin_count * 16 * 4 + 256) * sizeof(u32);
-	m_bin_counters.emplace(BufferType::shader_storage, bin_counters_size);
-	m_tile_counters.emplace(BufferType::shader_storage, tile_counters_size);
+	uint bin_counters_size =
+		bin_count * (max_dispatches + 8) + max_dispatches * max_bin_workgroup_items + 256;
+	uint tile_counters_size = bin_count * 16 * 4 + 256;
+	m_bin_counters.emplace(BufferType::shader_storage, bin_counters_size * sizeof(u32));
+	m_tile_counters.emplace(BufferType::shader_storage, tile_counters_size * sizeof(u32));
 
 	m_block_counts.emplace(BufferType::shader_storage, tile_count * 16 * sizeof(u32));
 	m_block_offsets.emplace(BufferType::shader_storage, tile_count * 16 * sizeof(u32));
@@ -165,11 +172,8 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	defs["BLOCKS_PER_BIN"] = blocks_per_bin;
 	defs["MAX_LSIZE"] = gl_info->limits[GlLimit::max_compute_work_group_invocations];
 	defs["MAX_QUADS"] = max_quads;
-
-	// TODO: Why adding more on intel causes problems?
-	// TODO: properly get number of compute units (use opencl?)
-	// https://tinyurl.com/o7s9ph3
-	defs["MAX_DISPATCHES"] = gl_info->vendor == GlVendor::intel ? 32 : 128;
+	defs["MAX_DISPATCHES"] = max_dispatches;
+	defs["MAX_BIN_WORKGROUP_ITEMS"] = max_bin_workgroup_items;
 
 	init_counters_program = EX_PASS(Program::makeCompute("init_counters", defs));
 	setup_program = EX_PASS(Program::makeCompute("setup", defs));
@@ -1559,8 +1563,9 @@ void LucidRenderer::copyCounters() {
 		m_old_counters[i] = m_old_counters[i - 1];
 	m_old_counters[0] = last;
 
+	uint bin_base_size = m_bin_counts.x * m_bin_counts.y + 256;
 	if(!m_old_counters[0].first) {
-		m_old_counters[0].first.emplace(BufferType::copy_read, m_bin_counters->size());
+		m_old_counters[0].first.emplace(BufferType::copy_read, bin_base_size * sizeof(u32));
 		m_old_counters[0].second.emplace(BufferType::copy_read, m_tile_counters->size());
 	}
 
@@ -1611,7 +1616,7 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 		}
 		if(!empty)
 			num_nonempty_bins++;
-		int bin_quads = bin_counters[32 + b];
+		int bin_quads = bin_counters[64 + b];
 		max_quads_per_bin = max(max_quads_per_bin, bin_quads);
 		num_bin_quads += bin_quads;
 	}

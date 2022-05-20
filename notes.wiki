@@ -197,3 +197,19 @@ san-miguel: 8365   958    200    70%    688    1848        4417
     sponza: 3814   65     93     32%    6      3497        5
     teapot: 445    25     30     93%    5      333         5
  white_oak: 13492  25     136    25%    6      13182       5
+
+
+ Optymalizacja w dispatcherze (używanie obliczonych countów z estymatora):
+            total  setup  bins  tiles  raster_bin  raster_tile
+    #boxes: 1612   24     30    4      1479        3
+     bunny: 460    30     29    4      321         3
+conference: 1289   46     75    4      1025        3
+    dragon: 1062   138    51    113    261         418
+   gallery: 3427   183    67    135    1677        1161
+  hairball: 6577   544    228   1602   284         3736
+powerplant: 8376   1523   170   1257   758         4461
+san-miguel: 8389   958    175   737    1821        4428
+ scrubPine: 656    13     34    5      543         3
+    sponza: 3763   62     79    5      3449        3
+    teapot: 464    25     28    4      330         3
+ white_oak: 13474  23     104   5      13176       3

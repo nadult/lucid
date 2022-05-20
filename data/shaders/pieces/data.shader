@@ -75,6 +75,10 @@ struct BinCounters {
 #define BIN_BIG_BINS(idx) g_bins_counts[BIN_COUNT * 6 + (idx)]
 #define BIN_TILED_BINS(idx) g_bins_counts[BIN_COUNT * 7 + (idx)]
 
+#define BIN_WORKGROUP_COUNTS(wg_id, idx) g_bins_counts[BIN_COUNT * (8 + (wg_id)) + (idx)]
+#define BIN_WORKGROUP_ITEMS(wg_id, idx)                                                            \
+	g_bins_counts[BIN_COUNT * (8 + MAX_DISPATCHES) + (wg_id)*MAX_BIN_WORKGROUP_ITEMS + (idx)]
+
 // TODO: better explanation of stats
 struct TileCounters {
 	uint tile_dispatch_bin_counter;

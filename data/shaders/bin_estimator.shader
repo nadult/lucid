@@ -45,7 +45,7 @@ void countLargeQuadBins(uint quad_idx) {
 	// ASSERT(bex <= BIN_COUNT_X && bey <= BIN_COUNT_Y);
 
 #ifdef COMPUTE_WARP_DIVERGENCE
-	// Estimating divergence within warp
+	// Estimating divergence within warp; TODO: for 16 threads only?
 	int area = (bex - bsx + 1) * (bey - bsy + 1);
 	int avg_area = int(area);
 	uint mask = uint(ballotARB(true)), cur_bit = LIX & 31;
@@ -104,10 +104,12 @@ void computeOffsets() {
 shared int s_num_quads[2];
 shared int s_quads_offset;
 shared uint s_num_finished;
+shared int s_item_id;
 
 void main() {
 	if(LIX < 2) {
 		s_num_quads[LIX] = g_bins.num_visible_quads[LIX];
+		s_item_id = 0;
 #ifdef COMPUTE_WARP_DIVERGENCE
 		s_warp_divergence = 0;
 #endif
@@ -118,11 +120,15 @@ void main() {
 		s_counts[i] = 0;
 	barrier();
 
-	// Processing big quads
+	// Counting large quads
 	int num_quads = s_num_quads[1];
-	while(true) {
-		if(LIX == 0)
-			s_quads_offset = atomicAdd(g_bins.num_estimated_visible_quads[1], LSIZE);
+	while(s_item_id < MAX_BIN_WORKGROUP_ITEMS - 1) {
+		if(LIX == 0) {
+			int quads_offset = atomicAdd(g_bins.num_estimated_visible_quads[1], LSIZE);
+			if(quads_offset < num_quads)
+				BIN_WORKGROUP_ITEMS(WGID.x, s_item_id++) = -quads_offset - 1;
+			s_quads_offset = quads_offset;
+		}
 		barrier();
 
 		int quad_offset = s_quads_offset;
@@ -155,11 +161,15 @@ void main() {
 	}
 	barrier();
 
-	// Processing small quads
+	// Counting small quads
 	num_quads = s_num_quads[0];
-	while(true) {
-		if(LIX == 0)
-			s_quads_offset = atomicAdd(g_bins.num_estimated_visible_quads[0], LSIZE);
+	while(s_item_id < MAX_BIN_WORKGROUP_ITEMS - 1) {
+		if(LIX == 0) {
+			int quads_offset = atomicAdd(g_bins.num_estimated_visible_quads[0], LSIZE);
+			if(quads_offset < num_quads)
+				BIN_WORKGROUP_ITEMS(WGID.x, s_item_id++) = quads_offset;
+			s_quads_offset = quads_offset;
+		}
 		barrier();
 
 		int quad_offset = s_quads_offset;
@@ -172,12 +182,18 @@ void main() {
 		barrier();
 	}
 
-	// Copying bin counters to global memory buffer
-	for(uint i = LIX; i < BIN_COUNT; i += LSIZE)
-		if(s_counts[i] > 0)
-			atomicAdd(BIN_QUAD_COUNTS(i), s_counts[i]);
 	barrier();
 
+	// Copying bin counters to global memory buffer
+	for(uint i = LIX; i < BIN_COUNT; i += LSIZE) {
+		if(s_counts[i] > 0)
+			atomicAdd(BIN_QUAD_COUNTS(i), s_counts[i]);
+		BIN_WORKGROUP_COUNTS(WGID.x, i) = s_counts[i];
+	}
+	barrier();
+
+	if(LIX == 0)
+		BIN_WORKGROUP_ITEMS(WGID.x, MAX_BIN_WORKGROUP_ITEMS - 1) = s_item_id;
 #ifdef COMPUTE_WARP_DIVERGENCE
 	if(LIX == 0)
 		atomicAdd(g_bins.temp[0], s_warp_divergence >> 5);

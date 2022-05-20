@@ -25,8 +25,7 @@ shared int s_quads_offset;
 
 // Offsets have to be 32-bit...
 
-shared uint s_offsets[BIN_COUNT];
-shared uint s_counts[BIN_COUNT];
+shared int s_counts[BIN_COUNT];
 
 int getWorkItem() {
 	if(LIX == 0) {
@@ -99,7 +98,7 @@ void main() {
 		barrier();
 		for(uint i = LIX; i < BIN_COUNT; i += LSIZE)
 			if(s_counts[i] > 0)
-				s_offsets[i] = atomicAdd(BIN_QUAD_OFFSETS_TEMP(i), int(s_counts[i]));
+				s_counts[i] = atomicAdd(BIN_QUAD_OFFSETS_TEMP(i), s_counts[i]);
 		barrier();
 
 		for(uint i = 0; i < TRIS_PER_THREAD; i++) {
@@ -120,7 +119,7 @@ void main() {
 					(tile_ranges | (by < bey ? 0xc0 : 0)) & (by > bsy ? 0xf3 : 0xff);
 				for(int bx = bsx; bx <= bex; bx++) {
 					int bin_id = bx + by * BIN_COUNT_X;
-					uint quad_offset = atomicAdd(s_offsets[bin_id], 1);
+					uint quad_offset = atomicAdd(s_counts[bin_id], 1);
 					uint tile_ranges_cur =
 						(tile_ranges_cury | (bx < bex ? 0x30 : 0)) & (bx > bsx ? 0xfc : 0xff);
 					g_bin_quads[quad_offset] = (quad_idx & 0xffffff) | (tile_ranges_cur << 24);

@@ -213,3 +213,16 @@ san-miguel: 8389   958    175   737    1821        4428
     sponza: 3763   62     79    5      3449        3
     teapot: 464    25     28    4      330         3
  white_oak: 13474  23     104   5      13176       3
+
+Binowanie dla 128x128 z wyłączonymi małymi quadami:
+            total  setup  bins
+    #boxes: 126    24     25
+     bunny: 122    29     25
+conference: 323    46     40
+  hairball: 835    539    41
+powerplant: 1951   1516   45
+san-miguel: 1172   946    41
+    sponza: 596    60     43
+    teapot: 110    25     24
+ white_oak: 1365   20     47
+ -5 us z categorizera; Czyli może się opłacać zrobić najpierw fazę 128x128 tylko dla dużych trisów?

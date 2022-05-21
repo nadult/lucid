@@ -579,10 +579,10 @@ void LucidApp::drawScene() {
 
 void LucidApp::draw2D() {
 	Renderer2D renderer_2d(m_viewport, Orient2D::y_up);
-	if(m_selected_block) {
+	if(m_selected_block && m_lucid_renderer) {
 		int bsize = m_is_picking_8x8 ? 8 : 4;
-		int tsize = LucidRenderer::tile_size;
-		int bisize = LucidRenderer::bin_size;
+		int tsize = m_lucid_renderer->tileSize();
+		int bisize = m_lucid_renderer->binSize();
 
 		int2 offset = *m_selected_block;
 		IRect block_rect = IRect(0, 0, bsize + 1, bsize + 1) + offset * bsize;

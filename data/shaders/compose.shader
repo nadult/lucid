@@ -5,10 +5,6 @@ layout(std430, binding = 0) readonly buffer buf0_ { uint g_raster_image[]; };
 uniform ivec2 bin_counts;
 uniform vec2 screen_scale;
 
-// TODO: hardcoded
-#define BIN_SIZE 64
-#define BIN_SHIFT 6
-
 #ifdef VERTEX_SHADER
 
 in uint in_pos;

@@ -2,7 +2,12 @@
 
 #define LIX gl_LocalInvocationIndex
 #define LID gl_LocalInvocationID
+
+#if BIN_SIZE == 64
 #define LSIZE 128
+#else
+#define LSIZE 512
+#endif
 
 layout(local_size_x = LSIZE) in;
 

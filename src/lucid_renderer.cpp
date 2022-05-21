@@ -103,11 +103,20 @@ LucidRenderer::LucidRenderer() = default;
 FWK_MOVABLE_CLASS_IMPL(LucidRenderer)
 
 Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
+	m_bin_size = opts & Opt::bin_size_32 ? 32 : 64;
+	m_tile_size = opts & Opt::bin_size_32 ? 8 : 16;
+	m_block_size = 4;
+
+	m_blocks_per_bin = square(m_bin_size / m_block_size);
+	m_blocks_per_tile = square(m_tile_size / m_block_size);
+	m_tiles_per_bin = square(m_bin_size / m_tile_size);
+
+	m_bin_counts = (view_size + int2(m_bin_size - 1)) / m_bin_size;
+	m_bin_count = m_bin_counts.x * m_bin_counts.y;
+	m_tile_count = m_bin_count * m_tiles_per_bin;
+
 	m_opts = opts;
 	m_size = view_size;
-	m_bin_counts = (view_size + int2(bin_size - 1)) / bin_size;
-	int bin_count = m_bin_counts.x * m_bin_counts.y;
-	int tile_count = bin_count * tiles_per_bin;
 
 	// TODO: this takes a lot of memory
 	// TODO: what should we do when quads won't fit?
@@ -130,13 +139,13 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	m_tri_aabbs.emplace(BufferType::shader_storage, max_quads * sizeof(int4));
 
 	uint bin_counters_size =
-		bin_count * (max_dispatches + 8) + max_dispatches * max_bin_workgroup_items + 256;
-	uint tile_counters_size = bin_count * 16 * 4 + 256;
+		m_bin_count * (max_dispatches + 8) + max_dispatches * max_bin_workgroup_items + 256;
+	uint tile_counters_size = m_tile_count * 4 + 256;
 	m_bin_counters.emplace(BufferType::shader_storage, bin_counters_size * sizeof(u32));
 	m_tile_counters.emplace(BufferType::shader_storage, tile_counters_size * sizeof(u32));
 
-	m_block_counts.emplace(BufferType::shader_storage, tile_count * 16 * sizeof(u32));
-	m_block_offsets.emplace(BufferType::shader_storage, tile_count * 16 * sizeof(u32));
+	m_block_counts.emplace(BufferType::shader_storage, m_tile_count * 16 * sizeof(u32));
+	m_block_offsets.emplace(BufferType::shader_storage, m_tile_count * 16 * sizeof(u32));
 
 	m_bin_quads.emplace(BufferType::shader_storage, max_bin_quads * sizeof(u32));
 	m_tile_tris.emplace(BufferType::shader_storage, max_tile_tris * sizeof(u32),
@@ -148,7 +157,8 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 						 (32 * 1024) * 128 * sizeof(u32)); // TODO: control size
 	m_scratch_64.emplace(BufferType::shader_storage,
 						 (64 * 1024) * 128 * sizeof(u64)); // TODO: control size
-	m_raster_image.emplace(BufferType::shader_storage, bin_count * square(bin_size) * sizeof(u32));
+	m_raster_image.emplace(BufferType::shader_storage,
+						   m_bin_count * square(m_bin_size) * sizeof(u32));
 
 	if(m_opts & (Opt::check_bins | Opt::check_tiles | Opt::debug_masks | Opt::debug_raster))
 		m_errors.emplace(BufferType::shader_storage, 1024 * 1024 * 4, BufferUsage::dynamic_read);
@@ -156,24 +166,26 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	ShaderDefs defs;
 	defs["VIEWPORT_SIZE_X"] = view_size.x;
 	defs["VIEWPORT_SIZE_Y"] = view_size.y;
-	defs["BIN_COUNT"] = bin_count;
+	defs["BIN_COUNT"] = m_bin_count;
 	defs["BIN_COUNT_X"] = m_bin_counts.x;
 	defs["BIN_COUNT_Y"] = m_bin_counts.y;
-	defs["BIN_SIZE"] = bin_size;
-	defs["TILE_SIZE"] = tile_size;
-	defs["BLOCK_SIZE"] = block_size;
-	defs["BIN_SHIFT"] = log2(bin_size);
-	defs["TILE_SHIFT"] = log2(tile_size);
-	defs["BLOCK_SHIFT"] = log2(block_size);
+	defs["BIN_SIZE"] = m_bin_size;
+	defs["TILE_SIZE"] = m_tile_size;
+	defs["BLOCK_SIZE"] = m_block_size;
+	defs["BIN_SHIFT"] = log2(m_bin_size);
+	defs["TILE_SHIFT"] = log2(m_tile_size);
+	defs["BLOCK_SHIFT"] = log2(m_block_size);
 	defs["MAX_LSIZE"] = gl_info->max_compute_work_group_size.x;
-	defs["XTILES_PER_BIN"] = bin_size / tile_size;
-	defs["TILES_PER_BIN"] = tiles_per_bin;
-	defs["BLOCKS_PER_TILE"] = blocks_per_tile;
-	defs["BLOCKS_PER_BIN"] = blocks_per_bin;
+	defs["XTILES_PER_BIN"] = m_bin_size / m_tile_size;
+	defs["TILES_PER_BIN"] = m_tiles_per_bin;
+	defs["BLOCKS_PER_TILE"] = m_blocks_per_tile;
+	defs["BLOCKS_PER_BIN"] = m_blocks_per_bin;
 	defs["MAX_LSIZE"] = gl_info->limits[GlLimit::max_compute_work_group_invocations];
 	defs["MAX_QUADS"] = max_quads;
+
 	defs["MAX_DISPATCHES"] = max_dispatches;
 	defs["MAX_BIN_WORKGROUP_ITEMS"] = max_bin_workgroup_items;
+	defs["BINNING_LSIZE"] = m_bin_size == 64 ? 512 : 1024;
 
 	init_counters_program = EX_PASS(Program::makeCompute("init_counters", defs));
 	setup_program = EX_PASS(Program::makeCompute("setup", defs));
@@ -183,11 +195,13 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 		"bin_dispatcher", defs, mask(m_opts & Opt::check_bins, ProgramOpt::debug)));
 	bin_categorizer_program = EX_PASS(Program::makeCompute("bin_categorizer", defs));
 
-	tile_dispatcher_program = EX_PASS(Program::makeCompute(
-		"tile_dispatcher", defs, mask(m_opts & Opt::check_tiles, ProgramOpt::debug)));
-	final_raster_program = EX_PASS(Program::makeCompute("final_raster", defs));
-	mask_raster_program = EX_PASS(Program::makeCompute(
-		"mask_raster", defs, mask(m_opts & Opt::debug_masks, ProgramOpt::debug)));
+	if(m_bin_size == 64) {
+		tile_dispatcher_program = EX_PASS(Program::makeCompute(
+			"tile_dispatcher", defs, mask(m_opts & Opt::check_tiles, ProgramOpt::debug)));
+		final_raster_program = EX_PASS(Program::makeCompute("final_raster", defs));
+		mask_raster_program = EX_PASS(Program::makeCompute(
+			"mask_raster", defs, mask(m_opts & Opt::debug_masks, ProgramOpt::debug)));
+	}
 
 	if(m_opts & Opt::raster_timings)
 		defs["ENABLE_TIMINGS"] = 1;
@@ -200,25 +214,29 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 
 	raster_bin_program = EX_PASS(Program::makeCompute(
 		"raster_bin_fastest", defs, mask(m_opts & Opt::debug_raster, ProgramOpt::debug)));
-	raster_tile_program = EX_PASS(Program::makeCompute(
-		"raster_tile_fastest", defs, mask(m_opts & Opt::debug_raster, ProgramOpt::debug)));
-	raster_block_program = EX_PASS(Program::makeCompute(
-		"raster_block", defs, mask(m_opts & Opt::debug_raster, ProgramOpt::debug)));
-	//	sort_program = EX_PASS(Program::makeCompute(
-	//		"mask_sort", defs, mask(m_opts & Opt::debug_masks, ProgramOpt::debug)));
+	if(m_bin_size == 64) {
+		raster_tile_program = EX_PASS(Program::makeCompute(
+			"raster_tile_fastest", defs, mask(m_opts & Opt::debug_raster, ProgramOpt::debug)));
+		raster_block_program = EX_PASS(Program::makeCompute(
+			"raster_block", defs, mask(m_opts & Opt::debug_raster, ProgramOpt::debug)));
+	}
 	dummy_program = EX_PASS(Program::makeCompute("dummy", defs));
 
 	mkdirRecursive("temp").ignore();
 	if(auto disas = raster_bin_program.getDisassembly())
 		saveFile("temp/raster_bin.asm", *disas).ignore();
-	if(auto disas = raster_tile_program.getDisassembly())
-		saveFile("temp/raster_tile.asm", *disas).ignore();
+	if(raster_tile_program)
+		if(auto disas = raster_tile_program.getDisassembly())
+			saveFile("temp/raster_tile.asm", *disas).ignore();
 
-	compose_program = EX_PASS(Program::make("compose", "", {"in_pos"}));
+	ShaderDefs compose_defs;
+	compose_defs["BIN_SIZE"] = m_bin_size;
+	compose_defs["BIN_SHIFT"] = log2(m_bin_size);
+	compose_program = EX_PASS(Program::make("compose", compose_defs, {"in_pos"}));
 
-	vector<u16> indices(bin_count * 6);
-	DASSERT(bin_count * 4 * 4 <= 64 * 1024);
-	for(int i = 0; i < bin_count; i++) {
+	vector<u16> indices(m_bin_count * 6);
+	DASSERT(m_bin_count * 4 * 4 <= 64 * 1024);
+	for(int i = 0; i < m_bin_count; i++) {
 		int offsets[6] = {0, 1, 2, 0, 2, 3};
 		for(int j = 0; j < 6; j++) {
 			int value = offsets[j] + i * 4;
@@ -227,7 +245,7 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	}
 	auto ibuffer = GlBuffer::make(BufferType::element_array, indices);
 	m_compose_quads =
-		GlBuffer::make(BufferType::array, bin_count * 4 * sizeof(uint), ImmBufferFlags());
+		GlBuffer::make(BufferType::array, m_bin_count * 4 * sizeof(uint), ImmBufferFlags());
 
 	m_compose_quads_vao = GlVertexArray::make();
 	m_compose_quads_vao->set({m_compose_quads}, defaultVertexAttribs<uint>(), ibuffer,
@@ -255,18 +273,22 @@ void LucidRenderer::render(const Context &ctx) {
 	if(m_opts & Opt::check_bins)
 		checkBins();
 
-	computeTiles(ctx);
-	if(m_opts & Opt::check_tiles)
-		checkTiles();
+	if(m_bin_size == 64) {
+		computeTiles(ctx);
+		if(m_opts & Opt::check_tiles)
+			checkTiles();
+	}
 
 	if(false)
 		dummyIterateBins(ctx);
 
-	if(m_opts & Opt::new_raster) {
+	if(m_opts & Opt::new_raster || m_bin_size == 32) {
 		bindRaster(ctx);
 		rasterBin(ctx);
-		rasterTile(ctx);
-		rasterBlock(ctx);
+		if(m_bin_size == 64) {
+			rasterTile(ctx);
+			rasterBlock(ctx);
+		}
 	} else {
 		rasterizeMasks(ctx);
 		if(m_opts & Opt::debug_masks)
@@ -488,12 +510,11 @@ void LucidRenderer::checkBins() {
 }
 
 void LucidRenderer::checkTiles() {
-	int bin_count = m_bin_counts.x * m_bin_counts.y;
 	vector<int> tile_tri_counts;
 	{
 		auto vals = m_tile_counters->map<int>(AccessMode::read_only);
 		vals = vals.subSpan(tile_counters_offset);
-		tile_tri_counts = vals.subSpan(0, bin_count * tiles_per_bin);
+		tile_tri_counts = vals.subSpan(0, m_tile_count);
 		m_tile_counters->unmap();
 	}
 
@@ -643,19 +664,19 @@ auto LucidRenderer::computeBlockStats(int bin_id, CSpan<u32> block_instances,
 	-> BinBlockStats {
 	BinBlockStats stats;
 
-	for(int block_id = 0; block_id < blocks_per_bin; block_id++)
-		stats.num_blocktris += block_counts[bin_id * blocks_per_bin + block_id];
+	for(int block_id = 0; block_id < m_blocks_per_bin; block_id++)
+		stats.num_blocktris += block_counts[bin_id * m_blocks_per_bin + block_id];
 	if(stats.num_blocktris == 0)
 		return stats;
 
 	vector<int> unique_tris_map(65536, -1);
 
-	for(int tile_id = 0; tile_id < tiles_per_bin; tile_id++) {
+	for(int tile_id = 0; tile_id < m_tiles_per_bin; tile_id++) {
 		int tindex = bin_id * 16 + tile_id;
 		int num_blocktris = 0;
 
-		for(int block_id = 0; block_id < blocks_per_tile; block_id++) {
-			int bindex = bin_id * blocks_per_bin + tile_id * blocks_per_tile + block_id;
+		for(int block_id = 0; block_id < m_blocks_per_tile; block_id++) {
+			int bindex = bin_id * m_blocks_per_bin + tile_id * m_blocks_per_tile + block_id;
 			int offset = block_offsets[bindex];
 			int count = block_counts[bindex];
 			if(count == 0)
@@ -714,9 +735,9 @@ void LucidRenderer::analyzeMaskRasterizer() const {
 
 	vector<int> offset_coverage(num_block_tris, 0);
 	for(int bin_id = 0; bin_id < bin_count; bin_id++)
-		for(int block_id = 0; block_id < blocks_per_bin; block_id++) {
-			int offset = block_offsets[bin_id * blocks_per_bin + block_id];
-			int count = block_counts[bin_id * blocks_per_bin + block_id];
+		for(int block_id = 0; block_id < m_blocks_per_bin; block_id++) {
+			int offset = block_offsets[bin_id * m_blocks_per_bin + block_id];
+			int count = block_counts[bin_id * m_blocks_per_bin + block_id];
 			if(offset + count > num_block_tris) {
 				print("Offset out of bounds: % > %\n", offset + count, num_block_tris);
 				return;
@@ -764,8 +785,8 @@ void LucidRenderer::analyzeMaskRasterizer() const {
 		for(int x = 0; x < min(max_width, m_bin_counts.x); x++) {
 			int bin_id = x + y * m_bin_counts.x;
 			int count = 0;
-			for(int block_id = 0; block_id < blocks_per_bin; block_id++)
-				count += block_counts[bin_id * blocks_per_bin + block_id];
+			for(int block_id = 0; block_id < m_blocks_per_bin; block_id++)
+				count += block_counts[bin_id * m_blocks_per_bin + block_id];
 			printf("%6d ", count);
 		}
 		printf("\n");
@@ -832,6 +853,9 @@ vector<vector<int>> RasterTileInfo::triNeighbourMap(int max_dist) const {
 RasterTileInfo LucidRenderer::introspectTile(CSpan<float3> verts, int2 full_tile_pos) const {
 	RasterTileInfo out;
 
+	if(m_bin_size != 64)
+		return out;
+
 	PERF_GPU_SCOPE();
 	glMemoryBarrier(GL_ALL_BARRIER_BITS);
 
@@ -841,7 +865,8 @@ RasterTileInfo LucidRenderer::introspectTile(CSpan<float3> verts, int2 full_tile
 	out.tile_pos = tile_pos;
 
 	out.bin_id = bin_pos.x + bin_pos.y * m_bin_counts.x;
-	out.tile_id = out.bin_id * tiles_per_bin + tile_pos.x + tile_pos.y * (bin_size / tile_size);
+	out.tile_id =
+		out.bin_id * m_tiles_per_bin + tile_pos.x + tile_pos.y * (m_bin_size / m_tile_size);
 	int bin_count = m_bin_counts.x * m_bin_counts.y;
 
 	vector<u32> tile_tri_indices, block_tri_masks[4];
@@ -850,8 +875,9 @@ RasterTileInfo LucidRenderer::introspectTile(CSpan<float3> verts, int2 full_tile
 	vector<array<uint, 3>> tile_tri_verts;
 
 	auto tile_counters = m_tile_counters->map<u32>(AccessMode::read_only);
-	int num_tile_tris = tile_counters[32 + out.tile_id];
-	int tile_tri_offset = tile_counters[32 + bin_count * tiles_per_bin + out.tile_id];
+	int num_tile_tris = tile_counters[tile_counters_offset + out.tile_id];
+	int tile_tri_offset =
+		tile_counters[tile_counters_offset + bin_count * m_tiles_per_bin + out.tile_id];
 	m_tile_counters->unmap();
 
 	if(num_tile_tris)
@@ -883,6 +909,9 @@ RasterTileInfo LucidRenderer::introspectTile(CSpan<float3> verts, int2 full_tile
 RasterBlockInfo LucidRenderer::introspectBlock4x4(const RasterTileInfo &tile, int2 full_block_pos,
 												  bool merge_masks) const {
 	RasterBlockInfo out;
+	if(m_bin_size != 64)
+		return out;
+
 	PERF_GPU_SCOPE();
 	int2 tile_pos = full_block_pos / 4;
 	int2 bin_pos = tile_pos / 4;
@@ -893,8 +922,9 @@ RasterBlockInfo LucidRenderer::introspectBlock4x4(const RasterTileInfo &tile, in
 	out.block_pos = block_pos;
 
 	int bin_id = bin_pos.x + bin_pos.y * m_bin_counts.x;
-	int tile_id = bin_id * tiles_per_bin + tile_pos.x + tile_pos.y * (bin_size / tile_size);
-	int block_id = tile_id * blocks_per_tile + block_pos.x + block_pos.y * (tile_size / block_size);
+	int tile_id = bin_id * m_tiles_per_bin + tile_pos.x + tile_pos.y * (m_bin_size / m_tile_size);
+	int block_id =
+		tile_id * m_blocks_per_tile + block_pos.x + block_pos.y * (m_tile_size / m_block_size);
 	int bin_count = m_bin_counts.x * m_bin_counts.y;
 
 	vector<u32> masks;
@@ -1105,6 +1135,9 @@ RasterBlockInfo LucidRenderer::introspectBlock4x4(const RasterTileInfo &tile, in
 RasterBlockInfo LucidRenderer::introspectBlock8x8(const RasterTileInfo &tile,
 												  int2 full_block8x8_pos, bool merge_masks) const {
 	RasterBlockInfo out;
+	if(m_bin_size != 64)
+		return out;
+
 	PERF_GPU_SCOPE();
 	int2 tile_pos = full_block8x8_pos / 2;
 	int2 bin_pos = tile_pos / 4;
@@ -1115,11 +1148,11 @@ RasterBlockInfo LucidRenderer::introspectBlock8x8(const RasterTileInfo &tile,
 	out.block_pos = block8x8_pos;
 
 	int bin_id = bin_pos.x + bin_pos.y * m_bin_counts.x;
-	int tile_id = bin_id * tiles_per_bin + tile_pos.x + tile_pos.y * (bin_size / tile_size);
+	int tile_id = bin_id * m_tiles_per_bin + tile_pos.x + tile_pos.y * (m_bin_size / m_tile_size);
 	int block_ids[4];
 	for(int i = 0; i < 4; i++) {
 		int2 bpos = int2(block8x8_pos.x * 2 + i % 2, block8x8_pos.y * 2 + i / 2);
-		block_ids[i] = tile_id * blocks_per_tile + bpos.x + bpos.y * (tile_size / block_size);
+		block_ids[i] = tile_id * m_blocks_per_tile + bpos.x + bpos.y * (m_tile_size / m_block_size);
 	}
 	int bin_count = m_bin_counts.x * m_bin_counts.y;
 	int block_tri_counts[4], block_tri_offsets[4];
@@ -1345,17 +1378,17 @@ Image LucidRenderer::masksSnapshot() {
 	int num_block_tris = tile_counters[9];
 	int bin_count = m_bin_counts.x * m_bin_counts.y;
 
-	Image image(m_bin_counts * bin_size, ColorId::black);
+	Image image(m_bin_counts * m_bin_size, ColorId::black);
 	auto block_instances = m_block_tris->download<u32>(num_block_tris);
 	for(int bin_id = 0; bin_id < bin_count; bin_id++) {
-		int2 bin_pos = int2(bin_id % m_bin_counts.x, bin_id / m_bin_counts.x) * bin_size;
+		int2 bin_pos = int2(bin_id % m_bin_counts.x, bin_id / m_bin_counts.x) * m_bin_size;
 
-		for(int tile_id = 0; tile_id < tiles_per_bin; tile_id++) {
-			int2 tile_pos = bin_pos + int2(tile_id % 4, tile_id / 4) * tile_size;
+		for(int tile_id = 0; tile_id < m_tiles_per_bin; tile_id++) {
+			int2 tile_pos = bin_pos + int2(tile_id % 4, tile_id / 4) * m_tile_size;
 
-			for(int block_id = 0; block_id < blocks_per_tile; block_id++) {
-				int2 block_pos = tile_pos + int2(block_id % 4, block_id / 4) * block_size;
-				int bindex = bin_id * blocks_per_bin + tile_id * blocks_per_tile + block_id;
+			for(int block_id = 0; block_id < m_blocks_per_tile; block_id++) {
+				int2 block_pos = tile_pos + int2(block_id % 4, block_id / 4) * m_block_size;
+				int bindex = bin_id * m_blocks_per_bin + tile_id * m_blocks_per_tile + block_id;
 				auto offset = block_offsets[bindex];
 				int count = block_counts[bindex];
 
@@ -1584,13 +1617,13 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 	int bin_count = m_bin_counts.x * m_bin_counts.y;
 	auto bin_counters = m_old_counters.back().first->download<u32>();
 	auto tile_counters =
-		m_old_counters.back().second->download<u32>(32 + bin_count * tiles_per_bin);
+		m_old_counters.back().second->download<u32>(32 + bin_count * m_tiles_per_bin);
 
 	int num_pixels = m_size.x * m_size.y;
 	int num_tiles =
-		((m_size.x + tile_size - 1) / tile_size) * ((m_size.y + tile_size - 1) / tile_size);
-	int num_blocks =
-		((m_size.x + block_size - 1) / block_size) * ((m_size.y + block_size - 1) / block_size);
+		((m_size.x + m_tile_size - 1) / m_tile_size) * ((m_size.y + m_tile_size - 1) / m_tile_size);
+	int num_blocks = ((m_size.x + m_block_size - 1) / m_block_size) *
+					 ((m_size.y + m_block_size - 1) / m_block_size);
 
 	int num_input_quads = bin_counters[1];
 	int num_visible_quads[2] = {(int)bin_counters[23], (int)bin_counters[24]};
@@ -1604,19 +1637,26 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 
 	int num_tile_tris = 0, num_nonempty_tiles = 0, num_nonempty_bins = 0;
 	int max_quads_per_bin = 0, num_bin_quads = 0;
+
+	int num_bins[4];
+	for(int i = 0; i < arraySize(num_bins); i++)
+		num_bins[i] = bin_counters[8 + i];
+	int sum_bins = num_bins[0] + num_bins[1] + num_bins[2] + num_bins[3];
+
 	for(int b = 0; b < bin_count; b++) {
 		bool empty = true;
-		for(int t = 0; t < 16; t++) {
-			int count = tile_counters[32 + b * tiles_per_bin + t];
-			num_tile_tris += count;
-			if(count) {
-				num_nonempty_tiles++;
-				empty = false;
+		if(num_bins[2] + num_bins[3] > 0) // Otherwise tile dispatcher is not even called
+			for(int t = 0; t < m_tiles_per_bin; t++) {
+				int count = tile_counters[tile_counters_offset + b * m_tiles_per_bin + t];
+				num_tile_tris += count;
+				if(count) {
+					num_nonempty_tiles++;
+					empty = false;
+				}
 			}
-		}
 		if(!empty)
 			num_nonempty_bins++;
-		int bin_quads = bin_counters[64 + b];
+		int bin_quads = bin_counters[bin_counters_offset + b];
 		max_quads_per_bin = max(max_quads_per_bin, bin_quads);
 		num_bin_quads += bin_quads;
 	}
@@ -1636,11 +1676,6 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 		stdFormat("%d (%.2f %%)", num_rejected[0], double(num_rejected[0]) / num_input_quads * 100);
 	auto rejection_details = format("backface: %\nfrustum: %\nbetween-samples: %", num_rejected[1],
 									num_rejected[2], num_rejected[3]);
-
-	int num_bins[4];
-	for(int i = 0; i < arraySize(num_bins); i++)
-		num_bins[i] = bin_counters[8 + i];
-	int sum_bins = num_bins[0] + num_bins[1] + num_bins[2] + num_bins[3];
 
 	vector<StatsRow> timings;
 	Str timer_names[] = {"generate rows",  "generate blocks",  "load samples", "shade samples",
@@ -1691,10 +1726,10 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 		{"block-tris / non-empty tile",
 		 stdFormat("%.2f", double(num_block_tris) / num_nonempty_tiles)},
 		{"block-tris / block*",
-		 stdFormat("%.2f", double(num_block_tris) / (num_nonempty_tiles * blocks_per_tile)),
+		 stdFormat("%.2f", double(num_block_tris) / (num_nonempty_tiles * m_blocks_per_tile)),
 		 "Counting all blocks in non-empty tiles"},
 		{"block-tris / pixel*",
-		 stdFormat("%.2f", double(num_block_tris) / (num_nonempty_tiles * square(tile_size))),
+		 stdFormat("%.2f", double(num_block_tris) / (num_nonempty_tiles * square(m_tile_size))),
 		 "Counting all pixels in non-empty tiles"},
 	};
 

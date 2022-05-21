@@ -233,12 +233,17 @@ void processQuad(uint quad_id, uint v0, uint v1, uint v2, uint v3, uint local_in
 	aabb = clamp(aabb + vec4(0.49, 0.49, -0.49, -0.49), vec4(0.0),
 				 vec4(max_screen_pos, max_screen_pos));
 
+#if BIN_SIZE == 64
 	uvec4 tile_aabb = uvec4(aabb) >> TILE_SHIFT;
-
 	uint enc_aabb = ((tile_aabb[0] & 0xff) << 0) | ((tile_aabb[1] & 0xff) << 8) |
 					((tile_aabb[2] & 0xff) << 16) | ((tile_aabb[3] & 0xff) << 24);
-
 	uvec4 bin_aabb = tile_aabb >> 2;
+#else
+	uvec4 bin_aabb = uvec4(aabb) >> BIN_SHIFT;
+	uint enc_aabb = ((bin_aabb[0] & 0xff) << 0) | ((bin_aabb[1] & 0xff) << 8) |
+					((bin_aabb[2] & 0xff) << 16) | ((bin_aabb[3] & 0xff) << 24);
+#endif
+
 	uvec2 bin_size = uvec2(bin_aabb[2] - bin_aabb[0] + 1, bin_aabb[3] - bin_aabb[1] + 1);
 	int size_type_idx = bin_size.x * bin_size.y <= 3 ? 0 : 1;
 	uint out_idx = atomicAdd(s_num_visible[local_instance_id * 2 + size_type_idx], 1);
@@ -329,8 +334,7 @@ void main() {
 		if(num_finished == gl_NumWorkGroups.x - 1) {
 			groupMemoryBarrier();
 			int num_quads = g_bins.num_visible_quads[0] + g_bins.num_visible_quads[1];
-			const int dispatch_size = 512;
-			int num_dispatches = (num_quads + (dispatch_size - 1)) / dispatch_size;
+			int num_dispatches = (num_quads + (BINNING_LSIZE - 1)) / BINNING_LSIZE;
 			g_bins.num_binning_dispatches[0] = uint(clamp(num_dispatches, 4, MAX_DISPATCHES));
 			g_bins.num_binning_dispatches[1] = 1;
 			g_bins.num_binning_dispatches[2] = 1;

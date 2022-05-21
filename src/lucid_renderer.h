@@ -7,7 +7,7 @@
 // TODO: better handling of phases
 // TODO: ability to change options without recreating renderer
 DEFINE_ENUM(LucidRenderOpt, check_bins, check_tiles, debug_masks, debug_raster, new_raster,
-			raster_timings, additive_blending, visualize_errors, alpha_threshold);
+			raster_timings, additive_blending, visualize_errors, alpha_threshold, bin_size_32);
 using LucidRenderOpts = EnumFlags<LucidRenderOpt>;
 
 struct RasterBlockInfo {
@@ -39,18 +39,11 @@ class LucidRenderer {
 	using Opts = LucidRenderOpts;
 	using Context = RenderContext;
 
-	static constexpr int block_size = 4, tile_size = 16, bin_size = 64;
-	static constexpr int blocks_per_bin = square(bin_size / block_size),
-						 tiles_per_bin = square(bin_size / tile_size),
-						 blocks_per_tile = square(tile_size / block_size);
-
 	static constexpr int max_width = 2560, max_height = 2048;
 	static constexpr int max_quads = 10 * 1024 * 1024, max_verts = 12 * 1024 * 1024;
 
 	// TODO: use shared structure between C++ and shader code
 	static constexpr int bin_counters_offset = 64, tile_counters_offset = 32;
-
-	static_assert(isPowerOfTwo(bin_size));
 
 	LucidRenderer();
 	FWK_MOVABLE_CLASS(LucidRenderer)
@@ -81,6 +74,9 @@ class LucidRenderer {
 	RasterBlockInfo introspectBlock8x8(const RasterTileInfo &, int2 full_block_pos,
 									   bool merge_masks) const;
 	vector<StatsGroup> getStats() const;
+
+	int binSize() const { return m_bin_size; }
+	int tileSize() const { return m_tile_size; }
 
   private:
 	void initCounters(const Context &);
@@ -131,9 +127,15 @@ class LucidRenderer {
 	array<Pair<PBuffer>, 3> m_old_counters;
 
 	PFramebuffer m_initial_fbo;
+
+	int m_bin_size, m_tile_size, m_block_size;
+	int m_blocks_per_bin, m_blocks_per_tile, m_tiles_per_bin;
+
+	int2 m_bin_counts;
+	int m_bin_count, m_tile_count;
+
 	int2 m_size;
 	int m_num_instances = 0, m_num_quads = 0;
-	int2 m_bin_counts;
 
 	FrustumRays m_frustum_rays;
 	Matrix4 m_view_proj_matrix;

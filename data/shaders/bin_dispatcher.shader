@@ -4,7 +4,7 @@
 #define LIX gl_LocalInvocationIndex
 #define WGID gl_WorkGroupID
 
-#define LSIZE 512
+#define LSIZE BINNING_LSIZE
 
 layout(local_size_x = LSIZE) in;
 layout(std430, binding = 0) buffer buf0_ { uint g_quad_aabbs[]; };
@@ -66,6 +66,7 @@ void main() {
 			quad_idx = (MAX_QUADS - 1) - quad_idx;
 
 		uint aabb = g_quad_aabbs[quad_idx];
+#if BIN_SIZE == 64
 		int tsx = int(aabb & 0xff), tsy = int((aabb >> 8) & 0xff);
 		int tex = int((aabb >> 16) & 0xff), tey = int((aabb >> 24));
 		int bsx = tsx >> 2, bsy = tsy >> 2;
@@ -73,16 +74,26 @@ void main() {
 		// Encodes tile ranges within a single bin
 		uint tile_ranges =
 			(tsx & 0x3) | ((tsy & 0x3) << 2) | ((tex & 0x3) << 4) | ((tey & 0x3) << 6);
+#else
+		int bsx = int(aabb & 0xff), bsy = int((aabb >> 8) & 0xff);
+		int bex = int((aabb >> 16) & 0xff), bey = int((aabb >> 24));
+#endif
 
 		for(int by = bsy; by <= bey; by++) {
+#if BIN_SIZE == 64
 			uint tile_ranges_cury =
 				(tile_ranges | (by < bey ? 0xc0 : 0)) & (by > bsy ? 0xf3 : 0xff);
+#endif
 			for(int bx = bsx; bx <= bex; bx++) {
 				int bin_id = bx + by * BIN_COUNT_X;
 				uint quad_offset = atomicAdd(s_offsets[bin_id], 1);
+#if BIN_SIZE == 64
 				uint tile_ranges_cur =
 					(tile_ranges_cury | (bx < bex ? 0x30 : 0)) & (bx > bsx ? 0xfc : 0xff);
 				g_bin_quads[quad_offset] = (quad_idx & 0xffffff) | (tile_ranges_cur << 24);
+#else
+				g_bin_quads[quad_offset] = quad_idx;
+#endif
 			}
 		}
 	}

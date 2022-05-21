@@ -6,7 +6,7 @@
 #define LIX gl_LocalInvocationIndex
 #define WGID gl_WorkGroupID
 
-#define LSIZE 512
+#define LSIZE BINNING_LSIZE
 
 layout(local_size_x = LSIZE) in;
 layout(std430, binding = 0) buffer buf0_ { uint g_quad_aabbs[]; };
@@ -20,10 +20,15 @@ shared int s_warp_divergence;
 
 void countSmallQuadBins(uint quad_idx) {
 	uint aabb = g_quad_aabbs[quad_idx];
+#if BIN_SIZE == 64
 	int tsx = int(aabb & 0xff), tsy = int((aabb >> 8) & 0xff);
 	int tex = int((aabb >> 16) & 0xff), tey = int((aabb >> 24));
 	int bsx = tsx >> 2, bsy = tsy >> 2;
 	int bex = tex >> 2, bey = tey >> 2;
+#else
+	int bsx = int(aabb & 0xff), bsy = int((aabb >> 8) & 0xff);
+	int bex = int((aabb >> 16) & 0xff), bey = int((aabb >> 24));
+#endif
 
 	// Handling only tris with bin area 1 to 3:
 	atomicAdd(s_counts[bsy * BIN_COUNT_X + bsx], 1);
@@ -36,13 +41,15 @@ void countSmallQuadBins(uint quad_idx) {
 
 void countLargeQuadBins(uint quad_idx) {
 	uint aabb = g_quad_aabbs[quad_idx];
+#if BIN_SIZE == 64
 	int tsx = int(aabb & 0xff), tsy = int((aabb >> 8) & 0xff);
 	int tex = int((aabb >> 16) & 0xff), tey = int((aabb >> 24));
-
 	int bsx = tsx >> 2, bsy = tsy >> 2;
 	int bex = tex >> 2, bey = tey >> 2;
-	// ASSERT(bsx >= 0 && bsy >= 0);
-	// ASSERT(bex <= BIN_COUNT_X && bey <= BIN_COUNT_Y);
+#else
+	int bsx = int(aabb & 0xff), bsy = int((aabb >> 8) & 0xff);
+	int bex = int((aabb >> 16) & 0xff), bey = int((aabb >> 24));
+#endif
 
 #ifdef COMPUTE_WARP_DIVERGENCE
 	// Estimating divergence within warp; TODO: for 16 threads only?

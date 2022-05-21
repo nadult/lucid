@@ -12,7 +12,7 @@
 layout(local_size_x = LSIZE) in;
 
 BIN_COUNTERS_BUFFER(1);
-layout(std430, binding = 2) buffer buf2_ { uint g_bin_quads[]; };
+layout(std430, binding = 2) buffer buf2_ { uint g_compose_quads[]; };
 
 shared int s_num_empty_bins, s_num_small_bins, s_num_medium_bins;
 shared int s_num_big_bins, s_num_tiled_bins;
@@ -56,10 +56,10 @@ void main() {
 
 		uint bin_id = i << 16;
 		uint mask = num_tris == 0 ? 0 : 0xffffffff;
-		g_bin_quads[i * 4 + 0] = mask & (bin_id);
-		g_bin_quads[i * 4 + 1] = mask & (bin_id + (BIN_SIZE << 8));
-		g_bin_quads[i * 4 + 2] = mask & (bin_id + BIN_SIZE + (BIN_SIZE << 8));
-		g_bin_quads[i * 4 + 3] = mask & (bin_id + BIN_SIZE);
+		g_compose_quads[i * 4 + 0] = mask & (bin_id);
+		g_compose_quads[i * 4 + 1] = mask & (bin_id + (BIN_SIZE << 8));
+		g_compose_quads[i * 4 + 2] = mask & (bin_id + BIN_SIZE + (BIN_SIZE << 8));
+		g_compose_quads[i * 4 + 3] = mask & (bin_id + BIN_SIZE);
 	}
 
 	barrier();

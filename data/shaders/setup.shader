@@ -20,8 +20,8 @@ layout(std430, binding = 0) readonly restrict buffer buf0_ { uint g_input_indice
 layout(std430, binding = 1) readonly restrict buffer buf1_ { InstanceData g_instances[]; };
 layout(std430, binding = 2) readonly restrict buffer buf2_ { float g_input_verts[]; };
 
-layout(std430, binding = 3) buffer buf4_ { BinCounters g_bins; };
-layout(std430, binding = 4) buffer buf3_ { uint g_quad_indices[]; };
+BIN_COUNTERS_BUFFER(3);
+layout(std430, binding = 4) buffer buf4_ { uint g_quad_indices[]; };
 layout(std430, binding = 5) buffer buf5_ { uint g_quad_aabbs[]; };
 layout(std430, binding = 6) buffer buf6_ { uvec4 g_tri_aabbs[]; };
 

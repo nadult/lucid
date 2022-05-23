@@ -103,6 +103,7 @@ LucidRenderer::LucidRenderer() = default;
 FWK_MOVABLE_CLASS_IMPL(LucidRenderer)
 
 Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
+	m_large_bin_size = 128;
 	m_bin_size = opts & Opt::bin_size_32 ? 32 : 64;
 	m_tile_size = opts & Opt::bin_size_32 ? 8 : 16;
 	m_block_size = 4;
@@ -111,6 +112,7 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	m_blocks_per_tile = square(m_tile_size / m_block_size);
 	m_tiles_per_bin = square(m_bin_size / m_tile_size);
 
+	m_large_bin_counts = (view_size + int2(m_large_bin_size - 1)) / m_large_bin_size;
 	m_bin_counts = (view_size + int2(m_bin_size - 1)) / m_bin_size;
 	m_bin_count = m_bin_counts.x * m_bin_counts.y;
 	m_tile_count = m_bin_count * m_tiles_per_bin;
@@ -139,7 +141,7 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	m_tri_aabbs.emplace(BufferType::shader_storage, max_quads * sizeof(int4));
 
 	uint bin_counters_size =
-		m_bin_count * (max_dispatches + 8) + max_dispatches * max_bin_workgroup_items + 256;
+		m_bin_count * (max_dispatches + 10) + max_dispatches * max_bin_workgroup_items + 256;
 	uint tile_counters_size = m_tile_count * 4 + 256;
 	m_bin_counters.emplace(BufferType::shader_storage, bin_counters_size * sizeof(u32));
 	m_tile_counters.emplace(BufferType::shader_storage, tile_counters_size * sizeof(u32));
@@ -166,12 +168,17 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	ShaderDefs defs;
 	defs["VIEWPORT_SIZE_X"] = view_size.x;
 	defs["VIEWPORT_SIZE_Y"] = view_size.y;
+	defs["LARGE_BIN_COUNT"] = m_large_bin_counts.x * m_large_bin_counts.y;
+	defs["LARGE_BIN_COUNT_X"] = m_large_bin_counts.x;
+	defs["LARGE_BIN_COUNT_Y"] = m_large_bin_counts.y;
 	defs["BIN_COUNT"] = m_bin_count;
 	defs["BIN_COUNT_X"] = m_bin_counts.x;
 	defs["BIN_COUNT_Y"] = m_bin_counts.y;
+	defs["LARGE_BIN_SIZE"] = m_large_bin_size;
 	defs["BIN_SIZE"] = m_bin_size;
 	defs["TILE_SIZE"] = m_tile_size;
 	defs["BLOCK_SIZE"] = m_block_size;
+	defs["LARGE_BIN_SHIFT"] = log2(m_large_bin_size);
 	defs["BIN_SHIFT"] = log2(m_bin_size);
 	defs["TILE_SHIFT"] = log2(m_tile_size);
 	defs["BLOCK_SHIFT"] = log2(m_block_size);

@@ -9,9 +9,7 @@ struct InstanceData {
 };
 
 struct BinCounters {
-	int num_binned_quads; // TODO: remove
 	int num_input_quads;
-	int num_estimated_quads;
 	int num_verts;
 
 	uint num_rejected_quads[4];
@@ -22,9 +20,6 @@ struct BinCounters {
 	int num_big_bins;
 	int num_tiled_bins;
 
-	uint empty_bin_counter;
-	uint small_bin_counter;
-
 	uint timings[8];
 
 	int num_visible_quads[2]; // TODO: move
@@ -34,11 +29,16 @@ struct BinCounters {
 	int num_finished_setup_groups;
 	int num_finished_bin_groups;
 
-	uint num_binning_dispatches[3]; // 31
-	uint num_tiling_dispatches[3]; // 34
-	uint num_bin_raster_dispatches[3]; // 37
-	uint num_tile_raster_dispatches[3]; // 40
-	uint num_block_raster_dispatches[3]; // 43
+	// Atomics
+	uint a_small_bins;
+	int a_dispatcher_processed_quads[2];
+	int a_dispatcher_active_thread_groups;
+
+	uint num_binning_dispatches[3];
+	uint num_tiling_dispatches[3];
+	uint num_bin_raster_dispatches[3];
+	uint num_tile_raster_dispatches[3];
+	uint num_block_raster_dispatches[3];
 
 	int temp[18];
 };

@@ -1023,7 +1023,7 @@ void rasterBin(int bin_id) {
 
 int loadNextBin() {
 	if(LIX == 0) {
-		uint bin_idx = atomicAdd(g_bins.small_bin_counter, 1);
+		uint bin_idx = atomicAdd(g_bins.a_small_bins, 1);
 		s_bin_id = bin_idx < s_num_bins ? BIN_SMALL_BINS(bin_idx) : -1;
 		s_bin_raster_offset = s_bin_id << (BIN_SHIFT * 2);
 	}

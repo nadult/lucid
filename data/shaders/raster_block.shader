@@ -1,4 +1,4 @@
-// $$include funcs lighting frustum viewport data
+// $$include funcs lighting frustum viewport declarations
 // clang-format off
 
 #define LIX gl_LocalInvocationIndex

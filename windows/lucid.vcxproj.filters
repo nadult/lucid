@@ -103,6 +103,9 @@
     <ClInclude Include="..\src\wavefront_obj.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="..\src\shader_structs.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <None Include="..\notes.wiki" />
@@ -145,9 +148,6 @@
     <None Include="..\data\shaders\tile_dispatcher.shader">
       <Filter>shaders</Filter>
     </None>
-    <None Include="..\data\shaders\pieces\data.shader">
-      <Filter>shaders\pieces</Filter>
-    </None>
     <None Include="..\data\shaders\pieces\frustum.shader">
       <Filter>shaders\pieces</Filter>
     </None>
@@ -169,22 +169,16 @@
     <None Include="..\data\shaders\raster_bin_fastest.shader">
       <Filter>shaders</Filter>
     </None>
-    <None Include="..\data\shaders\raster_bin_mixed.shader">
-      <Filter>shaders</Filter>
-    </None>
-    <None Include="..\data\shaders\raster_bin_reduction_samples.shader">
-      <Filter>shaders</Filter>
-    </None>
-    <None Include="..\data\shaders\raster_bin_handling_collisions.shader">
-      <Filter>shaders</Filter>
-    </None>
-    <None Include="..\data\shaders\raster_bin_16x16.shader">
-      <Filter>shaders</Filter>
-    </None>
     <None Include="..\data\shaders\raster_tile_fastest.shader">
       <Filter>shaders</Filter>
     </None>
     <None Include="..\data\shaders\pieces\raster.shader">
+      <Filter>shaders\pieces</Filter>
+    </None>
+    <None Include="..\data\shaders\pieces\structures.shader">
+      <Filter>shaders\pieces</Filter>
+    </None>
+    <None Include="..\data\shaders\pieces\declarations.shader">
       <Filter>shaders\pieces</Filter>
     </None>
   </ItemGroup>

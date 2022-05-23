@@ -1,6 +1,7 @@
 #include "lucid_renderer.h"
 
 #include "scene.h"
+#include "shader_structs.h"
 #include "shading.h"
 #include <fwk/gfx/camera.h>
 #include <fwk/gfx/draw_call.h>
@@ -140,9 +141,9 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	m_quad_aabbs.emplace(BufferType::shader_storage, max_quads * sizeof(u32));
 	m_tri_aabbs.emplace(BufferType::shader_storage, max_quads * sizeof(int4));
 
-	uint bin_counters_size =
-		m_bin_count * (max_dispatches + 10) + max_dispatches * max_bin_workgroup_items + 256;
-	uint tile_counters_size = m_tile_count * 4 + 256;
+	uint bin_counters_size = BIN_COUNTERS_SIZE + m_bin_count * (max_dispatches + 10) +
+							 max_dispatches * max_bin_workgroup_items;
+	uint tile_counters_size = TILE_COUNTERS_SIZE + m_tile_count * 4;
 	m_bin_counters.emplace(BufferType::shader_storage, bin_counters_size * sizeof(u32));
 	m_tile_counters.emplace(BufferType::shader_storage, tile_counters_size * sizeof(u32));
 
@@ -335,6 +336,7 @@ void LucidRenderer::initCounters(const Context &ctx) {
 void LucidRenderer::uploadInstances(const Context &ctx) {
 	PERF_GPU_SCOPE();
 
+	using InstanceData = shader::InstanceData;
 	vector<InstanceData> instances;
 	instances.reserve(32 * 1024);
 	vector<float4> uv_rects;
@@ -357,7 +359,7 @@ void LucidRenderer::uploadInstances(const Context &ctx) {
 		out.vertex_offset = 0;
 		out.num_quads = num_quads;
 		out.flags = (uint(dc.opts.bits) & 0xffff);
-		out.color = mat_colors[dc.material_id];
+		out.color = u32(mat_colors[dc.material_id]);
 		out.temp = 0;
 		float4 uv_rect(dc.uv_rect.x(), dc.uv_rect.y(), dc.uv_rect.width(), dc.uv_rect.height());
 		m_num_quads += dc.num_quads;
@@ -424,7 +426,7 @@ void LucidRenderer::computeBins(const Context &ctx) {
 		shaderDebugUseBuffer(m_errors);
 
 	PERF_CHILD_SCOPE("estimator phase");
-	dispatchIndirect(31);
+	dispatchIndirect(BIN_COUNTERS_MEMBER_OFFSET(num_binning_dispatches));
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 
 	PERF_SIBLING_SCOPE("dispatcher phase");
@@ -434,7 +436,7 @@ void LucidRenderer::computeBins(const Context &ctx) {
 	bin_dispatcher_program.use();
 	if(m_opts & Opt::check_bins)
 		shaderDebugUseBuffer(m_errors);
-	dispatchIndirect(31);
+	dispatchIndirect(BIN_COUNTERS_MEMBER_OFFSET(num_binning_dispatches));
 
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 
@@ -463,7 +465,7 @@ void LucidRenderer::computeTiles(const Context &ctx) {
 	tile_dispatcher_program.setFrustum(ctx.camera);
 	if(m_opts & Opt::check_tiles)
 		shaderDebugUseBuffer(m_errors);
-	dispatchIndirect(34);
+	dispatchIndirect(BIN_COUNTERS_MEMBER_OFFSET(num_tiling_dispatches));
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 }
 
@@ -476,7 +478,7 @@ void LucidRenderer::checkBins() {
 		auto vals = m_bin_counters->map<int>(AccessMode::read_only);
 		num_input_quads = vals[1];
 		num_binned_quads = vals[2];
-		vals = vals.subSpan(bin_counters_offset);
+		vals = vals.subSpan(BIN_COUNTERS_SIZE);
 		bin_quad_counts = vals.subSpan(bin_count * 0, bin_count * 1);
 		bin_quad_offsets = vals.subSpan(bin_count * 1, bin_count * 2);
 		bin_quad_offsets2 = vals.subSpan(bin_count * 2, bin_count * 3);
@@ -520,7 +522,7 @@ void LucidRenderer::checkTiles() {
 	vector<int> tile_tri_counts;
 	{
 		auto vals = m_tile_counters->map<int>(AccessMode::read_only);
-		vals = vals.subSpan(tile_counters_offset);
+		vals = vals.subSpan(TILE_COUNTERS_SIZE);
 		tile_tri_counts = vals.subSpan(0, m_tile_count);
 		m_tile_counters->unmap();
 	}
@@ -866,9 +868,9 @@ RasterTileInfo LucidRenderer::introspectTile(CSpan<float3> verts, int2 full_tile
 
 	auto tile_counters = m_tile_counters->map<u32>(AccessMode::read_only);
 	// TODO: this is only computed properly when running old mode
-	int num_tile_tris = tile_counters[tile_counters_offset + out.tile_id];
+	int num_tile_tris = tile_counters[TILE_COUNTERS_SIZE + out.tile_id];
 	int tile_tri_offset =
-		tile_counters[tile_counters_offset + bin_count * m_tiles_per_bin + out.tile_id];
+		tile_counters[TILE_COUNTERS_SIZE + bin_count * m_tiles_per_bin + out.tile_id];
 	m_tile_counters->unmap();
 
 	if(num_tile_tris)
@@ -1439,7 +1441,7 @@ void LucidRenderer::rasterBlock(const Context &ctx) {
 	raster_block_program.setShadows(ctx.shadows.matrix, ctx.shadows.enable);
 	ctx.lighting.setUniforms(raster_block_program.glProgram());
 
-	dispatchIndirect(43);
+	dispatchIndirect(BIN_COUNTERS_MEMBER_OFFSET(num_block_raster_dispatches));
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 }
 
@@ -1466,7 +1468,7 @@ void LucidRenderer::rasterTile(const Context &ctx) {
 	// - Inny debugger dla compute i inny dla pozostałych shaderów
 	// - możliwość przekazywania konkretnych wartości (np. 4 różne wartości?)
 	// - jakaś klasa do prostej introspekcji linii kodu programu
-	dispatchIndirect(40);
+	dispatchIndirect(BIN_COUNTERS_MEMBER_OFFSET(num_tile_raster_dispatches));
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 
 	if(m_opts & Opt::debug_raster) {
@@ -1500,7 +1502,7 @@ void LucidRenderer::rasterBin(const Context &ctx) {
 	if(m_opts & Opt::debug_raster)
 		shaderDebugUseBuffer(m_errors);
 
-	dispatchIndirect(37);
+	dispatchIndirect(BIN_COUNTERS_MEMBER_OFFSET(num_bin_raster_dispatches));
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 	m_tile_tris->bindIndex(8);
 
@@ -1587,10 +1589,11 @@ void LucidRenderer::copyCounters() {
 		m_old_counters[i] = m_old_counters[i - 1];
 	m_old_counters[0] = last;
 
-	uint bin_base_size = m_bin_counts.x * m_bin_counts.y + 256;
+	uint bin_counters_size = (BIN_COUNTERS_SIZE + m_bin_count) * sizeof(u32);
+	uint tile_counters_size = (TILE_COUNTERS_SIZE + m_tile_count) * sizeof(u32);
 	if(!m_old_counters[0].first) {
-		m_old_counters[0].first.emplace(BufferType::copy_read, bin_base_size * sizeof(u32));
-		m_old_counters[0].second.emplace(BufferType::copy_read, m_tile_counters->size());
+		m_old_counters[0].first.emplace(BufferType::copy_read, bin_counters_size);
+		m_old_counters[0].second.emplace(BufferType::copy_read, tile_counters_size);
 	}
 
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
@@ -1607,8 +1610,15 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 	// TODO: double/triple buffering to avoid stall
 	int bin_count = m_bin_counts.x * m_bin_counts.y;
 	auto bin_counters = m_old_counters.back().first->download<u32>();
-	auto tile_counters = m_old_counters.back().second->download<u32>(tile_counters_offset +
-																	 bin_count * m_tiles_per_bin);
+	auto tile_counters = m_old_counters.back().second->download<u32>();
+
+	shader::BinCounters bins;
+	shader::TileCounters tiles;
+	memcpy(&bins, bin_counters.data(), sizeof(bins));
+	memcpy(&tiles, tile_counters.data(), sizeof(tiles));
+
+	bin_counters.erase(bin_counters.begin(), bin_counters.begin() + BIN_COUNTERS_SIZE);
+	tile_counters.erase(tile_counters.begin(), tile_counters.begin() + TILE_COUNTERS_SIZE);
 
 	int num_pixels = m_size.x * m_size.y;
 	int num_tiles =
@@ -1616,30 +1626,18 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 	int num_blocks = ((m_size.x + m_block_size - 1) / m_block_size) *
 					 ((m_size.y + m_block_size - 1) / m_block_size);
 
-	int num_input_quads = bin_counters[1];
-	int num_visible_quads[2] = {(int)bin_counters[23], (int)bin_counters[24]};
-	int num_invalid_pixels = tile_counters[10];
-	int num_invalid_blocks = tile_counters[11];
-	int num_invalid_tiles = tile_counters[12];
-
-	int tile_tris_estimate = tile_counters[8];
-	int num_block_tris = tile_counters[9];
-	int num_block_rows = tile_counters[14];
-
 	int num_tile_tris = 0, num_nonempty_tiles = 0, num_nonempty_bins = 0;
 	int max_quads_per_bin = 0, num_bin_quads = 0;
 
-	int num_bins[4];
-	for(int i = 0; i < arraySize(num_bins); i++)
-		num_bins[i] = bin_counters[8 + i];
-	int sum_bins = num_bins[0] + num_bins[1] + num_bins[2] + num_bins[3];
-	bool is_tile_dispatcher_running = num_bins[2] + num_bins[3] > 0 && !(m_opts & Opt::bin_size_32);
+	int sum_bins =
+		bins.num_empty_bins + bins.num_small_bins + bins.num_medium_bins + bins.num_big_bins;
+	bool is_tile_dispatcher_running = bins.num_tiled_bins > 0 && !(m_opts & Opt::bin_size_32);
 
 	for(int b = 0; b < bin_count; b++) {
 		bool empty = true;
 		if(is_tile_dispatcher_running)
 			for(int t = 0; t < m_tiles_per_bin; t++) {
-				int count = tile_counters[tile_counters_offset + b * m_tiles_per_bin + t];
+				int count = tile_counters[b * m_tiles_per_bin + t];
 				num_tile_tris += count;
 				if(count) {
 					num_nonempty_tiles++;
@@ -1648,65 +1646,70 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 			}
 		if(!empty)
 			num_nonempty_bins++;
-		int bin_quads = bin_counters[bin_counters_offset + b];
+		int bin_quads = bin_counters[b];
 		max_quads_per_bin = max(max_quads_per_bin, bin_quads);
 		num_bin_quads += bin_quads;
 	}
 
-	int num_rejected[4];
-	for(int i = 0; i < arraySize(num_rejected); i++)
-		num_rejected[i] = bin_counters[4 + i];
-	num_rejected[0] += num_rejected[1] + num_rejected[2] + num_rejected[3];
-
-	int visible_sum = num_visible_quads[0] + num_visible_quads[1];
-	auto visible_info =
-		stdFormat("%d (%.2f %%)", visible_sum, double(visible_sum) / num_input_quads * 100);
+	int num_visible_total = bins.num_visible_quads[0] + bins.num_visible_quads[1];
+	auto visible_info = stdFormat("%d (%.2f %%)", num_visible_total,
+								  double(num_visible_total) / bins.num_input_quads * 100);
 	auto visible_details =
-		stdFormat("%d small; %d big", num_visible_quads[0], num_visible_quads[1]);
+		stdFormat("%d small; %d big", bins.num_visible_quads[0], bins.num_visible_quads[1]);
 
-	auto rejected_info =
-		stdFormat("%d (%.2f %%)", num_rejected[0], double(num_rejected[0]) / num_input_quads * 100);
-	auto rejection_details = format("backface: %\nfrustum: %\nbetween-samples: %", num_rejected[1],
-									num_rejected[2], num_rejected[3]);
+	bins.num_rejected_quads[0] +=
+		bins.num_rejected_quads[1] + bins.num_rejected_quads[2] + bins.num_rejected_quads[3];
+	auto rejected_info = stdFormat("%d (%.2f %%)", bins.num_rejected_quads[0],
+								   double(bins.num_rejected_quads[0]) / bins.num_input_quads * 100);
+	auto rejection_details =
+		format("backface: %\nfrustum: %\nbetween-samples: %", bins.num_rejected_quads[1],
+			   bins.num_rejected_quads[2], bins.num_rejected_quads[3]);
 
 	vector<StatsRow> timings;
 	Str timer_names[] = {"generate rows",  "generate blocks",  "load samples", "shade samples",
 						 "reduce samples", "shade and reduce", "finish reduce"};
-	u64 total = 0;
+
+	u64 total_time = 0;
 	for(int i : intRange(timer_names))
-		total += bin_counters[15 + i];
-	if(total)
+		total_time += bins.timings[i];
+	if(total_time > 0)
 		for(int i : intRange(timer_names)) {
-			auto value = bin_counters[15 + i];
+			auto value = bins.timings[i];
 			if(value == 0)
 				continue;
-			timings.emplace_back(timer_names[i], stdFormat("%.2f %%", double(value) / total * 100));
+			timings.emplace_back(timer_names[i],
+								 stdFormat("%.2f %%", double(value) / total_time * 100));
 		}
 
+	auto format_percentage = [](int value, int total) {
+		return stdFormat("%d (%.0f %%)", value, value * 100.0 / total);
+	};
+
 	vector<StatsRow> bin_rows = {
-		{"empty bins", stdFormat("%d (%.0f %%)", num_bins[0], num_bins[0] * 100.0 / sum_bins)},
-		{"small bins", stdFormat("%d (%.0f %%)", num_bins[1], num_bins[1] * 100.0 / sum_bins)},
-		{"medium bins", stdFormat("%d (%.0f %%)", num_bins[2], num_bins[2] * 100.0 / sum_bins)},
-		{"big bins", stdFormat("%d (%.0f %%)", num_bins[3], num_bins[3] * 100.0 / sum_bins)},
+		{"empty bins", format_percentage(bins.num_empty_bins, sum_bins)},
+		{"small bins", format_percentage(bins.num_small_bins, sum_bins)},
+		{"medium bins", format_percentage(bins.num_medium_bins, sum_bins)},
+		{"big bins", format_percentage(bins.num_big_bins, sum_bins)},
 	};
 
 	vector<StatsRow> basic_rows = {
 		{"input instances", toString(m_num_instances)},
-		{"input quads", toString(num_input_quads)},
+		{"input quads", toString(bins.num_input_quads)},
 		{"visible quads", visible_info, visible_details},
 		{"rejected quads", rejected_info, rejection_details},
 		{"bin-quads", toString(num_bin_quads), "Per-bin quads"},
 		{"tile-tris", toString(num_tile_tris), "Per-tile triangles"},
-		{"estimated tile-tris", toString(tile_tris_estimate),
+		{"estimated tile-tris", toString(tiles.num_tile_tris),
 		 "Estimating space needed for tile-tris is inaccurate"},
 		{"empty tile-tris",
-		 stdFormat("%d (%.2f %%)", tile_counters[13],
-				   double(tile_counters[13]) / num_tile_tris * 100.0),
+		 stdFormat("%d (%.2f %%)", tiles.num_tile_tris_with_no_blocks,
+				   double(tiles.num_tile_tris_with_no_blocks) / num_tile_tris * 100.0),
 		 "Per-tile triangles which generate no samples"},
-		{"row-tris", toString(num_block_rows), "Block rows generated for each per-tile triangle"},
-		{"block-tris", toString(num_block_tris),
+		{"row-tris", toString(tiles.num_processed_block_rows),
+		 "Block rows generated for each per-tile triangle"},
+		{"block-tris", toString(tiles.num_block_tris),
 		 "Per-block triangle instances with at least 1 sample"},
-		{"fragments", toString(tile_counters[19])},
+		{"fragments", toString(tiles.num_fragments)},
 	};
 
 	vector<StatsRow> avg_rows = {
@@ -1714,34 +1717,35 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 		{"tile-tris / non-empty tile",
 		 stdFormat("%.2f", double(num_tile_tris) / num_nonempty_tiles)},
 		{"row-tris / non-empty tile",
-		 stdFormat("%.2f", double(num_block_rows) / num_nonempty_tiles)},
+		 stdFormat("%.2f", double(tiles.num_processed_block_rows) / num_nonempty_tiles)},
 		{"block-tris / non-empty tile",
-		 stdFormat("%.2f", double(num_block_tris) / num_nonempty_tiles)},
+		 stdFormat("%.2f", double(tiles.num_block_tris) / num_nonempty_tiles)},
 		{"block-tris / block*",
-		 stdFormat("%.2f", double(num_block_tris) / (num_nonempty_tiles * m_blocks_per_tile)),
+		 stdFormat("%.2f", double(tiles.num_block_tris) / (num_nonempty_tiles * m_blocks_per_tile)),
 		 "Counting all blocks in non-empty tiles"},
 		{"block-tris / pixel*",
-		 stdFormat("%.2f", double(num_block_tris) / (num_nonempty_tiles * square(m_tile_size))),
+		 stdFormat("%.2f",
+				   double(tiles.num_block_tris) / (num_nonempty_tiles * square(m_tile_size))),
 		 "Counting all pixels in non-empty tiles"},
 	};
 
 	vector<StatsRow> max_rows = {
 		{"max quads / bin", toString(max_quads_per_bin)},
-		{"max tile-tris / tile", toString(tile_counters[16])},
-		{"max row-tris / tile", toString(tile_counters[17])},
-		{"max block-tris / tile", toString(tile_counters[18])},
-		{"max block-tris / block", toString(tile_counters[15])},
-		{"max fragments / tile", toString(tile_counters[20])},
-		{"max fragments / pixel", toString(tile_counters[21])},
+		{"max tile-tris / tile", toString(tiles.max_tris_per_tile)},
+		{"max row-tris / tile", toString(tiles.max_row_tris_per_tile)},
+		{"max block-tris / tile", toString(tiles.max_block_tris_per_tile)},
+		{"max block-tris / block", toString(tiles.max_tris_per_block)},
+		{"max fragments / tile", toString(tiles.max_fragments_per_tile)},
+		{"max fragments / pixel", toString(tiles.max_fragments_per_pixel)},
 	};
 
 	vector<StatsRow> invalid_rows = {
-		{"invalid pixels", stdFormat("%d (%.3f %%)", num_invalid_pixels,
-									 float(num_invalid_pixels) / num_pixels * 100.0)},
-		{"invalid blocks", stdFormat("%d (%.3f %%)", num_invalid_blocks,
-									 float(num_invalid_blocks) / num_blocks * 100.0)},
-		{"invalid tiles", stdFormat("%d (%.3f %%)", num_invalid_tiles,
-									float(num_invalid_tiles) / num_tiles * 100.0)},
+		{"invalid pixels", stdFormat("%d (%.3f %%)", tiles.num_invalid_pixels,
+									 float(tiles.num_invalid_pixels) / num_pixels * 100.0)},
+		{"invalid blocks", stdFormat("%d (%.3f %%)", tiles.num_invalid_blocks,
+									 float(tiles.num_invalid_blocks) / num_blocks * 100.0)},
+		{"invalid tiles", stdFormat("%d (%.3f %%)", tiles.num_invalid_tiles,
+									float(tiles.num_invalid_tiles) / num_tiles * 100.0)},
 	};
 
 	if(timings)

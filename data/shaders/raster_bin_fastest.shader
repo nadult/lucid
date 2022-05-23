@@ -1,4 +1,4 @@
-// $$include funcs lighting frustum viewport data raster
+// $$include funcs lighting frustum viewport declarations raster
 
 // TODO: add synthetic test: 256 planes one after another
 // TODO: cleanup in the beginning (group definitions)

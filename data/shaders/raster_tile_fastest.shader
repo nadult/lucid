@@ -1,4 +1,4 @@
-// $$include funcs lighting frustum viewport data raster
+// $$include funcs lighting frustum viewport declarations raster
 
 // In this rasterizer we're processing half-blocks (8x4); We have 8 hblocks in a tile
 

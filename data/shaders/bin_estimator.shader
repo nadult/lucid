@@ -1,4 +1,4 @@
-// $$include data funcs
+// $$include funcs declarations
 
 // TODO: don't run too many groups if we have small amount of data (indirect dispatch)
 
@@ -249,7 +249,6 @@ void main() {
 	if(LIX == 0)
 		atomicAdd(g_bins.temp[0], s_warp_divergence >> 5);
 #endif
-	// TODO: kill redundant work groups earlier
 	if(LIX == 0)
 		s_num_finished = atomicAdd(g_bins.num_finished_bin_groups, 1);
 	barrier();

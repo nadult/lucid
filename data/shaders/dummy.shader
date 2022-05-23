@@ -1,4 +1,4 @@
-// $$include funcs data
+// $$include funcs declarations
 
 // This program isn't doing anything useful
 // It can be used for measuring performance of simple constructs

@@ -1,4 +1,4 @@
-// $$include funcs data frustum
+// $$include funcs frustum declarations
 
 // ~80% of time goes to data loading
 

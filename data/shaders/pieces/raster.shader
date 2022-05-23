@@ -1,4 +1,4 @@
-// $$include data
+// $$include declarations
 
 #define LIX gl_LocalInvocationIndex
 #define LID gl_LocalInvocationID

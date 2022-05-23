@@ -1,4 +1,4 @@
-// $$include data frustum funcs
+// $$include funcs frustum declarations
 
 #define LID gl_LocalInvocationID
 #define LIX gl_LocalInvocationIndex

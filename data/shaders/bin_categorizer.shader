@@ -1,4 +1,4 @@
-// $$include funcs data
+// $$include funcs declarations
 
 #define LIX gl_LocalInvocationIndex
 #define LID gl_LocalInvocationID

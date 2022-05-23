@@ -42,24 +42,11 @@ class LucidRenderer {
 	static constexpr int max_width = 2560, max_height = 2048;
 	static constexpr int max_quads = 10 * 1024 * 1024, max_verts = 12 * 1024 * 1024;
 
-	// TODO: use shared structure between C++ and shader code
-	static constexpr int bin_counters_offset = 64, tile_counters_offset = 32;
-
 	LucidRenderer();
 	FWK_MOVABLE_CLASS(LucidRenderer)
 	Ex<void> exConstruct(Opts, int2 view_size);
 
 	void render(const Context &);
-
-	struct InstanceData {
-		i32 index_offset;
-		i32 vertex_offset;
-		i32 num_quads;
-		u32 flags, temp;
-		IColor color;
-	};
-
-	static_assert(sizeof(InstanceData) == sizeof(i32) * 6);
 
 	auto opts() const { return m_opts; }
 

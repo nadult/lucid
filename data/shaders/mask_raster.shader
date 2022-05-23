@@ -334,7 +334,7 @@ void generateTileMasks() {
 			tri_idx &= 0x7fffffff;
 			
 			uvec4 aabb = g_tri_aabbs[tri_idx];
-			aabb = decodeAABB(second_tri? aabb.zw : aabb.xy);
+			aabb = decodeAABB64(second_tri? aabb.zw : aabb.xy);
 			int min_by = clamp(int(aabb[1]) - s_tile_pos.y, 0, 15) >> 2;
 			int max_by = clamp(int(aabb[3]) - s_tile_pos.y, 0, 15) >> 2;
 

@@ -238,7 +238,7 @@ void processInputTris() {
 		uint quad_idx = tri_idx & 0x7fffffff;
 
 		uvec4 aabb = g_tri_aabbs[quad_idx];
-		aabb = decodeAABB(second_tri != 0 ? aabb.zw : aabb.xy);
+		aabb = decodeAABB64(second_tri != 0 ? aabb.zw : aabb.xy);
 		int min_by = clamp(int(aabb[1]) - s_tile_pos.y, 0, 15) >> 2;
 		int max_by = clamp(int(aabb[3]) - s_tile_pos.y, 0, 15) >> 2;
 

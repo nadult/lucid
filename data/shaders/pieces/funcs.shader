@@ -38,10 +38,21 @@ uint encodeNormalUint(vec3 n) {
 	return x | (y << 10) | (z << 20);
 }
 
-uvec2 encodeAABB(uvec4 aabb) { return uvec2(aabb[0] | (aabb[1] << 16), aabb[2] | (aabb[3] << 16)); }
+uvec2 encodeAABB64(uvec4 aabb) {
+	return uvec2(aabb[0] | (aabb[1] << 16), aabb[2] | (aabb[3] << 16));
+}
 
-uvec4 decodeAABB(uvec2 aabb) {
+uvec4 decodeAABB64(uvec2 aabb) {
 	return uvec4(aabb[0] & 0xffff, aabb[0] >> 16, aabb[1] & 0xffff, aabb[1] >> 16);
+}
+
+uint encodeAABB32(uvec4 aabb) {
+	return ((aabb[0] & 0xff) << 0) | ((aabb[1] & 0xff) << 8) | ((aabb[2] & 0xff) << 16) |
+		   ((aabb[3] & 0xff) << 24);
+}
+
+uvec4 decodeAABB32(uint aabb) {
+	return uvec4(aabb & 0xff, (aabb >> 8) & 0xff, (aabb >> 16) & 0xff, aabb >> 24);
 }
 
 vec3 decodeNormalUint(uint n) {

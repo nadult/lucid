@@ -1,4 +1,4 @@
-// $$include data
+// $$include data funcs
 
 // TODO: don't run too many groups if we have small amount of data (indirect dispatch)
 
@@ -20,16 +20,9 @@ shared int s_large_bins[LARGE_BIN_COUNT];
 shared int s_warp_divergence;
 
 void countSmallQuadBins(uint quad_idx) {
-	uint aabb = g_quad_aabbs[quad_idx];
-#if BIN_SIZE == 64
-	int tsx = int(aabb & 0xff), tsy = int((aabb >> 8) & 0xff);
-	int tex = int((aabb >> 16) & 0xff), tey = int((aabb >> 24));
-	int bsx = tsx >> 2, bsy = tsy >> 2;
-	int bex = tex >> 2, bey = tey >> 2;
-#else
-	int bsx = int(aabb & 0xff), bsy = int((aabb >> 8) & 0xff);
-	int bex = int((aabb >> 16) & 0xff), bey = int((aabb >> 24));
-#endif
+	const int shift = BIN_SIZE == 64 ? BIN_SHIFT - TILE_SHIFT : 0;
+	ivec4 aabb = ivec4(decodeAABB32(g_quad_aabbs[quad_idx]) >> shift);
+	int bsx = aabb[0], bsy = aabb[1], bex = aabb[2], bey = aabb[3];
 
 	// Handling only tris with bin area 1 to 3:
 	atomicAdd(s_bins[bsy * BIN_COUNT_X + bsx], 1);
@@ -41,16 +34,9 @@ void countSmallQuadBins(uint quad_idx) {
 }
 
 void countLargeQuadBins(uint quad_idx) {
-	uint aabb = g_quad_aabbs[quad_idx];
-#if BIN_SIZE == 64
-	int tsx = int(aabb & 0xff), tsy = int((aabb >> 8) & 0xff);
-	int tex = int((aabb >> 16) & 0xff), tey = int((aabb >> 24));
-	int bsx = tsx >> 2, bsy = tsy >> 2;
-	int bex = tex >> 2, bey = tey >> 2;
-#else
-	int bsx = int(aabb & 0xff), bsy = int((aabb >> 8) & 0xff);
-	int bex = int((aabb >> 16) & 0xff), bey = int((aabb >> 24));
-#endif
+	const int shift = BIN_SIZE == 64 ? BIN_SHIFT - TILE_SHIFT : 0;
+	ivec4 aabb = ivec4(decodeAABB32(g_quad_aabbs[quad_idx]) >> shift);
+	int bsx = aabb[0], bsy = aabb[1], bex = aabb[2], bey = aabb[3];
 
 #ifdef COMPUTE_WARP_DIVERGENCE
 	// Estimating divergence within warp; TODO: for 16 threads only?

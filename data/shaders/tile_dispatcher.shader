@@ -193,8 +193,8 @@ void dispatchBinTris(int bin_id) {
 
 		// AABB here helps only on hairball
 		uvec4 aabb = g_tri_aabbs[tri_idx];
-		ivec4 aabb0 = ivec4(decodeAABB(aabb.xy)) - ivec4(s_bin_ipos, s_bin_ipos);
-		ivec4 aabb1 = ivec4(decodeAABB(aabb.zw)) - ivec4(s_bin_ipos, s_bin_ipos);
+		ivec4 aabb0 = ivec4(decodeAABB64(aabb.xy)) - ivec4(s_bin_ipos, s_bin_ipos);
+		ivec4 aabb1 = ivec4(decodeAABB64(aabb.zw)) - ivec4(s_bin_ipos, s_bin_ipos);
 		for(int i = 0; i < 4; i++) {
 			aabb0[i] >>= TILE_SHIFT;
 			aabb1[i] >>= TILE_SHIFT;

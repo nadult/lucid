@@ -1,4 +1,4 @@
-// $$include data
+// $$include data funcs
 
 #define LID gl_LocalInvocationID
 #define LIX gl_LocalInvocationIndex
@@ -65,27 +65,22 @@ void main() {
 		if(s_size_type == 1)
 			quad_idx = (MAX_QUADS - 1) - quad_idx;
 
-		uint aabb = g_quad_aabbs[quad_idx];
+		uvec4 aabb = decodeAABB32(g_quad_aabbs[quad_idx]);
 #if BIN_SIZE == 64
-		int tsx = int(aabb & 0xff), tsy = int((aabb >> 8) & 0xff);
-		int tex = int((aabb >> 16) & 0xff), tey = int((aabb >> 24));
-		int bsx = tsx >> 2, bsy = tsy >> 2;
-		int bex = tex >> 2, bey = tey >> 2;
 		// Encodes tile ranges within a single bin
-		uint tile_ranges =
-			(tsx & 0x3) | ((tsy & 0x3) << 2) | ((tex & 0x3) << 4) | ((tey & 0x3) << 6);
-#else
-		int bsx = int(aabb & 0xff), bsy = int((aabb >> 8) & 0xff);
-		int bex = int((aabb >> 16) & 0xff), bey = int((aabb >> 24));
+		uint tile_ranges = (aabb[0] & 0x3) | ((aabb[1] & 0x3) << 2) | ((aabb[2] & 0x3) << 4) |
+						   ((aabb[3] & 0x3) << 6);
+		aabb >>= BIN_SHIFT - TILE_SHIFT;
 #endif
+		uint bsx = aabb[0], bsy = aabb[1], bex = aabb[2], bey = aabb[3];
 
-		for(int by = bsy; by <= bey; by++) {
+		for(uint by = bsy; by <= bey; by++) {
 #if BIN_SIZE == 64
 			uint tile_ranges_cury =
 				(tile_ranges | (by < bey ? 0xc0 : 0)) & (by > bsy ? 0xf3 : 0xff);
 #endif
-			for(int bx = bsx; bx <= bex; bx++) {
-				int bin_id = bx + by * BIN_COUNT_X;
+			for(uint bx = bsx; bx <= bex; bx++) {
+				uint bin_id = bx + by * BIN_COUNT_X;
 				uint quad_offset = atomicAdd(s_offsets[bin_id], 1);
 #if BIN_SIZE == 64
 				uint tile_ranges_cur =

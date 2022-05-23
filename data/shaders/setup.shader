@@ -233,16 +233,9 @@ void processQuad(uint quad_id, uint v0, uint v1, uint v2, uint v3, uint local_in
 	aabb = clamp(aabb + vec4(0.49, 0.49, -0.49, -0.49), vec4(0.0),
 				 vec4(max_screen_pos, max_screen_pos));
 
-#if BIN_SIZE == 64
-	uvec4 tile_aabb = uvec4(aabb) >> TILE_SHIFT;
-	uint enc_aabb = ((tile_aabb[0] & 0xff) << 0) | ((tile_aabb[1] & 0xff) << 8) |
-					((tile_aabb[2] & 0xff) << 16) | ((tile_aabb[3] & 0xff) << 24);
-	uvec4 bin_aabb = tile_aabb >> 2;
-#else
-	uvec4 bin_aabb = uvec4(aabb) >> BIN_SHIFT;
-	uint enc_aabb = ((bin_aabb[0] & 0xff) << 0) | ((bin_aabb[1] & 0xff) << 8) |
-					((bin_aabb[2] & 0xff) << 16) | ((bin_aabb[3] & 0xff) << 24);
-#endif
+	uvec4 aabb_ui = uvec4(aabb);
+	uint enc_aabb = encodeAABB32(aabb_ui >> (BIN_SIZE == 64 ? TILE_SHIFT : BIN_SHIFT));
+	uvec4 bin_aabb = aabb_ui >> BIN_SHIFT;
 
 	uvec2 bin_size = uvec2(bin_aabb[2] - bin_aabb[0] + 1, bin_aabb[3] - bin_aabb[1] + 1);
 	int size_type_idx = bin_size.x * bin_size.y <= 3 ? 0 : 1;
@@ -251,7 +244,7 @@ void processQuad(uint quad_id, uint v0, uint v1, uint v2, uint v3, uint local_in
 		out_idx = (LSIZE - 1) - out_idx;
 
 	s_quad_aabbs[out_idx] = enc_aabb;
-	s_tri_aabbs[out_idx] = uvec4(encodeAABB(uvec4(aabb0)), encodeAABB(uvec4(aabb1)));
+	s_tri_aabbs[out_idx] = uvec4(encodeAABB64(uvec4(aabb0)), encodeAABB64(uvec4(aabb1)));
 	s_quad_indices[out_idx] = uvec4(v0, v1, v2, v3);
 }
 

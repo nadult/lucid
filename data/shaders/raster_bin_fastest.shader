@@ -289,7 +289,7 @@ void processQuads() {
 		uint quad_idx = g_bin_quads[s_bin_quad_offset + i] & 0xffffff;
 
 		uvec4 aabb = g_tri_aabbs[quad_idx];
-		aabb = decodeAABB(second_tri != 0 ? aabb.zw : aabb.xy);
+		aabb = decodeAABB64(second_tri != 0 ? aabb.zw : aabb.xy);
 		int min_by = clamp(int(aabb[1]) - s_bin_pos.y, 0, BIN_MASK) >> BLOCK_SHIFT;
 		int max_by = clamp(int(aabb[3]) - s_bin_pos.y, 0, BIN_MASK) >> BLOCK_SHIFT;
 

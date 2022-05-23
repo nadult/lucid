@@ -865,6 +865,7 @@ RasterTileInfo LucidRenderer::introspectTile(CSpan<float3> verts, int2 full_tile
 	vector<array<uint, 3>> tile_tri_verts;
 
 	auto tile_counters = m_tile_counters->map<u32>(AccessMode::read_only);
+	// TODO: this is only computed properly when running old mode
 	int num_tile_tris = tile_counters[tile_counters_offset + out.tile_id];
 	int tile_tri_offset =
 		tile_counters[tile_counters_offset + bin_count * m_tiles_per_bin + out.tile_id];
@@ -1606,8 +1607,8 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 	// TODO: double/triple buffering to avoid stall
 	int bin_count = m_bin_counts.x * m_bin_counts.y;
 	auto bin_counters = m_old_counters.back().first->download<u32>();
-	auto tile_counters =
-		m_old_counters.back().second->download<u32>(32 + bin_count * m_tiles_per_bin);
+	auto tile_counters = m_old_counters.back().second->download<u32>(tile_counters_offset +
+																	 bin_count * m_tiles_per_bin);
 
 	int num_pixels = m_size.x * m_size.y;
 	int num_tiles =
@@ -1632,10 +1633,11 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 	for(int i = 0; i < arraySize(num_bins); i++)
 		num_bins[i] = bin_counters[8 + i];
 	int sum_bins = num_bins[0] + num_bins[1] + num_bins[2] + num_bins[3];
+	bool is_tile_dispatcher_running = num_bins[2] + num_bins[3] > 0 && !(m_opts & Opt::bin_size_32);
 
 	for(int b = 0; b < bin_count; b++) {
 		bool empty = true;
-		if(num_bins[2] + num_bins[3] > 0) // Otherwise tile dispatcher is not even called
+		if(is_tile_dispatcher_running)
 			for(int t = 0; t < m_tiles_per_bin; t++) {
 				int count = tile_counters[tile_counters_offset + b * m_tiles_per_bin + t];
 				num_tile_tris += count;

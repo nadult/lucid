@@ -104,7 +104,7 @@ class LucidRenderer {
 
 	void checkBins();
 	void checkTiles();
-	void debugMasks(bool sort_phase);
+	void debugMasks();
 	void copyCounters();
 
 	struct BinBlockStats;
@@ -116,7 +116,7 @@ class LucidRenderer {
 	Program init_counters_program, setup_program;
 	Program bin_estimator_program, bin_dispatcher_program, tile_dispatcher_program;
 	Program bin_categorizer_program;
-	Program final_raster_program, mask_raster_program, sort_program;
+	Program final_raster_program, mask_raster_program;
 	Program raster_bin_program, raster_tile_program, raster_block_program;
 	Program compose_program, dummy_program;
 

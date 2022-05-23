@@ -299,7 +299,7 @@ void LucidRenderer::render(const Context &ctx) {
 	} else {
 		rasterizeMasks(ctx);
 		if(m_opts & Opt::debug_masks)
-			debugMasks(false);
+			debugMasks();
 		rasterizeFinal(ctx);
 	}
 
@@ -599,29 +599,12 @@ void LucidRenderer::rasterizeMasks(const Context &ctx) {
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 }
 
-void LucidRenderer::sortMasks(const Context &ctx) {
-	PERF_GPU_SCOPE();
-
-	m_tile_counters->bindIndex(0);
-	m_block_counts->bindIndex(1);
-	m_block_tris->bindIndex(2);
-	m_block_tri_keys->bindIndex(3);
-	sort_program.use();
-
-	if(m_opts & Opt::debug_masks)
-		shaderDebugUseBuffer(m_errors);
-
-	// TODO: spawn workgroups only to saturate SMs
-	glDispatchCompute(128, 1, 1);
-	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
-}
-
-void LucidRenderer::debugMasks(bool sort_phase) {
-	auto source_ranges = (sort_phase ? sort_program : mask_raster_program).sourceRanges();
+void LucidRenderer::debugMasks() {
+	auto source_ranges = mask_raster_program.sourceRanges();
 	auto records = shaderDebugRecords(m_errors, {256, 1, 1}, {128, 1, 1}, 256, source_ranges);
 	if(records) {
 		makeSorted(records);
-		print("mask_% shader debug messages reported:\n", sort_phase ? "sort" : "raster");
+		print("mask_raster shader debug messages reported:\n");
 		for(auto &record : records)
 			print("%\n", record);
 	}

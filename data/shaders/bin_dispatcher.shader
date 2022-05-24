@@ -21,6 +21,11 @@ shared int s_bins[BIN_COUNT];
 shared int s_rows[BIN_COUNT_Y];
 shared int s_large_bins[LARGE_BIN_COUNT];
 
+// Constants useful for efficient processing of bin counts
+const int xbin_warps = LSIZE / BIN_COUNT_X, ybin_warps = LSIZE / BIN_COUNT_Y;
+const int xbin_step = int(log2(xbin_warps)), ybin_step = int(log2(ybin_warps));
+const int xbin_count = 1 << xbin_step, ybin_count = 1 << ybin_step;
+
 void countSmallQuadBins(uint quad_idx) {
 	const int shift = BIN_SIZE == 64 ? BIN_SHIFT - TILE_SHIFT : 0;
 	ivec4 aabb = ivec4(decodeAABB32(g_quad_aabbs[quad_idx]) >> shift);
@@ -91,14 +96,23 @@ void dispatchQuad(int quad_idx) {
 
 void accumulateLargeQuadCounts() {
 	// Accumulating large quad counts across columns
-	int bx = int(LIX), lbx = int(LIX - BIN_COUNT_X);
-	if(bx < BIN_COUNT_X) {
+	if(LIX < BIN_COUNT_X * xbin_count) {
+		uint bx = LIX >> xbin_step;
 		int accum = 0;
-		for(uint by = 0; by < BIN_COUNT_Y; by++) {
-			accum += s_bins[bx + by * BIN_COUNT_X];
-			s_bins[bx + by * BIN_COUNT_X] = accum;
+		for(uint by = 0, suby = LIX & (xbin_count - 1); by < BIN_COUNT_Y; by += xbin_count) {
+			uint idx = bx + (by + suby) * BIN_COUNT_X;
+			int cur = by + suby < BIN_COUNT_Y ? s_bins[idx] : 0, temp;
+			for(int i = 1; i < xbin_count; i <<= 1) {
+				temp = shuffleUpNV(cur, i, xbin_count);
+				cur += suby >= i ? temp : 0;
+			}
+			cur += accum;
+			if(by + suby < BIN_COUNT_Y)
+				s_bins[idx] = cur;
+			accum = shuffleNV(cur, xbin_count - 1, xbin_count);
 		}
 	}
+
 	/*if(lbx >= 0 && lbx < LARGE_BIN_COUNT_X) {
 		int accum = 0;
 		for(uint lby = 0; lby < LARGE_BIN_COUNT_Y; lby++) {
@@ -109,14 +123,23 @@ void accumulateLargeQuadCounts() {
 	barrier();
 
 	// Accumulating large quad counts across rows
-	int by = int(LIX), lby = int(LIX - BIN_COUNT_X);
-	if(by < BIN_COUNT_Y) {
+	if(LIX < BIN_COUNT_Y * ybin_count) {
+		uint by = LIX >> ybin_step;
 		int accum = 0;
-		for(uint bx = 0; bx < BIN_COUNT_X; bx++) {
-			accum += s_bins[bx + by * BIN_COUNT_X];
-			s_bins[bx + by * BIN_COUNT_X] = accum;
+		for(uint bx = 0, subx = LIX & (ybin_count - 1); bx < BIN_COUNT_X; bx += ybin_count) {
+			uint idx = bx + subx + by * BIN_COUNT_X;
+			int cur = bx + subx < BIN_COUNT_X ? s_bins[idx] : 0, temp;
+			for(int i = 1; i < ybin_count; i <<= 1) {
+				temp = shuffleUpNV(cur, i, ybin_count);
+				cur += subx >= i ? temp : 0;
+			}
+			cur += accum;
+			if(bx + subx < BIN_COUNT_X)
+				s_bins[idx] = cur;
+			accum = shuffleNV(cur, ybin_count - 1, ybin_count);
 		}
 	}
+
 	/*if(lby >= 0 && lby < LARGE_BIN_COUNT_Y) {
 		int accum = 0;
 		for(uint lbx = 0; lbx < LARGE_BIN_COUNT_X; lbx++) {
@@ -133,51 +156,44 @@ void accumulateLargeQuadCounts() {
 void computeOffsets() {
 	// TODO: no need for groupMemoryBarrier ?
 
-	// clang-format off
-	const int xnum = LSIZE / BIN_COUNT_X, ynum = LSIZE / BIN_COUNT_Y;
-	const int xstep = xnum >= 32? 5 : xnum >= 16? 4 : xnum >= 8? 3 : xnum >= 4? 2 : xnum >= 2? 1 : 0;
-	const int ystep = ynum >= 32? 5 : ynum >= 16? 4 : ynum >= 8? 3 : ynum >= 4? 2 : ynum >= 2? 1 : 0;
-	const int xcount = 1 << xstep, ycount = 1 << ystep;
-	// clang-format on
-
-	if(LIX < BIN_COUNT_Y * ycount) {
-		uint y = LIX >> ystep;
+	if(LIX < BIN_COUNT_Y * ybin_count) {
+		uint by = LIX >> ybin_step;
 		int accum = 0;
-		for(uint x = 0, subx = LIX & (ycount - 1); x < BIN_COUNT_X; x += ycount) {
-			uint idx = x + subx + y * BIN_COUNT_X;
-			int cur = x + subx < BIN_COUNT_X ? BIN_QUAD_COUNTS(idx) : 0, temp;
-			for(int i = 1; i < ycount; i <<= 1) {
-				temp = shuffleUpNV(cur, i, ycount);
+		for(uint bx = 0, subx = LIX & (ybin_count - 1); bx < BIN_COUNT_X; bx += ybin_count) {
+			uint idx = bx + subx + by * BIN_COUNT_X;
+			int cur = bx + subx < BIN_COUNT_X ? BIN_QUAD_COUNTS(idx) : 0, temp;
+			for(int i = 1; i < ybin_count; i <<= 1) {
+				temp = shuffleUpNV(cur, i, ybin_count);
 				cur += subx >= i ? temp : 0;
 			}
 			cur += accum;
-			if(x + subx < BIN_COUNT_X)
+			if(bx + subx < BIN_COUNT_X)
 				BIN_QUAD_OFFSETS(idx) = cur;
-			accum = shuffleNV(cur, ycount - 1, ycount);
+			accum = shuffleNV(cur, ybin_count - 1, ybin_count);
 		}
 	}
 	barrier();
 	if(LIX < BIN_COUNT_Y)
 		s_rows[LIX] = BIN_QUAD_OFFSETS((BIN_COUNT_X - 1) + LIX * BIN_COUNT_X);
 	barrier();
-	if(LIX < BIN_COUNT_X * xcount) {
-		uint x = LIX >> xstep;
+	if(LIX < BIN_COUNT_X * xbin_count) {
+		uint bx = LIX >> xbin_step;
 		int accum = 0;
-		for(uint y = 0, suby = LIX & (xcount - 1); y < BIN_COUNT_Y; y += xcount) {
-			uint idx = y + suby;
+		for(uint by = 0, suby = LIX & (xbin_count - 1); by < BIN_COUNT_Y; by += xbin_count) {
+			uint idx = by + suby;
 			int cur = idx < BIN_COUNT_Y && idx > 0 ? s_rows[idx - 1] : 0, temp;
-			for(int i = 1; i < xcount; i <<= 1) {
-				temp = shuffleUpNV(cur, i, xcount);
+			for(int i = 1; i < xbin_count; i <<= 1) {
+				temp = shuffleUpNV(cur, i, xbin_count);
 				cur += suby >= i ? temp : 0;
 			}
 			cur += accum;
 			if(idx < BIN_COUNT_Y) {
-				uint bidx = x + idx * BIN_COUNT_X;
+				uint bidx = bx + idx * BIN_COUNT_X;
 				int value = BIN_QUAD_OFFSETS(bidx) + cur - BIN_QUAD_COUNTS(bidx);
 				BIN_QUAD_OFFSETS(bidx) = value;
 				BIN_QUAD_OFFSETS_TEMP(bidx) = value;
 			}
-			accum = shuffleNV(cur, xcount - 1, xcount);
+			accum = shuffleNV(cur, xbin_count - 1, xbin_count);
 		}
 	}
 	barrier();

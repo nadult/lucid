@@ -225,4 +225,18 @@ san-miguel: 1172   946    41
     sponza: 596    60     43
     teapot: 110    25     24
  white_oak: 1365   20     47
- -5 us z categorizera; Czyli może się opłacać zrobić najpierw fazę 128x128 tylko dla dużych trisów?
+
+ Połączenie estymacji i dispatchowania; Przełączenie na biny 32x32
+ (Niektóre sceny nie są renderowane w pełni):
+             total  setup  bins  raster_bin
+    #boxes: 1550   24     35    1440
+     bunny: 393    29     34    284
+conference: 1527   46     202   1150
+    dragon: 906    137    71    654
+   gallery: 2632   183    91    2207
+  hairball: 1814   540    334   861
+powerplant: 3391   1513   241   1499
+san-miguel: 5319   955    318   3896
+    sponza: 3927   63     215   3502
+    teapot: 400    24     29    307
+ white_oak: 13031  24     377   12495

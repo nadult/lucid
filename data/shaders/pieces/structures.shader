@@ -41,10 +41,11 @@ struct BinCounters {
 	uint num_tile_raster_dispatches[3];
 	uint num_block_raster_dispatches[3];
 
-	int temp[18];
+	int dispatcher_item_counts[128];
+	int temp[18 + 64];
 };
 
-#define BIN_COUNTERS_SIZE 64
+#define BIN_COUNTERS_SIZE 256
 
 // TODO: better explanation of stats
 struct TileCounters {

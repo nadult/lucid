@@ -133,6 +133,7 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	// TODO: properly get number of compute units (use opencl?)
 	// https://tinyurl.com/o7s9ph3
 	int max_dispatches = gl_info->vendor == GlVendor::intel ? 32 : 128;
+	DASSERT(max_dispatches <= sizeof(shader::BinCounters::dispatcher_item_counts) / sizeof(u32));
 
 	// TODO: won't work for small number of dispatches
 	// TODO: what if gpu will allow only single active TG ? then we're fucked, because
@@ -1687,7 +1688,8 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 
 	vector<StatsRow> basic_rows = {
 		{"input instances", toString(m_num_instances)},
-		{"dispatch active groups", toString(bins.a_dispatcher_active_thread_groups)},
+		{"dispatch active groups", toString(bins.a_dispatcher_active_thread_groups),
+		 toString(span(bins.dispatcher_item_counts, bins.a_dispatcher_active_thread_groups))},
 		{"input quads", toString(bins.num_input_quads)},
 		{"visible quads", visible_info, visible_details},
 		{"rejected quads", rejected_info, rejection_details},

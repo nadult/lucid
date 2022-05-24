@@ -222,6 +222,8 @@ shared int s_workgroup_items[MAX_BIN_WORKGROUP_ITEMS];
 void main() {
 	if(LIX < 2) {
 		s_num_quads[LIX] = g_bins.num_visible_quads[LIX];
+		// TODO: we can probably improve perf by dividing work more evenly
+		// Two types of quads make it a bit tricky
 		if(LIX == 0) {
 			int num_small_items = (s_num_quads[0] + ITEM_SIZE - 1) / ITEM_SIZE;
 			int num_large_items = (s_num_quads[1] + ITEM_SIZE - 1) / ITEM_SIZE;
@@ -303,6 +305,7 @@ void main() {
 		s_num_processed_items =
 			atomicAdd(g_bins.a_dispatcher_processed_items, s_item_id) + s_item_id;
 		s_num_items = s_item_id;
+		g_bins.dispatcher_item_counts[s_num_finished] = s_num_items;
 		s_item_id = 0;
 	}
 	barrier();

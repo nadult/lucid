@@ -31,8 +31,9 @@ struct BinCounters {
 
 	// Atomics
 	uint a_small_bins;
-	int a_dispatcher_processed_quads[2];
 	int a_dispatcher_active_thread_groups;
+	int a_dispatcher_processed_items;
+	uint a_dispatcher_phase;
 
 	uint num_binning_dispatches[3];
 	uint num_tiling_dispatches[3];

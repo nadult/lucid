@@ -115,9 +115,6 @@
     <None Include="..\data\shaders\bin_dispatcher.shader">
       <Filter>shaders</Filter>
     </None>
-    <None Include="..\data\shaders\bin_estimator.shader">
-      <Filter>shaders</Filter>
-    </None>
     <None Include="..\data\shaders\compose.shader">
       <Filter>shaders</Filter>
     </None>

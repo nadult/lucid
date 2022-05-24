@@ -133,7 +133,11 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	// TODO: properly get number of compute units (use opencl?)
 	// https://tinyurl.com/o7s9ph3
 	int max_dispatches = gl_info->vendor == GlVendor::intel ? 32 : 128;
-	int max_bin_workgroup_items = 256; // TODO: tune
+
+	// TODO: won't work for small number of dispatches
+	// TODO: what if gpu will allow only single active TG ? then we're fucked, because
+	// there won't be enough space for workgroups
+	int max_bin_workgroup_items = m_bin_size == 64 ? 256 : 128;
 
 	// TODO: LucidRenderer constructed 2x at the beginning
 
@@ -193,12 +197,13 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 
 	defs["MAX_DISPATCHES"] = max_dispatches;
 	defs["MAX_BIN_WORKGROUP_ITEMS"] = max_bin_workgroup_items;
-	defs["BINNING_LSIZE"] = m_bin_size == 64 ? 512 : 1024;
+
+	int binning_lsize = m_bin_size == 64 ? 512 : 1024;
+	defs["BINNING_LSIZE"] = binning_lsize;
+	defs["BINNING_LSHIFT"] = log2(binning_lsize);
 
 	init_counters_program = EX_PASS(Program::makeCompute("init_counters", defs));
 	setup_program = EX_PASS(Program::makeCompute("setup", defs));
-	bin_estimator_program = EX_PASS(Program::makeCompute(
-		"bin_estimator", defs, mask(m_opts & Opt::check_bins, ProgramOpt::debug)));
 	bin_dispatcher_program = EX_PASS(Program::makeCompute(
 		"bin_dispatcher", defs, mask(m_opts & Opt::check_bins, ProgramOpt::debug)));
 	bin_categorizer_program = EX_PASS(Program::makeCompute("bin_categorizer", defs));
@@ -421,23 +426,11 @@ void LucidRenderer::computeBins(const Context &ctx) {
 	m_tile_counters->bindIndex(2);
 	m_bin_quads->bindIndex(3);
 
-	bin_estimator_program.use();
-	if(m_opts & Opt::check_bins)
-		shaderDebugUseBuffer(m_errors);
-
-	PERF_CHILD_SCOPE("estimator phase");
-	dispatchIndirect(BIN_COUNTERS_MEMBER_OFFSET(num_binning_dispatches));
-	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
-
-	PERF_SIBLING_SCOPE("dispatcher phase");
-	// Why adding more slows everything down?
-	// TODO: how to optimize this ?
-	// 1ms for now for dragon...
+	PERF_CHILD_SCOPE("dispatcher phase");
 	bin_dispatcher_program.use();
 	if(m_opts & Opt::check_bins)
 		shaderDebugUseBuffer(m_errors);
 	dispatchIndirect(BIN_COUNTERS_MEMBER_OFFSET(num_binning_dispatches));
-
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 
 	PERF_SIBLING_SCOPE("categorizer phase");
@@ -1694,6 +1687,7 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 
 	vector<StatsRow> basic_rows = {
 		{"input instances", toString(m_num_instances)},
+		{"dispatch active groups", toString(bins.a_dispatcher_active_thread_groups)},
 		{"input quads", toString(bins.num_input_quads)},
 		{"visible quads", visible_info, visible_details},
 		{"rejected quads", rejected_info, rejection_details},

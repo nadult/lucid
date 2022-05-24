@@ -20,10 +20,6 @@
 #define BIN_BIG_BINS(idx) g_bins_counts[BIN_COUNT * 8 + (idx)]
 #define BIN_TILED_BINS(idx) g_bins_counts[BIN_COUNT * 9 + (idx)]
 
-#define BIN_WORKGROUP_COUNTS(wg_id, idx) g_bins_counts[BIN_COUNT * (10 + (wg_id)) + (idx)]
-#define BIN_WORKGROUP_ITEMS(wg_id, idx)                                                            \
-	g_bins_counts[BIN_COUNT * (10 + MAX_DISPATCHES) + (wg_id)*MAX_BIN_WORKGROUP_ITEMS + (idx)]
-
 #define TILE_COUNTERS_BUFFER(idx)                                                                  \
 	layout(std430, binding = idx) buffer buf##idx##_ {                                             \
 		TileCounters g_tiles;                                                                      \

@@ -238,7 +238,7 @@ void processQuad(uint quad_id, uint v0, uint v1, uint v2, uint v3, uint local_in
 	uvec4 bin_aabb = aabb_ui >> BIN_SHIFT;
 
 	uvec2 bin_size = uvec2(bin_aabb[2] - bin_aabb[0] + 1, bin_aabb[3] - bin_aabb[1] + 1);
-	int size_type_idx = bin_size.x * bin_size.y <= 3 ? 0 : 1;
+	int size_type_idx = bin_size.x * bin_size.y <= 4 ? 0 : 1;
 	uint out_idx = atomicAdd(s_num_visible[local_instance_id * 2 + size_type_idx], 1);
 	if(size_type_idx == 1)
 		out_idx = (LSIZE - 1) - out_idx;

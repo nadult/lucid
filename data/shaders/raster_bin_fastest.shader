@@ -288,6 +288,11 @@ void processQuads() {
 		uint second_tri = LIX & 1;
 		uint quad_idx = g_bin_quads[s_bin_quad_offset + i] & 0xffffff;
 
+		// TODO: ifdef
+		if(quad_idx >= MAX_QUADS || (quad_idx >= g_bins.num_visible_quads[0] &&
+									 quad_idx < (MAX_QUADS - 1 - g_bins.num_visible_quads[1])))
+			atomicOr(s_raster_error, ~0);
+
 		uvec4 aabb = g_tri_aabbs[quad_idx];
 		aabb = decodeAABB64(second_tri != 0 ? aabb.zw : aabb.xy);
 		int min_by = clamp(int(aabb[1]) - s_bin_pos.y, 0, BIN_MASK) >> BLOCK_SHIFT;
@@ -940,6 +945,8 @@ void visualizeErrors(uint bid) {
 void rasterBin(int bin_id) {
 	INIT_CLOCK();
 
+	const int num_blocks = (BIN_SIZE / BLOCK_SIZE) * (BIN_SIZE / BLOCK_SIZE);
+
 	if(LIX < BLOCK_ROWS) {
 		if(LIX == 0) {
 			// TODO: optimize
@@ -960,14 +967,19 @@ void rasterBin(int bin_id) {
 	barrier();
 	UPDATE_CLOCK(0);
 
-	const int num_half_blocks = (BIN_SIZE / BLOCK_SIZE) * (BIN_SIZE / BLOCK_SIZE) * 2;
+	if(s_raster_error != 0) {
+		for(uint bid = LIX >> 6; bid < num_blocks; bid += NUM_WARPS / 2)
+			visualizeErrors(bid);
+		return;
+	}
+
 	//  bid: block (8x8) id; We have 8 x 8 = 64 blocks
 	// hbid: half block (8x4) id; We have 8 x 16 = 128 half blocks
 	//       half blocks which make a single block are stored one after another
 	//       (upper block first)
 	// lbid: local block id (range: 0 up to NUM_WARPS - 1)
 	// Each block has 64 pixels, so we need 2 warps to process all pixels within a single block
-	for(uint hbid = LIX >> 5; hbid < num_half_blocks; hbid += NUM_WARPS) {
+	for(uint hbid = LIX >> 5; hbid < num_blocks * 2; hbid += NUM_WARPS) {
 		barrier();
 		if((hbid & NUM_WARPS) == 0) {
 			uint bid = (hbid & ~(NUM_WARPS - 1)) >> 1;

@@ -426,6 +426,7 @@ void LucidRenderer::computeBins(const Context &ctx) {
 	m_bin_counters->bindIndex(1);
 	m_tile_counters->bindIndex(2);
 	m_bin_quads->bindIndex(3);
+	m_scratch_64->bindIndex(4);
 
 	PERF_CHILD_SCOPE("dispatcher phase");
 	bin_dispatcher_program.use();
@@ -1583,11 +1584,9 @@ void LucidRenderer::copyCounters() {
 		m_old_counters[i] = m_old_counters[i - 1];
 	m_old_counters[0] = last;
 
-	uint bin_counters_size = (BIN_COUNTERS_SIZE + m_bin_count) * sizeof(u32);
-	uint tile_counters_size = (TILE_COUNTERS_SIZE + m_tile_count) * sizeof(u32);
 	if(!m_old_counters[0].first) {
-		m_old_counters[0].first.emplace(BufferType::copy_read, bin_counters_size);
-		m_old_counters[0].second.emplace(BufferType::copy_read, tile_counters_size);
+		m_old_counters[0].first.emplace(BufferType::copy_read, m_bin_counters->size());
+		m_old_counters[0].second.emplace(BufferType::copy_read, m_tile_counters->size());
 	}
 
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
@@ -1614,6 +1613,43 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 	bin_counters.erase(bin_counters.begin(), bin_counters.begin() + BIN_COUNTERS_SIZE);
 	tile_counters.erase(tile_counters.begin(), tile_counters.begin() + TILE_COUNTERS_SIZE);
 
+	CSpan<uint> bin_quad_counts = cspan(bin_counters.data() + m_bin_count * 0, m_bin_count);
+	CSpan<uint> bin_quad_offsets = cspan(bin_counters.data() + m_bin_count * 1, m_bin_count);
+	CSpan<uint> bin_quad_offsets_temp = cspan(bin_counters.data() + m_bin_count * 2, m_bin_count);
+
+	CSpan<uint> bin_rows_large_quad_counts =
+		cspan(bin_counters.data() + m_bin_count * 3, m_bin_counts.y);
+	CSpan<uint> bin_rows_large_quad_offsets =
+		cspan(bin_counters.data() + m_bin_count * 4, m_bin_counts.y);
+	CSpan<uint> bin_rows_large_quad_offsets_temp =
+		cspan(bin_counters.data() + m_bin_count * 5, m_bin_counts.y);
+
+	// Checking bins quad offsets
+	for(uint i = 0; i < m_bin_count; i++) {
+		int cur_value = bin_quad_counts[i];
+		int cur_offset = bin_quad_offsets[i];
+		int cur_offset_temp = bin_quad_offsets_temp[i];
+
+		if(cur_offset_temp != cur_offset + cur_value)
+			print("Invalid bin quad offset [%]: % != % (offset:% + count:%)\n", i, cur_offset_temp,
+				  cur_offset + cur_value, cur_offset, cur_value);
+	}
+
+	// Checking bin-rows large quad offsets
+	for(int y = 0; y < m_bin_counts.y; y++) {
+		int prev_offset = y == 0 ? 0 : bin_rows_large_quad_offsets[y - 1];
+		int prev_value = y == 0 ? 0 : bin_rows_large_quad_counts[y - 1];
+		int cur_temp_offset = bin_rows_large_quad_offsets_temp[y];
+		int cur_offset = bin_rows_large_quad_offsets[y];
+		int cur_value = bin_rows_large_quad_counts[y];
+		if(cur_offset != prev_offset + prev_value)
+			print("Invalid bin-row large quad offset [%]: % != (offset:% + count:%)\n", y,
+				  cur_offset, prev_offset, prev_value);
+		if(cur_temp_offset != cur_offset + cur_value)
+			print("Invalid bin-row large quad temp-offset [%]: % != (offset:% + count:%)\n", y,
+				  cur_temp_offset, cur_offset, cur_value);
+	}
+
 	int num_pixels = m_size.x * m_size.y;
 	int num_tiles =
 		((m_size.x + m_tile_size - 1) / m_tile_size) * ((m_size.y + m_tile_size - 1) / m_tile_size);
@@ -1621,7 +1657,9 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 					 ((m_size.y + m_block_size - 1) / m_block_size);
 
 	int num_tile_tris = 0, num_nonempty_tiles = 0, num_nonempty_bins = 0;
-	int max_quads_per_bin = 0, num_bin_quads = 0;
+	int max_quads_per_bin = max(bin_quad_counts);
+	int num_bin_quads = accumulate(bin_quad_counts);
+	int num_bin_rows_lquads = accumulate(bin_rows_large_quad_counts);
 
 	int sum_bins =
 		bins.num_empty_bins + bins.num_small_bins + bins.num_medium_bins + bins.num_big_bins;
@@ -1638,11 +1676,9 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 					empty = false;
 				}
 			}
+		// TODO: this is wrong
 		if(!empty)
 			num_nonempty_bins++;
-		int bin_quads = bin_counters[b];
-		max_quads_per_bin = max(max_quads_per_bin, bin_quads);
-		num_bin_quads += bin_quads;
 	}
 
 	int num_visible_total = bins.num_visible_quads[0] + bins.num_visible_quads[1];
@@ -1693,7 +1729,9 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 		{"input quads", toString(bins.num_input_quads)},
 		{"visible quads", visible_info, visible_details},
 		{"rejected quads", rejected_info, rejection_details},
-		{"bin-quads", toString(num_bin_quads), "Per-bin quads"},
+		{"bin quads", toString(num_bin_quads), "Per bin quads"},
+		{"bin large quads", toString(bins.num_bin_large_quads)},
+		{"bin-row large quads", toString(num_bin_rows_lquads), "Per bin row large quads"},
 		{"tile-tris", toString(num_tile_tris), "Per-tile triangles"},
 		{"estimated tile-tris", toString(tiles.num_tile_tris),
 		 "Estimating space needed for tile-tris is inaccurate"},

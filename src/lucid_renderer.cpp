@@ -205,8 +205,8 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 
 	init_counters_program = EX_PASS(Program::makeCompute("init_counters", defs));
 	setup_program = EX_PASS(Program::makeCompute("setup", defs));
-	bin_dispatcher_program = EX_PASS(Program::makeCompute(
-		"bin_dispatcher", defs, mask(m_opts & Opt::check_bins, ProgramOpt::debug)));
+	bin_dispatcher_program = EX_PASS(Program::makeCompute("bin_dispatcher", defs));
+	bin_row_dispatcher_program = EX_PASS(Program::makeCompute("bin_row_dispatcher", defs));
 	bin_categorizer_program = EX_PASS(Program::makeCompute("bin_categorizer", defs));
 
 	if(m_bin_size == 64) {
@@ -430,8 +430,11 @@ void LucidRenderer::computeBins(const Context &ctx) {
 
 	PERF_CHILD_SCOPE("dispatcher phase");
 	bin_dispatcher_program.use();
-	if(m_opts & Opt::check_bins)
-		shaderDebugUseBuffer(m_errors);
+	dispatchIndirect(BIN_COUNTERS_MEMBER_OFFSET(num_binning_dispatches));
+	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+
+	PERF_SIBLING_SCOPE("row dispatcher phase");
+	bin_row_dispatcher_program.use();
 	dispatchIndirect(BIN_COUNTERS_MEMBER_OFFSET(num_binning_dispatches));
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 

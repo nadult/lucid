@@ -9,7 +9,7 @@
 #define LSIZE BINNING_LSIZE
 #define LSHIFT BINNING_LSHIFT
 
-#define ITEM_STEPS 1
+#define ITEM_STEPS 4
 #define ITEM_SIZE (LSIZE * ITEM_STEPS)
 
 layout(local_size_x = LSIZE) in;
@@ -20,12 +20,23 @@ layout(std430, binding = 4) buffer buf4_ { uint g_bin_row_quads[]; };
 
 shared int s_bins[BIN_COUNT];
 shared int s_rows[BIN_COUNT_Y + 1];
-shared int s_row_warps[32];
+shared int s_segments[LSIZE]; // TODO: merge rows and segments into single array
 
 // Constants useful for efficient processing of bin counts
 const int xbin_warps = LSIZE / BIN_COUNT_X, ybin_warps = LSIZE / BIN_COUNT_Y;
 const int xbin_step = int(log2(xbin_warps)), ybin_step = int(log2(ybin_warps));
 const int xbin_count = 1 << xbin_step, ybin_count = 1 << ybin_step;
+
+int prefixSum32(int accum) {
+	int temp;
+	uint sub_id = LIX & 31;
+	temp = shuffleUpNV(accum, 1, 32), accum += sub_id >= 1 ? temp : 0;
+	temp = shuffleUpNV(accum, 2, 32), accum += sub_id >= 2 ? temp : 0;
+	temp = shuffleUpNV(accum, 4, 32), accum += sub_id >= 4 ? temp : 0;
+	temp = shuffleUpNV(accum, 8, 32), accum += sub_id >= 8 ? temp : 0;
+	temp = shuffleUpNV(accum, 16, 32), accum += sub_id >= 16 ? temp : 0;
+	return accum;
+}
 
 void countSmallQuadBins(uint quad_idx) {
 	const int shift = BIN_SIZE == 64 ? BIN_SHIFT - TILE_SHIFT : 0;
@@ -51,22 +62,104 @@ void countLargeQuadBins(uint quad_idx) {
 	ivec4 aabb = ivec4(decodeAABB32(g_quad_aabbs[quad_idx]) >> shift);
 	int bsx = aabb[0], bsy = aabb[1], bex = aabb[2], bey = aabb[3];
 
-	// TODO: maybe it makes no sense to compute bins and rows separately?
-	// We could compute rows from bins
 	bex++, bey++;
 	atomicAdd(s_bins[bsx + bsy * BIN_COUNT_X], 1);
-	atomicAdd(s_rows[bsy], 1);
 	if(bex < BIN_COUNT_X)
 		atomicAdd(s_bins[bex + bsy * BIN_COUNT_X], -1);
-	if(bey < BIN_COUNT_Y) {
+	if(bey < BIN_COUNT_Y)
 		atomicAdd(s_bins[bsx + bey * BIN_COUNT_X], -1);
-		atomicAdd(s_rows[bey], -1);
-	}
 	if(bex < BIN_COUNT_X && bey < BIN_COUNT_Y)
 		atomicAdd(s_bins[bex + bey * BIN_COUNT_X], 1);
 }
 
-void dispatchQuad(int quad_idx) {
+void accumulateLargeQuadCounts() {
+	// Accumulating large quad counts across columns
+	if(LIX < BIN_COUNT_X * xbin_count) {
+		uint bx = LIX >> xbin_step;
+		int accum = 0;
+		for(uint by = 0, suby = LIX & (xbin_count - 1); by < BIN_COUNT_Y; by += xbin_count) {
+			uint idx = bx + (by + suby) * BIN_COUNT_X;
+			int cur = by + suby < BIN_COUNT_Y ? s_bins[idx] : 0, temp;
+			for(int i = 1; i < xbin_count; i <<= 1) {
+				temp = shuffleUpNV(cur, i, xbin_count);
+				cur += suby >= i ? temp : 0;
+			}
+			cur += accum;
+			if(by + suby < BIN_COUNT_Y)
+				s_bins[idx] = cur;
+			accum = shuffleNV(cur, xbin_count - 1, xbin_count);
+		}
+	}
+	barrier();
+
+	// Accumulating large quad counts across rows
+	if(LIX < BIN_COUNT_Y * ybin_count) {
+		uint by = LIX >> ybin_step;
+		int accum = 0;
+		for(uint bx = 0, subx = LIX & (ybin_count - 1); bx < BIN_COUNT_X; bx += ybin_count) {
+			uint idx = bx + subx + by * BIN_COUNT_X;
+			int cur = bx + subx < BIN_COUNT_X ? s_bins[idx] : 0, temp;
+			for(int i = 1; i < ybin_count; i <<= 1) {
+				temp = shuffleUpNV(cur, i, ybin_count);
+				cur += subx >= i ? temp : 0;
+			}
+			cur += accum;
+			if(bx + subx < BIN_COUNT_X)
+				s_bins[idx] = cur;
+			accum = shuffleNV(cur, ybin_count - 1, ybin_count);
+		}
+	}
+	barrier();
+}
+
+void computeOffsets() {
+	// TODO: no need for groupMemoryBarrier ?
+	// Computing bin quad counts offsets
+	if(LIX < BIN_COUNT_Y * ybin_count) {
+		uint by = LIX >> ybin_step;
+		int accum = 0;
+		for(uint bx = 0, subx = LIX & (ybin_count - 1); bx < BIN_COUNT_X; bx += ybin_count) {
+			uint idx = bx + subx + by * BIN_COUNT_X;
+			int cur = bx + subx < BIN_COUNT_X ? BIN_QUAD_COUNTS(idx) : 0, temp;
+			for(int i = 1; i < ybin_count; i <<= 1) {
+				temp = shuffleUpNV(cur, i, ybin_count);
+				cur += subx >= i ? temp : 0;
+			}
+			cur += accum;
+			if(bx + subx < BIN_COUNT_X)
+				BIN_QUAD_OFFSETS(idx) = cur;
+			accum = shuffleNV(cur, ybin_count - 1, ybin_count);
+		}
+	}
+	barrier();
+	// Storing accumulated bin quad counts for each row
+	if(LIX < BIN_COUNT_Y)
+		s_rows[LIX] = BIN_QUAD_OFFSETS((BIN_COUNT_X - 1) + LIX * BIN_COUNT_X);
+	barrier();
+	if(LIX < BIN_COUNT_X * xbin_count) {
+		uint bx = LIX >> xbin_step;
+		int accum = 0;
+		for(uint by = 0, suby = LIX & (xbin_count - 1); by < BIN_COUNT_Y; by += xbin_count) {
+			uint idx = by + suby;
+			int cur = idx < BIN_COUNT_Y && idx > 0 ? s_rows[idx - 1] : 0, temp;
+			for(int i = 1; i < xbin_count; i <<= 1) {
+				temp = shuffleUpNV(cur, i, xbin_count);
+				cur += suby >= i ? temp : 0;
+			}
+			cur += accum;
+			if(idx < BIN_COUNT_Y) {
+				uint bidx = bx + idx * BIN_COUNT_X;
+				int value = BIN_QUAD_OFFSETS(bidx) + cur - BIN_QUAD_COUNTS(bidx);
+				BIN_QUAD_OFFSETS(bidx) = value;
+				BIN_QUAD_OFFSETS_TEMP(bidx) = value;
+			}
+			accum = shuffleNV(cur, xbin_count - 1, xbin_count);
+		}
+	}
+	barrier();
+}
+
+void dispatchSmallQuad(int quad_idx) {
 	uvec4 aabb = decodeAABB32(g_quad_aabbs[quad_idx]);
 #if BIN_SIZE == 64
 	// Encodes tile ranges within a single bin
@@ -93,148 +186,67 @@ void dispatchQuad(int quad_idx) {
 		}
 	}
 }
+void dispatchLargeQuad(int large_quad_idx, int num_large_quads) {
+	if(allInvocationsARB(large_quad_idx >= num_large_quads))
+		return;
 
-int prefixSum32(int accum) {
-	int temp;
-	uint sub_id = LIX & 31;
-	temp = shuffleUpNV(accum, 1, 32), accum += sub_id >= 1 ? temp : 0;
-	temp = shuffleUpNV(accum, 2, 32), accum += sub_id >= 2 ? temp : 0;
-	temp = shuffleUpNV(accum, 4, 32), accum += sub_id >= 4 ? temp : 0;
-	temp = shuffleUpNV(accum, 8, 32), accum += sub_id >= 8 ? temp : 0;
-	temp = shuffleUpNV(accum, 16, 32), accum += sub_id >= 16 ? temp : 0;
-	return accum;
+	int num_samples = 0;
+	ivec4 quad_info;
+
+	if(large_quad_idx < num_large_quads) {
+		int quad_idx = (MAX_QUADS - 1) - large_quad_idx;
+		const uint shift = BIN_SIZE == 64 ? BIN_SHIFT - TILE_SHIFT : 0;
+		uvec4 aabb = decodeAABB32(g_quad_aabbs[quad_idx]) >> shift;
+		int width = int(aabb[2] - aabb[0] + 1), height = int(aabb[3] - aabb[1] + 1);
+		int base_offset = int(aabb[0] + aabb[1] * BIN_COUNT_X);
+		quad_info = ivec4(quad_idx, base_offset, width, height * BIN_COUNT_X);
+		num_samples = width * height;
+	}
+
+	int warp_offset = int(LIX & ~31), warp_sub_id = int(LIX & 31);
+	int sample_offset = prefixSum32(num_samples);
+	int warp_num_samples = shuffleNV(sample_offset, 31, 32);
+	sample_offset -= num_samples;
+
+	int segment_size = (warp_num_samples + 31) / 32;
+	// TODO: use float division somehow? or uint division at least
+	int segment_id = sample_offset / segment_size;
+	int segment_offset = sample_offset - segment_id * segment_size;
+	if(segment_offset == 0)
+		s_segments[warp_offset + segment_id] = warp_sub_id;
+	for(int k = 1; segment_offset + num_samples > segment_size * k && k + segment_id < 32; k++)
+		s_segments[warp_offset + segment_id + k] = warp_sub_id;
+
+	int first_quad = s_segments[LIX];
+	int first_sample_id = warp_sub_id * segment_size;
+	int cur_offset = first_sample_id - shuffleNV(sample_offset, first_quad, 32);
+	int cur_samples = min(segment_size, warp_num_samples - first_sample_id);
+	ivec4 cur_info = shuffleNV(quad_info, first_quad, 32);
+	// TODO: floor(cur_offset * s_inv_widths[cur_width])
+	int cur_y = cur_offset / cur_info[2];
+	int cur_x = cur_offset - cur_y * cur_info[2];
+	cur_y *= BIN_COUNT_X;
+
+	// TODO: somehow process 4 samples at once?
+	for(int i = 0; i < segment_size; i++) {
+		// 0:quad_idx 1:base_offset 2:width 3:height
+		ivec4 cur_info = shuffleNV(quad_info, first_quad, 32);
+
+		if(i < cur_samples) {
+			uint quad_offset = atomicAdd(s_bins[cur_info[1] + cur_x + cur_y], 1);
+			// TODO: tile ranges
+			g_bin_quads[quad_offset] = cur_info[0];
+			cur_x++;
+			if(cur_x == cur_info[2]) {
+				cur_x = 0, cur_y += BIN_COUNT_X;
+				if(cur_y == cur_info[3])
+					cur_y = 0, first_quad++;
+			}
+		}
+	}
 }
 
-void accumulateLargeQuadCounts() {
-	// Accumulating large quad counts across columns
-	if(LIX < BIN_COUNT_X * xbin_count) {
-		uint bx = LIX >> xbin_step;
-		int accum = 0;
-		for(uint by = 0, suby = LIX & (xbin_count - 1); by < BIN_COUNT_Y; by += xbin_count) {
-			uint idx = bx + (by + suby) * BIN_COUNT_X;
-			int cur = by + suby < BIN_COUNT_Y ? s_bins[idx] : 0, temp;
-			for(int i = 1; i < xbin_count; i <<= 1) {
-				temp = shuffleUpNV(cur, i, xbin_count);
-				cur += suby >= i ? temp : 0;
-			}
-			cur += accum;
-			if(by + suby < BIN_COUNT_Y)
-				s_bins[idx] = cur;
-			accum = shuffleNV(cur, xbin_count - 1, xbin_count);
-		}
-	}
-
-	// Accumulating bin rows (within warps)
-	if(LIX < BIN_COUNT_Y) {
-		int accum = prefixSum32(s_rows[LIX]);
-		s_rows[LIX] = accum;
-		if((LIX & 31) == 31)
-			s_row_warps[LIX >> 5] = accum;
-	}
-	barrier();
-
-	// Accumulating large quad counts across rows
-	if(LIX < BIN_COUNT_Y * ybin_count) {
-		uint by = LIX >> ybin_step;
-		int accum = 0;
-		for(uint bx = 0, subx = LIX & (ybin_count - 1); bx < BIN_COUNT_X; bx += ybin_count) {
-			uint idx = bx + subx + by * BIN_COUNT_X;
-			int cur = bx + subx < BIN_COUNT_X ? s_bins[idx] : 0, temp;
-			for(int i = 1; i < ybin_count; i <<= 1) {
-				temp = shuffleUpNV(cur, i, ybin_count);
-				cur += subx >= i ? temp : 0;
-			}
-			cur += accum;
-			if(bx + subx < BIN_COUNT_X)
-				s_bins[idx] = cur;
-			accum = shuffleNV(cur, ybin_count - 1, ybin_count);
-		}
-	}
-	// Accumulating bin rows (adding previous warps)
-	if(LIX < BIN_COUNT_Y) {
-		int prev_warps = 0, warp_id = int(LIX >> 5);
-		for(int i = 0; i < warp_id; i++)
-			prev_warps += s_row_warps[i];
-		atomicAdd(BIN_ROWS_LARGE_QUAD_COUNTS(LIX), s_rows[LIX] + prev_warps);
-	}
-	barrier();
-	for(uint i = LIX; i < BIN_COUNT; i += LSIZE)
-		if(s_bins[i] > 0) {
-			atomicAdd(BIN_QUAD_COUNTS(i), s_bins[i]);
-			s_bins[i] = 0;
-		}
-	barrier();
-}
-
-void computeOffsets() {
-	// TODO: no need for groupMemoryBarrier ?
-
-	// Computing offsets of large quad counts within bin rows
-	if(LIX < BIN_COUNT_Y) {
-		int accum = prefixSum32(BIN_ROWS_LARGE_QUAD_COUNTS(LIX));
-		s_rows[LIX] = accum;
-		if((LIX & 31) == 31)
-			s_row_warps[LIX >> 5] = accum;
-	}
-
-	// Computing bin quad counts offsets
-	if(LIX < BIN_COUNT_Y * ybin_count) {
-		uint by = LIX >> ybin_step;
-		int accum = 0;
-		for(uint bx = 0, subx = LIX & (ybin_count - 1); bx < BIN_COUNT_X; bx += ybin_count) {
-			uint idx = bx + subx + by * BIN_COUNT_X;
-			int cur = bx + subx < BIN_COUNT_X ? BIN_QUAD_COUNTS(idx) : 0, temp;
-			for(int i = 1; i < ybin_count; i <<= 1) {
-				temp = shuffleUpNV(cur, i, ybin_count);
-				cur += subx >= i ? temp : 0;
-			}
-			cur += accum;
-			if(bx + subx < BIN_COUNT_X)
-				BIN_QUAD_OFFSETS(idx) = cur;
-			accum = shuffleNV(cur, ybin_count - 1, ybin_count);
-		}
-	}
-	barrier();
-	if(LIX < BIN_COUNT_Y) {
-		// Finishing computation of bin rows offsets
-		int prev_warps = 0, warp_id = int(LIX >> 5);
-		for(int i = 0; i < warp_id; i++)
-			prev_warps += s_row_warps[i];
-		int count = BIN_ROWS_LARGE_QUAD_COUNTS(LIX);
-		int value = s_rows[LIX] + prev_warps;
-		BIN_ROWS_LARGE_QUAD_OFFSETS(LIX) = value - count;
-		BIN_ROWS_LARGE_QUAD_OFFSETS_TEMP(LIX) = value - count;
-		if(LIX == BIN_COUNT_Y - 1)
-			g_bins.num_bin_rows_quads = value;
-
-		// Storing accumulated bin quad counts for each row
-		s_rows[LIX] = BIN_QUAD_OFFSETS((BIN_COUNT_X - 1) + LIX * BIN_COUNT_X);
-	}
-	barrier();
-	if(LIX < BIN_COUNT_X * xbin_count) {
-		uint bx = LIX >> xbin_step;
-		int accum = 0;
-		for(uint by = 0, suby = LIX & (xbin_count - 1); by < BIN_COUNT_Y; by += xbin_count) {
-			uint idx = by + suby;
-			int cur = idx < BIN_COUNT_Y && idx > 0 ? s_rows[idx - 1] : 0, temp;
-			for(int i = 1; i < xbin_count; i <<= 1) {
-				temp = shuffleUpNV(cur, i, xbin_count);
-				cur += suby >= i ? temp : 0;
-			}
-			cur += accum;
-			if(idx < BIN_COUNT_Y) {
-				uint bidx = bx + idx * BIN_COUNT_X;
-				int value = BIN_QUAD_OFFSETS(bidx) + cur - BIN_QUAD_COUNTS(bidx);
-				BIN_QUAD_OFFSETS(bidx) = value;
-				BIN_QUAD_OFFSETS_TEMP(bidx) = value;
-			}
-			accum = shuffleNV(cur, xbin_count - 1, xbin_count);
-		}
-	}
-	barrier();
-}
-
-shared int s_num_quads[2], s_num_bin_row_quads;
+shared int s_num_quads[2], s_size_type;
 shared int s_quads_offset;
 shared uint s_num_finished;
 shared int s_item_id, s_num_items;
@@ -250,10 +262,13 @@ void main() {
 		// TODO: we can probably improve perf by dividing work more evenly
 		// Two types of quads make it a bit tricky
 		if(LIX == 0) {
-			s_num_all_items = (s_num_quads[0] + ITEM_SIZE - 1) / ITEM_SIZE;
+			int num_small_quads = (s_num_quads[0] + ITEM_SIZE - 1) / ITEM_SIZE;
+			int num_large_quads = (s_num_quads[1] + LSIZE - 1) / LSIZE;
+			s_num_all_items = num_small_quads + num_large_quads;
 			s_item_id = 0;
 		}
 	}
+
 	for(uint i = LIX; i < BIN_COUNT; i += LSIZE)
 		s_bins[i] = 0;
 	if(LIX < BIN_COUNT_Y)
@@ -262,21 +277,23 @@ void main() {
 
 	// Computing large quads bin coverage
 	int num_quads = s_num_quads[1];
-	while(num_quads > 0) {
-		if(LIX == 0)
-			s_quads_offset = atomicAdd(g_bins.num_estimated_visible_quads[1], ITEM_SIZE);
+	while(num_quads > 0 && s_item_id < MAX_BIN_WORKGROUP_ITEMS - 1) {
+		if(LIX == 0) {
+			int quads_offset = atomicAdd(g_bins.num_estimated_visible_quads[1], LSIZE);
+			if(quads_offset < num_quads)
+				s_workgroup_items[s_item_id++] = -quads_offset - 1;
+			s_quads_offset = quads_offset;
+		}
 		barrier();
 
-		int quad_offset = s_quads_offset;
-		if(quad_offset >= num_quads)
+		int large_quads_offset = s_quads_offset;
+		if(large_quads_offset >= num_quads)
 			break;
 
-		for(int s = 0; s < ITEM_STEPS; s++) {
-			int quad_idx = quad_offset + (LSIZE * s) + int(LIX);
-			if(quad_idx >= num_quads)
-				break;
-			countLargeQuadBins((MAX_QUADS - 1) - quad_idx);
-		}
+		int large_quad_idx = large_quads_offset + int(LIX);
+		if(large_quad_idx < num_quads)
+			countLargeQuadBins((MAX_QUADS - 1) - large_quad_idx);
+
 		barrier();
 	}
 
@@ -285,7 +302,7 @@ void main() {
 
 	// Computing small quads bin coverage
 	num_quads = s_num_quads[0];
-	while(s_item_id < MAX_BIN_WORKGROUP_ITEMS - 1) {
+	while(num_quads > 0 && s_item_id < MAX_BIN_WORKGROUP_ITEMS - 1) {
 		if(LIX == 0) {
 			int quads_offset = atomicAdd(g_bins.num_estimated_visible_quads[0], ITEM_SIZE);
 			if(quads_offset < num_quads)
@@ -353,80 +370,29 @@ void main() {
 			s_bins[i] = atomicAdd(BIN_QUAD_OFFSETS_TEMP(i), s_bins[i]);
 	barrier();
 
-	// Dispatching small quads
-	num_quads = s_num_quads[0];
+	// Dispatching quads
 	while(s_item_id < s_num_items) {
 		barrier();
-		if(LIX == 0)
-			s_quads_offset = s_workgroup_items[s_item_id++];
+		if(LIX == 0) {
+			int quads_offset = s_workgroup_items[s_item_id++];
+			s_size_type = quads_offset < 0 ? 1 : 0;
+			s_quads_offset = quads_offset < 0 ? -quads_offset - 1 : quads_offset;
+		}
 		barrier();
 		int quads_offset = s_quads_offset;
+		int size_type = s_size_type;
 
-		for(int s = 0; s < ITEM_STEPS; s++) {
-			int quad_idx = quads_offset + LSIZE * s + int(LIX);
-			if(quad_idx >= num_quads)
-				break;
-			dispatchQuad(quad_idx);
+		if(size_type == 0) { // Small quads
+			int num_quads = s_num_quads[0];
+			for(int s = 0; s < ITEM_STEPS; s++) {
+				int quad_idx = quads_offset + LSIZE * s + int(LIX);
+				if(quad_idx >= num_quads)
+					break;
+				dispatchSmallQuad(quad_idx);
+			}
+		} else { // Large quads
+			dispatchLargeQuad(quads_offset + int(LIX), s_num_quads[1]);
 		}
 	}
 	barrier();
-
-	num_quads = s_num_quads[1];
-	if(num_quads == 0)
-		return;
-	// Dispatching large quads to bin rows
-	while(true) {
-		if(LIX == 0)
-			s_quads_offset = atomicAdd(g_bins.num_dispatched_visible_quads[0], LSIZE);
-		barrier();
-
-		int quad_offset = s_quads_offset;
-		if(quad_offset >= num_quads)
-			break;
-
-		if(LIX < BIN_COUNT_Y)
-			s_rows[LIX] = 0;
-		barrier();
-
-		int large_quad_idx = quad_offset + int(LIX);
-		int quad_idx = (MAX_QUADS - 1) - large_quad_idx;
-		uint bsy, bey;
-		if(large_quad_idx < num_quads) {
-			const uint shift = BIN_SIZE == 64 ? BIN_SHIFT - TILE_SHIFT : 0;
-			uvec4 aabb = decodeAABB32(g_quad_aabbs[quad_idx]) >> shift;
-			bsy = aabb[1], bey = aabb[3];
-			atomicAdd(s_rows[bsy], 1);
-			atomicAdd(s_rows[bey + 1], -1);
-
-			atomicAdd(g_bins.num_bin_large_quads, int((aabb[2] - aabb[0] + 1) * (bey - bsy + 1)));
-		}
-		barrier();
-		// Accumulating current quad counts for each row (within warps)
-		if(LIX < BIN_COUNT_Y) {
-			int accum = prefixSum32(s_rows[LIX]);
-			s_rows[LIX] = accum;
-			if((LIX & 31) == 31)
-				s_row_warps[LIX >> 5] = accum;
-		}
-		barrier();
-		// Reserving ranges for quad indices in rows
-		if(LIX < BIN_COUNT_Y) {
-			int prev_warps = 0, warp_id = int(LIX >> 5);
-			for(int i = 0; i < warp_id; i++)
-				prev_warps += s_row_warps[i];
-			int value = s_rows[LIX] + prev_warps;
-			if(value > 0)
-				s_rows[LIX] = atomicAdd(BIN_ROWS_LARGE_QUAD_OFFSETS_TEMP(LIX), value);
-		}
-		barrier();
-		// Dispatching quad indices to bin rows
-		// TODO: this work can be more fairly divided among threads
-		if(large_quad_idx < num_quads)
-			for(uint by = bsy; by <= bey; by++) {
-				uint row_quad_offset = atomicAdd(s_rows[by], 1);
-				g_bin_row_quads[row_quad_offset] = (quad_idx & 0xffffff) | (by << 24);
-			}
-
-		barrier();
-	}
 }

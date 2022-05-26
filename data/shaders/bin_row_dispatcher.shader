@@ -51,20 +51,6 @@ void main() {
 		s_rows[LIX] = 0;
 	barrier();
 
-	// Jak równomiernie roz³o¿yæ pracê ?
-	// Ka¿dy quad-row generuje ileœ tam bloków w rzêdzie
-	// Mamy w sumie ileœ tam bloków do przetworzenia, jak je roz³o¿yæ równomiernie ?
-	// Róbmy równomiernie w ramach warpa ?
-	//
-	// Generujemy sample ? aby to robiæ efektywnie musielibyœmy mieæ segmenty
-	// To mo¿e od razu przy generowaniu rzêdów generujmy segmenty? zapisujmy do segmentu
-	//
-	// Wiemy ile ma byæ docelowo bin-quadów, wiêc wiemy ile ma byæ segmentów
-	// Segment ma np. 1024 bin-quady
-
-	// Czy da siê bez segmentów ?
-	// Mo¿e móg³bym ew. wyznaczyæ segmenty tutaj ?
-
 	// Dispatching large quads from rows to bins
 	int row_num_quads = s_num_row_quads;
 	while(true) {
@@ -126,6 +112,10 @@ void main() {
 		if(LIX < BIN_COUNT_Y * ybin_count) {
 			uint by = LIX >> ybin_step;
 			int accum = 0;
+			// TODO: jak to zrobiæ po kwadratach? chyba siê nie da unin¹æ modulo?
+			// Chyba, ¿e bym wyznaczy³ offset x & y ?
+			// Mo¿e da³oby siê jakoœ stablicowac div ? stablicowaæ odwrotnoœci
+
 			for(uint bx = 0, subx = LIX & (ybin_count - 1); bx < BIN_COUNT_X; bx += ybin_count) {
 				uint idx = bx + subx + by * BIN_COUNT_X;
 				int cur = bx + subx < BIN_COUNT_X ? s_bins[idx] : 0, temp;

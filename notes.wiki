@@ -240,3 +240,26 @@ san-miguel: 5319   955    318   3896
     sponza: 3927   63     215   3502
     teapot: 400    24     29    307
  white_oak: 13031  24     377   12495
+
+ with rows:
+             total  setup  bins  raster_bin
+    #boxes: 1580   25     56    1447
+     bunny: 400    29     38    287
+conference: 1384   46     56    1157
+  hairball: 1811   539    328   854
+powerplant: 3474   1517   324   1506
+    sponza: 3814   60     61    3533
+ white_oak: 12683  22     124   12398
+
+ without rows only segments:
+            total  setup  bins  raster_bin
+    #boxes: 1549   25     38    1435
+     bunny: 391    29     31    285
+conference: 1370   46     51    1149
+    dragon: 897    138    61    652
+  hairball: 1754   541    283   848
+powerplant: 3399   1516   225   1523
+san-miguel: 5221   956    195   3898
+    sponza: 3859   61     83    3565
+    teapot: 411    25     36    313
+ white_oak: 12770  25     171   12404

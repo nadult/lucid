@@ -433,10 +433,10 @@ void LucidRenderer::computeBins(const Context &ctx) {
 	dispatchIndirect(BIN_COUNTERS_MEMBER_OFFSET(num_binning_dispatches));
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 
-	PERF_SIBLING_SCOPE("row dispatcher phase");
+	/*PERF_SIBLING_SCOPE("row dispatcher phase");
 	bin_row_dispatcher_program.use();
 	dispatchIndirect(BIN_COUNTERS_MEMBER_OFFSET(num_binning_dispatches));
-	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);*/
 
 	PERF_SIBLING_SCOPE("categorizer phase");
 	bin_categorizer_program.use();

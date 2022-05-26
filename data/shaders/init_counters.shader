@@ -4,7 +4,7 @@
 #define LIX gl_LocalInvocationIndex
 #define WGID gl_WorkGroupID
 
-#define LSIZE 128
+#define LSIZE 256
 
 BIN_COUNTERS_BUFFER(0);
 TILE_COUNTERS_BUFFER(1);

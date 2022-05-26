@@ -248,7 +248,7 @@ void dispatchLargeQuad(int large_quad_idx, int num_large_quads) {
 
 shared int s_num_quads[2], s_size_type;
 shared int s_quads_offset;
-shared uint s_num_finished;
+shared uint s_num_finished; // TODO: name
 shared int s_item_id, s_num_items;
 shared int s_num_processed_items, s_num_all_items;
 
@@ -257,6 +257,8 @@ shared int s_num_processed_items, s_num_all_items;
 shared int s_workgroup_items[MAX_BIN_WORKGROUP_ITEMS];
 
 void main() {
+	uint64_t clock0 = clockARB();
+
 	if(LIX < 2) {
 		s_num_quads[LIX] = g_bins.num_visible_quads[LIX];
 		// TODO: we can probably improve perf by dividing work more evenly
@@ -395,4 +397,6 @@ void main() {
 		}
 	}
 	barrier();
+
+	g_bins.dispatcher_timings[s_num_finished] = int(clockARB() - clock0);
 }

@@ -1582,6 +1582,10 @@ void LucidRenderer::compose(const Context &ctx) {
 }
 
 void LucidRenderer::copyCounters() {
+	static int iter = 0;
+	if(iter++ % 30 != 0)
+		return;
+
 	auto last = m_old_counters.back();
 	for(int i = m_old_counters.size() - 1; i > 0; i--)
 		m_old_counters[i] = m_old_counters[i - 1];
@@ -1725,10 +1729,28 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 		{"big bins", format_percentage(bins.num_big_bins, sum_bins)},
 	};
 
+	string dispatcher_info;
+	{
+		auto timings = span(bins.dispatcher_timings, bins.a_dispatcher_active_thread_groups);
+		for(auto &value : timings)
+			value *= 0.001;
+		float sum = accumulate(timings);
+		float average = sum / timings.size();
+
+		float var = 0.0;
+		for(auto value : timings)
+			var += square(value - average);
+		var /= timings.size();
+
+		dispatcher_info =
+			toString(span(bins.dispatcher_item_counts, bins.a_dispatcher_active_thread_groups));
+		dispatcher_info += stdFormat("\nThread-group computation time variance: %.2f", var);
+	}
+
 	vector<StatsRow> basic_rows = {
 		{"input instances", toString(m_num_instances)},
 		{"dispatch active groups", toString(bins.a_dispatcher_active_thread_groups),
-		 toString(span(bins.dispatcher_item_counts, bins.a_dispatcher_active_thread_groups))},
+		 dispatcher_info},
 		{"input quads", toString(bins.num_input_quads)},
 		{"visible quads", visible_info, visible_details},
 		{"rejected quads", rejected_info, rejection_details},

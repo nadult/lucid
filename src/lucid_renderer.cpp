@@ -165,7 +165,8 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	m_raster_image.emplace(BufferType::shader_storage,
 						   m_bin_count * square(m_bin_size) * sizeof(u32));
 
-	if(m_opts & (Opt::check_bins | Opt::check_tiles | Opt::debug_masks | Opt::debug_raster))
+	if(m_opts &
+	   (Opt::debug_bin_dispatcher | Opt::check_tiles | Opt::debug_masks | Opt::debug_raster))
 		m_errors.emplace(BufferType::shader_storage, 1024 * 1024 * 4, BufferUsage::dynamic_read);
 
 	ShaderDefs defs;
@@ -209,7 +210,8 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 
 	if(m_opts & Opt::raster_timings)
 		defs["ENABLE_TIMINGS"] = 1;
-	bin_dispatcher_program = EX_PASS(Program::makeCompute("bin_dispatcher", defs));
+	bin_dispatcher_program = EX_PASS(Program::makeCompute(
+		"bin_dispatcher", defs, mask(m_opts & Opt::debug_bin_dispatcher, ProgramOpt::debug)));
 
 	if(m_opts & Opt::additive_blending)
 		defs["ADDITIVE_BLENDING"] = 1;
@@ -274,10 +276,7 @@ void LucidRenderer::render(const Context &ctx) {
 	initCounters(ctx);
 	uploadInstances(ctx);
 	setupQuads(ctx);
-
 	computeBins(ctx);
-	if(m_opts & Opt::check_bins)
-		checkBins();
 
 	if(m_bin_size == 64) {
 		computeTiles(ctx);
@@ -325,8 +324,6 @@ void LucidRenderer::initCounters(const Context &ctx) {
 	m_tile_counters->bindIndex(1);
 	init_counters_program.use();
 	init_counters_program["num_verts"] = num_verts;
-	if(m_opts & Opt::check_bins)
-		shaderDebugUseBuffer(m_errors);
 	glDispatchCompute(1, 1, 1);
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 }
@@ -422,8 +419,24 @@ void LucidRenderer::computeBins(const Context &ctx) {
 
 	PERF_CHILD_SCOPE("dispatcher phase");
 	bin_dispatcher_program.use();
-	dispatchIndirect(BIN_COUNTERS_MEMBER_OFFSET(num_binning_dispatches));
+	if(m_opts & Opt::debug_bin_dispatcher)
+		shaderDebugUseBuffer(m_errors);
+	if(m_opts & Opt::debug_bin_dispatcher)
+		glDispatchCompute(128, 1, 1);
+	else
+		dispatchIndirect(BIN_COUNTERS_MEMBER_OFFSET(num_binning_dispatches));
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+
+	if(m_opts & Opt::debug_bin_dispatcher) {
+		auto source_ranges = bin_dispatcher_program.sourceRanges();
+		auto records = shaderDebugRecords(m_errors, {1024, 1, 1}, {128, 1, 1}, 256, source_ranges);
+		if(records) {
+			makeSorted(records);
+			print("Bin-dispatcher messages:\n");
+			for(auto &record : records)
+				print("%\n", record);
+		}
+	}
 
 	PERF_SIBLING_SCOPE("categorizer phase");
 	bin_categorizer_program.use();
@@ -452,55 +465,6 @@ void LucidRenderer::computeTiles(const Context &ctx) {
 		shaderDebugUseBuffer(m_errors);
 	dispatchIndirect(BIN_COUNTERS_MEMBER_OFFSET(num_tiling_dispatches));
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
-}
-
-void LucidRenderer::checkBins() {
-	vector<int> bin_quad_counts, bin_quad_offsets, bin_quad_offsets2;
-	int num_binned_quads, num_input_quads;
-	int bin_count = m_bin_counts.x * m_bin_counts.y;
-
-	{
-		auto vals = m_bin_counters->map<int>(AccessMode::read_only);
-		num_input_quads = vals[1];
-		num_binned_quads = vals[2];
-		vals = vals.subSpan(BIN_COUNTERS_SIZE);
-		bin_quad_counts = vals.subSpan(bin_count * 0, bin_count * 1);
-		bin_quad_offsets = vals.subSpan(bin_count * 1, bin_count * 2);
-		bin_quad_offsets2 = vals.subSpan(bin_count * 2, bin_count * 3);
-		m_bin_counters->unmap();
-	}
-
-	int max_width = 40, max_height = 60;
-	if(auto dim = consoleDimensions()) {
-		max_width = (dim->x - 1) / 6;
-		max_height = dim->y * 3 / 4;
-	}
-
-	print("Checking bins:\n");
-	print("Input quads:%\nBinned quads:%\n", num_input_quads, num_binned_quads);
-	print("\nBin quad counts:\n");
-	for(int y = 0; y < min(max_height, m_bin_counts.y); y++) {
-		for(int x = 0; x < min(max_width, m_bin_counts.x); x++) {
-			int count = bin_quad_counts[x + y * m_bin_counts.x];
-			printf("%6d ", count);
-		}
-		printf("\n");
-	}
-
-	int cur_offset = 0, num_errors = 0;
-	for(int y = 0; y < m_bin_counts.y; y++) {
-		for(int x = 0; x < m_bin_counts.x; x++) {
-			int idx = x + y * m_bin_counts.x;
-			if(cur_offset != bin_quad_offsets[idx] && num_errors++ < 1)
-				print("Invalid offset at (%, %): % (should be: %)\n", x, y, bin_quad_offsets[idx],
-					  cur_offset);
-			if(bin_quad_counts[idx] != bin_quad_offsets2[idx] - bin_quad_offsets[idx] &&
-			   num_errors++ < 1)
-				print("Quad count & estimate does not match at (%, %)\n", x, y);
-			cur_offset += bin_quad_counts[idx];
-		}
-	}
-	print("\n");
 }
 
 void LucidRenderer::checkTiles() {
@@ -1594,16 +1558,12 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 	if(!m_old_counters.back().first)
 		return out;
 
-	// TODO: double/triple buffering to avoid stall
-	int bin_count = m_bin_counts.x * m_bin_counts.y;
 	auto bin_counters = m_old_counters.back().first->download<u32>();
 	auto tile_counters = m_old_counters.back().second->download<u32>();
-
 	shader::BinCounters bins;
 	shader::TileCounters tiles;
 	memcpy(&bins, bin_counters.data(), sizeof(bins));
 	memcpy(&tiles, tile_counters.data(), sizeof(tiles));
-
 	bin_counters.erase(bin_counters.begin(), bin_counters.begin() + BIN_COUNTERS_SIZE);
 	tile_counters.erase(tile_counters.begin(), tile_counters.begin() + TILE_COUNTERS_SIZE);
 
@@ -1636,7 +1596,7 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 		bins.num_empty_bins + bins.num_small_bins + bins.num_medium_bins + bins.num_big_bins;
 	bool is_tile_dispatcher_running = bins.num_tiled_bins > 0 && !(m_opts & Opt::bin_size_32);
 
-	for(int b = 0; b < bin_count; b++) {
+	for(int b = 0; b < m_bin_count; b++) {
 		bool empty = true;
 		if(is_tile_dispatcher_running)
 			for(int t = 0; t < m_tiles_per_bin; t++) {

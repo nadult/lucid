@@ -6,8 +6,9 @@
 
 // TODO: better handling of phases
 // TODO: ability to change options without recreating renderer
-DEFINE_ENUM(LucidRenderOpt, check_bins, check_tiles, debug_masks, debug_raster, new_raster,
-			raster_timings, additive_blending, visualize_errors, alpha_threshold, bin_size_32);
+DEFINE_ENUM(LucidRenderOpt, check_tiles, debug_masks, debug_bin_dispatcher, debug_raster,
+			new_raster, raster_timings, additive_blending, visualize_errors, alpha_threshold,
+			bin_size_32);
 using LucidRenderOpts = EnumFlags<LucidRenderOpt>;
 
 struct RasterBlockInfo {
@@ -89,7 +90,6 @@ class LucidRenderer {
 	// .x: x0123, .y: y01, .z: y23
 	static array<uint, 256> computeCentroids4x4();
 
-	void checkBins();
 	void checkTiles();
 	void debugMasks();
 	void copyCounters();

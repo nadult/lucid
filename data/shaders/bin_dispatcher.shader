@@ -24,6 +24,7 @@ layout(std430, binding = 4) buffer buf4_ { uint g_bin_row_quads[]; };
 shared int s_bins[BIN_COUNT];
 shared int s_rows[BIN_COUNT_Y + 1];
 shared int s_segments[LSIZE]; // TODO: merge rows and segments into single array
+shared float s_inverses[BIN_COUNT_X + 1];
 
 // Constants useful for efficient processing of bin counts
 const int xbin_warps = LSIZE / BIN_COUNT_X, ybin_warps = LSIZE / BIN_COUNT_Y;
@@ -162,7 +163,7 @@ void computeOffsets() {
 	barrier();
 }
 
-void dispatchSmallQuad(int quad_idx) {
+void dispatchQuad(int quad_idx) {
 	uvec4 aabb = decodeAABB32(g_quad_aabbs[quad_idx]);
 #if BIN_SIZE == 64
 	// Encodes tile ranges within a single bin
@@ -189,6 +190,14 @@ void dispatchSmallQuad(int quad_idx) {
 		}
 	}
 }
+
+// This is an optimization of dispatchQuad which is more work efficient
+// This is especially useful if there is large variation in quad sizes
+// and for large quads in general
+//
+// Basic idea: within each warp we divide quads into segments which contain
+// more or less equal amount of bin-quad instances (samples in this context).
+// Each thread processes single segment.
 void dispatchLargeQuad(int large_quad_idx, int num_large_quads) {
 	if(allInvocationsARB(large_quad_idx >= num_large_quads))
 		return;
@@ -212,7 +221,6 @@ void dispatchLargeQuad(int large_quad_idx, int num_large_quads) {
 	sample_offset -= num_samples;
 
 	int segment_size = (warp_num_samples + 31) / 32;
-	// TODO: use float division somehow? or uint division at least
 	int segment_id = sample_offset / segment_size;
 	int segment_offset = sample_offset - segment_id * segment_size;
 	if(segment_offset == 0)
@@ -220,20 +228,19 @@ void dispatchLargeQuad(int large_quad_idx, int num_large_quads) {
 	for(int k = 1; segment_offset + num_samples > segment_size * k; k++)
 		s_segments[warp_offset + segment_id + k] = warp_sub_id;
 
-	int first_quad = s_segments[LIX];
-	int first_sample_id = warp_sub_id * segment_size;
-	int cur_offset = first_sample_id - shuffleNV(sample_offset, first_quad, 32);
-	int cur_samples = warp_num_samples - first_sample_id;
-	ivec4 cur_info = shuffleNV(quad_info, first_quad, 32);
-	// TODO: floor(cur_offset * s_inv_widths[cur_width])
-	int cur_y = cur_offset / cur_info[2];
+	int cur_quad_idx = s_segments[LIX];
+	int cur_sample_id = warp_sub_id * segment_size;
+	int cur_offset = cur_sample_id - shuffleNV(sample_offset, cur_quad_idx, 32);
+	int cur_samples = warp_num_samples - cur_sample_id;
+	ivec4 cur_info = shuffleNV(quad_info, cur_quad_idx, 32);
+	int cur_y = int((cur_offset + 0.5) * s_inverses[cur_info[2]]);
 	int cur_x = cur_offset - cur_y * cur_info[2];
 	cur_y *= BIN_COUNT_X;
 
 	// TODO: somehow process 4 samples at once?
 	for(int i = 0; i < segment_size; i++) {
 		// 0:quad_idx 1:base_offset 2:width 3:height
-		ivec4 cur_info = shuffleNV(quad_info, first_quad, 32);
+		ivec4 cur_info = shuffleNV(quad_info, cur_quad_idx, 32);
 
 		if(i < cur_samples) {
 			uint quad_offset = atomicAdd(s_bins[cur_info[1] + cur_x + cur_y], 1);
@@ -242,7 +249,7 @@ void dispatchLargeQuad(int large_quad_idx, int num_large_quads) {
 			if(cur_x == cur_info[2]) {
 				cur_x = 0, cur_y += BIN_COUNT_X;
 				if(cur_y == cur_info[3])
-					cur_y = 0, first_quad++;
+					cur_y = 0, cur_quad_idx++;
 			}
 		}
 	}
@@ -274,6 +281,8 @@ void main() {
 		}
 	}
 
+	if(LIX < BIN_COUNT_X + 1)
+		s_inverses[LIX] = 1.0 / float(LIX);
 	for(uint i = LIX; i < BIN_COUNT; i += LSIZE)
 		s_bins[i] = 0;
 	if(LIX < BIN_COUNT_Y)
@@ -392,14 +401,14 @@ void main() {
 				int quad_idx = quads_offset + LSIZE * s + int(LIX);
 				if(quad_idx >= num_quads)
 					break;
-				dispatchSmallQuad(quad_idx);
+				dispatchQuad(quad_idx);
 			}
 		} else { // Large quads
 #if BIN_SIZE == 64
 			int num_quads = s_num_quads[1];
 			int large_quad_idx = quads_offset + int(LIX);
 			if(large_quad_idx < num_quads)
-				dispatchSmallQuad((MAX_QUADS - 1) - large_quad_idx);
+				dispatchQuad((MAX_QUADS - 1) - large_quad_idx);
 #else
 			dispatchLargeQuad(quads_offset + int(LIX), s_num_quads[1]);
 #endif

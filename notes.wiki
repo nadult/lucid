@@ -253,13 +253,14 @@ powerplant: 3474   1517   324   1506
 
  without rows only segments:
             total  setup  bins  raster_bin
-    #boxes: 1549   25     38    1435
-     bunny: 391    29     31    285
-conference: 1370   46     51    1149
-    dragon: 897    138    61    652
-  hairball: 1754   541    283   848
-powerplant: 3399   1516   225   1523
-san-miguel: 5221   956    195   3898
-    sponza: 3859   61     83    3565
-    teapot: 411    25     36    313
- white_oak: 12770  25     171   12404
+    #boxes: 1560   25     35    1451
+     bunny: 393    29     30    287
+conference: 1379   46     50    1157
+    dragon: 899    137    58    652
+   gallery: 2615   181    75    2203
+  hairball: 1760   539    282   856
+powerplant: 3420   1518   230   1536
+san-miguel: 5198   955    188   3890
+    sponza: 3852   62     83    3556
+    teapot: 410    25     32    313
+ white_oak: 12730  22     173   12398

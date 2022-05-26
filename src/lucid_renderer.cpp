@@ -181,12 +181,12 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	defs["BIN_SHIFT"] = log2(m_bin_size);
 	defs["TILE_SHIFT"] = log2(m_tile_size);
 	defs["BLOCK_SHIFT"] = log2(m_block_size);
-	defs["MAX_LSIZE"] = gl_info->max_compute_work_group_size.x;
 	defs["XTILES_PER_BIN"] = m_bin_size / m_tile_size;
 	defs["TILES_PER_BIN"] = m_tiles_per_bin;
 	defs["BLOCKS_PER_TILE"] = m_blocks_per_tile;
 	defs["BLOCKS_PER_BIN"] = m_blocks_per_bin;
 	defs["MAX_LSIZE"] = gl_info->limits[GlLimit::max_compute_work_group_invocations];
+	defs["MAX_INSTANCE_QUADS"] = max_instance_quads;
 	defs["MAX_QUADS"] = max_quads;
 
 	defs["MAX_DISPATCHES"] = max_dispatches;
@@ -339,7 +339,7 @@ void LucidRenderer::uploadInstances(const Context &ctx) {
 
 	vector<IColor> mat_colors = transform(
 		ctx.materials, [](auto &mat) { return IColor(FColor(mat.diffuse, mat.opacity)); });
-	int max_instance_quads = gl_info->limits[GlLimit::max_compute_work_group_invocations];
+	//int max_instance_quads = gl_info->limits[GlLimit::max_compute_work_group_invocations];
 
 	m_num_quads = 0;
 	for(auto &dc : ctx.dcs) {

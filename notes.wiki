@@ -12,6 +12,7 @@ Bugi:
 - miganie na sponzie w górnej części (screenshot)
 - niedokładne wyznaczanie ilości trisów per tile (dużo więcej niż faktycznie)
 - przycinki przy niskiej kamerze na white oak
+- niepoprawne bin quad offsety w trybie 32x32 na boxach
 
 -----------------------------------------------------------------------------------------
                                  === Co dalej ===

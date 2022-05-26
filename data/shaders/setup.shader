@@ -2,7 +2,7 @@
 
 // ~80% of time goes to data loading
 
-#define LSIZE MAX_LSIZE
+#define LSIZE MAX_INSTANCE_QUADS
 layout(local_size_x = LSIZE) in;
 
 #define LID gl_LocalInvocationID

@@ -19,6 +19,4 @@ void main() {
 		g_tiles_plain[LIX] = 0;
 	for(uint i = LIX; i < BIN_COUNT; i += LSIZE)
 		BIN_QUAD_COUNTS(i) = 0;
-	if(LIX < BIN_COUNT_Y)
-		BIN_ROWS_LARGE_QUAD_COUNTS(LIX) = 0;
 }

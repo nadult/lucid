@@ -134,7 +134,6 @@
   <ItemGroup>
     <None Include="..\data\shaders\bin_categorizer.shader" />
     <None Include="..\data\shaders\bin_dispatcher.shader" />
-    <None Include="..\data\shaders\bin_row_dispatcher.shader" />
     <None Include="..\data\shaders\compose.shader" />
     <None Include="..\data\shaders\dummy.shader" />
     <None Include="..\data\shaders\final_raster.shader" />

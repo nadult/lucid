@@ -25,8 +25,6 @@ struct BinCounters {
 	int num_visible_quads[2]; // TODO: move
 	int num_estimated_visible_quads[2]; // TODO: naming
 	int num_dispatched_visible_quads[3];
-	int num_bin_rows_quads;
-	int num_bin_large_quads;
 
 	int num_finished_setup_groups;
 	int num_finished_bin_groups;
@@ -45,7 +43,7 @@ struct BinCounters {
 
 	int dispatcher_item_counts[128];
 	int dispatcher_timings[128];
-	int temp[15 + 64];
+	int temp[17 + 64];
 };
 
 #define BIN_COUNTERS_SIZE 384

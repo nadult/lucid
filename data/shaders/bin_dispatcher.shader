@@ -1,6 +1,9 @@
 // $$include funcs declarations
 
-// TODO: don't run too many groups if we have small amount of data (indirect dispatch)
+// TODO: we have to put workgroup items in GMEM: in case when there is
+// only 1 active thread-group, all items won't fit in small SMEM array
+
+// TODO: Do we want to perform rasterization here? Especially if we're dealing with slivers?
 
 #define LID gl_LocalInvocationID
 #define LIX gl_LocalInvocationIndex
@@ -214,13 +217,13 @@ void dispatchLargeQuad(int large_quad_idx, int num_large_quads) {
 	int segment_offset = sample_offset - segment_id * segment_size;
 	if(segment_offset == 0)
 		s_segments[warp_offset + segment_id] = warp_sub_id;
-	for(int k = 1; segment_offset + num_samples > segment_size * k && k + segment_id < 32; k++)
+	for(int k = 1; segment_offset + num_samples > segment_size * k; k++)
 		s_segments[warp_offset + segment_id + k] = warp_sub_id;
 
 	int first_quad = s_segments[LIX];
 	int first_sample_id = warp_sub_id * segment_size;
 	int cur_offset = first_sample_id - shuffleNV(sample_offset, first_quad, 32);
-	int cur_samples = min(segment_size, warp_num_samples - first_sample_id);
+	int cur_samples = warp_num_samples - first_sample_id;
 	ivec4 cur_info = shuffleNV(quad_info, first_quad, 32);
 	// TODO: floor(cur_offset * s_inv_widths[cur_width])
 	int cur_y = cur_offset / cur_info[2];
@@ -234,7 +237,6 @@ void dispatchLargeQuad(int large_quad_idx, int num_large_quads) {
 
 		if(i < cur_samples) {
 			uint quad_offset = atomicAdd(s_bins[cur_info[1] + cur_x + cur_y], 1);
-			// TODO: tile ranges
 			g_bin_quads[quad_offset] = cur_info[0];
 			cur_x++;
 			if(cur_x == cur_info[2]) {
@@ -247,8 +249,7 @@ void dispatchLargeQuad(int large_quad_idx, int num_large_quads) {
 }
 
 shared int s_num_quads[2], s_size_type;
-shared int s_quads_offset;
-shared uint s_num_finished; // TODO: name
+shared int s_quads_offset, s_active_thread_group_id;
 shared int s_item_id, s_num_items;
 shared int s_num_processed_items, s_num_all_items;
 
@@ -257,7 +258,9 @@ shared int s_num_processed_items, s_num_all_items;
 shared int s_workgroup_items[MAX_BIN_WORKGROUP_ITEMS];
 
 void main() {
+#ifdef ENABLE_TIMINGS
 	uint64_t clock0 = clockARB();
+#endif
 
 	if(LIX < 2) {
 		s_num_quads[LIX] = g_bins.num_visible_quads[LIX];
@@ -330,7 +333,6 @@ void main() {
 
 	// Thread groups which didn't do any estimation can quit early:
 	// they won't participate in dispatching either
-	// TODO: they could participate in large quad processing?
 	if(s_item_id == 0)
 		return;
 
@@ -342,11 +344,11 @@ void main() {
 
 	// Finishing estimation phase
 	if(LIX == 0) {
-		s_num_finished = atomicAdd(g_bins.a_dispatcher_active_thread_groups, 1);
+		s_active_thread_group_id = atomicAdd(g_bins.a_dispatcher_active_thread_groups, 1);
 		s_num_processed_items =
 			atomicAdd(g_bins.a_dispatcher_processed_items, s_item_id) + s_item_id;
 		s_num_items = s_item_id;
-		g_bins.dispatcher_item_counts[s_num_finished] = s_num_items;
+		g_bins.dispatcher_item_counts[s_active_thread_group_id] = s_num_items;
 		s_item_id = 0;
 	}
 	barrier();
@@ -393,10 +395,19 @@ void main() {
 				dispatchSmallQuad(quad_idx);
 			}
 		} else { // Large quads
+#if BIN_SIZE == 64
+			int num_quads = s_num_quads[1];
+			int large_quad_idx = quads_offset + int(LIX);
+			if(large_quad_idx < num_quads)
+				dispatchSmallQuad((MAX_QUADS - 1) - large_quad_idx);
+#else
 			dispatchLargeQuad(quads_offset + int(LIX), s_num_quads[1]);
+#endif
 		}
 	}
 	barrier();
 
-	g_bins.dispatcher_timings[s_num_finished] = int(clockARB() - clock0);
+#ifdef ENABLE_TIMINGS
+	g_bins.dispatcher_timings[s_active_thread_group_id] = int(clockARB() - clock0);
+#endif
 }

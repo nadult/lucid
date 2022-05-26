@@ -178,8 +178,5 @@
     <None Include="..\data\shaders\pieces\declarations.shader">
       <Filter>shaders\pieces</Filter>
     </None>
-    <None Include="..\data\shaders\bin_row_dispatcher.shader">
-      <Filter>shaders</Filter>
-    </None>
   </ItemGroup>
 </Project>

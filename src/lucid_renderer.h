@@ -101,7 +101,7 @@ class LucidRenderer {
 
 	// TODO: m_ prefix
 	Program init_counters_program, setup_program;
-	Program bin_dispatcher_program, bin_row_dispatcher_program, tile_dispatcher_program;
+	Program bin_dispatcher_program, tile_dispatcher_program;
 	Program bin_categorizer_program;
 	Program final_raster_program, mask_raster_program;
 	Program raster_bin_program, raster_tile_program, raster_block_program;
@@ -115,10 +115,10 @@ class LucidRenderer {
 
 	PFramebuffer m_initial_fbo;
 
-	int m_large_bin_size, m_bin_size, m_tile_size, m_block_size;
+	int m_bin_size, m_tile_size, m_block_size;
 	int m_blocks_per_bin, m_blocks_per_tile, m_tiles_per_bin;
 
-	int2 m_bin_counts, m_large_bin_counts;
+	int2 m_bin_counts;
 	int m_bin_count, m_tile_count;
 
 	int2 m_size;

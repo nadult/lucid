@@ -104,7 +104,6 @@ LucidRenderer::LucidRenderer() = default;
 FWK_MOVABLE_CLASS_IMPL(LucidRenderer)
 
 Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
-	m_large_bin_size = 128;
 	m_bin_size = opts & Opt::bin_size_32 ? 32 : 64;
 	m_tile_size = opts & Opt::bin_size_32 ? 8 : 16;
 	m_block_size = 4;
@@ -113,7 +112,6 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	m_blocks_per_tile = square(m_tile_size / m_block_size);
 	m_tiles_per_bin = square(m_bin_size / m_tile_size);
 
-	m_large_bin_counts = (view_size + int2(m_large_bin_size - 1)) / m_large_bin_size;
 	m_bin_counts = (view_size + int2(m_bin_size - 1)) / m_bin_size;
 	m_bin_count = m_bin_counts.x * m_bin_counts.y;
 	m_tile_count = m_bin_count * m_tiles_per_bin;
@@ -146,8 +144,7 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	m_quad_aabbs.emplace(BufferType::shader_storage, max_quads * sizeof(u32));
 	m_tri_aabbs.emplace(BufferType::shader_storage, max_quads * sizeof(int4));
 
-	uint bin_counters_size = BIN_COUNTERS_SIZE + m_bin_count * (max_dispatches + 10) +
-							 max_dispatches * max_bin_workgroup_items;
+	uint bin_counters_size = BIN_COUNTERS_SIZE + m_bin_count * 7;
 	uint tile_counters_size = TILE_COUNTERS_SIZE + m_tile_count * 4;
 	m_bin_counters.emplace(BufferType::shader_storage, bin_counters_size * sizeof(u32));
 	m_tile_counters.emplace(BufferType::shader_storage, tile_counters_size * sizeof(u32));
@@ -174,17 +171,12 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	ShaderDefs defs;
 	defs["VIEWPORT_SIZE_X"] = view_size.x;
 	defs["VIEWPORT_SIZE_Y"] = view_size.y;
-	defs["LARGE_BIN_COUNT"] = m_large_bin_counts.x * m_large_bin_counts.y;
-	defs["LARGE_BIN_COUNT_X"] = m_large_bin_counts.x;
-	defs["LARGE_BIN_COUNT_Y"] = m_large_bin_counts.y;
 	defs["BIN_COUNT"] = m_bin_count;
 	defs["BIN_COUNT_X"] = m_bin_counts.x;
 	defs["BIN_COUNT_Y"] = m_bin_counts.y;
-	defs["LARGE_BIN_SIZE"] = m_large_bin_size;
 	defs["BIN_SIZE"] = m_bin_size;
 	defs["TILE_SIZE"] = m_tile_size;
 	defs["BLOCK_SIZE"] = m_block_size;
-	defs["LARGE_BIN_SHIFT"] = log2(m_large_bin_size);
 	defs["BIN_SHIFT"] = log2(m_bin_size);
 	defs["TILE_SHIFT"] = log2(m_tile_size);
 	defs["BLOCK_SHIFT"] = log2(m_block_size);
@@ -205,8 +197,6 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 
 	init_counters_program = EX_PASS(Program::makeCompute("init_counters", defs));
 	setup_program = EX_PASS(Program::makeCompute("setup", defs));
-	bin_dispatcher_program = EX_PASS(Program::makeCompute("bin_dispatcher", defs));
-	bin_row_dispatcher_program = EX_PASS(Program::makeCompute("bin_row_dispatcher", defs));
 	bin_categorizer_program = EX_PASS(Program::makeCompute("bin_categorizer", defs));
 
 	if(m_bin_size == 64) {
@@ -219,6 +209,8 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 
 	if(m_opts & Opt::raster_timings)
 		defs["ENABLE_TIMINGS"] = 1;
+	bin_dispatcher_program = EX_PASS(Program::makeCompute("bin_dispatcher", defs));
+
 	if(m_opts & Opt::additive_blending)
 		defs["ADDITIVE_BLENDING"] = 1;
 	if(m_opts & Opt::visualize_errors)
@@ -432,11 +424,6 @@ void LucidRenderer::computeBins(const Context &ctx) {
 	bin_dispatcher_program.use();
 	dispatchIndirect(BIN_COUNTERS_MEMBER_OFFSET(num_binning_dispatches));
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
-
-	/*PERF_SIBLING_SCOPE("row dispatcher phase");
-	bin_row_dispatcher_program.use();
-	dispatchIndirect(BIN_COUNTERS_MEMBER_OFFSET(num_binning_dispatches));
-	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);*/
 
 	PERF_SIBLING_SCOPE("categorizer phase");
 	bin_categorizer_program.use();
@@ -1582,9 +1569,9 @@ void LucidRenderer::compose(const Context &ctx) {
 }
 
 void LucidRenderer::copyCounters() {
-	static int iter = 0;
-	if(iter++ % 30 != 0)
-		return;
+	//static int iter = 0;
+	//if(iter++ % 30 != 0)
+	//	return;
 
 	auto last = m_old_counters.back();
 	for(int i = m_old_counters.size() - 1; i > 0; i--)
@@ -1624,13 +1611,6 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 	CSpan<uint> bin_quad_offsets = cspan(bin_counters.data() + m_bin_count * 1, m_bin_count);
 	CSpan<uint> bin_quad_offsets_temp = cspan(bin_counters.data() + m_bin_count * 2, m_bin_count);
 
-	CSpan<uint> bin_rows_large_quad_counts =
-		cspan(bin_counters.data() + m_bin_count * 3, m_bin_counts.y);
-	CSpan<uint> bin_rows_large_quad_offsets =
-		cspan(bin_counters.data() + m_bin_count * 4, m_bin_counts.y);
-	CSpan<uint> bin_rows_large_quad_offsets_temp =
-		cspan(bin_counters.data() + m_bin_count * 5, m_bin_counts.y);
-
 	// Checking bins quad offsets
 	for(uint i = 0; i < m_bin_count; i++) {
 		int cur_value = bin_quad_counts[i];
@@ -1642,21 +1622,6 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 				  cur_offset + cur_value, cur_offset, cur_value);
 	}
 
-	// Checking bin-rows large quad offsets
-	for(int y = 0; y < m_bin_counts.y; y++) {
-		int prev_offset = y == 0 ? 0 : bin_rows_large_quad_offsets[y - 1];
-		int prev_value = y == 0 ? 0 : bin_rows_large_quad_counts[y - 1];
-		int cur_temp_offset = bin_rows_large_quad_offsets_temp[y];
-		int cur_offset = bin_rows_large_quad_offsets[y];
-		int cur_value = bin_rows_large_quad_counts[y];
-		if(cur_offset != prev_offset + prev_value)
-			print("Invalid bin-row large quad offset [%]: % != (offset:% + count:%)\n", y,
-				  cur_offset, prev_offset, prev_value);
-		if(cur_temp_offset != cur_offset + cur_value)
-			print("Invalid bin-row large quad temp-offset [%]: % != (offset:% + count:%)\n", y,
-				  cur_temp_offset, cur_offset, cur_value);
-	}
-
 	int num_pixels = m_size.x * m_size.y;
 	int num_tiles =
 		((m_size.x + m_tile_size - 1) / m_tile_size) * ((m_size.y + m_tile_size - 1) / m_tile_size);
@@ -1666,7 +1631,6 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 	int num_tile_tris = 0, num_nonempty_tiles = 0, num_nonempty_bins = 0;
 	int max_quads_per_bin = max(bin_quad_counts);
 	int num_bin_quads = accumulate(bin_quad_counts);
-	int num_bin_rows_lquads = accumulate(bin_rows_large_quad_counts);
 
 	int sum_bins =
 		bins.num_empty_bins + bins.num_small_bins + bins.num_medium_bins + bins.num_big_bins;
@@ -1729,22 +1693,18 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 		{"big bins", format_percentage(bins.num_big_bins, sum_bins)},
 	};
 
-	string dispatcher_info;
-	{
+	string dispatcher_info =
+		toString(span(bins.dispatcher_item_counts, bins.a_dispatcher_active_thread_groups));
+	if(m_opts & Opt::raster_timings) {
 		auto timings = span(bins.dispatcher_timings, bins.a_dispatcher_active_thread_groups);
-		for(auto &value : timings)
-			value *= 0.001;
 		float sum = accumulate(timings);
 		float average = sum / timings.size();
 
 		float var = 0.0;
 		for(auto value : timings)
 			var += square(value - average);
-		var /= timings.size();
-
-		dispatcher_info =
-			toString(span(bins.dispatcher_item_counts, bins.a_dispatcher_active_thread_groups));
-		dispatcher_info += stdFormat("\nThread-group computation time variance: %.2f", var);
+		var /= timings.size() * square(average);
+		dispatcher_info += stdFormat("\nComputation variance: %.4f", var);
 	}
 
 	vector<StatsRow> basic_rows = {
@@ -1755,8 +1715,6 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 		{"visible quads", visible_info, visible_details},
 		{"rejected quads", rejected_info, rejection_details},
 		{"bin quads", toString(num_bin_quads), "Per bin quads"},
-		{"bin large quads", toString(bins.num_bin_large_quads)},
-		{"bin-row large quads", toString(num_bin_rows_lquads), "Per bin row large quads"},
 		{"tile-tris", toString(num_tile_tris), "Per-tile triangles"},
 		{"estimated tile-tris", toString(tiles.num_tile_tris),
 		 "Estimating space needed for tile-tris is inaccurate"},

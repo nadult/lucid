@@ -6,7 +6,7 @@
 // NOTE: converting integer multiplications to shifts does not increase perf
 
 // Acceptable values: 128, 256, 512
-#define LSIZE 256
+#define LSIZE RASTER_LSIZE
 
 #define NUM_WARPS (LSIZE / 32)
 
@@ -286,10 +286,11 @@ void processQuads() {
 		uint second_tri = LIX & 1;
 		uint quad_idx = g_bin_quads[s_bin_quad_offset + i] & 0xffffff;
 
-		// TODO: ifdef
+#ifdef SHADER_DEBUG
 		if(quad_idx >= MAX_QUADS || (quad_idx >= g_info.num_visible_quads[0] &&
 									 quad_idx < (MAX_QUADS - 1 - g_info.num_visible_quads[1])))
 			atomicOr(s_raster_error, ~0);
+#endif
 
 		uvec4 aabb = g_tri_aabbs[quad_idx];
 		aabb = decodeAABB64(second_tri != 0 ? aabb.zw : aabb.xy);
@@ -501,12 +502,13 @@ void generateBlocks(uint bid) {
 	groupMemoryBarrier();
 
 #ifdef SHADER_DEBUG
-	for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_STEP) {
-		uint value = s_buffer[buf_offset + i];
-		uint prev_value = i == 0 ? 0 : s_buffer[buf_offset + i - 1];
-		if(value <= prev_value)
-			RECORD(i, tri_count, prev_value, value);
-	}
+	if(tri_count > 3)
+		for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_STEP) {
+			uint value = s_buffer[buf_offset + i];
+			uint prev_value = i == 0 ? 0 : s_buffer[buf_offset + i - 1];
+			if(value <= prev_value)
+				RECORD(i, tri_count, prev_value, value);
+		}
 #endif
 
 #define PREFIX_SUM_STEP(value, step)                                                               \
@@ -965,11 +967,13 @@ void rasterBin(int bin_id) {
 	barrier();
 	UPDATE_CLOCK(0);
 
+#ifdef SHADER_ERROR
 	if(s_raster_error != 0) {
 		for(uint bid = LIX >> 6; bid < num_blocks; bid += NUM_WARPS / 2)
 			visualizeErrors(bid);
 		return;
 	}
+#endif
 
 	//  bid: block (8x8) id; We have 8 x 8 = 64 blocks
 	// hbid: half block (8x4) id; We have 8 x 16 = 128 half blocks

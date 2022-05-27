@@ -19,6 +19,7 @@ class LucidRenderer {
 	static constexpr int max_width = 2560, max_height = 2048;
 	static constexpr int max_quads = 10 * 1024 * 1024, max_verts = 12 * 1024 * 1024;
 	static constexpr int max_instance_quads = 1024;
+	static constexpr int raster_lsize = 256;
 
 	LucidRenderer();
 	FWK_MOVABLE_CLASS(LucidRenderer)
@@ -51,14 +52,14 @@ class LucidRenderer {
 	// performance of simple constructs
 	void dummyIterateBins(const Context &);
 
+	void dispatchAndDebugProgram(Program &, int gsize, int lsize);
+
 	Opts m_opts;
 
-	// TODO: p_ prefix
-	Program init_counters_program, setup_program;
-	Program bin_dispatcher_program, tile_dispatcher_program;
-	Program bin_categorizer_program;
-	Program raster_low_program;
-	Program compose_program, dummy_program;
+	Program p_init_counters, p_setup;
+	Program p_bin_dispatcher, p_bin_categorizer;
+	Program p_raster_low;
+	Program p_compose, p_dummy;
 
 	PBuffer m_errors, m_scratch_32, m_scratch_64, m_instance_data, m_uv_rects;
 	PBuffer m_quad_indices, m_quad_aabbs, m_tri_aabbs;

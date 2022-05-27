@@ -171,7 +171,7 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	defs["TILES_PER_BIN"] = m_tiles_per_bin;
 	defs["BLOCKS_PER_TILE"] = m_blocks_per_tile;
 	defs["BLOCKS_PER_BIN"] = m_blocks_per_bin;
-	defs["MAX_LSIZE"] = gl_info->limits[GlLimit::max_compute_work_group_invocations];
+	defs["RASTER_LSIZE"] = raster_lsize;
 	defs["MAX_INSTANCE_QUADS"] = max_instance_quads;
 	defs["MAX_QUADS"] = max_quads;
 
@@ -182,13 +182,13 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	defs["BINNING_LSIZE"] = binning_lsize;
 	defs["BINNING_LSHIFT"] = log2(binning_lsize);
 
-	init_counters_program = EX_PASS(Program::makeCompute("init_counters", defs));
-	setup_program = EX_PASS(Program::makeCompute("setup", defs));
-	bin_categorizer_program = EX_PASS(Program::makeCompute("bin_categorizer", defs));
+	p_init_counters = EX_PASS(Program::makeCompute("init_counters", defs));
+	p_setup = EX_PASS(Program::makeCompute("setup", defs));
+	p_bin_categorizer = EX_PASS(Program::makeCompute("bin_categorizer", defs));
 
 	if(m_opts & Opt::raster_timings)
 		defs["ENABLE_TIMINGS"] = 1;
-	bin_dispatcher_program = EX_PASS(Program::makeCompute(
+	p_bin_dispatcher = EX_PASS(Program::makeCompute(
 		"bin_dispatcher", defs, mask(m_opts & Opt::debug_bin_dispatcher, ProgramOpt::debug)));
 
 	if(m_opts & Opt::additive_blending)
@@ -198,18 +198,18 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	if(m_opts & Opt::alpha_threshold)
 		defs["ALPHA_THRESHOLD"] = 1;
 
-	raster_low_program = EX_PASS(Program::makeCompute(
+	p_raster_low = EX_PASS(Program::makeCompute(
 		"raster_low", defs, mask(m_opts & Opt::debug_raster, ProgramOpt::debug)));
-	dummy_program = EX_PASS(Program::makeCompute("dummy", defs));
+	p_dummy = EX_PASS(Program::makeCompute("dummy", defs));
 
 	mkdirRecursive("temp").ignore();
-	if(auto disas = raster_low_program.getDisassembly())
+	if(auto disas = p_raster_low.getDisassembly())
 		saveFile("temp/raster_low.asm", *disas).ignore();
 
 	ShaderDefs compose_defs;
 	compose_defs["BIN_SIZE"] = m_bin_size;
 	compose_defs["BIN_SHIFT"] = log2(m_bin_size);
-	compose_program = EX_PASS(Program::make("compose", compose_defs, {"in_pos"}));
+	p_compose = EX_PASS(Program::make("compose", compose_defs, {"in_pos"}));
 
 	vector<u16> indices(m_bin_count * 6);
 	DASSERT(m_bin_count * 4 * 4 <= 64 * 1024);
@@ -229,6 +229,24 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 							 IndexType::uint16);
 
 	return {};
+}
+
+void LucidRenderer::dispatchAndDebugProgram(Program &program, int gsize, int lsize) {
+	program.use();
+	shaderDebugUseBuffer(m_errors);
+	glDispatchCompute(gsize, 1, 1);
+	auto source_ranges = program.sourceRanges();
+	auto records = shaderDebugRecords(m_errors, {lsize, 1, 1}, {gsize, 1, 1}, 256, source_ranges);
+	if(records) {
+		makeSorted(records);
+		print("TODO:name messages:\n");
+		for(auto &record : records)
+			print("%\n", record);
+	}
+}
+
+static void dispatchIndirect(int bin_counters_offset) {
+	glDispatchComputeIndirect((GLintptr)(bin_counters_offset * sizeof(int)));
 }
 
 void LucidRenderer::render(const Context &ctx) {
@@ -270,8 +288,8 @@ void LucidRenderer::initCounters(const Context &ctx) {
 	int num_verts = vbuffers[0]->size() / sizeof(float3);
 
 	m_info->bindIndex(0);
-	init_counters_program.use();
-	init_counters_program["num_verts"] = num_verts;
+	p_init_counters.use();
+	p_init_counters["num_verts"] = num_verts;
 	glDispatchCompute(1, 1, 1);
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 }
@@ -341,19 +359,14 @@ void LucidRenderer::setupQuads(const Context &ctx) {
 	m_quad_aabbs->bindIndex(5);
 	m_tri_aabbs->bindIndex(6);
 
-	auto &program = setup_program;
-	program["enable_backface_culling"] = ctx.config.backface_culling ? 1 : 0;
-	program["num_instances"] = m_num_instances;
-	program["view_proj_matrix"] = m_view_proj_matrix;
-	program.setFrustum(ctx.camera);
-	program.use();
+	p_setup["enable_backface_culling"] = ctx.config.backface_culling ? 1 : 0;
+	p_setup["num_instances"] = m_num_instances;
+	p_setup["view_proj_matrix"] = m_view_proj_matrix;
+	p_setup.setFrustum(ctx.camera);
+	p_setup.use();
 
 	glDispatchCompute((m_num_instances + 3) / 4, 1, 1);
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_COMMAND_BARRIER_BIT);
-}
-
-static void dispatchIndirect(int bin_counters_offset) {
-	glDispatchComputeIndirect((GLintptr)(bin_counters_offset * sizeof(int)));
 }
 
 void LucidRenderer::computeBins(const Context &ctx) {
@@ -364,31 +377,16 @@ void LucidRenderer::computeBins(const Context &ctx) {
 	m_bin_quads->bindIndex(2);
 
 	PERF_CHILD_SCOPE("dispatcher phase");
-	bin_dispatcher_program.use();
+	p_bin_dispatcher.use();
 
-	// TODO: add function for dispatch which handles debugging at the same time
 	if(m_opts & Opt::debug_bin_dispatcher)
-		shaderDebugUseBuffer(m_errors);
-	if(m_opts & Opt::debug_bin_dispatcher)
-		glDispatchCompute(m_max_dispatches, 1, 1);
+		dispatchAndDebugProgram(p_bin_dispatcher, m_max_dispatches, 1024);
 	else
 		dispatchIndirect(LUCID_INFO_MEMBER_OFFSET(num_binning_dispatches));
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 
-	if(m_opts & Opt::debug_bin_dispatcher) {
-		auto source_ranges = bin_dispatcher_program.sourceRanges();
-		auto records = shaderDebugRecords(m_errors, {1024, 1, 1}, {m_max_dispatches, 1, 1}, 256,
-										  source_ranges);
-		if(records) {
-			makeSorted(records);
-			print("Bin-dispatcher messages:\n");
-			for(auto &record : records)
-				print("%\n", record);
-		}
-	}
-
 	PERF_SIBLING_SCOPE("categorizer phase");
-	bin_categorizer_program.use();
+	p_bin_categorizer.use();
 	m_compose_quads->bindIndexAs(1, BufferType::shader_storage);
 	glDispatchCompute(1, 1, 1);
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_COMMAND_BARRIER_BIT);
@@ -398,7 +396,7 @@ void LucidRenderer::dummyIterateBins(const Context &ctx) {
 	PERF_GPU_SCOPE();
 
 	m_info->bindIndex(0);
-	dummy_program.use();
+	p_dummy.use();
 	glDispatchCompute(512, 1, 1);
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 }
@@ -429,36 +427,25 @@ void LucidRenderer::bindRaster(const Context &ctx) {
 void LucidRenderer::rasterLow(const Context &ctx) {
 	PERF_GPU_SCOPE();
 
-	raster_low_program.use();
+	p_raster_low.use();
 
 	GlTexture::bind({ctx.opaque_tex, ctx.trans_tex});
 	//GlTexture::bind({ctx.depth_buffer, ctx.shadows.map});
 
-	ctx.lighting.setUniforms(raster_low_program.glProgram());
-	raster_low_program.setFrustum(ctx.camera);
-	raster_low_program.setViewport(ctx.camera, m_size);
-	raster_low_program.setShadows(ctx.shadows.matrix, ctx.shadows.enable);
-	raster_low_program["background_color"] = u32(ctx.config.background_color);
-	ctx.lighting.setUniforms(raster_low_program.glProgram());
-
-	if(m_opts & Opt::debug_raster)
-		shaderDebugUseBuffer(m_errors);
-
-	dispatchIndirect(LUCID_INFO_MEMBER_OFFSET(bin_level_dispatches[BIN_LEVEL_LOW]));
-	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+	ctx.lighting.setUniforms(p_raster_low.glProgram());
+	p_raster_low.setFrustum(ctx.camera);
+	p_raster_low.setViewport(ctx.camera, m_size);
+	p_raster_low.setShadows(ctx.shadows.matrix, ctx.shadows.enable);
+	p_raster_low["background_color"] = u32(ctx.config.background_color);
+	ctx.lighting.setUniforms(p_raster_low.glProgram());
 
 	if(m_opts & Opt::debug_raster) {
-		FATAL("Make sure that LSIZE & GSIZE are correct");
-		auto source_ranges = raster_low_program.sourceRanges();
-		auto records =
-			shaderDebugRecords(m_errors, {256, 1, 1}, {m_max_dispatches, 1, 1}, 256, source_ranges);
-		if(records) {
-			makeSorted(records);
-			print("raster_bin shader debug messages reported:\n");
-			for(auto &record : records)
-				print("%\n", record);
-		}
+		// TODO: accurate LSIZE
+		dispatchAndDebugProgram(p_raster_low, m_max_dispatches, raster_lsize);
+	} else {
+		dispatchIndirect(LUCID_INFO_MEMBER_OFFSET(bin_level_dispatches[BIN_LEVEL_LOW]));
 	}
+	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 }
 
 // Final stage: blits transparent pixels onto main framebuffer
@@ -472,10 +459,10 @@ void LucidRenderer::compose(const Context &ctx) {
 	glDisable(GL_DEPTH_TEST);
 	glDisable(GL_CULL_FACE);
 	glDepthMask(0);
-	compose_program.setFullscreenRect();
-	compose_program.use();
-	compose_program["bin_counts"] = m_bin_counts;
-	compose_program["screen_scale"] = float2(1.0) / float2(m_size);
+	p_compose.setFullscreenRect();
+	p_compose.use();
+	p_compose["bin_counts"] = m_bin_counts;
+	p_compose["screen_scale"] = float2(1.0) / float2(m_size);
 	m_raster_image->bindIndex(0);
 	m_compose_quads_vao->draw(PrimitiveType::triangles, m_bin_counts.x * m_bin_counts.y * 6);
 }

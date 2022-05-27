@@ -6,7 +6,11 @@
 // NOTE: converting integer multiplications to shifts does not increase perf
 
 // Acceptable values: 128, 256, 512
+#if BIN_SIZE == 64
+#define LSIZE 512
+#else
 #define LSIZE 256
+#endif
 
 #define NUM_WARPS (LSIZE / 32)
 
@@ -15,7 +19,6 @@
 
 #define BUFFER_SIZE (LSIZE * 8)
 
-#define MAX_BLOCK_ROW_TRIS 1024 // TODO: detect overflow
 #define MAX_BLOCK_TRIS 256
 #define MAX_BLOCK_TRIS_SHIFT 8
 
@@ -28,16 +31,19 @@
 #define MAX_SEGMENTS_SHIFT 5
 #define MAX_SEGMENTS WARP_STEP
 
-#undef BLOCK_SIZE
-#undef BLOCK_SHIFT
+#define HBLOCK_WIDTH 8
+#define HBLOCK_HEIGHT 4
 
-// In this shader, we're using 8x8 blocks and 8x4 half blocks
-#define BLOCK_SIZE 8
-#define BLOCK_SHIFT 3
+#define HBLOCK_WIDTH_SHIFT 3
+#define HBLOCK_HEIGHT_SHIFT 2
 
-#define BLOCK_ROWS (BIN_SIZE / BLOCK_SIZE)
-#define BLOCK_ROWS_SHIFT (BIN_SHIFT - BLOCK_SHIFT)
-#define BLOCK_ROWS_MASK (BLOCK_ROWS - 1)
+#define HBLOCK_ROWS (BIN_SIZE / HBLOCK_HEIGHT)
+#define HBLOCK_ROWS_SHIFT (BIN_SHIFT - HBLOCK_HEIGHT_SHIFT)
+#define HBLOCK_ROWS_MASK (HBLOCK_ROWS - 1)
+
+#define HBLOCK_COLS (BIN_SIZE / HBLOCK_WIDTH)
+#define HBLOCK_COLS_SHIFT (BIN_SHIFT - HBLOCK_WIDTH_SHIFT)
+#define HBLOCK_COLS_MASK (HBLOCK_COLS - 1)
 
 #define BIN_MASK (BIN_SIZE - 1)
 
@@ -51,17 +57,21 @@ layout(local_size_x = LSIZE) in;
 
 #define TRI_SCRATCH(var_idx) g_scratch_64[scratch_tri_offset + (var_idx << MAX_SCRATCH_TRIS_SHIFT)]
 
+uint scratch32HBlockRowTrisOffset(uint hby) {
+	return (gl_WorkGroupID.x << WORKGROUP_64_SCRATCH_SHIFT) + (hby & 1) * MAX_SCRATCH_TRIS;
+}
+
 uint scratch32BlockTrisOffset(uint bx) {
-	return (gl_WorkGroupID.x << WORKGROUP_32_SCRATCH_SHIFT) + bx * MAX_BLOCK_TRIS;
+	return (gl_WorkGroupID.x << WORKGROUP_32_SCRATCH_SHIFT) + 8 * 1024 + bx * MAX_BLOCK_TRIS;
 }
 
 uint scratch64TriOffset(uint tri_idx) {
 	return (gl_WorkGroupID.x << WORKGROUP_64_SCRATCH_SHIFT) + tri_idx;
 }
 
-uint scratch64BlockRowTrisOffset(uint by) {
+uint scratch64HBlockRowTrisOffset(uint hby) {
 	return (gl_WorkGroupID.x << WORKGROUP_64_SCRATCH_SHIFT) + 32 * 1024 +
-		   by * (MAX_BLOCK_ROW_TRIS * 2);
+		   (hby & 1) * MAX_SCRATCH_TRIS;
 }
 
 uint scratch64BlockTrisOffset(uint bid) {
@@ -72,13 +82,14 @@ uint scratch64HalfBlockTrisOffset(uint hbid) {
 	return (gl_WorkGroupID.x << WORKGROUP_64_SCRATCH_SHIFT) + 48 * 1024 + hbid * MAX_BLOCK_TRIS;
 }
 
+shared int s_num_scratch_tris;
 shared int s_num_bins, s_bin_id, s_bin_raster_offset;
 shared uint s_bin_quad_count, s_bin_quad_offset;
 shared ivec2 s_bin_pos;
 shared vec3 s_bin_ray_dir0;
 
-shared uint s_block_row_tri_count[BLOCK_ROWS];
-shared uint s_block_tri_count[NUM_WARPS];
+shared uint s_hblock_row_tri_counts[HBLOCK_ROWS];
+shared uint s_hblock_tri_counts[NUM_WARPS];
 shared uint s_hblock_counts[NUM_WARPS * 2];
 
 shared uint s_buffer[BUFFER_SIZE + 1];
@@ -173,13 +184,13 @@ void getTriangleSecondaryParams(uint scratch_tri_offset, out uint unormal, out u
 	v2 = val1.y;
 }
 
-void generateRowTris(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, int min_by, int max_by) {
-
-	vec2 scan_start = vec2(s_bin_pos) + vec2(-0.5f, float(min_by) * 8.0 + 0.5f);
+int generateRowTris(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, int min_by, int max_by) {
+	vec2 scan_start = vec2(s_bin_pos) + vec2(-0.5f, float(min_by) * HBLOCK_HEIGHT + 0.5f);
 	vec3 scan_min, scan_max, scan_step;
 	computeScanlineParams(tri0, tri1, tri2, scan_start, scan_min, scan_max, scan_step);
 
-	uint dst_offset_64 = scratch64BlockRowTrisOffset(0);
+	uint dst_offset_64 = scratch64HBlockRowTrisOffset(0);
+	int scratch_tri_idx = -1;
 
 	// TODO: is it worth it to make this loop more work-efficient?
 	for(int by = min_by; by <= max_by; by++) {
@@ -190,47 +201,51 @@ void generateRowTris(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, int min_by, 
 		min##id = BIN_MASK, max##id = 0;                                                           \
 	scan_min += scan_step, scan_max += scan_step;
 
-		uint bx_mask;
-		uvec2 min_bits, max_bits;
-
 #define BX_MASK_ROW(id)                                                                            \
-	((((1 << BLOCK_ROWS) - 1) << (min##id >> BLOCK_SHIFT)) &                                       \
-	 (((1 << BLOCK_ROWS) - 1) >> (BLOCK_ROWS_MASK - (max##id >> BLOCK_SHIFT))))
-		{
-			SCAN_STEP(0);
-			SCAN_STEP(1);
-			SCAN_STEP(2);
-			SCAN_STEP(3);
+	((((1 << HBLOCK_COLS) - 1) << (min##id >> HBLOCK_COLS_SHIFT)) &                                \
+	 (((1 << HBLOCK_COLS) - 1) >> (HBLOCK_COLS_MASK - (max##id >> HBLOCK_COLS_SHIFT))))
+		SCAN_STEP(0);
+		SCAN_STEP(1);
+		SCAN_STEP(2);
+		SCAN_STEP(3);
 
-			bx_mask = BX_MASK_ROW(0) | BX_MASK_ROW(1) | BX_MASK_ROW(2) | BX_MASK_ROW(3);
-			min_bits.x = (min0 << 0) | (min1 << 6) | (min2 << 12) | (min3 << 18);
-			max_bits.x = (max0 << 0) | (max1 << 6) | (max2 << 12) | (max3 << 18);
-		}
-		{
-			SCAN_STEP(0);
-			SCAN_STEP(1);
-			SCAN_STEP(2);
-			SCAN_STEP(3);
-
-			bx_mask |= BX_MASK_ROW(0) | BX_MASK_ROW(1) | BX_MASK_ROW(2) | BX_MASK_ROW(3);
-			min_bits.y = (min0 << 0) | (min1 << 6) | (min2 << 12) | (min3 << 18);
-			max_bits.y = (max0 << 0) | (max1 << 6) | (max2 << 12) | (max3 << 18);
-		}
+		const int shift1 = BIN_SHIFT * 1, shift2 = BIN_SHIFT * 2, shift3 = BIN_SHIFT * 3;
+		uint bx_mask = BX_MASK_ROW(0) | BX_MASK_ROW(1) | BX_MASK_ROW(2) | BX_MASK_ROW(3);
+		uint min_bits = (min0 << 0) | (min1 << shift1) | (min2 << shift2) | (min3 << shift3);
+		uint max_bits = (max0 << 0) | (max1 << shift1) | (max2 << shift2) | (max3 << shift3);
 
 #undef BX_MASK_ROW
 #undef SCAN_STEP
 
 		if(bx_mask == 0)
 			continue;
+		if(scratch_tri_idx == -1) {
+			scratch_tri_idx = atomicAdd(s_num_scratch_tris, 1);
+			if(scratch_tri_idx > MAX_SCRATCH_TRIS) {
+				atomicOr(s_raster_error, 0x10000 << by);
+				return -1;
+			}
+		}
 
-		uint roffset = atomicAdd(s_block_row_tri_count[by], 1) + by * (MAX_BLOCK_ROW_TRIS * 2);
-		g_scratch_64[dst_offset_64 + roffset] = uvec2(min_bits.x | (bx_mask << 24), min_bits.y);
-		g_scratch_64[dst_offset_64 + roffset + MAX_BLOCK_ROW_TRIS] =
-			uvec2(max_bits.x | ((tri_idx & 0xff) << 24), max_bits.y | ((tri_idx & 0xff00) << 16));
+		uint roffset = atomicAdd(s_hblock_row_tri_counts[by], 1) + (by & 1) * MAX_SCRATCH_TRIS;
+#if BIN_SIZE == 64
+		g_scratch_32[roffset] = scratch_tri_idx | (bx_mask << 16);
+		g_scratch_64[dst_offset_64 + roffset] = uvec2(min_bits, max_bits);
+#else
+		g_scratch_64[dst_offset_64 + roffset] =
+			uvec2(min_bits | ((scratch_tri_idx & 0xfff) << 20),
+				  max_bits | ((scratch_tri_idx & 0xff000) << 8) | (bx_mask << 28));
+#endif
 	}
+
+	return scratch_tri_idx;
 }
 
-void processQuads() {
+void processQuads(int start_by) {
+	if(LIX == 0)
+		s_num_scratch_tris = 0;
+	barrier();
+
 	// TODO: optimization: in many cases all rows may very well fit in SMEM,
 	// maybe it would be worth it not to use scratch at all then?
 	// TODO: this loop is slooooow
@@ -247,8 +262,16 @@ void processQuads() {
 
 		uvec4 aabb = g_tri_aabbs[quad_idx];
 		aabb = decodeAABB64(second_tri != 0 ? aabb.zw : aabb.xy);
+
 		int min_by = clamp(int(aabb[1]) - s_bin_pos.y, 0, BIN_MASK) >> BLOCK_SHIFT;
 		int max_by = clamp(int(aabb[3]) - s_bin_pos.y, 0, BIN_MASK) >> BLOCK_SHIFT;
+
+		int end_by = start_by + 1;
+		min_by = max(start_by, min_by);
+		max_by = min(end_by, max_by);
+
+		if(max_by < min_by)
+			continue;
 
 		uvec4 verts = uvec4(g_quad_indices[quad_idx * 4 + 0], g_quad_indices[quad_idx * 4 + 1],
 							g_quad_indices[quad_idx * 4 + 2], g_quad_indices[quad_idx * 4 + 3]);
@@ -268,8 +291,9 @@ void processQuads() {
 		// TODO: store only if samples were generated
 		// TODO: do triangle storing later
 		uint tri_idx = i * 2 + (LIX & 1);
-		storeTriangle(tri_idx, tri0, tri1, tri2, v0, v1, v2, instance_id);
-		generateRowTris(tri_idx, tri0, tri1, tri2, min_by, max_by);
+		int scratch_tri_idx = generateRowTris(tri_idx, tri0, tri1, tri2, min_by, max_by);
+		if(scratch_tri_idx != -1)
+			storeTriangle(scratch_tri_idx, tri0, tri1, tri2, v0, v1, v2, instance_id);
 	}
 }
 
@@ -400,7 +424,7 @@ void generateBlocks(uint bid) {
 		uint row_idx = s_buffer[buf_offset + i];
 
 		uvec2 tri_mins = g_scratch_64[src_offset_64 + row_idx];
-		uvec2 tri_maxs = g_scratch_64[src_offset_64 + row_idx + MAX_BLOCK_ROW_TRIS];
+		uvec2 tri_maxs = g_scratch_64[src_offset_64 + row_idx + MAX_SCRATCH_TRIS];
 		uint tri_idx = (tri_maxs.x >> 24) | ((tri_maxs.y >> 16) & 0xff00);
 
 		uvec2 bits;
@@ -868,34 +892,27 @@ void visualizeFragmentCounts(uint hbid, ivec2 pixel_pos) {
 }
 
 void visualizeTriangleCounts(uint hbid, ivec2 pixel_pos) {
-	uint count = s_block_tri_count[(hbid >> 1) & (NUM_WARPS - 1)];
-	count = s_block_row_tri_count[hbid >> (BLOCK_ROWS_SHIFT + 1)];
+	//uint count = s_block_tri_count[(hbid >> 1) & (NUM_WARPS - 1)];
+	uint count = s_hblock_row_tri_counts[hbid >> HBLOCK_COLS_SHIFT];
 	//count = s_bin_quad_count;
 
-	vec3 color;
-	if(count == 0)
-		color = vec3(0);
-	else if(count < 2048)
-		color = vec3(count + 1024, 0, 0) / 3072.0;
-	else if(count < 8192)
-		color = vec3(count + 4096, count + 4096, 0) / 12288.0;
-	else
-		color = vec3(0, count, 0.0) / (64 * 1024.0);
+	vec3 color = vec3(count) / MAX_SCRATCH_TRIS;
 	outputPixel(pixel_pos, encodeRGBA8(vec4(SATURATE(color), 1.0)));
 }
 
-void visualizeErrors(uint bid) {
-	uint lbid = LIX >> 5;
-	bid += lbid;
-
+void visualizeErrors(uint hbid) {
+	uint bit_shift = hbid >> HBLOCK_COLS_SHIFT;
 	uint color = 0xff000031;
-	if((s_raster_error & (1 << lbid)) != 0)
+	if((s_raster_error & (1 << bit_shift)) != 0)
 		color += 0x64;
+	if((s_raster_error & (0x10000 << bit_shift)) != 0)
+		color += 0x32;
 
-	uint bx = bid & 7, by = bid >> 3;
-	ivec2 pixel_pos = ivec2((LIX & 7) + (bx << 3), ((LIX >> 3) & 3) + (by << 3));
+	uint hbx = hbid & HBLOCK_COLS_MASK, hby = hbid >> HBLOCK_COLS_SHIFT;
+	ivec2 pixel_pos = ivec2((LIX & 7) + (hbx << HBLOCK_WIDTH_SHIFT),
+							((LIX >> 3) & 3) + (hby << HBLOCK_HEIGHT_SHIFT));
+
 	outputPixel(pixel_pos, color);
-	outputPixel(pixel_pos + ivec2(0, 4), color);
 }
 
 void rasterBin(int bin_id) {
@@ -903,7 +920,7 @@ void rasterBin(int bin_id) {
 
 	const int num_blocks = (BIN_SIZE / BLOCK_SIZE) * (BIN_SIZE / BLOCK_SIZE);
 
-	if(LIX < BLOCK_ROWS) {
+	if(LIX < HBLOCK_ROWS) {
 		if(LIX == 0) {
 			// TODO: optimize
 			ivec2 bin_pos = ivec2(bin_id % BIN_COUNT_X, bin_id / BIN_COUNT_X) * BIN_SIZE;
@@ -915,31 +932,31 @@ void rasterBin(int bin_id) {
 			s_raster_error = 0;
 		}
 
-		s_block_row_tri_count[LIX] = 0;
+		s_hblock_row_tri_counts[LIX] = 0;
 	}
 	barrier();
-	processQuads();
-	groupMemoryBarrier();
-	barrier();
-	UPDATE_CLOCK(0);
 
-#ifdef SHADER_DEBUG
-	if(s_raster_error != 0) {
-		for(uint bid = LIX >> 6; bid < num_blocks; bid += NUM_WARPS / 2)
-			visualizeErrors(bid);
-		return;
-	}
-#endif
-
-	//  bid: block (8x8) id; We have 8 x 8 = 64 blocks
-	// hbid: half block (8x4) id; We have 8 x 16 = 128 half blocks
-	//       half blocks which make a single block are stored one after another
-	//       (upper block first)
-	// lbid: local block id (range: 0 up to NUM_WARPS - 1)
-	// Each block has 64 pixels, so we need 2 warps to process all pixels within a single block
-	for(uint hbid = LIX >> 5; hbid < num_blocks * 2; hbid += NUM_WARPS) {
+	for(int start_hby = 0; start_hby < HBLOCK_ROWS; start_hby += 2) {
+		int hbid = start_hby * HBLOCK_COLS + int(LIX >> 5);
+		processQuads(start_hby);
+		groupMemoryBarrier();
 		barrier();
-		/*if((hbid & NUM_WARPS) == 0) {
+		UPDATE_CLOCK(0);
+
+		if(s_raster_error != 0) {
+			visualizeErrors(hbid);
+			continue;
+		}
+
+		//  bid: block (8x8) id; We have 8 x 8 = 64 blocks
+		// hbid: half block (8x4) id; We have 8 x 16 = 128 half blocks
+		//       half blocks which make a single block are stored one after another
+		//       (upper block first)
+		// lbid: local block id (range: 0 up to NUM_WARPS - 1)
+		// Each block has 64 pixels, so we need 2 warps to process all pixels within a single block
+		/*for(uint hbid = LIX >> 5; hbid < num_blocks * 2; hbid += NUM_WARPS) {
+			barrier();
+			if((hbid & NUM_WARPS) == 0) {
 			uint bid = (hbid & ~(NUM_WARPS - 1)) >> 1;
 			generateBlocks(bid);
 			groupMemoryBarrier();
@@ -954,9 +971,8 @@ void rasterBin(int bin_id) {
 				continue;
 			}
 		}
-		UPDATE_CLOCK(1);*/
+		UPDATE_CLOCK(1);
 
-		/*
 		ReductionContext context;
 		initReduceSamples(context);
 		//initVisualizeSamples();
@@ -979,9 +995,9 @@ void rasterBin(int bin_id) {
 #endif
 		}*/
 
-		uint bx = (hbid >> 1) & BLOCK_ROWS_MASK;
-		uint hby = (hbid & 1) + ((hbid >> (BLOCK_ROWS_SHIFT + 1)) << 1);
-		ivec2 pixel_pos = ivec2((LIX & 7) + (bx << BLOCK_SHIFT), ((LIX >> 3) & 3) + (hby << 2));
+		uint hbx = hbid & HBLOCK_COLS_MASK, hby = hbid >> HBLOCK_COLS_SHIFT;
+		ivec2 pixel_pos = ivec2((LIX & 7) + (hbx << HBLOCK_WIDTH_SHIFT),
+								((LIX >> 3) & 3) + (hby << HBLOCK_HEIGHT_SHIFT));
 		//finishReduceSamples(pixel_pos, context);
 
 		//finishVisualizeSamples(pixel_pos);

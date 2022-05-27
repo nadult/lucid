@@ -32,7 +32,7 @@ void main() {
 		} else if(num_tris < 2048) {
 			int id = atomicAdd(s_bin_level_counts[BIN_LEVEL_LOW], 1);
 			LOW_LEVEL_BINS(id) = int(i);
-		} else if(num_tris < 4 * 1024) { // TODO: 64 * 1024 ?
+		} else if(num_tris < 32 * 1024) {
 			int id = atomicAdd(s_bin_level_counts[BIN_LEVEL_MEDIUM], 1);
 			MEDIUM_LEVEL_BINS(id) = int(i);
 		} else if(true) {

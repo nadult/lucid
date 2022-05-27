@@ -242,6 +242,10 @@ void processQuad(uint quad_id, uint v0, uint v1, uint v2, uint v3, uint local_in
 	if(size_type_idx == 1)
 		out_idx = (LSIZE - 1) - out_idx;
 
+	// TODO: for slivers try to encode in small amount of data, bins wihch for sure won't
+	// intersect with the quad; For example: corner_id (2 bits), vertical coverage (7 bits, percentage),
+	// horiz covergae (7 bits, percentage); This way we can encode 2 cropping lines in 32 bits (maybe)
+
 	s_quad_aabbs[out_idx] = enc_aabb;
 	s_tri_aabbs[out_idx] = uvec4(encodeAABB64(uvec4(aabb0)), encodeAABB64(uvec4(aabb1)));
 	s_quad_indices[out_idx] = uvec4(v0, v1, v2, v3);

@@ -1,4 +1,4 @@
-// $$include funcs declarations
+// $$include funcs structures
 
 // This program isn't doing anything useful
 // It can be used for measuring performance of simple constructs
@@ -18,8 +18,6 @@
 
 layout(local_size_x = LSIZE) in;
 
-BIN_COUNTERS_BUFFER(0);
-
 // Using this SMEM variable directly increases running time by 7%
 shared int s_bin_id;
 shared uint s_bin_tri_count;
@@ -31,7 +29,7 @@ void countTris(int bin_id) {
 
 int loadNextBin() {
 	if(LIX == 0)
-		s_bin_id = int(atomicAdd(g_bins.a_dummy_counter, 1));
+		s_bin_id = int(atomicAdd(g_info.a_dummy_counter, 1));
 	barrier();
 	return s_bin_id;
 }
@@ -46,5 +44,5 @@ void main() {
 		bin_id = loadNextBin();
 	}
 	if(LIX == 0)
-		g_bins.temp[0] = int(s_bin_tri_count);
+		g_info.temp[0] = int(s_bin_tri_count);
 }

@@ -151,14 +151,11 @@
     <None Include="..\data\shaders\pieces\raster.shader">
       <Filter>shaders\pieces</Filter>
     </None>
-    <None Include="..\data\shaders\pieces\structures.shader">
-      <Filter>shaders\pieces</Filter>
-    </None>
-    <None Include="..\data\shaders\pieces\declarations.shader">
-      <Filter>shaders\pieces</Filter>
-    </None>
     <None Include="..\data\shaders\raster_low.shader">
       <Filter>shaders</Filter>
+    </None>
+    <None Include="..\data\shaders\pieces\structures.shader">
+      <Filter>shaders\pieces</Filter>
     </None>
   </ItemGroup>
 </Project>

@@ -45,7 +45,7 @@ class LucidRenderer {
 	void rasterLow(const Context &);
 	void compose(const Context &);
 
-	void copyCounters();
+	void copyInfo();
 
 	// Does nothing useful; can be used for measuring
 	// performance of simple constructs
@@ -53,7 +53,7 @@ class LucidRenderer {
 
 	Opts m_opts;
 
-	// TODO: m_ prefix
+	// TODO: p_ prefix
 	Program init_counters_program, setup_program;
 	Program bin_dispatcher_program, tile_dispatcher_program;
 	Program bin_categorizer_program;
@@ -62,8 +62,8 @@ class LucidRenderer {
 
 	PBuffer m_errors, m_scratch_32, m_scratch_64, m_instance_data, m_uv_rects;
 	PBuffer m_quad_indices, m_quad_aabbs, m_tri_aabbs;
-	PBuffer m_bin_counters, m_bin_quads, m_raster_image;
-	array<PBuffer, 3> m_old_bin_counters;
+	PBuffer m_info, m_bin_quads, m_raster_image;
+	array<PBuffer, 3> m_old_info;
 
 	PFramebuffer m_initial_fbo;
 

@@ -1,17 +1,16 @@
-// $$include declarations
+// $$include structures
 
 #define LIX gl_LocalInvocationIndex
 #define LID gl_LocalInvocationID
 
-layout(std430, binding = 0) readonly buffer buf0_ { uvec4 g_tri_aabbs[]; };
-layout(std430, binding = 1) readonly buffer buf1_ { uint g_quad_indices[]; };
+layout(std430, binding = 1) readonly buffer buf1_ { uvec4 g_tri_aabbs[]; };
+layout(std430, binding = 2) readonly buffer buf2_ { uint g_quad_indices[]; };
 
-layout(std430, binding = 2) readonly buffer buf2_ { float g_verts[]; };
-layout(std430, binding = 3) readonly buffer buf3_ { vec2 g_tex_coords[]; };
-layout(std430, binding = 4) readonly buffer buf4_ { uint g_colors[]; };
-layout(std430, binding = 5) readonly buffer buf5_ { uint g_normals[]; };
+layout(std430, binding = 3) readonly buffer buf3_ { float g_verts[]; };
+layout(std430, binding = 4) readonly buffer buf4_ { vec2 g_tex_coords[]; };
+layout(std430, binding = 5) readonly buffer buf5_ { uint g_colors[]; };
+layout(std430, binding = 6) readonly buffer buf6_ { uint g_normals[]; };
 
-BIN_COUNTERS_BUFFER(6);
 layout(std430, binding = 8) buffer buf8_ { uint g_bin_quads[]; };
 
 layout(std430, binding = 9) coherent buffer buf9_ { uint g_scratch_32[]; };
@@ -45,7 +44,7 @@ void initTimers() {
 }
 void commitTimers() {
 	if(LIX < MAX_TIMERS)
-		atomicAdd(g_bins.timings[LIX], s_timings[LIX]);
+		atomicAdd(g_info.timings[LIX], s_timings[LIX]);
 }
 
 #else

@@ -1,4 +1,4 @@
-// $$include funcs declarations
+// $$include funcs structures
 
 #define LIX gl_LocalInvocationIndex
 #define LID gl_LocalInvocationID
@@ -10,14 +10,12 @@
 #endif
 
 layout(local_size_x = LSIZE) in;
+layout(std430, binding = 1) buffer buf1_ { uint g_compose_quads[]; };
 
-BIN_COUNTERS_BUFFER(1);
-layout(std430, binding = 2) buffer buf2_ { uint g_compose_quads[]; };
-
-shared int s_bin_level_counts[NUM_BIN_LEVELS];
+shared int s_bin_level_counts[BIN_LEVELS_COUNT];
 
 void main() {
-	if(LIX < NUM_BIN_LEVELS)
+	if(LIX < BIN_LEVELS_COUNT)
 		s_bin_level_counts[LIX] = 0;
 	barrier();
 
@@ -51,10 +49,10 @@ void main() {
 	}
 
 	barrier();
-	if(LIX < NUM_BIN_LEVELS) {
-		g_bins.bin_level_counts[LIX] = s_bin_level_counts[LIX];
-		g_bins.bin_level_dispatches[LIX][0] = min(s_bin_level_counts[LIX], MAX_DISPATCHES);
-		g_bins.bin_level_dispatches[LIX][1] = 1;
-		g_bins.bin_level_dispatches[LIX][2] = 1;
+	if(LIX < BIN_LEVELS_COUNT) {
+		g_info.bin_level_counts[LIX] = s_bin_level_counts[LIX];
+		g_info.bin_level_dispatches[LIX][0] = min(s_bin_level_counts[LIX], MAX_DISPATCHES);
+		g_info.bin_level_dispatches[LIX][1] = 1;
+		g_info.bin_level_dispatches[LIX][2] = 1;
 	}
 }

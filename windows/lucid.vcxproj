@@ -137,7 +137,6 @@
     <None Include="..\data\shaders\compose.shader" />
     <None Include="..\data\shaders\dummy.shader" />
     <None Include="..\data\shaders\init_counters.shader" />
-    <None Include="..\data\shaders\pieces\declarations.shader" />
     <None Include="..\data\shaders\pieces\frustum.shader" />
     <None Include="..\data\shaders\pieces\funcs.shader" />
     <None Include="..\data\shaders\pieces\lighting.shader" />

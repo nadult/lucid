@@ -1,4 +1,4 @@
-// $$include funcs lighting frustum viewport declarations raster
+// $$include funcs lighting frustum viewport raster
 
 // TODO: add synthetic test: 256 planes one after another
 // TODO: cleanup in the beginning (group definitions)
@@ -287,8 +287,8 @@ void processQuads() {
 		uint quad_idx = g_bin_quads[s_bin_quad_offset + i] & 0xffffff;
 
 		// TODO: ifdef
-		if(quad_idx >= MAX_QUADS || (quad_idx >= g_bins.num_visible_quads[0] &&
-									 quad_idx < (MAX_QUADS - 1 - g_bins.num_visible_quads[1])))
+		if(quad_idx >= MAX_QUADS || (quad_idx >= g_info.num_visible_quads[0] &&
+									 quad_idx < (MAX_QUADS - 1 - g_info.num_visible_quads[1])))
 			atomicOr(s_raster_error, ~0);
 
 		uvec4 aabb = g_tri_aabbs[quad_idx];
@@ -1033,7 +1033,7 @@ void rasterBin(int bin_id) {
 
 int loadNextBin() {
 	if(LIX == 0) {
-		uint bin_idx = atomicAdd(g_bins.a_small_bins, 1);
+		uint bin_idx = atomicAdd(g_info.a_small_bins, 1);
 		s_bin_id = bin_idx < s_num_bins ? LOW_LEVEL_BINS(bin_idx) : -1;
 		s_bin_raster_offset = s_bin_id << (BIN_SHIFT * 2);
 	}
@@ -1044,7 +1044,7 @@ int loadNextBin() {
 void main() {
 	initTimers();
 	if(LIX == 0)
-		s_num_bins = g_bins.bin_level_counts[BIN_LEVEL_LOW];
+		s_num_bins = g_info.bin_level_counts[BIN_LEVEL_LOW];
 
 	int bin_id = loadNextBin();
 	while(bin_id != -1) {

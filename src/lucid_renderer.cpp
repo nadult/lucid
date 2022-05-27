@@ -120,7 +120,7 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	// TODO: properly get number of compute units (use opencl?)
 	// https://tinyurl.com/o7s9ph3
 	m_max_dispatches = gl_info->vendor == GlVendor::intel ? 32 : 128;
-	DASSERT(m_max_dispatches <= sizeof(shader::BinCounters::dispatcher_item_counts) / sizeof(u32));
+	DASSERT(m_max_dispatches <= sizeof(shader::LucidInfo::dispatcher_item_counts) / sizeof(u32));
 
 	m_opts = opts;
 	m_size = view_size;
@@ -142,8 +142,8 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	m_quad_aabbs.emplace(BufferType::shader_storage, max_quads * sizeof(u32));
 	m_tri_aabbs.emplace(BufferType::shader_storage, max_quads * sizeof(int4));
 
-	uint bin_counters_size = BIN_COUNTERS_SIZE + m_bin_count * 7;
-	m_bin_counters.emplace(BufferType::shader_storage, bin_counters_size * sizeof(u32));
+	uint bin_counters_size = LUCID_INFO_SIZE + m_bin_count * 7;
+	m_info.emplace(BufferType::shader_storage, bin_counters_size * sizeof(u32));
 	m_bin_quads.emplace(BufferType::shader_storage, max_bin_quads * sizeof(u32));
 
 	// TODO: control size of scratch mem
@@ -235,8 +235,8 @@ void LucidRenderer::render(const Context &ctx) {
 	PERF_GPU_SCOPE();
 	testGlError("LucidRenderer::render init");
 
-	m_bin_counters->invalidate();
-	glBindBuffer(GL_DISPATCH_INDIRECT_BUFFER, m_bin_counters->id());
+	m_info->invalidate();
+	glBindBuffer(GL_DISPATCH_INDIRECT_BUFFER, m_info->id());
 
 	m_view_proj_matrix = ctx.camera.matrix();
 	m_frustum_rays = ctx.camera;
@@ -250,7 +250,7 @@ void LucidRenderer::render(const Context &ctx) {
 
 	bindRaster(ctx);
 	rasterLow(ctx);
-	copyCounters();
+	copyInfo();
 
 	// TODO: is this needed?
 	glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_SHADER_STORAGE_BARRIER_BIT);
@@ -269,7 +269,7 @@ void LucidRenderer::initCounters(const Context &ctx) {
 	DASSERT(vbuffers.size() == 4);
 	int num_verts = vbuffers[0]->size() / sizeof(float3);
 
-	m_bin_counters->bindIndex(0);
+	m_info->bindIndex(0);
 	init_counters_program.use();
 	init_counters_program["num_verts"] = num_verts;
 	glDispatchCompute(1, 1, 1);
@@ -330,13 +330,13 @@ void LucidRenderer::setupQuads(const Context &ctx) {
 	// TODO: backface-culling ?
 
 	PERF_GPU_SCOPE();
-	ctx.quads_ib->bindIndexAs(0, BufferType::shader_storage);
-	m_instance_data->bindIndex(1);
+
+	m_info->bindIndex(0);
+	ctx.quads_ib->bindIndexAs(1, BufferType::shader_storage);
+	m_instance_data->bindIndex(2);
 	auto vbuffers = ctx.vao->buffers();
 	DASSERT(vbuffers.size() == 4);
-	vbuffers[0]->bindIndexAs(2, BufferType::shader_storage);
-
-	m_bin_counters->bindIndex(3);
+	vbuffers[0]->bindIndexAs(3, BufferType::shader_storage);
 	m_quad_indices->bindIndex(4);
 	m_quad_aabbs->bindIndex(5);
 	m_tri_aabbs->bindIndex(6);
@@ -359,18 +359,20 @@ static void dispatchIndirect(int bin_counters_offset) {
 void LucidRenderer::computeBins(const Context &ctx) {
 	PERF_GPU_SCOPE();
 
-	m_quad_aabbs->bindIndex(0);
-	m_bin_counters->bindIndex(1);
+	m_info->bindIndex(0);
+	m_quad_aabbs->bindIndex(1);
 	m_bin_quads->bindIndex(2);
 
 	PERF_CHILD_SCOPE("dispatcher phase");
 	bin_dispatcher_program.use();
+
+	// TODO: add function for dispatch which handles debugging at the same time
 	if(m_opts & Opt::debug_bin_dispatcher)
 		shaderDebugUseBuffer(m_errors);
 	if(m_opts & Opt::debug_bin_dispatcher)
 		glDispatchCompute(m_max_dispatches, 1, 1);
 	else
-		dispatchIndirect(BIN_COUNTERS_MEMBER_OFFSET(num_binning_dispatches));
+		dispatchIndirect(LUCID_INFO_MEMBER_OFFSET(num_binning_dispatches));
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 
 	if(m_opts & Opt::debug_bin_dispatcher) {
@@ -387,7 +389,7 @@ void LucidRenderer::computeBins(const Context &ctx) {
 
 	PERF_SIBLING_SCOPE("categorizer phase");
 	bin_categorizer_program.use();
-	m_compose_quads->bindIndexAs(2, BufferType::shader_storage);
+	m_compose_quads->bindIndexAs(1, BufferType::shader_storage);
 	glDispatchCompute(1, 1, 1);
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_COMMAND_BARRIER_BIT);
 }
@@ -395,26 +397,27 @@ void LucidRenderer::computeBins(const Context &ctx) {
 void LucidRenderer::dummyIterateBins(const Context &ctx) {
 	PERF_GPU_SCOPE();
 
-	m_bin_counters->bindIndex(0);
+	m_info->bindIndex(0);
 	dummy_program.use();
 	glDispatchCompute(512, 1, 1);
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 }
 
 void LucidRenderer::bindRaster(const Context &ctx) {
-	m_tri_aabbs->bindIndex(0);
-	m_quad_indices->bindIndex(1);
+	m_info->bindIndex(0);
+
+	m_tri_aabbs->bindIndex(1);
+	m_quad_indices->bindIndex(2);
 	auto vbuffers = ctx.vao->buffers();
 	DASSERT(vbuffers.size() == 4);
-	vbuffers[0]->bindIndexAs(2, BufferType::shader_storage);
+	vbuffers[0]->bindIndexAs(3, BufferType::shader_storage);
 	if(auto tex_vb = vbuffers[2])
-		tex_vb->bindIndexAs(3, BufferType::shader_storage);
+		tex_vb->bindIndexAs(4, BufferType::shader_storage);
 	if(auto col_vb = vbuffers[1])
-		col_vb->bindIndexAs(4, BufferType::shader_storage);
+		col_vb->bindIndexAs(5, BufferType::shader_storage);
 	if(auto nrm_vb = vbuffers[3])
-		nrm_vb->bindIndexAs(5, BufferType::shader_storage);
+		nrm_vb->bindIndexAs(6, BufferType::shader_storage);
 
-	m_bin_counters->bindIndex(6);
 	m_bin_quads->bindIndex(8);
 	m_scratch_32->bindIndex(9);
 	m_scratch_64->bindIndex(10);
@@ -441,7 +444,7 @@ void LucidRenderer::rasterLow(const Context &ctx) {
 	if(m_opts & Opt::debug_raster)
 		shaderDebugUseBuffer(m_errors);
 
-	dispatchIndirect(BIN_COUNTERS_MEMBER_OFFSET(bin_level_dispatches[BIN_LEVEL_LOW]));
+	dispatchIndirect(LUCID_INFO_MEMBER_OFFSET(bin_level_dispatches[BIN_LEVEL_LOW]));
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 
 	if(m_opts & Opt::debug_raster) {
@@ -477,34 +480,34 @@ void LucidRenderer::compose(const Context &ctx) {
 	m_compose_quads_vao->draw(PrimitiveType::triangles, m_bin_counts.x * m_bin_counts.y * 6);
 }
 
-void LucidRenderer::copyCounters() {
+void LucidRenderer::copyInfo() {
 	//static int iter = 0;
 	//if(iter++ % 30 != 0)
 	//	return;
 
-	auto last = m_old_bin_counters.back();
-	for(int i = m_old_bin_counters.size() - 1; i > 0; i--)
-		m_old_bin_counters[i] = m_old_bin_counters[i - 1];
-	m_old_bin_counters[0] = last;
+	auto last = m_old_info.back();
+	for(int i = m_old_info.size() - 1; i > 0; i--)
+		m_old_info[i] = m_old_info[i - 1];
+	m_old_info[0] = last;
 
-	if(!m_old_bin_counters[0]) {
-		m_old_bin_counters[0].emplace(BufferType::copy_read, m_bin_counters->size());
+	if(!m_old_info[0]) {
+		m_old_info[0].emplace(BufferType::copy_read, m_info->size());
 	}
 
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
-	m_bin_counters->copyTo(m_old_bin_counters[0], 0, 0, m_old_bin_counters[0]->size());
+	m_info->copyTo(m_old_info[0], 0, 0, m_old_info[0]->size());
 }
 
 vector<StatsGroup> LucidRenderer::getStats() const {
 	vector<StatsGroup> out;
 
-	if(!m_old_bin_counters.back())
+	if(!m_old_info.back())
 		return out;
 
-	auto bin_counters = m_old_bin_counters.back()->download<u32>();
-	shader::BinCounters bins;
+	auto bin_counters = m_old_info.back()->download<u32>();
+	shader::LucidInfo bins;
 	memcpy(&bins, bin_counters.data(), sizeof(bins));
-	bin_counters.erase(bin_counters.begin(), bin_counters.begin() + BIN_COUNTERS_SIZE);
+	bin_counters.erase(bin_counters.begin(), bin_counters.begin() + LUCID_INFO_SIZE);
 
 	CSpan<uint> bin_quad_counts = cspan(bin_counters.data() + m_bin_count * 0, m_bin_count);
 	CSpan<uint> bin_quad_offsets = cspan(bin_counters.data() + m_bin_count * 1, m_bin_count);

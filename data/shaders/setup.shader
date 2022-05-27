@@ -1,4 +1,4 @@
-// $$include funcs frustum declarations
+// $$include funcs frustum structures
 
 // ~80% of time goes to data loading
 
@@ -15,19 +15,18 @@ uniform mat4 view_proj_matrix;
 uniform int enable_backface_culling;
 uniform int num_instances;
 
-// TODO: check if readonly/restrict makes a differencr
-layout(std430, binding = 0) readonly restrict buffer buf0_ { uint g_input_indices[]; };
-layout(std430, binding = 1) readonly restrict buffer buf1_ { InstanceData g_instances[]; };
-layout(std430, binding = 2) readonly restrict buffer buf2_ { float g_input_verts[]; };
+// TODO: check if readonly/restrict makes a difference
+layout(std430, binding = 1) readonly restrict buffer buf1_ { uint g_input_indices[]; };
+layout(std430, binding = 2) readonly restrict buffer buf2_ { InstanceData g_instances[]; };
+layout(std430, binding = 3) readonly restrict buffer buf3_ { float g_input_verts[]; };
 
-BIN_COUNTERS_BUFFER(3);
 layout(std430, binding = 4) buffer buf4_ { uint g_quad_indices[]; };
 layout(std430, binding = 5) buffer buf5_ { uint g_quad_aabbs[]; };
 layout(std430, binding = 6) buffer buf6_ { uvec4 g_tri_aabbs[]; };
 
 shared uint s_instance_id[MAX_INSTANCES];
 
-shared uint s_rejected_quads[REJECTED_TYPE_COUNT];
+shared uint s_rejected_quads[REJECTION_TYPE_COUNT];
 
 shared uint s_quad_aabbs[LSIZE];
 shared uvec4 s_tri_aabbs[LSIZE];
@@ -143,7 +142,7 @@ void processQuad(uint quad_id, uint v0, uint v1, uint v2, uint v3, uint local_in
 	// in later phases; We have to cut them as early as possible!
 
 	if(v0 == v2 || ((v0 == v1 || v1 == v2) && (v2 == v3 || (v3 == v0)))) {
-		atomicAdd(s_rejected_quads[REJECTED_OTHER], 1);
+		atomicAdd(s_rejected_quads[REJECTION_TYPE_OTHER], 1);
 		return;
 	}
 
@@ -161,7 +160,7 @@ void processQuad(uint quad_id, uint v0, uint v1, uint v2, uint v3, uint local_in
 		// TODO: what about orthogonal projection?
 		// TODO: is this really a good way to back-face cull?
 		if(dot(nrm1, point) < 0.0 && ((v3 == v2) || dot(nrm2, point) <= 0.0)) {
-			atomicAdd(s_rejected_quads[REJECTED_BACKFACE], 1);
+			atomicAdd(s_rejected_quads[REJECTION_TYPE_BACKFACE], 1);
 			return;
 		}
 	}
@@ -180,7 +179,7 @@ void processQuad(uint quad_id, uint v0, uint v1, uint v2, uint v3, uint local_in
 
 	// Culling triangles outside of one of clipping planes
 	if(and_clipmask != 0) {
-		atomicAdd(s_rejected_quads[REJECTED_FRUSTUM], 1);
+		atomicAdd(s_rejected_quads[REJECTION_TYPE_FRUSTUM], 1);
 		return;
 	}
 
@@ -219,7 +218,7 @@ void processQuad(uint quad_id, uint v0, uint v1, uint v2, uint v3, uint local_in
 	// TODO: why -0.5? are samples positioned incorrectly?
 	if(ceil(aabb[0] - 0.5001) == floor(aabb[2] + 0.5001) ||
 	   ceil(aabb[1] - 0.5001) == floor(aabb[3] + 0.5001)) {
-		atomicAdd(s_rejected_quads[REJECTED_BETWEEN_SAMPLES], 1);
+		atomicAdd(s_rejected_quads[REJECTION_TYPE_BETWEEN_SAMPLES], 1);
 		return;
 	}
 
@@ -275,7 +274,7 @@ void main() {
 			s_num_quads[LIX] = num_quads;
 			s_vertex_offset[LIX] = g_instances[instance_id].vertex_offset;
 			s_index_offset[LIX] = g_instances[instance_id].index_offset;
-			s_quad_offset[LIX] = atomicAdd(g_bins.num_input_quads, num_quads);
+			s_quad_offset[LIX] = atomicAdd(g_info.num_input_quads, num_quads);
 			s_instance_id[LIX] = instance_id;
 		} else {
 			s_num_quads[LIX] = 0;
@@ -283,7 +282,7 @@ void main() {
 	}
 	if(LIX < MAX_INSTANCES * 2)
 		s_num_visible[LIX] = 0;
-	if(LIX < REJECTED_TYPE_COUNT)
+	if(LIX < REJECTION_TYPE_COUNT)
 		s_rejected_quads[LIX] = 0;
 	barrier();
 	for(int i = 0; i < MAX_INSTANCES; i++) {
@@ -302,7 +301,7 @@ void main() {
 		barrier();
 		if(LIX < 2)
 			s_out_offset[LIX] =
-				atomicAdd(g_bins.num_visible_quads[LIX], s_num_visible[i * 2 + LIX]);
+				atomicAdd(g_info.num_visible_quads[LIX], s_num_visible[i * 2 + LIX]);
 		barrier();
 
 		int out_offset = -1;
@@ -318,20 +317,20 @@ void main() {
 			addVisibleQuad(out_offset, i);
 	}
 	barrier();
-	if(LIX < REJECTED_TYPE_COUNT)
-		atomicAdd(g_bins.num_rejected_quads[LIX], s_rejected_quads[LIX]);
+	if(LIX < REJECTION_TYPE_COUNT)
+		atomicAdd(g_info.num_rejected_quads[LIX], s_rejected_quads[LIX]);
 
 	// Last group computes number of dispatches for binning phase
 	if(LIX == 0) {
-		uint num_finished = atomicAdd(g_bins.num_finished_setup_groups, 1);
+		uint num_finished = atomicAdd(g_info.num_finished_setup_groups, 1);
 		if(num_finished == gl_NumWorkGroups.x - 1) {
 			groupMemoryBarrier();
-			int num_quads = g_bins.num_visible_quads[0] + g_bins.num_visible_quads[1];
+			int num_quads = g_info.num_visible_quads[0] + g_info.num_visible_quads[1];
 			int batch_size = BINNING_LSIZE;
 			int num_dispatches = (num_quads + (batch_size - 1)) / batch_size;
-			g_bins.num_binning_dispatches[0] = uint(clamp(num_dispatches, 4, MAX_DISPATCHES));
-			g_bins.num_binning_dispatches[1] = 1;
-			g_bins.num_binning_dispatches[2] = 1;
+			g_info.num_binning_dispatches[0] = uint(clamp(num_dispatches, 4, MAX_DISPATCHES));
+			g_info.num_binning_dispatches[1] = 1;
+			g_info.num_binning_dispatches[2] = 1;
 		}
 	}
 }

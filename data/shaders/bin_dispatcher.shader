@@ -255,7 +255,7 @@ void dispatchLargeQuad(int large_quad_idx, int num_large_quads) {
 }
 
 shared int s_num_quads[2], s_size_type;
-shared int s_quads_offset, s_active_thread_group_id;
+shared int s_quads_offset, s_active_work_group_id;
 shared int s_item_id, s_num_items;
 shared int s_num_processed_items, s_num_all_items;
 
@@ -264,7 +264,7 @@ shared int s_num_processed_items, s_num_all_items;
 shared int s_workgroup_items[MAX_BIN_WORKGROUP_ITEMS];
 
 void main() {
-#ifdef ENABLE_TIMINGS
+#ifdef ENABLE_TIMERS
 	uint64_t clock0 = clockARB();
 #endif
 
@@ -292,7 +292,7 @@ void main() {
 	int num_quads = s_num_quads[1];
 	while(num_quads > 0 && s_item_id < MAX_BIN_WORKGROUP_ITEMS - 1) {
 		if(LIX == 0) {
-			int quads_offset = atomicAdd(g_info.num_estimated_visible_quads[1], LSIZE);
+			int quads_offset = atomicAdd(g_info.num_estimated_quads[1], LSIZE);
 			if(quads_offset < num_quads)
 				s_workgroup_items[s_item_id++] = -quads_offset - 1;
 			s_quads_offset = quads_offset;
@@ -317,7 +317,7 @@ void main() {
 	num_quads = s_num_quads[0];
 	while(num_quads > 0 && s_item_id < MAX_BIN_WORKGROUP_ITEMS - 1) {
 		if(LIX == 0) {
-			int quads_offset = atomicAdd(g_info.num_estimated_visible_quads[0], ITEM_SIZE);
+			int quads_offset = atomicAdd(g_info.num_estimated_quads[0], ITEM_SIZE);
 			if(quads_offset < num_quads)
 				s_workgroup_items[s_item_id++] = quads_offset;
 			s_quads_offset = quads_offset;
@@ -352,11 +352,10 @@ void main() {
 
 	// Finishing estimation phase
 	if(LIX == 0) {
-		s_active_thread_group_id = atomicAdd(g_info.a_dispatcher_active_thread_groups, 1);
-		s_num_processed_items =
-			atomicAdd(g_info.a_dispatcher_processed_items, s_item_id) + s_item_id;
+		s_active_work_group_id = atomicAdd(g_info.a_bin_dispatcher_work_groups, 1);
+		s_num_processed_items = atomicAdd(g_info.a_bin_dispatcher_items, s_item_id) + s_item_id;
 		s_num_items = s_item_id;
-		g_info.dispatcher_item_counts[s_active_thread_group_id] = s_num_items;
+		g_info.dispatcher_item_counts[s_active_work_group_id] = s_num_items;
 		s_item_id = 0;
 	}
 	barrier();
@@ -366,13 +365,13 @@ void main() {
 		groupMemoryBarrier();
 		computeOffsets();
 		if(LIX == 0)
-			atomicExchange(g_info.a_dispatcher_phase, 1);
+			atomicExchange(g_info.a_bin_dispatcher_phase, 1);
 	}
 
 	// Waiting until all bin offsets are computed
 	// TODO: can we do something useful while waiting?
 	if(LIX == 0)
-		while(g_info.a_dispatcher_phase == 0)
+		while(g_info.a_bin_dispatcher_phase == 0)
 			;
 	barrier();
 
@@ -415,7 +414,7 @@ void main() {
 	}
 	barrier();
 
-#ifdef ENABLE_TIMINGS
-	g_info.dispatcher_timings[s_active_thread_group_id] = int(clockARB() - clock0);
+#ifdef ENABLE_TIMERS
+	g_info.dispatcher_timers[s_active_work_group_id] = int(clockARB() - clock0);
 #endif
 }

@@ -186,8 +186,8 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	p_setup = EX_PASS(Program::makeCompute("setup", defs));
 	p_bin_categorizer = EX_PASS(Program::makeCompute("bin_categorizer", defs));
 
-	if(m_opts & Opt::raster_timings)
-		defs["ENABLE_TIMINGS"] = 1;
+	if(m_opts & Opt::timers)
+		defs["ENABLE_TIMERS"] = 1;
 	p_bin_dispatcher = EX_PASS(Program::makeCompute(
 		"bin_dispatcher", defs, mask(m_opts & Opt::debug_bin_dispatcher, ProgramOpt::debug)));
 
@@ -536,20 +536,21 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 		format("backface: %\nfrustum: %\nbetween-samples: %", bins.num_rejected_quads[1],
 			   bins.num_rejected_quads[2], bins.num_rejected_quads[3]);
 
-	vector<StatsRow> timings;
+	vector<StatsRow> timers;
 	Str timer_names[] = {"generate rows",  "generate blocks",  "load samples", "shade samples",
 						 "reduce samples", "shade and reduce", "finish reduce"};
+	static_assert(arraySize(timer_names) < arraySize(bins.timers));
 
 	u64 total_time = 0;
 	for(int i : intRange(timer_names))
-		total_time += bins.timings[i];
+		total_time += bins.timers[i];
 	if(total_time > 0)
 		for(int i : intRange(timer_names)) {
-			auto value = bins.timings[i];
+			auto value = bins.timers[i];
 			if(value == 0)
 				continue;
-			timings.emplace_back(timer_names[i],
-								 stdFormat("%.2f %%", double(value) / total_time * 100));
+			timers.emplace_back(timer_names[i],
+								stdFormat("%.2f %%", double(value) / total_time * 100));
 		}
 
 	auto format_percentage = [](int value, int total) {
@@ -564,24 +565,24 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 		{"high level bins", format_percentage(bins.bin_level_counts[BIN_LEVEL_HIGH], sum_bins)},
 	};
 
-	string dispatcher_info =
-		toString(span(bins.dispatcher_item_counts, bins.a_dispatcher_active_thread_groups));
-	if(m_opts & Opt::raster_timings) {
-		auto timings = span(bins.dispatcher_timings, bins.a_dispatcher_active_thread_groups);
-		float sum = accumulate(timings);
-		float average = sum / timings.size();
+	string bin_dispatcher_info =
+		toString(span(bins.dispatcher_item_counts, bins.a_bin_dispatcher_work_groups));
+	if(m_opts & Opt::timers) {
+		auto timers = span(bins.dispatcher_timers, bins.a_bin_dispatcher_work_groups);
+		float sum = accumulate(timers);
+		float average = sum / timers.size();
 
 		float var = 0.0;
-		for(auto value : timings)
+		for(auto value : timers)
 			var += square(value - average);
-		var /= timings.size() * square(average);
-		dispatcher_info += stdFormat("\nComputation variance: %.4f", var);
+		var /= timers.size() * square(average);
+		bin_dispatcher_info += stdFormat("\nComputation variance: %.4f", var);
 	}
 
 	vector<StatsRow> basic_rows = {
 		{"input instances", toString(m_num_instances)},
-		{"dispatch active groups", toString(bins.a_dispatcher_active_thread_groups),
-		 dispatcher_info},
+		{"bin dispatcher work-groups", toString(bins.a_bin_dispatcher_work_groups),
+		 bin_dispatcher_info},
 		{"input quads", toString(bins.num_input_quads)},
 		{"visible quads", visible_info, visible_details},
 		{"rejected quads", rejected_info, rejection_details},
@@ -591,8 +592,8 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 
 	// TODO: add better stats once rasterizez is working on all levels
 
-	if(timings)
-		out.emplace_back(move(timings), "", 130);
+	if(timers)
+		out.emplace_back(move(timers), "", 130);
 	out.emplace_back(move(bin_level_rows), "Bins categorized by quad density levels:", 130);
 	out.emplace_back(move(basic_rows), "", 130);
 	return out;

@@ -6,7 +6,7 @@
 
 // TODO: better handling of phases
 // TODO: ability to change options without recreating renderer
-DEFINE_ENUM(LucidRenderOpt, debug_bin_dispatcher, debug_raster, raster_timings, additive_blending,
+DEFINE_ENUM(LucidRenderOpt, debug_bin_dispatcher, debug_raster, timers, additive_blending,
 			visualize_errors, alpha_threshold, bin_size_32);
 using LucidRenderOpts = EnumFlags<LucidRenderOpt>;
 

@@ -27,24 +27,23 @@ layout(binding = 1) uniform sampler2D transparent_texture;
 // then read it and use depth to optimize drawing
 uniform uint background_color;
 
-#ifdef ENABLE_TIMINGS
-#define MAX_TIMERS 8
-shared uint s_timings[MAX_TIMERS];
+#ifdef ENABLE_TIMERS
+shared uint s_timers[TIMERS_COUNT];
 #define INIT_CLOCK() uint64_t clock0 = clockARB();
 #define UPDATE_CLOCK(idx)                                                                          \
 	if((LIX & 31) == 0) {                                                                          \
 		uint64_t clock = clockARB();                                                               \
-		atomicAdd(s_timings[idx], uint(clock - clock0) >> 4);                                      \
+		atomicAdd(s_timers[idx], uint(clock - clock0) >> 4);                                       \
 		clock0 = clock;                                                                            \
 	}
 
 void initTimers() {
-	if(LIX < MAX_TIMERS)
-		s_timings[LIX] = 0;
+	if(LIX < TIMERS_COUNT)
+		s_timers[LIX] = 0;
 }
 void commitTimers() {
-	if(LIX < MAX_TIMERS)
-		atomicAdd(g_info.timings[LIX], s_timings[LIX]);
+	if(LIX < TIMERS_COUNT)
+		atomicAdd(g_info.timers[LIX], s_timers[LIX]);
 }
 
 #else

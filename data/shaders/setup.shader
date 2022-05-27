@@ -322,7 +322,7 @@ void main() {
 
 	// Last group computes number of dispatches for binning phase
 	if(LIX == 0) {
-		uint num_finished = atomicAdd(g_info.num_finished_setup_groups, 1);
+		uint num_finished = atomicAdd(g_info.a_setup_work_groups, 1);
 		if(num_finished == gl_NumWorkGroups.x - 1) {
 			groupMemoryBarrier();
 			int num_quads = g_info.num_visible_quads[0] + g_info.num_visible_quads[1];

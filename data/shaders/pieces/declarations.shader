@@ -15,19 +15,3 @@
 #define BIN_MEDIUM_BINS(idx) g_bins_counts[BIN_COUNT * 4 + (idx)]
 #define BIN_BIG_BINS(idx) g_bins_counts[BIN_COUNT * 5 + (idx)]
 #define BIN_TILED_BINS(idx) g_bins_counts[BIN_COUNT * 6 + (idx)]
-
-#define TILE_COUNTERS_BUFFER(idx)                                                                  \
-	layout(std430, binding = idx) buffer buf##idx##_ {                                             \
-		TileCounters g_tiles;                                                                      \
-		uint g_tiles_counts[];                                                                     \
-	}
-
-// TODO: 16-bit counters?
-#define TILE_TRI_COUNTS(bin, tile)                                                                 \
-	g_tiles_counts[BIN_COUNT * TILES_PER_BIN * 0 + (((bin)*TILES_PER_BIN) + (tile))]
-#define TILE_TRI_OFFSETS(bin, tile)                                                                \
-	g_tiles_counts[BIN_COUNT * TILES_PER_BIN * 1 + (((bin)*TILES_PER_BIN) + (tile))]
-#define TILE_BLOCK_TRI_COUNTS(bin, tile)                                                           \
-	g_tiles_counts[BIN_COUNT * TILES_PER_BIN * 2 + (((bin)*TILES_PER_BIN) + (tile))]
-#define TILE_BLOCK_TRI_OFFSETS(bin, tile)                                                          \
-	g_tiles_counts[BIN_COUNT * TILES_PER_BIN * 3 + (((bin)*TILES_PER_BIN) + (tile))]

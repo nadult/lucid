@@ -116,6 +116,12 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	m_bin_count = m_bin_counts.x * m_bin_counts.y;
 	m_tile_count = m_bin_count * m_tiles_per_bin;
 
+	// TODO: Why adding more on intel causes problems?
+	// TODO: properly get number of compute units (use opencl?)
+	// https://tinyurl.com/o7s9ph3
+	m_max_dispatches = gl_info->vendor == GlVendor::intel ? 32 : 128;
+	DASSERT(m_max_dispatches <= sizeof(shader::BinCounters::dispatcher_item_counts) / sizeof(u32));
+
 	m_opts = opts;
 	m_size = view_size;
 
@@ -124,14 +130,6 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	// TODO: better estimate needed
 	// TODO: properly handle situations when limits were reached
 	uint max_bin_quads = max_quads * 3 / 2;
-	uint max_tile_tris = max_quads * 3;
-	uint max_block_tris = max_quads * 2;
-
-	// TODO: Why adding more on intel causes problems?
-	// TODO: properly get number of compute units (use opencl?)
-	// https://tinyurl.com/o7s9ph3
-	int max_dispatches = gl_info->vendor == GlVendor::intel ? 32 : 128;
-	DASSERT(max_dispatches <= sizeof(shader::BinCounters::dispatcher_item_counts) / sizeof(u32));
 
 	// TODO: won't work for small number of dispatches
 	// TODO: what if gpu will allow only single active TG ? then we're fucked, because
@@ -145,28 +143,16 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	m_tri_aabbs.emplace(BufferType::shader_storage, max_quads * sizeof(int4));
 
 	uint bin_counters_size = BIN_COUNTERS_SIZE + m_bin_count * 7;
-	uint tile_counters_size = TILE_COUNTERS_SIZE + m_tile_count * 4;
 	m_bin_counters.emplace(BufferType::shader_storage, bin_counters_size * sizeof(u32));
-	m_tile_counters.emplace(BufferType::shader_storage, tile_counters_size * sizeof(u32));
-
-	m_block_counts.emplace(BufferType::shader_storage, m_tile_count * 16 * sizeof(u32));
-	m_block_offsets.emplace(BufferType::shader_storage, m_tile_count * 16 * sizeof(u32));
-
 	m_bin_quads.emplace(BufferType::shader_storage, max_bin_quads * sizeof(u32));
-	m_tile_tris.emplace(BufferType::shader_storage, max_tile_tris * sizeof(u32),
-						BufferUsage::dynamic_read);
-	m_block_tris.emplace(BufferType::shader_storage, max_block_tris * sizeof(u32),
-						 BufferUsage::dynamic_read);
-	m_block_tri_keys.emplace(BufferType::shader_storage, max_block_tris * sizeof(u32));
-	m_scratch_32.emplace(BufferType::shader_storage,
-						 (32 * 1024) * 128 * sizeof(u32)); // TODO: control size
-	m_scratch_64.emplace(BufferType::shader_storage,
-						 (64 * 1024) * 128 * sizeof(u64)); // TODO: control size
+
+	// TODO: control size of scratch mem
+	m_scratch_32.emplace(BufferType::shader_storage, (32 * 1024) * m_max_dispatches * sizeof(u32));
+	m_scratch_64.emplace(BufferType::shader_storage, (64 * 1024) * m_max_dispatches * sizeof(u64));
 	m_raster_image.emplace(BufferType::shader_storage,
 						   m_bin_count * square(m_bin_size) * sizeof(u32));
 
-	if(m_opts &
-	   (Opt::debug_bin_dispatcher | Opt::check_tiles | Opt::debug_masks | Opt::debug_raster))
+	if(m_opts & (Opt::debug_bin_dispatcher | Opt::debug_raster))
 		m_errors.emplace(BufferType::shader_storage, 1024 * 1024 * 4, BufferUsage::dynamic_read);
 
 	ShaderDefs defs;
@@ -189,7 +175,7 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	defs["MAX_INSTANCE_QUADS"] = max_instance_quads;
 	defs["MAX_QUADS"] = max_quads;
 
-	defs["MAX_DISPATCHES"] = max_dispatches;
+	defs["MAX_DISPATCHES"] = m_max_dispatches;
 	defs["MAX_BIN_WORKGROUP_ITEMS"] = max_bin_workgroup_items;
 
 	int binning_lsize = m_bin_size == 64 ? 512 : 1024;
@@ -199,14 +185,6 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	init_counters_program = EX_PASS(Program::makeCompute("init_counters", defs));
 	setup_program = EX_PASS(Program::makeCompute("setup", defs));
 	bin_categorizer_program = EX_PASS(Program::makeCompute("bin_categorizer", defs));
-
-	if(m_bin_size == 64) {
-		tile_dispatcher_program = EX_PASS(Program::makeCompute(
-			"tile_dispatcher", defs, mask(m_opts & Opt::check_tiles, ProgramOpt::debug)));
-		final_raster_program = EX_PASS(Program::makeCompute("final_raster", defs));
-		mask_raster_program = EX_PASS(Program::makeCompute(
-			"mask_raster", defs, mask(m_opts & Opt::debug_masks, ProgramOpt::debug)));
-	}
 
 	if(m_opts & Opt::raster_timings)
 		defs["ENABLE_TIMINGS"] = 1;
@@ -220,22 +198,13 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	if(m_opts & Opt::alpha_threshold)
 		defs["ALPHA_THRESHOLD"] = 1;
 
-	raster_bin_program = EX_PASS(Program::makeCompute(
-		"raster_bin_fastest", defs, mask(m_opts & Opt::debug_raster, ProgramOpt::debug)));
-	if(m_bin_size == 64) {
-		raster_tile_program = EX_PASS(Program::makeCompute(
-			"raster_tile_fastest", defs, mask(m_opts & Opt::debug_raster, ProgramOpt::debug)));
-		raster_block_program = EX_PASS(Program::makeCompute(
-			"raster_block", defs, mask(m_opts & Opt::debug_raster, ProgramOpt::debug)));
-	}
+	raster_low_program = EX_PASS(Program::makeCompute(
+		"raster_low", defs, mask(m_opts & Opt::debug_raster, ProgramOpt::debug)));
 	dummy_program = EX_PASS(Program::makeCompute("dummy", defs));
 
 	mkdirRecursive("temp").ignore();
-	if(auto disas = raster_bin_program.getDisassembly())
-		saveFile("temp/raster_bin.asm", *disas).ignore();
-	if(raster_tile_program)
-		if(auto disas = raster_tile_program.getDisassembly())
-			saveFile("temp/raster_tile.asm", *disas).ignore();
+	if(auto disas = raster_low_program.getDisassembly())
+		saveFile("temp/raster_low.asm", *disas).ignore();
 
 	ShaderDefs compose_defs;
 	compose_defs["BIN_SIZE"] = m_bin_size;
@@ -267,7 +236,6 @@ void LucidRenderer::render(const Context &ctx) {
 	testGlError("LucidRenderer::render init");
 
 	m_bin_counters->invalidate();
-	m_tile_counters->invalidate();
 	glBindBuffer(GL_DISPATCH_INDIRECT_BUFFER, m_bin_counters->id());
 
 	m_view_proj_matrix = ctx.camera.matrix();
@@ -277,30 +245,11 @@ void LucidRenderer::render(const Context &ctx) {
 	uploadInstances(ctx);
 	setupQuads(ctx);
 	computeBins(ctx);
-
-	if(m_bin_size == 64) {
-		computeTiles(ctx);
-		if(m_opts & Opt::check_tiles)
-			checkTiles();
-	}
-
 	if(false)
 		dummyIterateBins(ctx);
 
-	if(m_opts & Opt::new_raster || m_bin_size == 32) {
-		bindRaster(ctx);
-		rasterBin(ctx);
-		if(m_bin_size == 64) {
-			rasterTile(ctx);
-			rasterBlock(ctx);
-		}
-	} else {
-		rasterizeMasks(ctx);
-		if(m_opts & Opt::debug_masks)
-			debugMasks();
-		rasterizeFinal(ctx);
-	}
-
+	bindRaster(ctx);
+	rasterLow(ctx);
 	copyCounters();
 
 	// TODO: is this needed?
@@ -321,7 +270,6 @@ void LucidRenderer::initCounters(const Context &ctx) {
 	int num_verts = vbuffers[0]->size() / sizeof(float3);
 
 	m_bin_counters->bindIndex(0);
-	m_tile_counters->bindIndex(1);
 	init_counters_program.use();
 	init_counters_program["num_verts"] = num_verts;
 	glDispatchCompute(1, 1, 1);
@@ -413,23 +361,22 @@ void LucidRenderer::computeBins(const Context &ctx) {
 
 	m_quad_aabbs->bindIndex(0);
 	m_bin_counters->bindIndex(1);
-	m_tile_counters->bindIndex(2);
-	m_bin_quads->bindIndex(3);
-	m_scratch_64->bindIndex(4);
+	m_bin_quads->bindIndex(2);
 
 	PERF_CHILD_SCOPE("dispatcher phase");
 	bin_dispatcher_program.use();
 	if(m_opts & Opt::debug_bin_dispatcher)
 		shaderDebugUseBuffer(m_errors);
 	if(m_opts & Opt::debug_bin_dispatcher)
-		glDispatchCompute(128, 1, 1);
+		glDispatchCompute(m_max_dispatches, 1, 1);
 	else
 		dispatchIndirect(BIN_COUNTERS_MEMBER_OFFSET(num_binning_dispatches));
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 
 	if(m_opts & Opt::debug_bin_dispatcher) {
 		auto source_ranges = bin_dispatcher_program.sourceRanges();
-		auto records = shaderDebugRecords(m_errors, {1024, 1, 1}, {128, 1, 1}, 256, source_ranges);
+		auto records = shaderDebugRecords(m_errors, {1024, 1, 1}, {m_max_dispatches, 1, 1}, 256,
+										  source_ranges);
 		if(records) {
 			makeSorted(records);
 			print("Bin-dispatcher messages:\n");
@@ -440,918 +387,18 @@ void LucidRenderer::computeBins(const Context &ctx) {
 
 	PERF_SIBLING_SCOPE("categorizer phase");
 	bin_categorizer_program.use();
-	bin_categorizer_program["tile_all_bins"] = !(m_opts & Opt::new_raster);
 	m_compose_quads->bindIndexAs(2, BufferType::shader_storage);
 	glDispatchCompute(1, 1, 1);
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_COMMAND_BARRIER_BIT);
-}
-
-void LucidRenderer::computeTiles(const Context &ctx) {
-	PERF_GPU_SCOPE();
-
-	m_bin_counters->bindIndex(1);
-	m_tile_counters->bindIndex(2);
-	m_bin_quads->bindIndex(3);
-	m_tile_tris->bindIndex(4);
-	auto vbuffers = ctx.vao->buffers();
-	DASSERT(vbuffers.size() == 4);
-	vbuffers[0]->bindIndexAs(5, BufferType::shader_storage);
-	m_quad_indices->bindIndex(6);
-	m_tri_aabbs->bindIndex(7);
-
-	tile_dispatcher_program.use();
-	tile_dispatcher_program.setFrustum(ctx.camera);
-	if(m_opts & Opt::check_tiles)
-		shaderDebugUseBuffer(m_errors);
-	dispatchIndirect(BIN_COUNTERS_MEMBER_OFFSET(num_tiling_dispatches));
-	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
-}
-
-void LucidRenderer::checkTiles() {
-	vector<int> tile_tri_counts;
-	{
-		auto vals = m_tile_counters->map<int>(AccessMode::read_only);
-		vals = vals.subSpan(TILE_COUNTERS_SIZE);
-		tile_tri_counts = vals.subSpan(0, m_tile_count);
-		m_tile_counters->unmap();
-	}
-
-	print("Per-tile triangle count histogram:\n");
-	vector<pair<int, int>> histogram(32);
-	pair<int, int> sum = {0, 0};
-
-	for(int value : tile_tri_counts) {
-		int i = value == 0 ? 0 : value <= 16 ? 1 : int(log2(value - 1)) - 2;
-		if(histogram.inRange(i)) {
-			histogram[i].first++;
-			histogram[i].second += value;
-		}
-	}
-
-	for(auto &elem : histogram) {
-		sum.first += elem.first;
-		sum.second += elem.second;
-	}
-
-	for(int i : intRange(histogram)) {
-		if(!histogram[i].first)
-			continue;
-		int level = i == 0 ? 0 : i == 1 ? 16 : 32 << (i - 2);
-		printf("%s %8d: ", i == 0 ? "  " : "<=", level);
-		printf("%5d tiles (%5.2f %%); ", histogram[i].first,
-			   double(histogram[i].first) / sum.first * 100.0);
-		printf("%7d tris total (%5.2f %%)\n", histogram[i].second,
-			   double(histogram[i].second) / sum.second * 100.0);
-	}
-	printf("\n");
 }
 
 void LucidRenderer::dummyIterateBins(const Context &ctx) {
 	PERF_GPU_SCOPE();
 
 	m_bin_counters->bindIndex(0);
-	m_tile_counters->bindIndex(1);
 	dummy_program.use();
 	glDispatchCompute(512, 1, 1);
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
-}
-
-void LucidRenderer::rasterizeMasks(const Context &ctx) {
-	PERF_GPU_SCOPE();
-
-	m_tri_aabbs->bindIndex(2);
-	auto vbuffers = ctx.vao->buffers();
-	DASSERT(vbuffers.size() == 4);
-	vbuffers[0]->bindIndexAs(3, BufferType::shader_storage);
-	m_quad_indices->bindIndex(4);
-	m_bin_counters->bindIndex(5);
-	m_tile_counters->bindIndex(6);
-	m_block_counts->bindIndex(7);
-	m_block_offsets->bindIndex(8);
-	m_tile_tris->bindIndex(9);
-	m_block_tris->bindIndex(10);
-	m_block_tri_keys->bindIndex(11);
-	m_scratch_64->bindIndex(12);
-
-	mask_raster_program.use();
-	mask_raster_program.setFrustum(ctx.camera);
-	mask_raster_program.setViewport(ctx.camera, m_size);
-	mask_raster_program["mask_centroids[0]"] = computeCentroids4x4();
-
-	if(m_opts & Opt::debug_masks)
-		shaderDebugUseBuffer(m_errors);
-
-	// TODO: lepiej by było, jakby było to bardziej zintegrowane z GlProgramem
-	// - dispatch też mógłby być funkcją debuggera);
-	// - Inny debugger dla compute i inny dla pozostałych shaderów
-	// - możliwość przekazywania konkretnych wartości (np. 4 różne wartości?)
-	// - jakaś klasa do prostej introspekcji linii kodu programu
-	glDispatchCompute(128, 1, 1);
-	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
-}
-
-void LucidRenderer::debugMasks() {
-	auto source_ranges = mask_raster_program.sourceRanges();
-	auto records = shaderDebugRecords(m_errors, {256, 1, 1}, {128, 1, 1}, 256, source_ranges);
-	if(records) {
-		makeSorted(records);
-		print("mask_raster shader debug messages reported:\n");
-		for(auto &record : records)
-			print("%\n", record);
-	}
-}
-
-struct LucidRenderer::BinBlockStats {
-	double avg_max_pixel_depth = 0, avg_min_pixel_depth = 0, avg_tris_per_block = 0;
-	int max_pixel_depth = 0, max_tris_per_block = 0, max_blocktris_per_tile = 0;
-	int num_nonempty_blocks = 0, num_fragments = 0, unique_tris_sum = 0;
-	int num_blocktris = 0;
-
-	bool empty() const { return num_blocktris == 0; }
-	void computeAverages() {
-		if(num_nonempty_blocks) {
-			avg_min_pixel_depth /= num_nonempty_blocks;
-			avg_max_pixel_depth /= num_nonempty_blocks;
-			avg_tris_per_block /= num_nonempty_blocks;
-		}
-	}
-
-	static BinBlockStats sum(CSpan<BinBlockStats> stats) {
-		BinBlockStats out;
-		for(auto elem : stats) {
-			if(elem.empty())
-				continue;
-#define ACCUM(var) out.var += elem.var;
-#define ACCUM_MAX(var) out.var = max(out.var, elem.var);
-			ACCUM(avg_max_pixel_depth);
-			ACCUM(avg_min_pixel_depth);
-			ACCUM(avg_tris_per_block);
-			ACCUM_MAX(max_pixel_depth);
-			ACCUM_MAX(max_tris_per_block);
-			ACCUM_MAX(max_blocktris_per_tile);
-			ACCUM(num_nonempty_blocks);
-			ACCUM(num_fragments);
-			ACCUM(unique_tris_sum);
-			ACCUM(num_blocktris);
-#undef ACCUM_MAX
-#undef ACCUM
-		}
-		return out;
-	}
-};
-
-auto LucidRenderer::computeBlockStats(int bin_id, CSpan<u32> block_instances,
-									  CSpan<u32> block_counts, CSpan<u32> block_offsets) const
-	-> BinBlockStats {
-	BinBlockStats stats;
-
-	for(int block_id = 0; block_id < m_blocks_per_bin; block_id++)
-		stats.num_blocktris += block_counts[bin_id * m_blocks_per_bin + block_id];
-	if(stats.num_blocktris == 0)
-		return stats;
-
-	vector<int> unique_tris_map(65536, -1);
-
-	for(int tile_id = 0; tile_id < m_tiles_per_bin; tile_id++) {
-		int tindex = bin_id * 16 + tile_id;
-		int num_blocktris = 0;
-
-		for(int block_id = 0; block_id < m_blocks_per_tile; block_id++) {
-			int bindex = bin_id * m_blocks_per_bin + tile_id * m_blocks_per_tile + block_id;
-			int offset = block_offsets[bindex];
-			int count = block_counts[bindex];
-			if(count == 0)
-				continue;
-
-			int pixel_stacks[16];
-			fill(pixel_stacks, 0);
-
-			for(int i = 0; i < count; i++) {
-				u32 value = block_instances[offset + i];
-				for(int j = 0; j < 16; j++)
-					if(value & (1 << j))
-						pixel_stacks[j]++;
-
-				auto &unique = unique_tris_map[value >> 16];
-				if(unique != tindex) {
-					unique = tindex;
-					stats.unique_tris_sum++;
-				}
-			}
-
-			int max_depth = 0, min_depth = pixel_stacks[0];
-			for(auto val : pixel_stacks) {
-				max_depth = max(max_depth, val);
-				min_depth = min(min_depth, val);
-				stats.num_fragments += val;
-			}
-			stats.avg_max_pixel_depth += max_depth;
-			stats.avg_min_pixel_depth += min_depth;
-			stats.max_pixel_depth = max(stats.max_pixel_depth, max_depth);
-			stats.avg_tris_per_block += count;
-			stats.max_tris_per_block = max(stats.max_tris_per_block, count);
-			num_blocktris += count;
-			stats.num_nonempty_blocks++;
-		}
-		stats.max_blocktris_per_tile = max(stats.max_blocktris_per_tile, num_blocktris);
-	}
-
-	return stats;
-}
-
-void LucidRenderer::analyzeMaskRasterizer() const {
-	vector<u32> block_counts, block_offsets, block_instances, tile_counters;
-	int bin_count = m_bin_counts.x * m_bin_counts.y;
-	int num_block_tris = 0;
-
-	{
-		PERF_GPU_SCOPE("download gpu data");
-		tile_counters = m_tile_counters->download<u32>();
-		num_block_tris = tile_counters[9];
-		block_counts = m_block_counts->download<u32>();
-		block_offsets = m_block_offsets->download<u32>();
-		// TODO: why does it take 100ms to download m_block_tris?
-		block_instances = m_block_tris->download<u32>(num_block_tris);
-	}
-
-	vector<int> offset_coverage(num_block_tris, 0);
-	for(int bin_id = 0; bin_id < bin_count; bin_id++)
-		for(int block_id = 0; block_id < m_blocks_per_bin; block_id++) {
-			int offset = block_offsets[bin_id * m_blocks_per_bin + block_id];
-			int count = block_counts[bin_id * m_blocks_per_bin + block_id];
-			if(offset + count > num_block_tris) {
-				print("Offset out of bounds: % > %\n", offset + count, num_block_tris);
-				return;
-			}
-
-			for(int i = 0; i < count; i++)
-				offset_coverage[offset + i]++;
-		}
-	if(anyOf(offset_coverage, [](int v) { return v > 1; })) {
-		print("Overlapping offsets detected\n");
-		return;
-	}
-
-	vector<BinBlockStats> bin_stats(bin_count);
-#pragma omp parallel for
-	for(int bin_id = 0; bin_id < bin_count; bin_id++)
-		bin_stats[bin_id] = computeBlockStats(bin_id, block_instances, block_counts, block_offsets);
-	auto stats = BinBlockStats::sum(bin_stats);
-	stats.computeAverages();
-
-	print("Mask rasterization statistics: ------------------------------------\n");
-	print("\nTotal tri-blocks: %\n", num_block_tris);
-	if(stats.num_blocktris != num_block_tris)
-		print("Invalid number of summed block tris: %\n", stats.num_blocktris);
-	print("Block-tris / unique tris per tile ratio: %\n",
-		  double(num_block_tris) / stats.unique_tris_sum);
-	print("Total fragments rasterized: %\n", stats.num_fragments);
-	print("\nStats for non-empty blocks:\n");
-	printf("    Max pixel depth: %d\n", stats.max_pixel_depth);
-	printf("Avg min pixel depth: %.2f\n", stats.avg_min_pixel_depth);
-	printf("Avg max pixel depth: %.2f\n\n", stats.avg_max_pixel_depth);
-	printf("         Max tris per block: %8d\n", stats.max_tris_per_block);
-	printf("    Max block-tris per tile: %8d\n", stats.max_blocktris_per_tile);
-	printf("         Avg tris per block: %8.2f\n", stats.avg_tris_per_block);
-	printf("Avg fragments per tri-block: %8.2f\n", double(stats.num_fragments) / num_block_tris);
-	print("\nBlock-tris per bin:\n");
-
-	int max_width = 40, max_height = 60;
-	if(auto dim = consoleDimensions()) {
-		max_width = (dim->x - 1) / 6;
-		max_height = dim->y * 3 / 4;
-	}
-
-	for(int y = 0; y < min(max_height, m_bin_counts.y); y++) {
-		for(int x = 0; x < min(max_width, m_bin_counts.x); x++) {
-			int bin_id = x + y * m_bin_counts.x;
-			int count = 0;
-			for(int block_id = 0; block_id < m_blocks_per_bin; block_id++)
-				count += block_counts[bin_id * m_blocks_per_bin + block_id];
-			printf("%6d ", count);
-		}
-		printf("\n");
-	}
-	print("\n");
-}
-
-string RasterBlockInfo::description() const {
-	TextFormatter fmt;
-	fmt("bin:% tile:% block:%\ntris/block:% tris/tile:%\n", bin_pos, tile_pos, block_pos,
-		num_block_tris, num_tile_tris);
-	if(num_sub_block_tris)
-		fmt.stdFormat("total tris/sub block:%d (%.2f %%)\n", num_sub_block_tris,
-					  double(num_sub_block_tris) / num_block_tris * 100);
-	if(num_merged_block_tris)
-		fmt.stdFormat("merged tris/block:%d (%.2f %%)", num_merged_block_tris,
-					  double(num_merged_block_tris) / num_block_tris * 100);
-	return fmt.text();
-}
-
-vector<vector<int>> RasterTileInfo::triNeighbourMap(int max_dist) const {
-	DASSERT(max_dist >= 1);
-	vector<vector<int>> neighbours(tri_verts.size());
-	HashMap<int, vector<int>> vertex_tri_map(tri_verts.size() * 2);
-	for(auto i : intRange(tri_verts))
-		for(auto v : tri_verts[i])
-			vertex_tri_map[v].emplace_back(i);
-
-	for(int i : intRange(tri_verts)) {
-		auto &tri = tri_verts[i];
-		auto is_neighbour = [&](int nid) {
-			auto &ntri = tri_verts[nid];
-			int num_shared = 0;
-			for(auto v : tri)
-				if(isOneOf(v, ntri))
-					num_shared++;
-			return num_shared >= 2;
-		};
-
-		for(auto v : tri)
-			for(auto nid : vertex_tri_map[v])
-				if(nid > i && is_neighbour(nid)) {
-					neighbours[i].emplace_back(nid);
-					neighbours[nid].emplace_back(i);
-				}
-	}
-
-	max_dist--;
-	for(int r = 0; r < max_dist; r++) {
-		vector<vector<int>> temp = neighbours;
-		for(int i : intRange(tri_verts))
-			for(auto n1 : neighbours[i])
-				for(auto n2 : neighbours[i])
-					if(n1 != n2 && !isOneOf(n2, temp[n1])) {
-						temp[n1].emplace_back(n2);
-						temp[n2].emplace_back(n1);
-					}
-		neighbours = move(temp);
-	}
-
-	return neighbours;
-}
-
-RasterTileInfo LucidRenderer::introspectTile(CSpan<float3> verts, int2 full_tile_pos) const {
-	RasterTileInfo out;
-
-	if(m_bin_size != 64)
-		return out;
-
-	PERF_GPU_SCOPE();
-	glMemoryBarrier(GL_ALL_BARRIER_BITS);
-
-	int2 bin_pos = full_tile_pos / 4;
-	int2 tile_pos = full_tile_pos - bin_pos * 4;
-	out.bin_pos = bin_pos;
-	out.tile_pos = tile_pos;
-
-	out.bin_id = bin_pos.x + bin_pos.y * m_bin_counts.x;
-	out.tile_id =
-		out.bin_id * m_tiles_per_bin + tile_pos.x + tile_pos.y * (m_bin_size / m_tile_size);
-	int bin_count = m_bin_counts.x * m_bin_counts.y;
-
-	vector<u32> tile_tri_indices, block_tri_masks[4];
-	vector<Triangle3F> tile_tris;
-	vector<int> tile_tri_instances;
-	vector<array<uint, 3>> tile_tri_verts;
-
-	auto tile_counters = m_tile_counters->map<u32>(AccessMode::read_only);
-	// TODO: this is only computed properly when running old mode
-	int num_tile_tris = tile_counters[TILE_COUNTERS_SIZE + out.tile_id];
-	int tile_tri_offset =
-		tile_counters[TILE_COUNTERS_SIZE + bin_count * m_tiles_per_bin + out.tile_id];
-	m_tile_counters->unmap();
-
-	if(num_tile_tris)
-		tile_tri_indices = m_tile_tris->download<u32>(num_tile_tris, tile_tri_offset);
-
-	auto quad_indices = m_quad_indices->map<u32>(AccessMode::read_only);
-	out.tris.reserve(tile_tri_indices.size());
-	out.tri_verts.reserve(tile_tri_indices.size());
-	out.tri_instances.reserve(tile_tri_indices.size());
-
-	for(auto idx : tile_tri_indices) {
-		bool second_tri = idx & 0x80000000;
-		idx &= 0xffffff;
-		u32 v0 = quad_indices[idx * 4 + 0], v1 = quad_indices[idx * 4 + 1];
-		u32 v2 = quad_indices[idx * 4 + 2], v3 = quad_indices[idx * 4 + 3];
-		uint instance_id = (v0 >> 26) | ((v1 >> 20) & 0xfc0) | ((v2 >> 14) & 0x3f000);
-		v0 &= 0x3ffffff, v1 &= 0x3ffffff, v2 &= 0x3ffffff, v3 &= 0x3ffffff;
-		out.tri_verts.emplace_back(v0, second_tri ? v2 : v1, second_tri ? v3 : v2);
-		out.tris.emplace_back(verts[v0], verts[second_tri ? v2 : v1], verts[second_tri ? v3 : v2]);
-		out.tri_instances.emplace_back(instance_id);
-	}
-
-	out.tri_indices = move(tile_tri_indices);
-	m_quad_indices->unmap();
-
-	return out;
-}
-
-RasterBlockInfo LucidRenderer::introspectBlock4x4(const RasterTileInfo &tile, int2 full_block_pos,
-												  bool merge_masks) const {
-	RasterBlockInfo out;
-	if(m_bin_size != 64)
-		return out;
-
-	PERF_GPU_SCOPE();
-	int2 tile_pos = full_block_pos / 4;
-	int2 bin_pos = tile_pos / 4;
-	int2 block_pos = full_block_pos - tile_pos * 4;
-	tile_pos -= bin_pos * 4;
-	out.bin_pos = bin_pos;
-	out.tile_pos = tile_pos;
-	out.block_pos = block_pos;
-
-	int bin_id = bin_pos.x + bin_pos.y * m_bin_counts.x;
-	int tile_id = bin_id * m_tiles_per_bin + tile_pos.x + tile_pos.y * (m_bin_size / m_tile_size);
-	int block_id =
-		tile_id * m_blocks_per_tile + block_pos.x + block_pos.y * (m_tile_size / m_block_size);
-	int bin_count = m_bin_counts.x * m_bin_counts.y;
-
-	vector<u32> masks;
-
-	out.num_tile_tris = tile.tris.size();
-	out.num_block_tris = m_block_counts->map<u32>(AccessMode::read_only)[block_id];
-	m_block_counts->unmap();
-	int block_tri_offset = m_block_offsets->map<u32>(AccessMode::read_only)[block_id];
-	m_block_offsets->unmap();
-	if(out.num_block_tris)
-		masks = m_block_tris->download<u32>(out.num_block_tris, block_tri_offset);
-	vector<Pair<float>> mask_depths;
-
-	// Note: it makes no sense without merging non-overlapping masks into layers
-
-	for(int i : intRange(masks)) {
-		u32 mask = masks[i] & 0xffff;
-		u32 local_idx = masks[i] >> 16;
-		auto &tri = tile.tris[local_idx];
-		float depth_min = inf, depth_max = -inf;
-		if(tri.degenerate())
-			continue;
-		Plane3F plane(tri);
-
-		for(int j = 0; j < 16; j++) {
-			if((mask & (1 << j)) == 0)
-				continue;
-			int2 pos = full_block_pos * 4 + int2(j % 4, j / 4);
-			float3 ray_origin = m_frustum_rays.origin0;
-			float3 ray_dir = normalize(m_frustum_rays.dir0 + m_frustum_rays.dirx * float(pos.x) +
-									   m_frustum_rays.diry * float(pos.y));
-
-			auto isect = Ray3F(ray_origin, ray_dir).isectParam(plane);
-			if(isect.isPoint()) {
-				depth_min = min(depth_min, isect.asPoint());
-				depth_max = max(depth_max, isect.asPoint());
-			}
-		}
-		mask_depths.emplace_back(depth_min, depth_max);
-	}
-
-	// 1: overlaps, 2: is overlapped
-	vector<bool> mask_overlaps(mask_depths.size(), false);
-	for(int i : intRange(mask_depths)) {
-		for(int j = i + 1; j < mask_depths.size(); j++)
-			if(mask_depths[j].first > mask_depths[i].second)
-				mask_overlaps[i] = mask_overlaps[j] = true;
-		for(int j = i - 1; j >= 0; j--)
-			if(mask_depths[j].second < mask_depths[i].first)
-				mask_overlaps[i] = mask_overlaps[j] = true;
-	}
-
-	out.selected_tile_tris.resize(tile.tris.size());
-	for(int i : intRange(masks)) {
-		u32 local_idx = masks[i] >> 16;
-		out.selected_tile_tris[local_idx] = true;
-	}
-
-	if(!masks)
-		return out;
-
-	print("Triangle masks: %", masks.size());
-	/*for(int i : intRange(masks)) {
-		printf("%4d: %c %f - %f", i, mask_overlaps[i] ? 'X' : ' ', mask_depths[i].first,
-			   mask_depths[i].second);
-		uint local_idx = masks[i] >> 16;
-		print("%\n", tile.tris[local_idx]);
-	}*/
-	int max_row_size = 16;
-	for(int i = 0; i < masks.size(); i += max_row_size) {
-		printf("\n");
-		int row_size = min(masks.size() - i, max_row_size);
-		for(int j = 0; j < row_size; j++) {
-			uint local_idx = masks[i + j] >> 16;
-			uint tri_idx = tile.tri_indices[local_idx];
-			printf(" %4d  ", i + j);
-			//printf("%c%6d ", tri_idx & 0x80000000 ? '*' : ' ', tri_idx & 0xffffff);
-		}
-		printf("\n");
-		for(int iy = 0; iy < 4; iy++) {
-			for(int j = 0; j < row_size; j++) {
-				u32 mask = masks[i + j];
-				int y = 3 - iy;
-				printf(" ");
-				for(int x = 0; x < 4; x++)
-					printf("%c", mask & (1 << (x + y * 4)) ? 'X' : '.');
-				printf(j + 1 == row_size ? "\n" : "  ");
-			}
-		}
-	}
-	print("\n");
-	vector<pair<int, u16>> mask_layers;
-	mask_layers.emplace_back(0, 0);
-	for(int i : intRange(masks)) {
-		auto &layer = mask_layers.back();
-		auto mask = masks[i] & 0xffff;
-		if((layer.second & mask) == 0) {
-			layer.first++;
-			layer.second |= mask;
-		} else {
-			mask_layers.emplace_back(1, mask);
-		}
-	}
-
-	int num_fragments = 0;
-	for(auto &mask : masks)
-		num_fragments += countBits(mask & 0xffff);
-	print("masks:% fragments:% layers:%\n", masks.size(), num_fragments, mask_layers.size());
-	printf("fragments/mask:%.2f fragments/layer:%.2f masks/layer:%.2f\n",
-		   double(num_fragments) / masks.size(), double(num_fragments) / mask_layers.size(),
-		   double(masks.size()) / mask_layers.size());
-	for(int i = 0; i < mask_layers.size(); i += 4) {
-		int row_size = min(mask_layers.size() - i, 4);
-		for(int j = 0; j < row_size; j++) {
-			auto &layer = mask_layers[i + j];
-			printf("[%03d]: %2d tri %2d pix %s", i + j, layer.first, countBits((u32)layer.second),
-				   j + 1 == row_size ? "\n" : "| ");
-		}
-	}
-	print("\n");
-
-	if(!merge_masks)
-		return out;
-
-	struct MergedMask4x4 {
-		vector<u16> tri_ids;
-		array<u8, 16> indices;
-		u16 bits = 0;
-	};
-
-	auto neighbour_map = tile.triNeighbourMap(4);
-	auto are_compatible_tris = [&](int id0, int id1) -> bool {
-		return true || isOneOf(id1, neighbour_map[id0]);
-	};
-
-	// We have to make sure that depth ranges don't get too mixed up...
-	vector<MergedMask4x4> mmasks;
-	constexpr int max_merged_tris = 15;
-	for(auto &mask : masks) {
-		int mmask_idx = -1;
-		u16 bits = u16(mask & 0xffff);
-		u16 tri_id = u16(mask >> 16);
-
-		for(int i = max(0, mmasks.size() - 1); i < mmasks.size(); i++)
-			if((mmasks[i].bits & bits) == 0 && mmasks[i].tri_ids.size() < max_merged_tris) {
-				bool compatible = true;
-				for(auto tid : mmasks[i].tri_ids)
-					if(!are_compatible_tris(tri_id, tid)) {
-						compatible = false;
-						break;
-					}
-				if(compatible) {
-					mmask_idx = i;
-					break;
-				}
-			}
-		if(mmask_idx == -1) {
-			MergedMask4x4 new_mask;
-			new_mask.bits = 0;
-			fill(new_mask.indices, 255);
-			mmask_idx = mmasks.size();
-			mmasks.emplace_back(new_mask);
-		}
-
-		auto &mmask = mmasks[mmask_idx];
-		mmask.bits |= bits;
-		uint index = mmask.tri_ids.size();
-		mmask.tri_ids.emplace_back(tri_id);
-		for(int i : intRange(64))
-			if(bits & (1ull << i))
-				mmask.indices[i] = index;
-	}
-
-	out.num_merged_block_tris = mmasks.size();
-
-	printf("\nMerged masks: %d (%.2f %%)\n", mmasks.size(),
-		   double(mmasks.size()) / masks.size() * 100.0);
-	max_row_size = 6;
-	for(int i = 0; i < mmasks.size(); i += max_row_size) {
-		printf("\n");
-		int row_size = min(mmasks.size() - i, max_row_size);
-		for(int j = 0; j < row_size; j++) {
-			int num_tris = (int)mmasks[i + j].tri_ids.size();
-			printf("  %4d (%d)    %s", i + j, num_tris, num_tris < 10 ? " " : "");
-		}
-		printf("\n");
-		for(int iy = 0; iy < 4; iy++) {
-			for(int j = 0; j < row_size; j++) {
-				auto &mmask = mmasks[i + j];
-				int y = 3 - iy;
-				printf(" ");
-				for(int x = 0; x < 4; x++) {
-					int index = x + y * 4;
-					if(mmask.indices[index] != 255)
-						printf("%2d ", mmask.indices[index]);
-					else
-						printf(" . ");
-				}
-				printf(j + 1 == row_size ? "\n" : "  ");
-			}
-		}
-	}
-	print("\n");
-
-	return out;
-}
-
-RasterBlockInfo LucidRenderer::introspectBlock8x8(const RasterTileInfo &tile,
-												  int2 full_block8x8_pos, bool merge_masks) const {
-	RasterBlockInfo out;
-	if(m_bin_size != 64)
-		return out;
-
-	PERF_GPU_SCOPE();
-	int2 tile_pos = full_block8x8_pos / 2;
-	int2 bin_pos = tile_pos / 4;
-	int2 block8x8_pos = full_block8x8_pos - tile_pos * 2;
-	tile_pos -= bin_pos * 4;
-	out.bin_pos = bin_pos;
-	out.tile_pos = tile_pos;
-	out.block_pos = block8x8_pos;
-
-	int bin_id = bin_pos.x + bin_pos.y * m_bin_counts.x;
-	int tile_id = bin_id * m_tiles_per_bin + tile_pos.x + tile_pos.y * (m_bin_size / m_tile_size);
-	int block_ids[4];
-	for(int i = 0; i < 4; i++) {
-		int2 bpos = int2(block8x8_pos.x * 2 + i % 2, block8x8_pos.y * 2 + i / 2);
-		block_ids[i] = tile_id * m_blocks_per_tile + bpos.x + bpos.y * (m_tile_size / m_block_size);
-	}
-	int bin_count = m_bin_counts.x * m_bin_counts.y;
-	int block_tri_counts[4], block_tri_offsets[4];
-
-	vector<u32> block_tri_masks[4];
-
-	{
-		auto block_counts = m_block_counts->map<u32>(AccessMode::read_only);
-		auto block_offsets = m_block_offsets->map<u32>(AccessMode::read_only);
-		auto block_tris = m_block_tris->map<u32>(AccessMode::read_only);
-		out.num_tile_tris = tile.tris.size();
-		for(int i = 0; i < 4; i++) {
-			block_tri_counts[i] = block_counts[block_ids[i]];
-			block_tri_offsets[i] = block_offsets[block_ids[i]];
-			if(block_tri_counts[i]) {
-				block_tri_masks[i] = block_tris.subSpan(block_tri_offsets[i],
-														block_tri_offsets[i] + block_tri_counts[i]);
-				out.num_sub_block_tris += block_tri_counts[i];
-			}
-		}
-		m_block_counts->unmap();
-		m_block_offsets->unmap();
-		m_block_tris->unmap();
-	}
-
-	struct Mask8x8 {
-		u64 bits;
-		int tri_id;
-		Pair<float> depth = {0, 0};
-	};
-
-	vector<Mask8x8> masks8x8;
-	array<int, 64> layer_depth;
-	fill(layer_depth, 0);
-
-	{
-		vector<int> tri_ids;
-		for(auto &masks : block_tri_masks)
-			for(auto mask : masks) {
-				int tri_id = mask >> 16;
-				if(!isOneOf(tri_id, tri_ids))
-					tri_ids.emplace_back(tri_id);
-			}
-
-		for(auto tri_id : tri_ids) {
-			u64 mask8x8 = 0;
-			for(int i = 0; i < 4; i++) {
-				int bx = i % 2, by = i / 2;
-				u32 cur_mask = 0;
-				for(auto mask : block_tri_masks[i])
-					if((mask >> 16) == tri_id) {
-						cur_mask = mask;
-						break;
-					}
-
-				if(cur_mask)
-					for(int y = 0; y < 4; y++) {
-						uint row_bits = (cur_mask >> (y * 4)) & 0xf;
-						mask8x8 |= u64(row_bits) << (bx * 4 + y * 8 + by * 32);
-					}
-			}
-			for(int i : intRange(64))
-				if(mask8x8 & (1ull << i))
-					layer_depth[i]++;
-			masks8x8.emplace_back(mask8x8, tri_id);
-		}
-	}
-
-	out.num_block_tris = masks8x8.size();
-
-	// TODO: We're assuming that backface culling is enabled?
-	// Note: it makes no sense without merging non-overlapping masks into layers
-	for(auto &mask : masks8x8) {
-		auto &tri = tile.tris[mask.tri_id];
-		float depth_min = inf, depth_max = -inf;
-		Plane3F plane(tri);
-
-		for(int j = 0; j < 64; j++) {
-			if((mask.bits & (1ull << j)) == 0)
-				continue;
-			int2 pos = full_block8x8_pos * 8 + int2(j % 8, j / 8);
-			float3 ray_origin = m_frustum_rays.origin0;
-			float3 ray_dir = normalize(m_frustum_rays.dir0 + m_frustum_rays.dirx * float(pos.x) +
-									   m_frustum_rays.diry * float(pos.y));
-
-			auto isect = Ray3F(ray_origin, ray_dir).isectParam(plane);
-			if(isect.isPoint()) {
-				depth_min = min(depth_min, isect.asPoint());
-				depth_max = max(depth_max, isect.asPoint());
-			}
-		}
-		mask.depth = {depth_min, depth_max};
-	}
-
-	std::sort(begin(masks8x8), end(masks8x8),
-			  [](const Mask8x8 &a, const Mask8x8 &b) { return a.depth.first < b.depth.first; });
-
-	struct MergedMask8x8 {
-		vector<int> tri_ids;
-		array<u8, 64> indices;
-		Pair<float> depth = {inf, -inf};
-		u64 bits;
-	};
-
-	auto neighbour_map = tile.triNeighbourMap(4);
-	auto are_compatible_tris = [&](int id0, int id1) -> bool {
-		return true || isOneOf(id1, neighbour_map[id0]);
-	};
-
-	// We have to make sure that depth ranges don't get too mixed up...
-	vector<MergedMask8x8> mmasks;
-	constexpr int max_merged_tris = 15;
-	for(auto &mask : masks8x8) {
-		int mmask_idx = -1;
-
-		for(int i = max(0, mmasks.size() - 1); i < mmasks.size(); i++)
-			if((mmasks[i].bits & mask.bits) == 0 && mmasks[i].tri_ids.size() < max_merged_tris) {
-				bool compatible = true;
-				for(auto tid : mmasks[i].tri_ids)
-					if(!are_compatible_tris(mask.tri_id, tid)) {
-						compatible = false;
-						break;
-					}
-				if(compatible) {
-					mmask_idx = i;
-					break;
-				}
-			}
-		if(mmask_idx == -1) {
-			MergedMask8x8 new_mask;
-			new_mask.bits = 0;
-			fill(new_mask.indices, 255);
-			mmask_idx = mmasks.size();
-			mmasks.emplace_back(new_mask);
-		}
-
-		auto &mmask = mmasks[mmask_idx];
-		mmask.bits |= mask.bits;
-		uint index = mmask.tri_ids.size();
-		mmask.tri_ids.emplace_back(mask.tri_id);
-		mmask.depth.first = min(mmask.depth.first, mask.depth.first);
-		mmask.depth.second = max(mmask.depth.second, mask.depth.second);
-		for(int i : intRange(64))
-			if(mask.bits & (1ull << i))
-				mmask.indices[i] = index;
-	}
-	out.num_merged_block_tris = mmasks.size();
-
-	print("Triangle masks: %\n", masks8x8.size());
-	int max_row_size = 8;
-	for(int i = 0; i < masks8x8.size(); i += max_row_size) {
-		int row_size = min(masks8x8.size() - i, max_row_size);
-		for(int j = 0; j < row_size; j++)
-			printf("      %3d      ", i + j);
-		printf("\n");
-		for(int j = 0; j < row_size; j++)
-			printf(" %6.2f:%6.2f ", masks8x8[i + j].depth.first, masks8x8[i + j].depth.second);
-		printf("\n");
-		for(int iy = 0; iy < 8; iy++) {
-			for(int j = 0; j < row_size; j++) {
-				u64 mask = masks8x8[i + j].bits;
-				int y = 7 - iy;
-				printf("    ");
-				for(int x = 0; x < 8; x++)
-					printf("%c", mask & (1ull << (x + y * 8)) ? 'X' : '.');
-				printf(j + 1 == row_size ? "\n" : "   ");
-			}
-		}
-	}
-
-	if(merge_masks) {
-		printf("\nMerged masks: %d (%.2f %%)\n", mmasks.size(),
-			   double(mmasks.size()) / masks8x8.size() * 100.0);
-		max_row_size = 4;
-		for(int i = 0; i < mmasks.size(); i += max_row_size) {
-			printf("\n");
-			int row_size = min(mmasks.size() - i, max_row_size);
-			for(int j = 0; j < row_size; j++)
-				printf("        %4d:%4d          ", i + j, (int)mmasks[i + j].tri_ids.size());
-			printf("\n");
-			for(int j = 0; j < row_size; j++)
-				printf("       %6.2f:%6.2f       ", mmasks[i + j].depth.first,
-					   mmasks[i + j].depth.second);
-			printf("\n");
-			for(int iy = 0; iy < 8; iy++) {
-				for(int j = 0; j < row_size; j++) {
-					auto &mmask = mmasks[i + j];
-					int y = 7 - iy;
-					printf(" ");
-					for(int x = 0; x < 8; x++) {
-						int index = x + y * 8;
-						if(mmask.indices[index] != 255)
-							printf("%2d ", mmask.indices[index]);
-						else
-							printf(" . ");
-					}
-					printf(j + 1 == row_size ? "\n" : "  ");
-				}
-			}
-		}
-	}
-
-	print("\nLayer depths: (min/max: %)\n", minMax(layer_depth));
-	for(int y = 0; y < 8; y++) {
-		for(int x = 0; x < 8; x++) {
-			printf("%3d ", layer_depth[x + y * 8]);
-		}
-		printf("\n");
-	}
-
-	out.selected_tile_tris.resize(tile.tris.size());
-	for(auto &mask : masks8x8)
-		out.selected_tile_tris[mask.tri_id] = true;
-
-	return out;
-}
-
-Image LucidRenderer::masksSnapshot() {
-	auto block_counts = m_block_counts->download<u32>();
-	auto block_offsets = m_block_offsets->download<u32>();
-	auto tile_counters = m_tile_counters->download<u32>();
-
-	int num_block_tris = tile_counters[9];
-	int bin_count = m_bin_counts.x * m_bin_counts.y;
-
-	Image image(m_bin_counts * m_bin_size, ColorId::black);
-	auto block_instances = m_block_tris->download<u32>(num_block_tris);
-	for(int bin_id = 0; bin_id < bin_count; bin_id++) {
-		int2 bin_pos = int2(bin_id % m_bin_counts.x, bin_id / m_bin_counts.x) * m_bin_size;
-
-		for(int tile_id = 0; tile_id < m_tiles_per_bin; tile_id++) {
-			int2 tile_pos = bin_pos + int2(tile_id % 4, tile_id / 4) * m_tile_size;
-
-			for(int block_id = 0; block_id < m_blocks_per_tile; block_id++) {
-				int2 block_pos = tile_pos + int2(block_id % 4, block_id / 4) * m_block_size;
-				int bindex = bin_id * m_blocks_per_bin + tile_id * m_blocks_per_tile + block_id;
-				auto offset = block_offsets[bindex];
-				int count = block_counts[bindex];
-
-				for(int i = 0; i < count; i++) {
-					u32 value = block_instances[offset + i];
-					for(int y = 0; y < 4; y++)
-						for(int x = 0; x < 4; x++)
-							if(value & (1 << (x + y * 4))) {
-								int2 pixel_pos = block_pos + int2(x, y);
-								auto &pixel =
-									image({pixel_pos.x, image.height() - 1 - pixel_pos.y});
-								pixel.r = min(255, pixel.r + 64);
-								pixel.g = min(255, pixel.g + 8);
-								pixel.b = min(255, pixel.b + 1);
-							}
-				}
-			}
-		}
-	}
-
-	return image;
 }
 
 void LucidRenderer::bindRaster(const Context &ctx) {
@@ -1368,8 +415,7 @@ void LucidRenderer::bindRaster(const Context &ctx) {
 		nrm_vb->bindIndexAs(5, BufferType::shader_storage);
 
 	m_bin_counters->bindIndex(6);
-	m_tile_counters->bindIndex(7);
-	m_tile_tris->bindIndex(8);
+	m_bin_quads->bindIndex(8);
 	m_scratch_32->bindIndex(9);
 	m_scratch_64->bindIndex(10);
 	m_instance_data->bindIndex(11);
@@ -1377,87 +423,32 @@ void LucidRenderer::bindRaster(const Context &ctx) {
 	m_raster_image->bindIndex(13); // TODO: too many bindings
 }
 
-void LucidRenderer::rasterBlock(const Context &ctx) {
+void LucidRenderer::rasterLow(const Context &ctx) {
 	PERF_GPU_SCOPE();
-	raster_block_program.use();
+
+	raster_low_program.use();
 
 	GlTexture::bind({ctx.opaque_tex, ctx.trans_tex});
 	//GlTexture::bind({ctx.depth_buffer, ctx.shadows.map});
 
-	ctx.lighting.setUniforms(raster_block_program.glProgram());
-	raster_block_program.setFrustum(ctx.camera);
-	raster_block_program.setViewport(ctx.camera, m_size);
-	raster_block_program.setShadows(ctx.shadows.matrix, ctx.shadows.enable);
-	ctx.lighting.setUniforms(raster_block_program.glProgram());
-
-	dispatchIndirect(BIN_COUNTERS_MEMBER_OFFSET(num_block_raster_dispatches));
-	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
-}
-
-void LucidRenderer::rasterTile(const Context &ctx) {
-	PERF_GPU_SCOPE();
-
-	raster_tile_program.use();
-
-	GlTexture::bind({ctx.opaque_tex, ctx.trans_tex});
-	//GlTexture::bind({ctx.depth_buffer, ctx.shadows.map});
-
-	ctx.lighting.setUniforms(raster_tile_program.glProgram());
-	raster_tile_program.setFrustum(ctx.camera);
-	raster_tile_program.setViewport(ctx.camera, m_size);
-	raster_tile_program.setShadows(ctx.shadows.matrix, ctx.shadows.enable);
-	raster_tile_program["background_color"] = u32(ctx.config.background_color);
-	ctx.lighting.setUniforms(raster_tile_program.glProgram());
-
-	if(m_opts & Opt::debug_raster)
-		shaderDebugUseBuffer(m_errors);
-
-	// TODO: lepiej by było, jakby było to bardziej zintegrowane z GlProgramem
-	// - dispatch też mógłby być funkcją debuggera);
-	// - Inny debugger dla compute i inny dla pozostałych shaderów
-	// - możliwość przekazywania konkretnych wartości (np. 4 różne wartości?)
-	// - jakaś klasa do prostej introspekcji linii kodu programu
-	dispatchIndirect(BIN_COUNTERS_MEMBER_OFFSET(num_tile_raster_dispatches));
-	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
-
-	if(m_opts & Opt::debug_raster) {
-		auto source_ranges = raster_tile_program.sourceRanges();
-		auto records = shaderDebugRecords(m_errors, {256, 1, 1}, {128, 1, 1}, 256, source_ranges);
-		if(records) {
-			makeSorted(records);
-			print("raster_tile shader debug messages reported:\n");
-			for(auto &record : records)
-				print("%\n", record);
-		}
-	}
-}
-
-void LucidRenderer::rasterBin(const Context &ctx) {
-	PERF_GPU_SCOPE();
-
-	raster_bin_program.use();
-	m_bin_quads->bindIndex(8);
-
-	GlTexture::bind({ctx.opaque_tex, ctx.trans_tex});
-	//GlTexture::bind({ctx.depth_buffer, ctx.shadows.map});
-
-	ctx.lighting.setUniforms(raster_bin_program.glProgram());
-	raster_bin_program.setFrustum(ctx.camera);
-	raster_bin_program.setViewport(ctx.camera, m_size);
-	raster_bin_program.setShadows(ctx.shadows.matrix, ctx.shadows.enable);
-	raster_bin_program["background_color"] = u32(ctx.config.background_color);
-	ctx.lighting.setUniforms(raster_bin_program.glProgram());
+	ctx.lighting.setUniforms(raster_low_program.glProgram());
+	raster_low_program.setFrustum(ctx.camera);
+	raster_low_program.setViewport(ctx.camera, m_size);
+	raster_low_program.setShadows(ctx.shadows.matrix, ctx.shadows.enable);
+	raster_low_program["background_color"] = u32(ctx.config.background_color);
+	ctx.lighting.setUniforms(raster_low_program.glProgram());
 
 	if(m_opts & Opt::debug_raster)
 		shaderDebugUseBuffer(m_errors);
 
 	dispatchIndirect(BIN_COUNTERS_MEMBER_OFFSET(num_bin_raster_dispatches));
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
-	m_tile_tris->bindIndex(8);
 
 	if(m_opts & Opt::debug_raster) {
-		auto source_ranges = raster_tile_program.sourceRanges();
-		auto records = shaderDebugRecords(m_errors, {256, 1, 1}, {128, 1, 1}, 256, source_ranges);
+		FATAL("Make sure that LSIZE & GSIZE are correct");
+		auto source_ranges = raster_low_program.sourceRanges();
+		auto records =
+			shaderDebugRecords(m_errors, {256, 1, 1}, {m_max_dispatches, 1, 1}, 256, source_ranges);
 		if(records) {
 			makeSorted(records);
 			print("raster_bin shader debug messages reported:\n");
@@ -1465,52 +456,6 @@ void LucidRenderer::rasterBin(const Context &ctx) {
 				print("%\n", record);
 		}
 	}
-}
-
-void LucidRenderer::rasterizeFinal(const Context &ctx) {
-	PERF_GPU_SCOPE();
-
-	m_instance_data->bindIndex(0);
-	m_quad_indices->bindIndex(1);
-	auto vbuffers = ctx.vao->buffers();
-	DASSERT(vbuffers.size() == 4);
-	vbuffers[0]->bindIndexAs(2, BufferType::shader_storage);
-	if(auto tex_vb = vbuffers[2])
-		tex_vb->bindIndexAs(3, BufferType::shader_storage);
-	if(auto col_vb = vbuffers[1])
-		col_vb->bindIndexAs(4, BufferType::shader_storage);
-	if(auto nrm_vb = vbuffers[3])
-		nrm_vb->bindIndexAs(5, BufferType::shader_storage);
-
-	m_tile_counters->bindIndex(6);
-	m_block_counts->bindIndex(7);
-	m_block_offsets->bindIndex(8);
-
-	m_tile_tris->bindIndex(9);
-	m_block_tris->bindIndex(10);
-	m_uv_rects->bindIndex(11);
-	m_raster_image->bindIndex(12);
-	final_raster_program.use();
-
-	GlTexture::bind({ctx.opaque_tex, ctx.trans_tex});
-	//GlTexture::bind({ctx.depth_buffer, ctx.shadows.map});
-
-	final_raster_program["fog_multiplier"] = 0.3f / ctx.camera.params().ortho_scale;
-	final_raster_program["background_color"] = u32(ctx.config.background_color);
-
-	ctx.lighting.setUniforms(final_raster_program.glProgram());
-	final_raster_program.setFrustum(ctx.camera);
-	final_raster_program.setViewport(ctx.camera, m_size);
-	final_raster_program.setShadows(ctx.shadows.matrix, ctx.shadows.enable);
-	ctx.lighting.setUniforms(final_raster_program.glProgram());
-
-	// TODO: lepiej by było, jakby było to bardziej zintegrowane z GlProgramem
-	// - dispatch też mógłby być funkcją debuggera);
-	// - Inny debugger dla compute i inny dla pozostałych shaderów
-	// - możliwość przekazywania konkretnych wartości (np. 4 różne wartości?)
-	// - jakaś klasa do prostej introspekcji linii kodu programu
-	glDispatchCompute(128, 1, 1);
-	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 }
 
 // Final stage: blits transparent pixels onto main framebuffer
@@ -1537,35 +482,29 @@ void LucidRenderer::copyCounters() {
 	//if(iter++ % 30 != 0)
 	//	return;
 
-	auto last = m_old_counters.back();
-	for(int i = m_old_counters.size() - 1; i > 0; i--)
-		m_old_counters[i] = m_old_counters[i - 1];
-	m_old_counters[0] = last;
+	auto last = m_old_bin_counters.back();
+	for(int i = m_old_bin_counters.size() - 1; i > 0; i--)
+		m_old_bin_counters[i] = m_old_bin_counters[i - 1];
+	m_old_bin_counters[0] = last;
 
-	if(!m_old_counters[0].first) {
-		m_old_counters[0].first.emplace(BufferType::copy_read, m_bin_counters->size());
-		m_old_counters[0].second.emplace(BufferType::copy_read, m_tile_counters->size());
+	if(!m_old_bin_counters[0]) {
+		m_old_bin_counters[0].emplace(BufferType::copy_read, m_bin_counters->size());
 	}
 
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
-	m_bin_counters->copyTo(m_old_counters[0].first, 0, 0, m_old_counters[0].first->size());
-	m_tile_counters->copyTo(m_old_counters[0].second, 0, 0, m_old_counters[0].second->size());
+	m_bin_counters->copyTo(m_old_bin_counters[0], 0, 0, m_old_bin_counters[0]->size());
 }
 
 vector<StatsGroup> LucidRenderer::getStats() const {
 	vector<StatsGroup> out;
 
-	if(!m_old_counters.back().first)
+	if(!m_old_bin_counters.back())
 		return out;
 
-	auto bin_counters = m_old_counters.back().first->download<u32>();
-	auto tile_counters = m_old_counters.back().second->download<u32>();
+	auto bin_counters = m_old_bin_counters.back()->download<u32>();
 	shader::BinCounters bins;
-	shader::TileCounters tiles;
 	memcpy(&bins, bin_counters.data(), sizeof(bins));
-	memcpy(&tiles, tile_counters.data(), sizeof(tiles));
 	bin_counters.erase(bin_counters.begin(), bin_counters.begin() + BIN_COUNTERS_SIZE);
-	tile_counters.erase(tile_counters.begin(), tile_counters.begin() + TILE_COUNTERS_SIZE);
 
 	CSpan<uint> bin_quad_counts = cspan(bin_counters.data() + m_bin_count * 0, m_bin_count);
 	CSpan<uint> bin_quad_offsets = cspan(bin_counters.data() + m_bin_count * 1, m_bin_count);
@@ -1588,29 +527,12 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 	int num_blocks = ((m_size.x + m_block_size - 1) / m_block_size) *
 					 ((m_size.y + m_block_size - 1) / m_block_size);
 
-	int num_tile_tris = 0, num_nonempty_tiles = 0, num_nonempty_bins = 0;
 	int max_quads_per_bin = max(bin_quad_counts);
 	int num_bin_quads = accumulate(bin_quad_counts);
 
 	int sum_bins =
 		bins.num_empty_bins + bins.num_small_bins + bins.num_medium_bins + bins.num_big_bins;
 	bool is_tile_dispatcher_running = bins.num_tiled_bins > 0 && !(m_opts & Opt::bin_size_32);
-
-	for(int b = 0; b < m_bin_count; b++) {
-		bool empty = true;
-		if(is_tile_dispatcher_running)
-			for(int t = 0; t < m_tiles_per_bin; t++) {
-				int count = tile_counters[b * m_tiles_per_bin + t];
-				num_tile_tris += count;
-				if(count) {
-					num_nonempty_tiles++;
-					empty = false;
-				}
-			}
-		// TODO: this is wrong
-		if(!empty)
-			num_nonempty_bins++;
-	}
 
 	int num_visible_total = bins.num_visible_quads[0] + bins.num_visible_quads[1];
 	auto visible_info = stdFormat("%d (%.2f %%)", num_visible_total,
@@ -1675,63 +597,15 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 		{"visible quads", visible_info, visible_details},
 		{"rejected quads", rejected_info, rejection_details},
 		{"bin quads", toString(num_bin_quads), "Per bin quads"},
-		{"tile-tris", toString(num_tile_tris), "Per-tile triangles"},
-		{"estimated tile-tris", toString(tiles.num_tile_tris),
-		 "Estimating space needed for tile-tris is inaccurate"},
-		{"empty tile-tris",
-		 stdFormat("%d (%.2f %%)", tiles.num_tile_tris_with_no_blocks,
-				   double(tiles.num_tile_tris_with_no_blocks) / num_tile_tris * 100.0),
-		 "Per-tile triangles which generate no samples"},
-		{"row-tris", toString(tiles.num_processed_block_rows),
-		 "Block rows generated for each per-tile triangle"},
-		{"block-tris", toString(tiles.num_block_tris),
-		 "Per-block triangle instances with at least 1 sample"},
-		{"fragments", toString(tiles.num_fragments)},
+		{"max quads / pin", toString(max_quads_per_bin)},
 	};
 
-	vector<StatsRow> avg_rows = {
-		{"quads / non-empty bin", stdFormat("%.2f", double(num_bin_quads) / num_nonempty_bins)},
-		{"tile-tris / non-empty tile",
-		 stdFormat("%.2f", double(num_tile_tris) / num_nonempty_tiles)},
-		{"row-tris / non-empty tile",
-		 stdFormat("%.2f", double(tiles.num_processed_block_rows) / num_nonempty_tiles)},
-		{"block-tris / non-empty tile",
-		 stdFormat("%.2f", double(tiles.num_block_tris) / num_nonempty_tiles)},
-		{"block-tris / block*",
-		 stdFormat("%.2f", double(tiles.num_block_tris) / (num_nonempty_tiles * m_blocks_per_tile)),
-		 "Counting all blocks in non-empty tiles"},
-		{"block-tris / pixel*",
-		 stdFormat("%.2f",
-				   double(tiles.num_block_tris) / (num_nonempty_tiles * square(m_tile_size))),
-		 "Counting all pixels in non-empty tiles"},
-	};
-
-	vector<StatsRow> max_rows = {
-		{"max quads / bin", toString(max_quads_per_bin)},
-		{"max tile-tris / tile", toString(tiles.max_tris_per_tile)},
-		{"max row-tris / tile", toString(tiles.max_row_tris_per_tile)},
-		{"max block-tris / tile", toString(tiles.max_block_tris_per_tile)},
-		{"max block-tris / block", toString(tiles.max_tris_per_block)},
-		{"max fragments / tile", toString(tiles.max_fragments_per_tile)},
-		{"max fragments / pixel", toString(tiles.max_fragments_per_pixel)},
-	};
-
-	vector<StatsRow> invalid_rows = {
-		{"invalid pixels", stdFormat("%d (%.3f %%)", tiles.num_invalid_pixels,
-									 float(tiles.num_invalid_pixels) / num_pixels * 100.0)},
-		{"invalid blocks", stdFormat("%d (%.3f %%)", tiles.num_invalid_blocks,
-									 float(tiles.num_invalid_blocks) / num_blocks * 100.0)},
-		{"invalid tiles", stdFormat("%d (%.3f %%)", tiles.num_invalid_tiles,
-									float(tiles.num_invalid_tiles) / num_tiles * 100.0)},
-	};
+	// TODO: add better stats once rasterizez is working on all levels
 
 	if(timings)
 		out.emplace_back(move(timings), "", 130);
 	out.emplace_back(move(bin_rows), "", 130);
 	out.emplace_back(move(basic_rows), "", 130);
-	out.emplace_back(move(avg_rows), "Averages per non-empty bin/tile", 130);
-	out.emplace_back(move(max_rows), "", 130);
-	out.emplace_back(move(invalid_rows), "", 130);
 	return out;
 }
 
@@ -1912,16 +786,4 @@ void LucidRenderer::printHistograms() const {
 		printf("  avg: single:%d multi:%d \n", int(double(ssum) / num_not_empty),
 			   int(double(msum) / num_not_empty));
 	}
-}
-
-array<uint, 256> LucidRenderer::computeCentroids4x4() {
-	array<uint, 256> out;
-	for(uint mask = 0; mask < 256; mask++) {
-		uint x0123 = 1 * countBits(mask & 0x11) + 3 * countBits(mask & 0x22) +
-					 5 * countBits(mask & 0x44) + 7 * countBits(mask & 0x88);
-		uint y01 = 1 * countBits(mask & 0xf) + 3 * countBits(mask & 0xf0);
-		uint y23 = 5 * countBits(mask & 0xf) + 7 * countBits(mask & 0xf0);
-		out[mask] = x0123 | (y01 << 8) | (y23 << 16);
-	}
-	return out;
 }

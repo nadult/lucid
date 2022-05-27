@@ -43,8 +43,6 @@
 
 layout(local_size_x = LSIZE) in;
 
-layout(std430, binding = 8) buffer buf8_ { uint g_bin_quads[]; };
-
 #define WORKGROUP_32_SCRATCH_SIZE (32 * 1024)
 #define WORKGROUP_32_SCRATCH_SHIFT 15
 

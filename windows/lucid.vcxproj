@@ -136,10 +136,7 @@
     <None Include="..\data\shaders\bin_dispatcher.shader" />
     <None Include="..\data\shaders\compose.shader" />
     <None Include="..\data\shaders\dummy.shader" />
-    <None Include="..\data\shaders\final_raster.shader" />
     <None Include="..\data\shaders\init_counters.shader" />
-    <None Include="..\data\shaders\mask_raster.shader" />
-    <None Include="..\data\shaders\mask_sort.shader" />
     <None Include="..\data\shaders\pieces\declarations.shader" />
     <None Include="..\data\shaders\pieces\frustum.shader" />
     <None Include="..\data\shaders\pieces\funcs.shader" />
@@ -149,12 +146,9 @@
     <None Include="..\data\shaders\pieces\rect.shader" />
     <None Include="..\data\shaders\pieces\structures.shader" />
     <None Include="..\data\shaders\pieces\viewport.shader" />
-    <None Include="..\data\shaders\raster_bin_fastest.shader" />
-    <None Include="..\data\shaders\raster_block.shader" />
-    <None Include="..\data\shaders\raster_tile_fastest.shader" />
+    <None Include="..\data\shaders\raster_low.shader" />
     <None Include="..\data\shaders\setup.shader" />
     <None Include="..\data\shaders\simple.shader" />
-    <None Include="..\data\shaders\tile_dispatcher.shader" />
     <None Include="..\notes.wiki" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

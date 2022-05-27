@@ -18,8 +18,7 @@
 layout(local_size_x = LSIZE) in;
 layout(std430, binding = 0) buffer buf0_ { uint g_quad_aabbs[]; };
 coherent BIN_COUNTERS_BUFFER(1);
-layout(std430, binding = 3) buffer buf3_ { uint g_bin_quads[]; };
-layout(std430, binding = 4) buffer buf4_ { uint g_bin_row_quads[]; };
+layout(std430, binding = 2) buffer buf2_ { uint g_bin_quads[]; };
 
 shared int s_bins[BIN_COUNT];
 shared int s_rows[BIN_COUNT_Y + 1];

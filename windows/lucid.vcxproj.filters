@@ -121,28 +121,13 @@
     <None Include="..\data\shaders\dummy.shader">
       <Filter>shaders</Filter>
     </None>
-    <None Include="..\data\shaders\final_raster.shader">
-      <Filter>shaders</Filter>
-    </None>
     <None Include="..\data\shaders\init_counters.shader">
-      <Filter>shaders</Filter>
-    </None>
-    <None Include="..\data\shaders\mask_raster.shader">
-      <Filter>shaders</Filter>
-    </None>
-    <None Include="..\data\shaders\mask_sort.shader">
-      <Filter>shaders</Filter>
-    </None>
-    <None Include="..\data\shaders\raster_block.shader">
       <Filter>shaders</Filter>
     </None>
     <None Include="..\data\shaders\setup.shader">
       <Filter>shaders</Filter>
     </None>
     <None Include="..\data\shaders\simple.shader">
-      <Filter>shaders</Filter>
-    </None>
-    <None Include="..\data\shaders\tile_dispatcher.shader">
       <Filter>shaders</Filter>
     </None>
     <None Include="..\data\shaders\pieces\frustum.shader">
@@ -163,12 +148,6 @@
     <None Include="..\data\shaders\pieces\viewport.shader">
       <Filter>shaders\pieces</Filter>
     </None>
-    <None Include="..\data\shaders\raster_bin_fastest.shader">
-      <Filter>shaders</Filter>
-    </None>
-    <None Include="..\data\shaders\raster_tile_fastest.shader">
-      <Filter>shaders</Filter>
-    </None>
     <None Include="..\data\shaders\pieces\raster.shader">
       <Filter>shaders\pieces</Filter>
     </None>
@@ -177,6 +156,9 @@
     </None>
     <None Include="..\data\shaders\pieces\declarations.shader">
       <Filter>shaders\pieces</Filter>
+    </None>
+    <None Include="..\data\shaders\raster_low.shader">
+      <Filter>shaders</Filter>
     </None>
   </ItemGroup>
 </Project>

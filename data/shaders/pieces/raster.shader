@@ -3,8 +3,8 @@
 #define LIX gl_LocalInvocationIndex
 #define LID gl_LocalInvocationID
 
-layout(std430, binding = 0) buffer buf0_ { uvec4 g_tri_aabbs[]; };
-layout(std430, binding = 1) buffer buf1_ { uint g_quad_indices[]; };
+layout(std430, binding = 0) readonly buffer buf0_ { uvec4 g_tri_aabbs[]; };
+layout(std430, binding = 1) readonly buffer buf1_ { uint g_quad_indices[]; };
 
 layout(std430, binding = 2) readonly buffer buf2_ { float g_verts[]; };
 layout(std430, binding = 3) readonly buffer buf3_ { vec2 g_tex_coords[]; };
@@ -12,7 +12,7 @@ layout(std430, binding = 4) readonly buffer buf4_ { uint g_colors[]; };
 layout(std430, binding = 5) readonly buffer buf5_ { uint g_normals[]; };
 
 BIN_COUNTERS_BUFFER(6);
-TILE_COUNTERS_BUFFER(7);
+layout(std430, binding = 8) buffer buf8_ { uint g_bin_quads[]; };
 
 layout(std430, binding = 9) coherent buffer buf9_ { uint g_scratch_32[]; };
 layout(std430, binding = 10) coherent buffer buf10_ { uvec2 g_scratch_64[]; };

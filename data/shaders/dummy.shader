@@ -19,20 +19,19 @@
 layout(local_size_x = LSIZE) in;
 
 BIN_COUNTERS_BUFFER(0);
-TILE_COUNTERS_BUFFER(1);
 
 // Using this SMEM variable directly increases running time by 7%
 shared int s_bin_id;
 shared uint s_bin_tri_count;
 
 void countTris(int bin_id) {
-	if(LIX < 16)
-		atomicAdd(s_bin_tri_count, TILE_TRI_COUNTS(bin_id, LIX));
+	if(LIX == 0)
+		atomicAdd(s_bin_tri_count, BIN_QUAD_COUNTS(bin_id));
 }
 
 int loadNextBin() {
 	if(LIX == 0)
-		s_bin_id = int(atomicAdd(g_tiles.final_raster_bin_counter, 1));
+		s_bin_id = int(atomicAdd(g_bins.a_dummy_counter, 1));
 	barrier();
 	return s_bin_id;
 }

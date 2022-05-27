@@ -340,13 +340,6 @@ void LucidApp::doMenu() {
 		if(ImGui::Button("Print triangle size histogram")) {
 			m_lucid_renderer->printTriangleSizeHistogram();
 		}
-		if(ImGui::Button("Analyze mask rasterizer"))
-			m_lucid_renderer->analyzeMaskRasterizer();
-
-		if(ImGui::Button("Raster masks snapshot")) {
-			auto image = m_lucid_renderer->masksSnapshot();
-			image.saveTGA(format("%_masks.tga", setup.name)).ignore();
-		}
 		ImGui::InputFloat("Square weight", &m_square_weight);
 		if(setup.scene && ImGui::Button("Generate meshlets")) {
 			m_test_meshlets = true;
@@ -403,17 +396,13 @@ void LucidApp::doMenu() {
 	ImGui::ColorEdit3("Scene color", setup.render_config.scene_color.v, 0);
 
 	if(m_is_picking_block) {
-		m_gui.text("Picking % block: %", m_is_picking_8x8 ? "8x8" : "4x4", m_selected_block);
-		if(m_block_info) {
-			auto desc = m_block_info->description();
-			m_gui.text("%", desc.c_str());
+		auto bin_size = m_lucid_renderer->binSize();
+		m_gui.text("Picking %dx%d bin: %d", bin_size, bin_size, m_selected_block);
+		if(m_selection_info) {
+			m_gui.text("TODO: selection info");
 		}
-	} else if(ImGui::Button("Introspect 8x8 raster block")) {
+	} else if(ImGui::Button("Introspect bin")) {
 		m_is_picking_block = true;
-		m_is_picking_8x8 = true;
-	} else if(ImGui::Button("Introspect 4x4 raster block")) {
-		m_is_picking_block = true;
-		m_is_picking_8x8 = false;
 	}
 	ImGui::Checkbox("Merge introspected masks", &m_merge_masks);
 
@@ -449,7 +438,7 @@ bool LucidApp::handleInput(vector<InputEvent> events, float time_diff) {
 		if(event.mouseButtonDown(InputButton::right) && m_is_picking_block) {
 			m_is_picking_block = false;
 			m_selected_block = none;
-			m_block_info = none;
+			m_selection_info = none;
 		}
 
 		if(event.mouseButtonDown(InputButton::left) && m_setup_idx != -1) {
@@ -474,8 +463,9 @@ bool LucidApp::handleInput(vector<InputEvent> events, float time_diff) {
 	if(m_is_picking_block && m_mouse_pos) {
 		int2 pos = int2(*m_mouse_pos);
 		pos.y = m_viewport.height() - pos.y;
+		auto bin_size = m_lucid_renderer->binSize();
 		if(m_viewport.contains(pos))
-			m_selected_block = pos / (m_is_picking_8x8 ? 8 : 4);
+			m_selected_block = pos / bin_size;
 		else
 			m_selected_block = none;
 	}
@@ -580,50 +570,16 @@ void LucidApp::drawScene() {
 void LucidApp::draw2D() {
 	Renderer2D renderer_2d(m_viewport, Orient2D::y_up);
 	if(m_selected_block && m_lucid_renderer) {
-		int bsize = m_is_picking_8x8 ? 8 : 4;
-		int tsize = m_lucid_renderer->tileSize();
-		int bisize = m_lucid_renderer->binSize();
+		int bin_size = m_lucid_renderer->binSize();
+		int tile_size = m_lucid_renderer->tileSize();
 
 		int2 offset = *m_selected_block;
-		IRect block_rect = IRect(0, 0, bsize + 1, bsize + 1) + offset * bsize;
-		IRect tile_rect = IRect(0, 0, tsize + 1, tsize + 1) + offset / (tsize / bsize) * tsize;
-		IRect bin_rect = IRect(0, 0, bisize + 1, bisize + 1) + offset / (bisize / bsize) * bisize;
+		IRect tile_rect = IRect(0, 0, tile_size + 1, tile_size + 1) + offset;
+		IRect bin_rect = IRect(0, 0, bin_size + 1, bin_size + 1) + offset;
 		renderer_2d.addRect(bin_rect, ColorId::brown);
 		renderer_2d.addRect(tile_rect, ColorId::purple);
-		renderer_2d.addRect(block_rect, ColorId::magneta);
 	}
 	renderer_2d.render();
-}
-
-static void visualizeBlockTris(const RasterTileInfo &tile, const RasterBlockInfo &block) {
-	auto vis_func = [&](Visualizer3 &vis, double2) -> string {
-		for(int i : intRange(tile.tris)) {
-			if(!block.selected_tile_tris[i])
-				continue;
-			auto &tri = tile.tris[i];
-			vis(tri);
-			vis(tri.flipped());
-			for(auto edge : tri.edges())
-				vis(edge, ColorId::black);
-		}
-
-		for(int i : intRange(tile.tris)) {
-			if(block.selected_tile_tris[i])
-				continue;
-			vis(tile.tris[i], ColorId::yellow);
-			vis(tile.tris[i].flipped(), ColorId::yellow);
-		}
-
-		TextFormatter fmt;
-		fmt << "Introspecting triangles intersecting current block (white) and tile (yellow)\n";
-		fmt("Tile-tris: %\nBlock-tris: %\n", tile.tris.size(), countIf(block.selected_tile_tris));
-		return fmt.text();
-	};
-
-	Investigator3::Config config;
-	config.move_speed_multiplier = 0.05;
-	Investigator3 rutkowski(vis_func, InvestigatorOpt::exit_with_space, config);
-	rutkowski.run();
 }
 
 bool LucidApp::mainLoop(GlDevice &device) {
@@ -648,20 +604,15 @@ bool LucidApp::mainLoop(GlDevice &device) {
 	if(m_selected_block && m_lucid_renderer && m_rendering_mode != RenderingMode::simple &&
 	   m_setup_idx != -1) {
 		auto &verts = m_setups[m_setup_idx]->scene->positions;
-		auto tile_pos = *m_selected_block / (m_is_picking_8x8 ? 2 : 4);
-		auto tile_info = m_lucid_renderer->introspectTile(verts, tile_pos);
-		auto func = m_is_picking_8x8 ? &LucidRenderer::introspectBlock8x8 :
-										 &LucidRenderer::introspectBlock4x4;
-		m_block_info = (m_lucid_renderer.get()->*func)(tile_info, *m_selected_block, m_merge_masks);
 		if(m_is_final_pick) {
-			if(tile_info.tris)
-				visualizeBlockTris(tile_info, *m_block_info);
+			// TODO: use it for bins / tiles / blocks introspection
+			// m_selection_info = ...
 			m_is_final_pick = false;
 			m_is_picking_block = false;
 			m_selected_block = none;
 		}
 	} else {
-		m_block_info = none;
+		m_selection_info = none;
 	}
 
 	return result;

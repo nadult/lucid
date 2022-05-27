@@ -11,7 +11,6 @@ class LucidRenderer;
 class SimpleRenderer;
 class SceneSetup;
 struct Scene;
-struct RasterBlockInfo;
 
 DEFINE_ENUM(RenderingMode, simple, lucid, mixed);
 
@@ -76,10 +75,9 @@ class LucidApp {
 
 	bool m_merge_masks = false;
 	bool m_is_picking_block = false;
-	bool m_is_picking_8x8 = false;
 	bool m_is_final_pick = false;
 	Maybe<int2> m_selected_block;
-	Maybe<RasterBlockInfo> m_block_info;
+	Maybe<int> m_selection_info;
 
 	struct StatPoint {
 		perf::ExecId exec_id;

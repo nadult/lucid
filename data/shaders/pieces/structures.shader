@@ -8,6 +8,7 @@ struct InstanceData {
 	uint color;
 };
 
+// TODO: better name for that
 struct BinCounters {
 	int num_input_quads;
 	int num_verts;
@@ -34,6 +35,7 @@ struct BinCounters {
 	int a_dispatcher_active_thread_groups;
 	int a_dispatcher_processed_items;
 	uint a_dispatcher_phase;
+	uint a_dummy_counter;
 
 	uint num_binning_dispatches[3];
 	uint num_tiling_dispatches[3];
@@ -43,45 +45,7 @@ struct BinCounters {
 
 	int dispatcher_item_counts[128];
 	int dispatcher_timings[128];
-	int temp[17 + 64];
+	int temp[16 + 64];
 };
 
 #define BIN_COUNTERS_SIZE 384
-
-// TODO: better explanation of stats
-struct TileCounters {
-	uint tile_dispatch_bin_counter;
-	uint mask_raster_bin_counter;
-	uint final_raster_bin_counter;
-	uint sorted_bin_counter;
-
-	uint medium_bin_counter;
-	uint big_bin_counter;
-	uint tiled_bin_counter;
-	uint temp1[1];
-
-	// This is only rough estimation (some tile-tris don't pass edge test)
-	uint num_tile_tris;
-
-	// Number of triangles per block summed across all blocks
-	uint num_block_tris;
-	uint num_invalid_pixels;
-	uint num_invalid_blocks;
-	uint num_invalid_tiles;
-
-	uint num_tile_tris_with_no_blocks;
-	uint num_processed_block_rows;
-
-	uint max_tris_per_block;
-	uint max_tris_per_tile;
-	uint max_row_tris_per_tile;
-	uint max_block_tris_per_tile;
-
-	uint num_fragments;
-	uint max_fragments_per_tile;
-	uint max_fragments_per_pixel;
-
-	uint temp2[10];
-};
-
-#define TILE_COUNTERS_SIZE 32

@@ -200,16 +200,20 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 
 	p_raster_low = EX_PASS(Program::makeCompute(
 		"raster_low", defs, mask(m_opts & Opt::debug_raster, ProgramOpt::debug)));
-	p_dummy = EX_PASS(Program::makeCompute("dummy", defs));
+	p_raster_medium = EX_PASS(Program::makeCompute(
+		"raster_medium", defs, mask(m_opts & Opt::debug_raster, ProgramOpt::debug)));
 
 	mkdirRecursive("temp").ignore();
 	if(auto disas = p_raster_low.getDisassembly())
 		saveFile("temp/raster_low.asm", *disas).ignore();
+	if(auto disas = p_raster_medium.getDisassembly())
+		saveFile("temp/raster_medium.asm", *disas).ignore();
 
 	ShaderDefs compose_defs;
 	compose_defs["BIN_SIZE"] = m_bin_size;
 	compose_defs["BIN_SHIFT"] = log2(m_bin_size);
 	p_compose = EX_PASS(Program::make("compose", compose_defs, {"in_pos"}));
+	//p_dummy = EX_PASS(Program::makeCompute("dummy", defs));
 
 	vector<u16> indices(m_bin_count * 6);
 	DASSERT(m_bin_count * 4 * 4 <= 64 * 1024);
@@ -268,6 +272,7 @@ void LucidRenderer::render(const Context &ctx) {
 
 	bindRaster(ctx);
 	rasterLow(ctx);
+	rasterMedium(ctx);
 	copyInfo();
 
 	// TODO: is this needed?
@@ -448,7 +453,30 @@ void LucidRenderer::rasterLow(const Context &ctx) {
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 }
 
-// Final stage: blits transparent pixels onto main framebuffer
+void LucidRenderer::rasterMedium(const Context &ctx) {
+	PERF_GPU_SCOPE();
+
+	p_raster_medium.use();
+
+	GlTexture::bind({ctx.opaque_tex, ctx.trans_tex});
+	//GlTexture::bind({ctx.depth_buffer, ctx.shadows.map});
+
+	ctx.lighting.setUniforms(p_raster_medium.glProgram());
+	p_raster_medium.setFrustum(ctx.camera);
+	p_raster_medium.setViewport(ctx.camera, m_size);
+	p_raster_medium.setShadows(ctx.shadows.matrix, ctx.shadows.enable);
+	p_raster_medium["background_color"] = u32(ctx.config.background_color);
+	ctx.lighting.setUniforms(p_raster_medium.glProgram());
+
+	if(m_opts & Opt::debug_raster) {
+		// TODO: accurate LSIZE
+		dispatchAndDebugProgram(p_raster_medium, m_max_dispatches, raster_lsize);
+	} else {
+		dispatchIndirect(LUCID_INFO_MEMBER_OFFSET(bin_level_dispatches[BIN_LEVEL_MEDIUM]));
+	}
+	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+}
+
 void LucidRenderer::compose(const Context &ctx) {
 	PERF_GPU_SCOPE();
 

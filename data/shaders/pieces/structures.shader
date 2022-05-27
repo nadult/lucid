@@ -31,7 +31,7 @@ struct LucidInfo {
 	int bin_level_counts[BIN_LEVELS_COUNT];
 
 	// Atomic counters
-	uint a_small_bins;
+	uint a_small_bins, a_medium_bins;
 	uint a_setup_work_groups;
 	uint a_dummy_counter;
 	int a_bin_dispatcher_work_groups;
@@ -48,7 +48,7 @@ struct LucidInfo {
 
 	int dispatcher_item_counts[128];
 	int dispatcher_timers[128];
-	int temp[18 + 64];
+	int temp[17 + 64];
 };
 
 #define LUCID_INFO_SIZE 384

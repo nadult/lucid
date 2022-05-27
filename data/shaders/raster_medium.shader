@@ -6,7 +6,7 @@
 // NOTE: converting integer multiplications to shifts does not increase perf
 
 // Acceptable values: 128, 256, 512
-#define LSIZE RASTER_LSIZE
+#define LSIZE 256
 
 #define NUM_WARPS (LSIZE / 32)
 
@@ -19,8 +19,8 @@
 #define MAX_BLOCK_TRIS 256
 #define MAX_BLOCK_TRIS_SHIFT 8
 
-#define MAX_SCRATCH_TRIS 2048
-#define MAX_SCRATCH_TRIS_SHIFT 11
+#define MAX_SCRATCH_TRIS 4096
+#define MAX_SCRATCH_TRIS_SHIFT 12
 
 #define SEGMENT_SIZE 256
 #define SEGMENT_SHIFT 8
@@ -60,7 +60,7 @@ uint scratch64TriOffset(uint tri_idx) {
 }
 
 uint scratch64BlockRowTrisOffset(uint by) {
-	return (gl_WorkGroupID.x << WORKGROUP_64_SCRATCH_SHIFT) + 28 * 1024 +
+	return (gl_WorkGroupID.x << WORKGROUP_64_SCRATCH_SHIFT) + 32 * 1024 +
 		   by * (MAX_BLOCK_ROW_TRIS * 2);
 }
 
@@ -90,7 +90,7 @@ shared int s_raster_error;
 shared uint s_vis_pixels[LSIZE];
 
 void outputPixel(ivec2 pixel_pos, uint color) {
-	color = tintColor(color, vec3(0.2, 0.3, 0.4), 0.8);
+	//color = tintColor(color, vec3(0.2, 0.3, 0.4), 0.8);
 	g_raster_image[s_bin_raster_offset + pixel_pos.x + (pixel_pos.y << BIN_SHIFT)] = color;
 }
 
@@ -117,6 +117,7 @@ void storeTriangle(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, uint v0, uint 
 
 	uint instance_flags = g_instances[instance_id].flags;
 	uint instance_color = g_instances[instance_id].color;
+	// TODO: flag for instance color?
 
 	// Nice optimization for barycentric computations:
 	// dot(cross(edge, dir), normal) == dot(dir, cross(normal, edge))
@@ -139,32 +140,9 @@ void storeTriangle(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, uint v0, uint 
 	TRI_SCRATCH(4) = uvec2(floatBitsToUint(edge0.z), floatBitsToUint(edge1.x));
 	TRI_SCRATCH(5) = uvec2(floatBitsToUint(edge1.y), floatBitsToUint(edge1.z));
 
-	TRI_SCRATCH(6) = uvec2(unormal, instance_color);
-
-	uint vcolor2 = 0;
-	if((instance_flags & INST_HAS_VERTEX_COLORS) != 0) {
-		TRI_SCRATCH(7) = uvec2(g_colors[v0], g_colors[v1]);
-		vcolor2 = g_colors[v2];
-	}
-	uint vnormal2 = 0;
-	if((instance_flags & INST_HAS_VERTEX_NORMALS) != 0) {
-		TRI_SCRATCH(9) = uvec2(g_normals[v0], g_normals[v1]);
-		vnormal2 = g_normals[v2];
-	}
-
-	if((instance_flags & (INST_HAS_VERTEX_COLORS | INST_HAS_VERTEX_NORMALS)) != 0) {
-		TRI_SCRATCH(8) = uvec2(vcolor2, vnormal2);
-	}
-	if((instance_flags & INST_HAS_TEXTURE) != 0) {
-		vec2 tex0 = g_tex_coords[v0];
-		vec2 tex1 = g_tex_coords[v1];
-		vec2 tex2 = g_tex_coords[v2];
-		tex1 -= tex0;
-		tex2 -= tex0;
-		TRI_SCRATCH(10) = floatBitsToUint(tex0);
-		TRI_SCRATCH(11) = floatBitsToUint(tex1);
-		TRI_SCRATCH(12) = floatBitsToUint(tex2);
-	}
+	// TODO: instance color...
+	TRI_SCRATCH(6) = uvec2(unormal, v0);
+	TRI_SCRATCH(7) = uvec2(v1, v2);
 }
 
 void getTriangleParams(uint scratch_tri_offset, out vec3 depth_eq, out vec2 bary_params,
@@ -185,39 +163,14 @@ void getTriangleParams(uint scratch_tri_offset, out vec3 depth_eq, out vec2 bary
 	}
 }
 
-void getTriangleSecondaryParams(uint scratch_tri_offset, out uint unormal,
-								out uint instance_color) {
+void getTriangleSecondaryParams(uint scratch_tri_offset, out uint unormal, out uint v0, out uint v1,
+								out uint v2) {
 	uvec2 val0 = TRI_SCRATCH(6);
+	uvec2 val1 = TRI_SCRATCH(7);
 	unormal = val0.x;
-	instance_color = val0.y;
-}
-
-void getTriangleVertexColors(uint scratch_tri_offset, out vec4 color0, out vec4 color1,
-							 out vec4 color2) {
-	uvec2 val0 = TRI_SCRATCH(7);
-	uvec2 val1 = TRI_SCRATCH(8);
-	color0 = decodeRGBA8(val0[0]);
-	color1 = decodeRGBA8(val0[1]);
-	color2 = decodeRGBA8(val1[0]);
-}
-
-void getTriangleVertexNormals(uint scratch_tri_offset, out vec3 normal0, out vec3 normal1,
-							  out vec3 normal2) {
-	uvec2 val0 = TRI_SCRATCH(9);
-	uvec2 val1 = TRI_SCRATCH(8);
-	normal0 = decodeNormalUint(val0[0]);
-	normal1 = decodeNormalUint(val0[1]);
-	normal2 = decodeNormalUint(val1[1]);
-}
-
-void getTriangleVertexTexCoords(uint scratch_tri_offset, out vec2 tex0, out vec2 tex1,
-								out vec2 tex2) {
-	uvec2 val0 = TRI_SCRATCH(10);
-	uvec2 val1 = TRI_SCRATCH(11);
-	uvec2 val2 = TRI_SCRATCH(12);
-	tex0 = uintBitsToFloat(val0);
-	tex1 = uintBitsToFloat(val1);
-	tex2 = uintBitsToFloat(val2);
+	v0 = val0.y;
+	v1 = val1.x;
+	v2 = val1.y;
 }
 
 void generateRowTris(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, int min_by, int max_by) {
@@ -320,6 +273,7 @@ void processQuads() {
 	}
 }
 
+/*
 shared uint s_sort_rcount[NUM_WARPS];
 
 void prepareSortTris() {
@@ -674,7 +628,6 @@ void loadSamples(uint hbid, int segment_id) {
 	}
 }
 
-// TODO: Can we improve speed of loading vertex data?
 uint shadeSample(ivec2 bin_pixel_pos, uint scratch_tri_offset, out float out_depth) {
 	float px = float(bin_pixel_pos.x), py = float(bin_pixel_pos.y);
 
@@ -683,8 +636,6 @@ uint shadeSample(ivec2 bin_pixel_pos, uint scratch_tri_offset, out float out_dep
 	vec2 bary_params;
 	getTriangleParams(scratch_tri_offset, depth_eq, bary_params, edge0_eq, edge1_eq, instance_id,
 					  instance_flags);
-	uint instance_color, unormal;
-	getTriangleSecondaryParams(scratch_tri_offset, unormal, instance_color);
 
 	float inv_ray_pos = depth_eq.x * px + (depth_eq.y * py + depth_eq.z);
 	out_depth = inv_ray_pos;
@@ -704,10 +655,15 @@ uint shadeSample(ivec2 bin_pixel_pos, uint scratch_tri_offset, out float out_dep
 	}
 	bary -= bary_params;
 
+	uint unormal, v0, v1, v2;
+	getTriangleSecondaryParams(scratch_tri_offset, unormal, v0, v1, v2);
+
+	uint instance_color = g_instances[instance_id].color;
 	vec4 color = decodeRGBA8(instance_color);
 	if((instance_flags & INST_HAS_TEXTURE) != 0) {
-		vec2 tex0, tex1, tex2;
-		getTriangleVertexTexCoords(scratch_tri_offset, tex0, tex1, tex2);
+		vec2 tex0 = g_tex_coords[v0];
+		vec2 tex1 = g_tex_coords[v1] - tex0;
+		vec2 tex2 = g_tex_coords[v2] - tex0;
 
 		vec2 tex_coord = bary[0] * tex1 + (bary[1] * tex2 + tex0);
 		vec2 tex_dx = bary_dx[0] * tex1 + bary_dx[1] * tex2;
@@ -728,8 +684,9 @@ uint shadeSample(ivec2 bin_pixel_pos, uint scratch_tri_offset, out float out_dep
 	}
 
 	if((instance_flags & INST_HAS_VERTEX_COLORS) != 0) {
-		vec4 col0, col1, col2;
-		getTriangleVertexColors(scratch_tri_offset, col0, col1, col2);
+		vec4 col0 = decodeRGBA8(g_colors[v0]);
+		vec4 col1 = decodeRGBA8(g_colors[v1]);
+		vec4 col2 = decodeRGBA8(g_colors[v2]);
 		color *= (1.0 - bary[0] - bary[1]) * col0 + (bary[0] * col1 + bary[1] * col2);
 	}
 
@@ -738,10 +695,9 @@ uint shadeSample(ivec2 bin_pixel_pos, uint scratch_tri_offset, out float out_dep
 
 	vec3 normal;
 	if((instance_flags & INST_HAS_VERTEX_NORMALS) != 0) {
-		vec3 nrm0, nrm1, nrm2;
-		getTriangleVertexNormals(scratch_tri_offset, nrm0, nrm1, nrm2);
-		nrm1 -= nrm0;
-		nrm2 -= nrm0;
+		vec3 nrm0 = decodeNormalUint(g_normals[v0]);
+		vec3 nrm1 = decodeNormalUint(g_normals[v1]) - nrm0;
+		vec3 nrm2 = decodeNormalUint(g_normals[v2]) - nrm0;
 		normal = bary[0] * nrm1 + (bary[1] * nrm2 + nrm0);
 	} else {
 		normal = decodeNormalUint(unormal);
@@ -884,7 +840,7 @@ void finishReduceSamples(ivec2 pixel_pos, ReductionContext ctx) {
 	out_color += ctx.out_trans * decodeRGB8(background_color);
 	uint enc_color = encodeRGB8(SATURATE(out_color)); // TODO: 10 bit
 	outputPixel(pixel_pos, enc_color);
-}
+}*/
 
 void initVisualizeSamples() { s_vis_pixels[LIX] = 0; }
 
@@ -913,18 +869,18 @@ void visualizeFragmentCounts(uint hbid, ivec2 pixel_pos) {
 
 void visualizeTriangleCounts(uint hbid, ivec2 pixel_pos) {
 	uint count = s_block_tri_count[(hbid >> 1) & (NUM_WARPS - 1)];
-	//count = s_block_row_tri_count[hbid >> (BLOCK_ROW_SHIFT + 1)];
+	count = s_block_row_tri_count[hbid >> (BLOCK_ROWS_SHIFT + 1)];
 	//count = s_bin_quad_count;
 
 	vec3 color;
 	if(count == 0)
 		color = vec3(0);
-	else if(count < 16)
-		color = vec3(count + 16, 0, 0) / 32.0;
-	else if(count < 64)
-		color = vec3(count + 32, count + 32, 0) / 96.0;
+	else if(count < 2048)
+		color = vec3(count + 1024, 0, 0) / 3072.0;
+	else if(count < 8192)
+		color = vec3(count + 4096, count + 4096, 0) / 12288.0;
 	else
-		color = vec3(0, count, 0.0) / 256.0;
+		color = vec3(0, count, 0.0) / (64 * 1024.0);
 	outputPixel(pixel_pos, encodeRGBA8(vec4(SATURATE(color), 1.0)));
 }
 
@@ -983,7 +939,7 @@ void rasterBin(int bin_id) {
 	// Each block has 64 pixels, so we need 2 warps to process all pixels within a single block
 	for(uint hbid = LIX >> 5; hbid < num_blocks * 2; hbid += NUM_WARPS) {
 		barrier();
-		if((hbid & NUM_WARPS) == 0) {
+		/*if((hbid & NUM_WARPS) == 0) {
 			uint bid = (hbid & ~(NUM_WARPS - 1)) >> 1;
 			generateBlocks(bid);
 			groupMemoryBarrier();
@@ -998,8 +954,9 @@ void rasterBin(int bin_id) {
 				continue;
 			}
 		}
-		UPDATE_CLOCK(1);
+		UPDATE_CLOCK(1);*/
 
+		/*
 		ReductionContext context;
 		initReduceSamples(context);
 		//initVisualizeSamples();
@@ -1020,25 +977,25 @@ void rasterBin(int bin_id) {
 			if(allInvocationsARB(context.out_trans < 1.0 / 255.0))
 				break;
 #endif
-		}
+		}*/
 
 		uint bx = (hbid >> 1) & BLOCK_ROWS_MASK;
 		uint hby = (hbid & 1) + ((hbid >> (BLOCK_ROWS_SHIFT + 1)) << 1);
 		ivec2 pixel_pos = ivec2((LIX & 7) + (bx << BLOCK_SHIFT), ((LIX >> 3) & 3) + (hby << 2));
-		finishReduceSamples(pixel_pos, context);
-		UPDATE_CLOCK(6);
+		//finishReduceSamples(pixel_pos, context);
 
 		//finishVisualizeSamples(pixel_pos);
 		//visualizeFragmentCounts(hbid, pixel_pos);
-		//visualizeTriangleCounts(hbid, pixel_pos);
+		visualizeTriangleCounts(hbid, pixel_pos);
+		UPDATE_CLOCK(6);
 		barrier();
 	}
 }
 
 int loadNextBin() {
 	if(LIX == 0) {
-		uint bin_idx = atomicAdd(g_info.a_small_bins, 1);
-		s_bin_id = bin_idx < s_num_bins ? LOW_LEVEL_BINS(bin_idx) : -1;
+		uint bin_idx = atomicAdd(g_info.a_medium_bins, 1);
+		s_bin_id = bin_idx < s_num_bins ? MEDIUM_LEVEL_BINS(bin_idx) : -1;
 		s_bin_raster_offset = s_bin_id << (BIN_SHIFT * 2);
 	}
 	barrier();
@@ -1048,7 +1005,7 @@ int loadNextBin() {
 void main() {
 	initTimers();
 	if(LIX == 0)
-		s_num_bins = g_info.bin_level_counts[BIN_LEVEL_LOW];
+		s_num_bins = g_info.bin_level_counts[BIN_LEVEL_MEDIUM];
 
 	int bin_id = loadNextBin();
 	while(bin_id != -1) {

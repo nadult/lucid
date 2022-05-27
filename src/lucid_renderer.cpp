@@ -441,7 +441,7 @@ void LucidRenderer::rasterLow(const Context &ctx) {
 	if(m_opts & Opt::debug_raster)
 		shaderDebugUseBuffer(m_errors);
 
-	dispatchIndirect(BIN_COUNTERS_MEMBER_OFFSET(num_bin_raster_dispatches));
+	dispatchIndirect(BIN_COUNTERS_MEMBER_OFFSET(bin_level_dispatches[BIN_LEVEL_LOW]));
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 
 	if(m_opts & Opt::debug_raster) {
@@ -530,9 +530,7 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 	int max_quads_per_bin = max(bin_quad_counts);
 	int num_bin_quads = accumulate(bin_quad_counts);
 
-	int sum_bins =
-		bins.num_empty_bins + bins.num_small_bins + bins.num_medium_bins + bins.num_big_bins;
-	bool is_tile_dispatcher_running = bins.num_tiled_bins > 0 && !(m_opts & Opt::bin_size_32);
+	int sum_bins = accumulate(bins.bin_level_counts);
 
 	int num_visible_total = bins.num_visible_quads[0] + bins.num_visible_quads[1];
 	auto visible_info = stdFormat("%d (%.2f %%)", num_visible_total,
@@ -568,11 +566,12 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 		return stdFormat("%d (%.0f %%)", value, value * 100.0 / total);
 	};
 
-	vector<StatsRow> bin_rows = {
-		{"empty bins", format_percentage(bins.num_empty_bins, sum_bins)},
-		{"small bins", format_percentage(bins.num_small_bins, sum_bins)},
-		{"medium bins", format_percentage(bins.num_medium_bins, sum_bins)},
-		{"big bins", format_percentage(bins.num_big_bins, sum_bins)},
+	vector<StatsRow> bin_level_rows = {
+		{"empty bins", format_percentage(bins.bin_level_counts[0], sum_bins)},
+		{"micro level bins", format_percentage(bins.bin_level_counts[BIN_LEVEL_MICRO], sum_bins)},
+		{"low level bins", format_percentage(bins.bin_level_counts[BIN_LEVEL_LOW], sum_bins)},
+		{"medium level bins", format_percentage(bins.bin_level_counts[BIN_LEVEL_MEDIUM], sum_bins)},
+		{"high level bins", format_percentage(bins.bin_level_counts[BIN_LEVEL_HIGH], sum_bins)},
 	};
 
 	string dispatcher_info =
@@ -604,7 +603,7 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 
 	if(timings)
 		out.emplace_back(move(timings), "", 130);
-	out.emplace_back(move(bin_rows), "", 130);
+	out.emplace_back(move(bin_level_rows), "Bins categorized by quad density levels:", 130);
 	out.emplace_back(move(basic_rows), "", 130);
 	return out;
 }

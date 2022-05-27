@@ -6,7 +6,7 @@
 // NOTE: converting integer multiplications to shifts does not increase perf
 
 // Acceptable values: 128, 256, 512
-#define LSIZE 512
+#define LSIZE 256
 
 #define NUM_WARPS (LSIZE / 32)
 
@@ -1034,7 +1034,7 @@ void rasterBin(int bin_id) {
 int loadNextBin() {
 	if(LIX == 0) {
 		uint bin_idx = atomicAdd(g_bins.a_small_bins, 1);
-		s_bin_id = bin_idx < s_num_bins ? BIN_SMALL_BINS(bin_idx) : -1;
+		s_bin_id = bin_idx < s_num_bins ? LOW_LEVEL_BINS(bin_idx) : -1;
 		s_bin_raster_offset = s_bin_id << (BIN_SHIFT * 2);
 	}
 	barrier();
@@ -1044,7 +1044,7 @@ int loadNextBin() {
 void main() {
 	initTimers();
 	if(LIX == 0)
-		s_num_bins = g_bins.num_small_bins;
+		s_num_bins = g_bins.bin_level_counts[BIN_LEVEL_LOW];
 
 	int bin_id = loadNextBin();
 	while(bin_id != -1) {

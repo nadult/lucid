@@ -10,8 +10,8 @@
 #define BIN_QUAD_OFFSETS(idx) g_bins_counts[BIN_COUNT * 1 + (idx)]
 #define BIN_QUAD_OFFSETS_TEMP(idx) g_bins_counts[BIN_COUNT * 2 + (idx)]
 
-// Bins are categorized based on quad count
-#define BIN_SMALL_BINS(idx) g_bins_counts[BIN_COUNT * 3 + (idx)]
-#define BIN_MEDIUM_BINS(idx) g_bins_counts[BIN_COUNT * 4 + (idx)]
-#define BIN_BIG_BINS(idx) g_bins_counts[BIN_COUNT * 5 + (idx)]
-#define BIN_TILED_BINS(idx) g_bins_counts[BIN_COUNT * 6 + (idx)]
+// Lists of bins on different quad density levels
+#define MICRO_LEVEL_BINS(idx) g_bins_counts[BIN_COUNT * 3 + (idx)]
+#define LOW_LEVEL_BINS(idx) g_bins_counts[BIN_COUNT * 4 + (idx)]
+#define MEDIUM_LEVEL_BINS(idx) g_bins_counts[BIN_COUNT * 5 + (idx)]
+#define HIGH_LEVEL_BINS(idx) g_bins_counts[BIN_COUNT * 6 + (idx)]

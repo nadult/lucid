@@ -246,7 +246,7 @@ void LucidApp::showSceneStats(const Scene &scene) {
 		{"bbox max", stdFormat("(%.2f, %.2f, %.2f)", bbox.max().x, bbox.max().y, bbox.max().z),
 		 ""}};
 
-	showStatsRows(rows, "scene_stats", 90);
+	showStatsRows(rows, "scene_stats", 90 * m_gui.dpiScale());
 }
 
 void LucidApp::showRasterStats(const Scene &scene) {

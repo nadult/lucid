@@ -421,7 +421,8 @@ void generateBlocks(uint bid) {
 			if(bx_bit != 0) {
 				uint tri_offset =
 					(block_tri_count + warp_offset) & ((1 << MAX_BLOCK_TRIS_SHIFT) - 1);
-				s_buffer[buf_offset + tri_offset] = i;
+				if(tri_offset < MAX_BLOCK_TRIS)
+					s_buffer[buf_offset + tri_offset] = i;
 			}
 			block_tri_count += bitCount(bit_mask);
 		}

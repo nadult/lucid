@@ -30,44 +30,13 @@ Bugi:
   Czy wogóle chcę robić computeTiles, czy może lepiej generować to z poziomu raster_tile ?
   musiałbym sprawdzić?
 
-- Muszę zwiększyć ilość wątków na raster_tile, żeby opóźnienie w przypadku przejścia bin -> tile było mniejsze
 
-- Chcę najpierw generować listy tile-sów lokalnie per bin?
+*** raster_medium: ***
 
-Jak to zrobić ? mam listę trisów per-bin. Jak ją efektywnie przerobić? rzędami tak jak wcześniej?
-tzn. po 4 rzędy na raz i wrzucamy do 4 kolejek; od razu generujemy listy dla 4 tile-i na raz;
-te 4 kolejki musiałby być wszystkie przetwarzane w przypadku każdego tile-a
+256/512 wątków
+- przerabiamy od razu wszystkie rzędy ? na razie jest niski limit, następny krok to zmienny limit 
+- jaki chcemy zrobić limit 
 
-4 rzedy po max 64 pixele. 12 bitów na rząd; 48 bitów w sumie; 12-13 bitów na id trókąta.
-8 bitów potrzebne na bx-maskę...
-
-Może biny są za duże ? Lepsze by były 32x32 ?
-- mniejsza ilość elementów per bin
-- grupy wątków mają 4x więcej elementów do przetworzenia
-Problem: liczniki dla rozdzielczości 4096x4096 zajmą 64KB. Mógłbym zrobić podział trókątów
-na grupy (powiedzmy 512x512?) i każdą grupę bym rozpatrywał oddzielnie?
-Na razie chyba zostajemy z binami...
-
-Co zrobić z sytuacjami gdy mamy bardzo dużo trisów? 128K quadów -> >64K trisów/tile
-- przechowywanie 128K rzędów wymaga 128 * 1024 * 8 = 1MB
-- przechowanie mapy bitów dla pokrywanych tile-i: 128 * 1024 * 2 = 256K
-
-Jakaś forma alokacji pamięci ? Ale jak to później zwalniać? co najmniej musiałbym mieć jakiś
-buddy allocator, ale to jest wolne...
-
-Rozwiązanie nie musi być perfekcyjne od samego początku... 
-
-Może się zdarzyć, że wszystkie trisy wylądują w tym samym tile-u. I co wtedy? Bail ? po prostu
-nie obsługuję wszystkich sytuacji i tyle ? wszystkie inne algorytmy też mają jakieś ograniczenia
-(nie licząc hardware-u).
-
-Powiedzmy, że chcemy mieć możliwość zrenderowania hairballa i powerplant i tyle. Więcej trisów obsługiwać
-nie muszę!
-
-A może max rozdziałka 2560x2048 ? 5000
-
-Plan:
-- zmniejszamy wielkość bina do 32x32 i tile-a do 8x8; blok: 4x4
 
 -----------------------------------------------------------------------------------------
                          === Nie działające / nie pewne pomysły ===                      

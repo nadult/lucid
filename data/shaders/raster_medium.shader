@@ -59,7 +59,7 @@ layout(local_size_x = LSIZE) in;
 
 #if BIN_SIZE == 64
 uint scratch32HBlockRowTrisOffset(uint hby) {
-	return (gl_WorkGroupID.x << WORKGROUP_64_SCRATCH_SHIFT) +
+	return (gl_WorkGroupID.x << WORKGROUP_32_SCRATCH_SHIFT) +
 		   (hby & HBLOCK_ROWS_STEP_MASK) * MAX_SCRATCH_TRIS;
 }
 #endif

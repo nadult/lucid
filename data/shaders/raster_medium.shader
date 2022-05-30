@@ -323,12 +323,21 @@ void processQuads(int start_by) {
 }
 
 shared uint s_sort_rcount[NUM_WARPS];
+shared uint s_max_sort_rcount;
 
 void prepareSortTris() {
 	if(LIX < NUM_WARPS) {
 		uint count = s_hblock_tri_counts[LIX];
 		// rcount: count rounded up to next power of 2, minimum: 32
-		s_sort_rcount[LIX] = max(32, (count & (count - 1)) == 0 ? count : (2 << findMSB(count)));
+		uint rcount = max(32, (count & (count - 1)) == 0 ? count : (2 << findMSB(count)));
+		s_sort_rcount[LIX] = rcount;
+		rcount = max(rcount, shuffleXorNV(rcount, 1, 32));
+		rcount = max(rcount, shuffleXorNV(rcount, 2, 32));
+		rcount = max(rcount, shuffleXorNV(rcount, 4, 32));
+		rcount = max(rcount, shuffleXorNV(rcount, 8, 32));
+		rcount = max(rcount, shuffleXorNV(rcount, 16, 32));
+		if(LIX == 0)
+			s_max_sort_rcount = rcount;
 	}
 }
 
@@ -343,7 +352,7 @@ uint xorBits(uint value, int bit0, int bit1) { return ((value >> bit0) ^ (value 
 
 void sortTris(uint lhbid, uint count, uint buf_offset) {
 	uint lid = LIX & WARP_MASK;
-	uint rcount = s_sort_rcount[lhbid];
+	uint rcount = s_max_sort_rcount;
 	for(uint i = lid + count; i < rcount; i += WARP_STEP)
 		s_buffer[buf_offset + i] = 0xffffffff;
 
@@ -367,6 +376,8 @@ void sortTris(uint lhbid, uint count, uint buf_offset) {
 #else
 	int start_k = 2, end_j = 1;
 #endif
+	barrier();
+
 	for(uint k = start_k; k <= rcount; k = 2 * k) {
 		for(uint j = k >> 1; j >= end_j; j = j >> 1) {
 			for(uint i = lid; i < rcount; i += WARP_STEP * 2) {
@@ -378,6 +389,7 @@ void sortTris(uint lhbid, uint count, uint buf_offset) {
 					s_buffer[buf_offset + idx + j] = lvalue;
 				}
 			}
+			barrier();
 		}
 #ifdef VENDOR_NVIDIA
 		for(uint i = lid; i < rcount; i += WARP_STEP) {
@@ -493,21 +505,18 @@ void generateHBlocks(uint hbid) {
 	}
 	barrier();
 
-	// For 3 tris and less depth filter is enough, there is no need to sort
-	if(tri_count > 3)
-		sortTris(lhbid, tri_count, buf_offset);
+	sortTris(lhbid, tri_count, buf_offset);
 
 	barrier();
 	groupMemoryBarrier();
 
 #ifdef SHADER_DEBUG
-	if(tri_count > 3)
-		for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_STEP) {
-			uint value = s_buffer[buf_offset + i];
-			uint prev_value = i == 0 ? 0 : s_buffer[buf_offset + i - 1];
-			if(value <= prev_value)
-				RECORD(i, tri_count, prev_value, value);
-		}
+	for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_STEP) {
+		uint value = s_buffer[buf_offset + i];
+		uint prev_value = i == 0 ? 0 : s_buffer[buf_offset + i - 1];
+		if(value <= prev_value)
+			RECORD(i, tri_count, prev_value, value);
+	}
 #endif
 
 	for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_STEP) {

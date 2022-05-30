@@ -46,6 +46,10 @@
 #define HBLOCK_COLS_SHIFT (BIN_SHIFT - HBLOCK_WIDTH_SHIFT)
 #define HBLOCK_COLS_MASK (HBLOCK_COLS - 1)
 
+// Max rows processed at the same time
+#define HBLOCK_MAX_ROWS (NUM_WARPS / HBLOCK_COLS)
+#define HBLOCK_MAX_ROWS_MASK (HBLOCK_MAX_ROWS - 1)
+
 #define BIN_MASK (BIN_SIZE - 1)
 
 layout(local_size_x = LSIZE) in;
@@ -59,7 +63,8 @@ layout(local_size_x = LSIZE) in;
 #define TRI_SCRATCH(var_idx) g_scratch_64[scratch_tri_offset + (var_idx << MAX_SCRATCH_TRIS_SHIFT)]
 
 uint scratch32HBlockRowTrisOffset(uint hby) {
-	return (gl_WorkGroupID.x << WORKGROUP_64_SCRATCH_SHIFT) + (hby & 1) * MAX_SCRATCH_TRIS;
+	return (gl_WorkGroupID.x << WORKGROUP_64_SCRATCH_SHIFT) +
+		   (hby & HBLOCK_MAX_ROWS_MASK) * MAX_SCRATCH_TRIS;
 }
 
 uint scratch32BlockTrisOffset(uint bx) {
@@ -72,7 +77,7 @@ uint scratch64TriOffset(uint tri_idx) {
 
 uint scratch64HBlockRowTrisOffset(uint hby) {
 	return (gl_WorkGroupID.x << WORKGROUP_64_SCRATCH_SHIFT) + 32 * 1024 +
-		   (hby & 1) * MAX_SCRATCH_TRIS;
+		   (hby & HBLOCK_MAX_ROWS_MASK) * MAX_SCRATCH_TRIS;
 }
 
 uint scratch64BlockTrisOffset(uint bid) {
@@ -190,6 +195,9 @@ int generateRowTris(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, int min_by, i
 	vec3 scan_min, scan_max, scan_step;
 	computeScanlineParams(tri0, tri1, tri2, scan_start, scan_min, scan_max, scan_step);
 
+#if BIN_SIZE == 64
+	uint dst_offset_32 = scratch32HBlockRowTrisOffset(0);
+#endif
 	uint dst_offset_64 = scratch64HBlockRowTrisOffset(0);
 	int scratch_tri_idx = -1;
 
@@ -231,7 +239,7 @@ int generateRowTris(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, int min_by, i
 
 		uint roffset = atomicAdd(s_hblock_row_tri_counts[by], 1) + (by & 1) * MAX_SCRATCH_TRIS;
 #if BIN_SIZE == 64
-		g_scratch_32[roffset] = scratch_tri_idx | (bx_mask << 16);
+		g_scratch_32[dst_offset_32 + roffset] = scratch_tri_idx | (bx_mask << 16);
 		g_scratch_64[dst_offset_64 + roffset] = uvec2(min_bits, max_bits);
 #else
 		g_scratch_64[dst_offset_64 + roffset] =
@@ -901,8 +909,8 @@ void visualizeFragmentCounts(uint hbid, ivec2 pixel_pos) {
 
 void visualizeTriangleCounts(uint hbid, ivec2 pixel_pos) {
 	uint count = s_hblock_tri_counts[hbid & (NUM_WARPS - 1)];
-	//uint count = s_hblock_row_tri_counts[hbid >> HBLOCK_COLS_SHIFT] / 8;
-	//count = s_bin_quad_count;
+	//count = s_hblock_row_tri_counts[hbid >> HBLOCK_COLS_SHIFT] / 8;
+	//count = s_bin_quad_count / 32;
 
 	vec3 color = vec3(count) / 512.0;
 	outputPixel(pixel_pos, encodeRGBA8(vec4(SATURATE(color), 1.0)));

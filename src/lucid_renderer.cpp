@@ -615,7 +615,7 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 		{"visible quads", visible_info, visible_details},
 		{"rejected quads", rejected_info, rejection_details},
 		{"bin quads", toString(num_bin_quads), "Per bin quads"},
-		{"max quads / pin", toString(max_quads_per_bin)},
+		{"max quads / bin", toString(max_quads_per_bin)},
 	};
 
 	// TODO: add better stats once rasterizez is working on all levels

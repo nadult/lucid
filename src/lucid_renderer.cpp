@@ -148,7 +148,7 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 
 	// TODO: control size of scratch mem
 	m_scratch_32.emplace(BufferType::shader_storage, (32 * 1024) * m_max_dispatches * sizeof(u32));
-	m_scratch_64.emplace(BufferType::shader_storage, (64 * 1024) * m_max_dispatches * sizeof(u64));
+	m_scratch_64.emplace(BufferType::shader_storage, (128 * 1024) * m_max_dispatches * sizeof(u64));
 	m_raster_image.emplace(BufferType::shader_storage,
 						   m_bin_count * square(m_bin_size) * sizeof(u32));
 

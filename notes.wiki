@@ -7,6 +7,7 @@ Aktualne cele:
 - wrzucenie gdzieś do sieci
 
 Bugi: 
+- na Hairballu jak się zzoomujemy, to przez slivery możemy mieć pierdyliard bin-trisów
 - poziome linie widoczne na chestnut_tree01
 - poziome linie widoczne na desktopie na white_oak
 - miganie na sponzie w górnej części (screenshot)

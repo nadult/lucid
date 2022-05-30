@@ -88,7 +88,7 @@ shared ivec2 s_bin_pos;
 shared vec3 s_bin_ray_dir0;
 
 shared uint s_hblock_row_tri_counts[HBLOCK_ROWS];
-shared uint s_hblock_tri_counts[NUM_WARPS];
+shared int s_hblock_tri_counts[NUM_WARPS];
 shared uint s_hblock_frag_counts[NUM_WARPS];
 
 shared uint s_buffer[BUFFER_SIZE + 1];
@@ -183,8 +183,8 @@ void getTriangleSecondaryParams(uint scratch_tri_offset, out uint unormal, out u
 	v2 = val1.y;
 }
 
-int generateRowTris(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, int min_by, int max_by) {
-	vec2 scan_start = vec2(s_bin_pos) + vec2(-0.5f, float(min_by) * HBLOCK_HEIGHT + 0.5f);
+int generateRowTris(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, int min_hby, int max_hby) {
+	vec2 scan_start = vec2(s_bin_pos) + vec2(-0.5f, float(min_hby) * HBLOCK_HEIGHT + 0.5f);
 	vec3 scan_min, scan_max, scan_step;
 	computeScanlineParams(tri0, tri1, tri2, scan_start, scan_min, scan_max, scan_step);
 
@@ -195,8 +195,7 @@ int generateRowTris(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, int min_by, i
 	int scratch_tri_idx = -1;
 
 	// TODO: is it worth it to make this loop more work-efficient?
-	// TODO: hby
-	for(int by = min_by; by <= max_by; by++) {
+	for(int hby = min_hby; hby <= max_hby; hby++) {
 #define SCAN_STEP(id)                                                                              \
 	int min##id = int(max(max(scan_min[0], scan_min[1]), max(scan_min[2], 0.0)));                  \
 	int max##id = int(min(min(scan_max[0], scan_max[1]), min(scan_max[2], BIN_SIZE))) - 1;         \
@@ -230,8 +229,15 @@ int generateRowTris(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, int min_by, i
 			}
 		}
 
-		uint roffset = atomicAdd(s_hblock_row_tri_counts[by], 1) +
-					   (by & HBLOCK_ROWS_STEP_MASK) * MAX_SCRATCH_TRIS;
+		uint hbid_row = (hby & HBLOCK_ROWS_STEP_MASK) << HBLOCK_COLS_SHIFT;
+		uint min_hbid = findLSB(bx_mask), max_hbid = findMSB(bx_mask) + 1;
+		// Accumulation is done at the end of processBlocks
+		atomicAdd(s_hblock_tri_counts[hbid_row + min_hbid], 1);
+		if(max_hbid < HBLOCK_COLS)
+			atomicAdd(s_hblock_tri_counts[hbid_row + max_hbid], -1);
+
+		uint roffset = atomicAdd(s_hblock_row_tri_counts[hby], 1) +
+					   (hby & HBLOCK_ROWS_STEP_MASK) * MAX_SCRATCH_TRIS;
 #if BIN_SIZE == 64
 		g_scratch_32[dst_offset_32 + roffset] = scratch_tri_idx | (bx_mask << 16);
 		g_scratch_64[dst_offset_64 + roffset] = uvec2(min_bits, max_bits);
@@ -248,6 +254,8 @@ int generateRowTris(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, int min_by, i
 void processQuads(int start_by) {
 	if(LIX == 0)
 		s_num_scratch_tris = 0;
+	if(LIX < NUM_WARPS)
+		s_hblock_tri_counts[LIX] = 0;
 	barrier();
 
 	// TODO: this loop is slooooow
@@ -296,6 +304,21 @@ void processQuads(int start_by) {
 		int scratch_tri_idx = generateRowTris(tri_idx, tri0, tri1, tri2, min_by, max_by);
 		if(scratch_tri_idx != -1)
 			storeTriangle(scratch_tri_idx, tri0, tri1, tri2, v0, v1, v2, instance_id);
+	}
+	barrier();
+
+	// Accumulating per hblock-counts for each hblock-row
+	// Note: these are only estimates; very good estimates, but in some cases a single
+	// triangle can have wide holes between pixels (because middle pixels don't hit pixel centers)
+	if(LIX < NUM_WARPS) {
+		uint hbx = LIX & HBLOCK_COLS_MASK;
+		int value = s_hblock_tri_counts[LIX], sum = value, temp;
+		temp = shuffleUpNV(sum, 1, HBLOCK_COLS), sum += hbx >= 1 ? temp : 0;
+		if(HBLOCK_COLS >= 4)
+			temp = shuffleUpNV(sum, 2, HBLOCK_COLS), sum += hbx >= 2 ? temp : 0;
+		if(HBLOCK_COLS >= 8)
+			temp = shuffleUpNV(sum, 4, HBLOCK_COLS), sum += hbx >= 4 ? temp : 0;
+		s_hblock_tri_counts[LIX] = sum;
 	}
 }
 
@@ -412,7 +435,9 @@ void generateHBlocks(uint hbid) {
 		}
 
 		if((LIX & 31) == 0) {
-			s_hblock_tri_counts[lhbid] = block_tri_count;
+			if(s_hblock_tri_counts[lhbid] < int(block_tri_count))
+				RECORD(hbid, s_hblock_tri_counts[lhbid], block_tri_count, 0);
+			s_hblock_tri_counts[lhbid] = int(block_tri_count);
 			if(block_tri_count > MAX_HBLOCK_TRIS)
 				atomicOr(s_raster_error, 1 << lhbid);
 		}
@@ -462,9 +487,8 @@ void generateHBlocks(uint hbid) {
 
 		if(num_frags == 0) // This means that bx_mask is invalid
 			RECORD(0, 0, 0, 0);
-		g_scratch_64[dst_offset_64 + i] = uvec2(bits, tri_idx | (num_frags << 20));
 
-		// 12 bits for tile-tri index, 20 bits for depth
+		g_scratch_64[dst_offset_64 + i] = uvec2(bits, tri_idx | (num_frags << 20));
 		s_buffer[buf_offset + i] = i | (uint(depth) << 12);
 	}
 	barrier();

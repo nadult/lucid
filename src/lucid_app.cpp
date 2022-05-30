@@ -629,9 +629,8 @@ vector<LucidApp::StatPoint> LucidApp::selectPerfPoints() const {
 		{"setup", "LucidRenderer::setupQuads", ""},
 		{"bins", "LucidRenderer::computeBins", ""},
 		{"tiles", "LucidRenderer::computeTiles", ""},
-		{"raster_bin", "LucidRenderer::rasterBin", ""},
-		{"raster_tile", "LucidRenderer::rasterTile", ""},
-		{"raster_block", "LucidRenderer::rasterBlock", ""},
+		{"raster_low", "LucidRenderer::rasterLow", ""},
+		{"raster_mid", "LucidRenderer::rasterMedium", ""},
 	};
 
 	vector<StatPoint> out;

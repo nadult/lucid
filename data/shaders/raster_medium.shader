@@ -90,6 +90,7 @@ shared vec3 s_bin_ray_dir0;
 shared uint s_hblock_row_tri_counts[HBLOCK_ROWS];
 shared int s_hblock_tri_counts[NUM_WARPS];
 shared uint s_hblock_frag_counts[NUM_WARPS];
+shared uint s_hblock_max_tri_counts;
 
 shared uint s_buffer[BUFFER_SIZE + 1];
 shared uint s_mini_buffer[LSIZE];
@@ -102,6 +103,20 @@ shared uint s_vis_pixels[LSIZE];
 void outputPixel(ivec2 pixel_pos, uint color) {
 	//color = tintColor(color, vec3(0.2, 0.3, 0.4), 0.8);
 	g_raster_image[s_bin_raster_offset + pixel_pos.x + (pixel_pos.y << BIN_SHIFT)] = color;
+}
+
+uint max32(uint value, int width) {
+	if(width >= 2)
+		value = max(value, shuffleXorNV(value, 1, 32));
+	if(width >= 4)
+		value = max(value, shuffleXorNV(value, 2, 32));
+	if(width >= 8)
+		value = max(value, shuffleXorNV(value, 4, 32));
+	if(width >= 16)
+		value = max(value, shuffleXorNV(value, 8, 32));
+	if(width >= 32)
+		value = max(value, shuffleXorNV(value, 16, 32));
+	return value;
 }
 
 // TODO: don't store triangles which generate very small number of samples in scratch,
@@ -312,32 +327,32 @@ void processQuads(int start_by) {
 	// triangle can have wide holes between pixels (because middle pixels don't hit pixel centers)
 	if(LIX < NUM_WARPS) {
 		uint hbx = LIX & HBLOCK_COLS_MASK;
-		int value = s_hblock_tri_counts[LIX], sum = value, temp;
-		temp = shuffleUpNV(sum, 1, HBLOCK_COLS), sum += hbx >= 1 ? temp : 0;
+		int value = s_hblock_tri_counts[LIX], temp;
+		temp = shuffleUpNV(value, 1, HBLOCK_COLS), value += hbx >= 1 ? temp : 0;
 		if(HBLOCK_COLS >= 4)
-			temp = shuffleUpNV(sum, 2, HBLOCK_COLS), sum += hbx >= 2 ? temp : 0;
+			temp = shuffleUpNV(value, 2, HBLOCK_COLS), value += hbx >= 2 ? temp : 0;
 		if(HBLOCK_COLS >= 8)
-			temp = shuffleUpNV(sum, 4, HBLOCK_COLS), sum += hbx >= 4 ? temp : 0;
-		s_hblock_tri_counts[LIX] = sum;
+			temp = shuffleUpNV(value, 4, HBLOCK_COLS), value += hbx >= 4 ? temp : 0;
+		s_hblock_tri_counts[LIX] = value;
+		uint max_value = max32(uint(value), NUM_WARPS);
+		if(LIX == 0)
+			s_hblock_max_tri_counts = max_value;
 	}
 }
 
-shared uint s_sort_rcount[NUM_WARPS];
+//shared uint s_sort_rcount[NUM_WARPS];
 shared uint s_max_sort_rcount;
 
+// TODO: this is very similar to whats done at the end of processQuads
 void prepareSortTris() {
 	if(LIX < NUM_WARPS) {
 		uint count = s_hblock_tri_counts[LIX];
 		// rcount: count rounded up to next power of 2, minimum: 32
 		uint rcount = max(32, (count & (count - 1)) == 0 ? count : (2 << findMSB(count)));
-		s_sort_rcount[LIX] = rcount;
-		rcount = max(rcount, shuffleXorNV(rcount, 1, 32));
-		rcount = max(rcount, shuffleXorNV(rcount, 2, 32));
-		rcount = max(rcount, shuffleXorNV(rcount, 4, 32));
-		rcount = max(rcount, shuffleXorNV(rcount, 8, 32));
-		rcount = max(rcount, shuffleXorNV(rcount, 16, 32));
+		//s_sort_rcount[LIX] = rcount;
+		uint rcount_max = max32(rcount, NUM_WARPS);
 		if(LIX == 0)
-			s_max_sort_rcount = rcount;
+			s_max_sort_rcount = rcount_max;
 	}
 }
 
@@ -402,13 +417,15 @@ void sortTris(uint lhbid, uint count, uint buf_offset) {
 			value = swap(value, 0x01, bit ^ bitExtract(lid, 0));
 			s_buffer[buf_offset + i] = value;
 		}
+		barrier();
 #endif
 	}
 }
 
 // TODO: maybe process smaller amount of blocks at the same time?
 // smaller chance that it will leave cache
-void generateHBlocks(uint hbid) {
+void generateHBlocks(uint start_hbid) {
+	uint hbid = start_hbid + (LIX >> 5);
 	uint hby = hbid >> HBLOCK_COLS_SHIFT, hbx = hbid & HBLOCK_COLS_MASK;
 	uint lhbid = hbid & (NUM_WARPS - 1);
 	uint tri_count = s_hblock_row_tri_counts[hby];
@@ -936,16 +953,16 @@ void rasterBin(int bin_id) {
 	barrier();
 
 	for(int start_hby = 0; start_hby < HBLOCK_ROWS; start_hby += HBLOCK_ROWS_STEP) {
-		int hbid = start_hby * HBLOCK_COLS + int(LIX >> 5);
 		processQuads(start_hby);
 		groupMemoryBarrier();
 		barrier();
 		UPDATE_CLOCK(0);
 
 		if(s_raster_error == 0)
-			generateHBlocks(hbid);
+			generateHBlocks(start_hby * HBLOCK_COLS);
 		barrier();
 
+		int hbid = start_hby * HBLOCK_COLS + int(LIX >> 5);
 		if(s_raster_error != 0) {
 			visualizeErrors(hbid);
 			barrier();

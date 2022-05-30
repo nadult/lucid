@@ -57,14 +57,12 @@ layout(local_size_x = LSIZE) in;
 
 #define TRI_SCRATCH(var_idx) g_scratch_64[scratch_tri_offset + (var_idx << MAX_SCRATCH_TRIS_SHIFT)]
 
+#if BIN_SIZE == 64
 uint scratch32HBlockRowTrisOffset(uint hby) {
 	return (gl_WorkGroupID.x << WORKGROUP_64_SCRATCH_SHIFT) +
 		   (hby & HBLOCK_ROWS_STEP_MASK) * MAX_SCRATCH_TRIS;
 }
-
-uint scratch32BlockTrisOffset(uint bx) {
-	return (gl_WorkGroupID.x << WORKGROUP_32_SCRATCH_SHIFT) + 16 * 1024 + bx * MAX_HBLOCK_TRIS;
-}
+#endif
 
 uint scratch64TriOffset(uint tri_idx) {
 	return (gl_WorkGroupID.x << WORKGROUP_64_SCRATCH_SHIFT) + tri_idx;
@@ -75,7 +73,7 @@ uint scratch64HBlockRowTrisOffset(uint hby) {
 		   (hby & HBLOCK_ROWS_STEP_MASK) * MAX_SCRATCH_TRIS;
 }
 
-uint scratch64BlockTrisOffset(uint bid) {
+uint scratch64HBlockTrisOffset(uint bid) {
 	return (gl_WorkGroupID.x << WORKGROUP_64_SCRATCH_SHIFT) + 96 * 1024 + bid * MAX_HBLOCK_TRIS;
 }
 
@@ -424,46 +422,37 @@ void generateHBlocks(uint hbid) {
 			return;
 	}
 
-	/*	prepareSortTris();
+	prepareSortTris();
 
-	uint dst_offset_64 = scratch64BlockTrisOffset(lbid);
-	uint dst_offset_32 = scratch32BlockTrisOffset(lbid);
-	tri_count = s_block_tri_count[lbid];
-	int startx = int(bx << 3);
+	uint dst_offset_64 = scratch64HBlockTrisOffset(lhbid);
+	tri_count = s_hblock_tri_counts[lhbid];
+	int startx = int(hbx << 3);
 
 	for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_STEP) {
 		uint row_idx = s_buffer[buf_offset + i];
 
-		uvec2 tri_mins = g_scratch_64[src_offset_64 + row_idx];
-		uvec2 tri_maxs = g_scratch_64[src_offset_64 + row_idx + MAX_SCRATCH_TRIS];
-		uint tri_idx = (tri_maxs.x >> 24) | ((tri_maxs.y >> 16) & 0xff00);
+		uvec2 tri_info = g_scratch_64[src_offset_64 + row_idx];
+#if BIN_SIZE == 64
+		uint tri_idx = g_scratch_32[src_offset_32 + row_idx] & 0xffff;
+#else
+		uint tri_idx = (tri_info.x >> 20) | ((tri_info.y & 0xff00000) >> 8);
+#endif
 
-		uvec2 bits;
-		uvec2 num_frags;
-		vec2 cpos = vec2(0);
+		const ivec4 bin_shifts = ivec4(0, BIN_SIZE, BIN_SIZE * 2, BIN_SIZE * 3);
+		ivec4 xmin = max(((ivec4(tri_info.x) >> bin_shifts) & BIN_MASK) - startx, 0);
+		ivec4 xmax = min(((ivec4(tri_info.y) >> bin_shifts) & BIN_MASK) - startx, 7);
+		ivec4 count = max(xmax - xmin + 1, 0);
+		vec4 cpx = vec4(xmin * 2 + count) * count;
+		vec4 cpy = vec4(1.0, 3.0, 5.0, 7.0) * count;
+		vec2 cpos = vec2(cpx[0] + cpx[1] + cpx[2] + cpx[3], cpy[0] + cpy[1] + cpy[2] + cpy[3]);
+		uint num_frags = count[0] + count[1] + count[2] + count[3];
+		uint min_bits =
+			(xmin[0] & 7) | ((xmin[1] & 7) << 3) | ((xmin[2] & 7) << 6) | ((xmin[3] & 7) << 9);
+		uint count_bits = (count[0] << 16) | (count[1] << 20) | (count[2] << 24) | (count[3] << 28);
+		uint bits = min_bits | count_bits;
 
-#define PROCESS_4_ROWS(e)                                                                          \
-	{                                                                                              \
-		ivec4 xmin = max(((ivec4(tri_mins.e) >> ivec4(0, 6, 12, 18)) & BIN_MASK) - startx, 0);     \
-		ivec4 xmax = min(((ivec4(tri_maxs.e) >> ivec4(0, 6, 12, 18)) & BIN_MASK) - startx, 7);     \
-		ivec4 count = max(xmax - xmin + 1, 0);                                                     \
-		vec4 cpx = vec4(xmin * 2 + count) * count;                                                 \
-		vec4 cpy = vec4(1.0, 3.0, 5.0, 7.0) * count;                                               \
-		cpos += vec2(cpx[0] + cpx[1] + cpx[2] + cpx[3], cpy[0] + cpy[1] + cpy[2] + cpy[3]);        \
-		num_frags.e = count[0] + count[1] + count[2] + count[3];                                   \
-		uint min_bits =                                                                            \
-			(xmin[0] & 7) | ((xmin[1] & 7) << 3) | ((xmin[2] & 7) << 6) | ((xmin[3] & 7) << 9);    \
-		uint count_bits =                                                                          \
-			(count[0] << 16) | (count[1] << 20) | (count[2] << 24) | (count[3] << 28);             \
-		bits.e = min_bits | count_bits;                                                            \
-	}
-
-		PROCESS_4_ROWS(x);
-		PROCESS_4_ROWS(y);
-
-		uint num_all_frags = num_frags.x + num_frags.y;
-		cpos *= 0.5 / float(num_all_frags);
-		cpos += vec2(bx << 3, by << 3);
+		cpos *= 0.5 / float(num_frags);
+		cpos += vec2(hbx << HBLOCK_WIDTH_SHIFT, hby << HBLOCK_HEIGHT_SHIFT);
 
 		uint scratch_tri_offset = scratch64TriOffset(tri_idx);
 		vec2 val0 = uintBitsToFloat(TRI_SCRATCH(0));
@@ -472,11 +461,9 @@ void generateHBlocks(uint hbid) {
 		float ray_pos = depth_eq.x * cpos.x + (depth_eq.y * cpos.y + depth_eq.z);
 		float depth = 0xffffe * SATURATE(inversesqrt(ray_pos + 1)); // 20 bits
 
-		if(num_all_frags == 0) // This means that bx_mask is invalid
+		if(num_frags == 0) // This means that bx_mask is invalid
 			RECORD(0, 0, 0, 0);
-		uint frag_bits = (num_frags.x << 20) | (num_frags.y << 26);
-		g_scratch_64[dst_offset_64 + i] = bits;
-		g_scratch_32[dst_offset_32 + i] = tri_idx | frag_bits;
+		g_scratch_64[dst_offset_64 + i] = uvec2(bits, tri_idx | (num_frags << 20));
 
 		// 12 bits for tile-tri index, 20 bits for depth
 		s_buffer[buf_offset + i] = i | (uint(depth) << 12);
@@ -484,7 +471,7 @@ void generateHBlocks(uint hbid) {
 	barrier();
 
 	// For 3 tris and less depth filter is enough, there is no need to sort
-	if(tri_count > 3)
+	/*if(tri_count > 3)
 		sortTris(lbid, tri_count, buf_offset);
 
 	barrier();
@@ -905,7 +892,7 @@ void visualizeFragmentCounts(uint hbid, ivec2 pixel_pos) {
 
 void visualizeTriangleCounts(uint hbid, ivec2 pixel_pos) {
 	uint count = s_hblock_tri_counts[hbid & (NUM_WARPS - 1)];
-	count = s_hblock_row_tri_counts[hbid >> HBLOCK_COLS_SHIFT] / 8;
+	//count = s_hblock_row_tri_counts[hbid >> HBLOCK_COLS_SHIFT] / 8;
 	//count = s_bin_quad_count / 16;
 
 	vec3 color = vec3(count) / 512.0;

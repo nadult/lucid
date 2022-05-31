@@ -19,8 +19,8 @@
 #define MAX_BLOCK_TRIS 256
 #define MAX_BLOCK_TRIS_SHIFT 8
 
-#define MAX_SCRATCH_TRIS 2048
-#define MAX_SCRATCH_TRIS_SHIFT 11
+#define MAX_SCRATCH_TRIS 1024
+#define MAX_SCRATCH_TRIS_SHIFT 10
 
 #define SEGMENT_SIZE 256
 #define SEGMENT_SHIFT 8
@@ -680,7 +680,6 @@ void loadSamples(uint hbid, int segment_id) {
 	}
 }
 
-// TODO: Can we improve speed of loading vertex data?
 uint shadeSample(ivec2 bin_pixel_pos, uint scratch_tri_offset, out float out_depth) {
 	float px = float(bin_pixel_pos.x), py = float(bin_pixel_pos.y);
 

@@ -29,7 +29,8 @@ void main() {
 		int num_tris = num_quads * 2;
 		if(num_tris == 0) {
 			atomicAdd(s_bin_level_counts[0], 1);
-		} else if(num_tris < 2048) {
+		} else if(num_tris < 1024) {
+			// TODO: On gallery, dragon, san-miguel setting limit to 512 for low increases perf, why?
 			int id = atomicAdd(s_bin_level_counts[BIN_LEVEL_LOW], 1);
 			LOW_LEVEL_BINS(id) = int(i);
 		} else if(num_tris < 128 * 1024) {

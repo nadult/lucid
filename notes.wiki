@@ -3,15 +3,14 @@
 Aktualne cele:
 - przygotowanie zoptymalizowanej wersji w aktualnym schemacie renderingu
 - zrobienie wersji raster_tile i ew. raster_block
+- zaimplementowanie WB-OIT ?
+
 - opisanie algorytmu
 - wrzucenie gdzieś do sieci
 
 Bugi: 
 - na Hairballu jak się zzoomujemy, to przez slivery możemy mieć pierdyliard bin-trisów
-- poziome linie widoczne na desktopie na white_oak
 - miganie na sponzie w górnej części, na powerplant przy rurach (screenshot)
-- niedokładne wyznaczanie ilości trisów per tile (dużo więcej niż faktycznie)
-- niepoprawne bin quad offsety w trybie 32x32 na boxach (na stacjonarce)
 
 -----------------------------------------------------------------------------------------
                                  === Co dalej ===

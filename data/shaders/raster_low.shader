@@ -503,6 +503,7 @@ void generateBlocks(uint bid) {
 	groupMemoryBarrier();
 
 #ifdef SHADER_DEBUG
+	// Making sure that tris are properly ordered
 	if(tri_count > 3)
 		for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_STEP) {
 			uint value = s_buffer[buf_offset + i];
@@ -557,8 +558,7 @@ void generateBlocks(uint bid) {
 			s_hblock_counts[lbid * 2 + 1] = (sum & 0xffff0000) | tri_count;
 		}
 
-		sum -= value;
-		s_mini_buffer[LIX] = (sum & 0xffff) | ((sum & 0xffff0000) >> 4);
+		s_mini_buffer[LIX] = sum - value;
 	}
 	barrier();
 	if(s_raster_error != 0)
@@ -572,21 +572,22 @@ void generateBlocks(uint bid) {
 
 	uint seg_block1_offset = lbid << (MAX_SEGMENTS_SHIFT + 1);
 	uint seg_block2_offset = seg_block1_offset + MAX_SEGMENTS;
-	// TODO: split this loop into two
 	for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_STEP) {
 		uint tri_offset = 0;
 		if(i > 0) {
 			uint prev = i - 1;
 			tri_offset = s_buffer[buf_offset + prev] & 0xffffff;
+			tri_offset = (tri_offset & 0xfff) | ((tri_offset & 0xfff000) << 4);
 			tri_offset += s_mini_buffer[(lbid << 3) + (prev >> 5)];
 		}
 
-		uint tri_value = s_buffer[buf_offset + i] + s_mini_buffer[(lbid << 3) + (i >> 5)];
+		uint tri_value = s_buffer[buf_offset + i];
 		uint tile_tri_idx = tri_value >> 24;
-		tri_value = (tri_value & 0xffffff) - tri_offset;
+		tri_value = (tri_value & 0xfff) | ((tri_value & 0xfff000) << 4);
+		tri_value = (tri_value + s_mini_buffer[(lbid << 3) + (i >> 5)]) - tri_offset;
 
-		uint tri_offset0 = tri_offset & 0xfff, tri_offset1 = (tri_offset >> 12) & 0xfff;
-		uint tri_value0 = tri_value & 0xfff, tri_value1 = (tri_value >> 12) & 0xfff;
+		uint tri_offset0 = tri_offset & 0xffff, tri_offset1 = tri_offset >> 16;
+		uint tri_value0 = tri_value & 0xffff, tri_value1 = tri_value >> 16;
 
 		uint seg_offset0 = tri_offset0 & (SEGMENT_SIZE - 1);
 		uint seg_offset1 = tri_offset1 & (SEGMENT_SIZE - 1);
@@ -906,9 +907,7 @@ void finishVisualizeSamples(ivec2 pixel_pos) {
 
 void visualizeFragmentCounts(uint hbid, ivec2 pixel_pos) {
 	uint count = s_hblock_counts[hbid & (NUM_WARPS * 2 - 1)] >> 16;
-	vec4 color = vec4(SATURATE(vec3(count) / 1024.0), 1.0);
-	if(count > SEGMENT_SIZE * 16)
-		color.gb = vec2(0.0);
+	vec4 color = vec4(SATURATE(vec3(count) / 2048.0), 1.0);
 	outputPixel(pixel_pos, encodeRGBA8(color));
 }
 
@@ -1027,11 +1026,11 @@ void rasterBin(int bin_id) {
 		uint hby = (hbid & 1) + ((hbid >> (BLOCK_ROWS_SHIFT + 1)) << 1);
 		ivec2 pixel_pos = ivec2((LIX & 7) + (bx << BLOCK_SHIFT), ((LIX >> 3) & 3) + (hby << 2));
 		finishReduceSamples(pixel_pos, context);
-		UPDATE_CLOCK(6);
 
 		//finishVisualizeSamples(pixel_pos);
 		//visualizeFragmentCounts(hbid, pixel_pos);
 		//visualizeTriangleCounts(hbid, pixel_pos);
+		UPDATE_CLOCK(6);
 		barrier();
 	}
 }

@@ -10,10 +10,9 @@ Bugi:
 - na Hairballu jak się zzoomujemy, to przez slivery możemy mieć pierdyliard bin-trisów
 - poziome linie widoczne na chestnut_tree01
 - poziome linie widoczne na desktopie na white_oak
-- miganie na sponzie w górnej części (screenshot)
+- miganie na sponzie w górnej części, na powerplant przy rurach (screenshot)
 - niedokładne wyznaczanie ilości trisów per tile (dużo więcej niż faktycznie)
-- przycinki przy niskiej kamerze na white oak
-- niepoprawne bin quad offsety w trybie 32x32 na boxach
+- niepoprawne bin quad offsety w trybie 32x32 na boxach (na stacjonarce)
 
 -----------------------------------------------------------------------------------------
                                  === Co dalej ===
@@ -30,14 +29,6 @@ Bugi:
 - Problem: jak sensownie obługiwać tile-e z dużą ilością trisów ?
   Czy wogóle chcę robić computeTiles, czy może lepiej generować to z poziomu raster_tile ?
   musiałbym sprawdzić?
-
-
-*** raster_medium: ***
-
-256/512 wątków
-- przerabiamy od razu wszystkie rzędy ? na razie jest niski limit, następny krok to zmienny limit 
-- jaki chcemy zrobić limit 
-
 
 -----------------------------------------------------------------------------------------
                          === Nie działające / nie pewne pomysły ===                      

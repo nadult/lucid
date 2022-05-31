@@ -15,8 +15,16 @@
 
 #define BUFFER_SIZE (LSIZE * 8)
 
-#define MAX_HBLOCK_TRIS 256
-#define MAX_HBLOCK_TRIS_SHIFT 8
+// Basic maximum value of tris per hblock
+#define MAX_HBLOCK_TRIS0 256
+#define MAX_HBLOCK_TRIS0_SHIFT 8
+
+// Actual max value of tris per hblock,
+// assuming using multiple warps per hblock in generateHBlocks
+#define MAX_HBLOCK_TRIS 1024
+#define MAX_HBLOCK_TRIS_SHIFT 10
+
+#define MAX_GROUP_SIZE 4
 
 #define MAX_SCRATCH_TRIS 8192
 #define MAX_SCRATCH_TRIS_SHIFT 13
@@ -24,8 +32,8 @@
 #define SEGMENT_SIZE 256
 #define SEGMENT_SHIFT 8
 
-#define MAX_SEGMENTS_SHIFT 5
-#define MAX_SEGMENTS WARP_STEP
+#define MAX_SEGMENTS_SHIFT 6
+#define MAX_SEGMENTS 64
 
 #define HBLOCK_WIDTH 8
 #define HBLOCK_HEIGHT 4
@@ -90,11 +98,18 @@ shared vec3 s_bin_ray_dir0;
 shared uint s_hblock_row_tri_counts[HBLOCK_ROWS];
 shared int s_hblock_tri_counts[NUM_WARPS];
 shared uint s_hblock_frag_counts[NUM_WARPS];
+
 shared uint s_hblock_max_tri_counts;
+
+// How many warps do we need to process single half-block in generateHBlocks ?
+// Acceptable values: 1, 2, 4; More: trouble :(
+shared uint s_hblock_group_size;
+shared uint s_hblock_group_shift;
+shared uint s_max_sort_rcount;
 
 shared uint s_buffer[BUFFER_SIZE + 1];
 shared uint s_mini_buffer[LSIZE];
-shared uint s_segments[LSIZE];
+shared uint s_segments[LSIZE * 2];
 shared int s_raster_error;
 
 // Only used when debugging
@@ -335,24 +350,24 @@ void processQuads(int start_by) {
 			temp = shuffleUpNV(value, 4, HBLOCK_COLS), value += hbx >= 4 ? temp : 0;
 		s_hblock_tri_counts[LIX] = value;
 		uint max_value = max32(uint(value), NUM_WARPS);
-		if(LIX == 0)
+		if(LIX == 0) {
 			s_hblock_max_tri_counts = max_value;
-	}
-}
+			// rcount: count rounded up to next power of 2, minimum: 32
+			uint rcount =
+				(max_value & (max_value - 1)) == 0 ? max_value : (2 << findMSB(max_value));
+			s_max_sort_rcount = max(32, rcount);
 
-//shared uint s_sort_rcount[NUM_WARPS];
-shared uint s_max_sort_rcount;
-
-// TODO: this is very similar to whats done at the end of processQuads
-void prepareSortTris() {
-	if(LIX < NUM_WARPS) {
-		uint count = s_hblock_tri_counts[LIX];
-		// rcount: count rounded up to next power of 2, minimum: 32
-		uint rcount = max(32, (count & (count - 1)) == 0 ? count : (2 << findMSB(count)));
-		//s_sort_rcount[LIX] = rcount;
-		uint rcount_max = max32(rcount, NUM_WARPS);
-		if(LIX == 0)
-			s_max_sort_rcount = rcount_max;
+			//uint group_shift = max(int(log2(max_value)) - MAX_HBLOCK_TRIS0_SHIFT, 0);
+			uint group_shift = max_value <= MAX_HBLOCK_TRIS0	 ? 0 :
+							   max_value <= MAX_HBLOCK_TRIS0 * 2 ? 1 :
+							   max_value <= MAX_HBLOCK_TRIS0 * 4 ? 2 :
+																	 3;
+			uint group_size = 1 << group_shift;
+			s_hblock_group_shift = group_shift;
+			s_hblock_group_size = 1 << group_shift;
+			if(group_size > MAX_GROUP_SIZE)
+				s_raster_error = 0xffffffff; // TODO: better reporting
+		}
 	}
 }
 
@@ -365,14 +380,13 @@ uint bitExtract(uint value, int boffset) { return (value >> boffset) & 1; }
 uint xorBits(uint value, int bit0, int bit1) { return ((value >> bit0) ^ (value >> bit1)) & 1; }
 #endif
 
-void sortTris(uint lhbid, uint count, uint buf_offset) {
-	uint lid = LIX & WARP_MASK;
+void sortTris(uint lhbid, uint count, uint buf_offset, uint group_size, uint lid) {
 	uint rcount = s_max_sort_rcount;
-	for(uint i = lid + count; i < rcount; i += WARP_STEP)
+	for(uint i = lid + count; i < rcount; i += group_size)
 		s_buffer[buf_offset + i] = 0xffffffff;
 
 #ifdef VENDOR_NVIDIA
-	for(uint i = lid; i < rcount; i += WARP_STEP) {
+	for(uint i = lid; i < rcount; i += group_size) {
 		uint value = s_buffer[buf_offset + i];
 		// TODO: register sort could be faster
 		value = swap(value, 0x01, xorBits(lid, 1, 0)); // K = 2
@@ -395,8 +409,8 @@ void sortTris(uint lhbid, uint count, uint buf_offset) {
 
 	for(uint k = start_k; k <= rcount; k = 2 * k) {
 		for(uint j = k >> 1; j >= end_j; j = j >> 1) {
-			for(uint i = lid; i < rcount; i += WARP_STEP * 2) {
-				uint idx = (i & j) != 0 ? i + WARP_STEP - j : i;
+			for(uint i = lid; i < rcount; i += group_size * 2) {
+				uint idx = (i & j) != 0 ? i + group_size - j : i;
 				uint lvalue = s_buffer[buf_offset + idx];
 				uint rvalue = s_buffer[buf_offset + idx + j];
 				if(((idx & k) != 0) == (lvalue.x < rvalue.x)) {
@@ -407,7 +421,7 @@ void sortTris(uint lhbid, uint count, uint buf_offset) {
 			barrier();
 		}
 #ifdef VENDOR_NVIDIA
-		for(uint i = lid; i < rcount; i += WARP_STEP) {
+		for(uint i = lid; i < rcount; i += group_size) {
 			uint bit = (i & k) == 0 ? 0 : 1;
 			uint value = s_buffer[buf_offset + i];
 			value = swap(value, 0x10, bit ^ bitExtract(lid, 4));
@@ -425,63 +439,61 @@ void sortTris(uint lhbid, uint count, uint buf_offset) {
 // TODO: maybe process smaller amount of blocks at the same time?
 // smaller chance that it will leave cache
 void generateHBlocks(uint start_hbid) {
-	uint hbid = start_hbid + (LIX >> 5);
+	uint group_size = s_hblock_group_size * 32;
+	uint group_shift = s_hblock_group_shift;
+	uint group_mask = group_size - 1;
+	uint group_thread = LIX & group_mask;
+
+	// TODO: better names for indices
+	uint group_hbid = LIX >> (5 + group_shift);
+	uint hbid = start_hbid + group_hbid;
 	uint hby = hbid >> HBLOCK_COLS_SHIFT, hbx = hbid & HBLOCK_COLS_MASK;
 	uint lhbid = hbid & (NUM_WARPS - 1);
 	uint tri_count = s_hblock_row_tri_counts[hby];
-	uint buf_offset = lhbid << MAX_HBLOCK_TRIS_SHIFT;
+	uint buf_offset = group_hbid << (MAX_HBLOCK_TRIS0_SHIFT + group_shift);
 
 #if BIN_SIZE == 64
 	uint src_offset_32 = scratch32HBlockRowTrisOffset(hby);
 #endif
 	uint src_offset_64 = scratch64HBlockRowTrisOffset(hby);
 
-	s_segments[LIX] = 0;
-
 	{
 		uint bx_bits_shift = (BIN_SIZE == 64 ? 16 : 28) + hbx;
 		uint thread_bit_mask = ~(0xffffffffu << (LIX & 31));
 		uint block_tri_count = 0;
 
-		for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_STEP) {
+		if(group_thread < WARP_SIZE) {
+			for(uint i = group_thread; i < tri_count; i += WARP_STEP) {
 #if BIN_SIZE == 64
-			uint bx_bit = (g_scratch_32[src_offset_32 + i] >> bx_bits_shift) & 1;
+				uint bx_bit = (g_scratch_32[src_offset_32 + i] >> bx_bits_shift) & 1;
 #else
-			uint bx_bit = (g_scratch_64[src_offset_64 + i].y >> bx_bits_shift) & 1;
+				uint bx_bit = (g_scratch_64[src_offset_64 + i].y >> bx_bits_shift) & 1;
 #endif
-			uint bit_mask = uint(ballotARB(bx_bit != 0));
-			if(bit_mask == 0)
-				continue;
+				uint bit_mask = uint(ballotARB(bx_bit != 0));
+				if(bit_mask == 0)
+					continue;
 
-			uint warp_offset = bitCount(bit_mask & thread_bit_mask);
-			if(bx_bit != 0) {
-				uint tri_offset =
-					(block_tri_count + warp_offset) & ((1 << MAX_HBLOCK_TRIS_SHIFT) - 1);
-				if(tri_offset < MAX_HBLOCK_TRIS)
+				uint warp_offset = bitCount(bit_mask & thread_bit_mask);
+				if(bx_bit != 0) {
+					uint tri_offset = block_tri_count + warp_offset;
 					s_buffer[buf_offset + tri_offset] = i;
+				}
+				block_tri_count += bitCount(bit_mask);
 			}
-			block_tri_count += bitCount(bit_mask);
-		}
-
-		if((LIX & 31) == 0) {
-			if(s_hblock_tri_counts[lhbid] < int(block_tri_count))
-				RECORD(hbid, s_hblock_tri_counts[lhbid], block_tri_count, 0);
-			s_hblock_tri_counts[lhbid] = int(block_tri_count);
-			if(block_tri_count > MAX_HBLOCK_TRIS)
-				atomicOr(s_raster_error, 1 << lhbid);
+			if(group_thread == 0) {
+				if(s_hblock_tri_counts[lhbid] < int(block_tri_count))
+					RECORD(hbid, s_hblock_tri_counts[lhbid], block_tri_count, 0);
+				s_hblock_tri_counts[lhbid] = int(block_tri_count);
+			}
 		}
 		barrier();
-		if(s_raster_error != 0)
-			return;
 	}
-
-	prepareSortTris();
 
 	uint dst_offset_64 = scratch64HBlockTrisOffset1(lhbid);
 	tri_count = s_hblock_tri_counts[lhbid];
 	int startx = int(hbx << 3);
 
-	for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_STEP) {
+	for(uint i = group_thread; i < tri_count; i += group_size) {
 		uint row_idx = s_buffer[buf_offset + i];
 
 		uvec2 tri_info = g_scratch_64[src_offset_64 + row_idx];
@@ -522,7 +534,7 @@ void generateHBlocks(uint start_hbid) {
 	}
 	barrier();
 
-	sortTris(lhbid, tri_count, buf_offset);
+	sortTris(lhbid, tri_count, buf_offset, group_size, group_thread);
 
 	barrier();
 	groupMemoryBarrier();
@@ -536,7 +548,7 @@ void generateHBlocks(uint start_hbid) {
 	}
 #endif
 
-	for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_STEP) {
+	for(uint i = group_thread; i < tri_count; i += group_size) {
 		uint idx = s_buffer[buf_offset + i] & 0xfff;
 		uint num_frags = g_scratch_64[dst_offset_64 + idx].y >> 20;
 
@@ -554,21 +566,29 @@ void generateHBlocks(uint start_hbid) {
 	// Computing prefix sum across whole blocks (at most 8 * 32 elements)
 	// TODO: this will get more complicated when we're processing more than 256 elements/hblock
 	if(LIX < 8 * NUM_WARPS) {
-		uint lhbid = LIX >> 3, warp_sub_idx = LIX & 7, warp_offset = warp_sub_idx << 5;
-		uint buf_offset = lhbid << MAX_HBLOCK_TRIS_SHIFT;
+		uint wgsize = 8 << group_shift, wgmask = wgsize - 1;
+		uint group_hbid = LIX >> (3 + group_shift), group_sub_idx = LIX & wgmask;
+		uint warp_offset = group_sub_idx << 5;
+		uint buf_offset = group_hbid << (MAX_HBLOCK_TRIS0_SHIFT + group_shift);
+		uint lhbid = (start_hbid + group_hbid) & (NUM_WARPS - 1);
 		uint tri_count = s_hblock_tri_counts[lhbid];
 		uint value = 0;
-
 		if(warp_offset < tri_count) {
 			uint tri_idx = min(warp_offset + 31, tri_count - 1);
 			value = s_buffer[buf_offset + tri_idx] & 0xfffff;
 		}
-		uint sum = value, temp;
-		temp = shuffleUpNV(sum, 1, 8), sum += warp_sub_idx >= 1 ? temp : 0;
-		temp = shuffleUpNV(sum, 2, 8), sum += warp_sub_idx >= 2 ? temp : 0;
-		temp = shuffleUpNV(sum, 4, 8), sum += warp_sub_idx >= 4 ? temp : 0;
 
-		if(warp_sub_idx == 7)
+		uint sum = value, temp;
+		temp = shuffleUpNV(sum, 1, wgsize), sum += group_sub_idx >= 1 ? temp : 0;
+		temp = shuffleUpNV(sum, 2, wgsize), sum += group_sub_idx >= 2 ? temp : 0;
+		temp = shuffleUpNV(sum, 4, wgsize), sum += group_sub_idx >= 4 ? temp : 0;
+		if(wgsize >= 16)
+			temp = shuffleUpNV(sum, 8, wgsize), sum += group_sub_idx >= 8 ? temp : 0;
+		if(wgsize >= 32)
+			temp = shuffleUpNV(sum, 16, wgsize), sum += group_sub_idx >= 16 ? temp : 0;
+
+		// TODO: report error if frags can't fit into segments
+		if(group_sub_idx == wgmask)
 			s_hblock_frag_counts[lhbid] = sum;
 		s_mini_buffer[LIX] = sum - value;
 	}
@@ -581,15 +601,16 @@ void generateHBlocks(uint start_hbid) {
 	src_offset_64 = dst_offset_64;
 	dst_offset_64 = scratch64HBlockTrisOffset2(lhbid);
 	uint seg_block_offset = lhbid << MAX_SEGMENTS_SHIFT;
-	for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_STEP) {
+	for(uint i = group_thread; i < tri_count; i += group_size) {
 		uint tri_offset = 0;
+		uint mini_offset = group_hbid << (3 + group_shift);
 		if(i > 0) {
 			uint prev = i - 1;
 			tri_offset = s_buffer[buf_offset + prev] & 0xfffff;
-			tri_offset += s_mini_buffer[(lhbid << 3) + (prev >> 5)];
+			tri_offset += s_mini_buffer[mini_offset + (prev >> 5)];
 		}
 
-		uint tri_value = s_buffer[buf_offset + i] + s_mini_buffer[(lhbid << 3) + (i >> 5)];
+		uint tri_value = s_buffer[buf_offset + i] + s_mini_buffer[mini_offset + (i >> 5)];
 		uint block_tri_idx = tri_value >> 20;
 		tri_value = (tri_value & 0xfffff) - tri_offset;
 
@@ -598,6 +619,10 @@ void generateHBlocks(uint start_hbid) {
 		bool first_seg = seg_offset == 0;
 		if(seg_offset + tri_value > SEGMENT_SIZE)
 			seg_id++, first_seg = true;
+		if(seg_id >= MAX_SEGMENTS) {
+			atomicOr(s_raster_error, 1 << lhbid);
+			break;
+		}
 		if(first_seg && tri_value > 0)
 			s_segments[seg_block_offset + seg_id] = i + 1;
 
@@ -606,21 +631,22 @@ void generateHBlocks(uint start_hbid) {
 		g_scratch_64[dst_offset_64 + i] = uvec2(tri_idx | (tri_offset << 16), tri_data.x);
 	}
 	barrier();
-	{
-		uint lhbid = LIX >> 4, seg_group_offset = lhbid << MAX_SEGMENTS_SHIFT;
-		uint tri_count = s_hblock_tri_counts[lhbid];
+}
 
-		for(uint seg_id = LIX & 15; seg_id < MAX_SEGMENTS; seg_id += 16) {
-			uint cur_value = s_segments[seg_group_offset + seg_id];
-			if(cur_value == 0)
-				break;
+void finalizeSegments() {
+	uint lhbid = LIX >> 4, seg_group_offset = lhbid << MAX_SEGMENTS_SHIFT;
+	uint tri_count = s_hblock_tri_counts[lhbid];
 
-			uint next_value =
-				seg_id + 1 == MAX_SEGMENTS ? 0 : s_segments[seg_group_offset + seg_id + 1];
-			next_value = next_value == 0 ? tri_count : min(tri_count, next_value);
-			uint seg_tri_count = next_value - (cur_value - 1);
-			s_segments[seg_group_offset + seg_id] = (cur_value - 1) | (seg_tri_count << 16);
-		}
+	for(uint seg_id = LIX & 15; seg_id < MAX_SEGMENTS; seg_id += 16) {
+		uint cur_value = s_segments[seg_group_offset + seg_id];
+		if(cur_value == 0)
+			break;
+
+		uint next_value =
+			seg_id + 1 == MAX_SEGMENTS ? 0 : s_segments[seg_group_offset + seg_id + 1];
+		next_value = next_value == 0 ? tri_count : min(tri_count, next_value);
+		uint seg_tri_count = next_value - (cur_value - 1);
+		s_segments[seg_group_offset + seg_id] = (cur_value - 1) | (seg_tri_count << 16);
 	}
 }
 
@@ -884,6 +910,12 @@ void finishReduceSamples(ivec2 pixel_pos, ReductionContext ctx) {
 	outputPixel(pixel_pos, enc_color);
 }
 
+ivec2 computePixelPos(uint hbid) {
+	uint hbx = hbid & HBLOCK_COLS_MASK, hby = hbid >> HBLOCK_COLS_SHIFT;
+	return ivec2((LIX & 7) + (hbx << HBLOCK_WIDTH_SHIFT),
+				 ((LIX >> 3) & 3) + (hby << HBLOCK_HEIGHT_SHIFT));
+}
+
 void initVisualizeSamples() { s_vis_pixels[LIX] = 0; }
 
 void visualizeSamples(uint sample_count) {
@@ -896,16 +928,39 @@ void visualizeSamples(uint sample_count) {
 
 void finishVisualizeSamples(ivec2 pixel_pos) {
 	uint pixel_id = (pixel_pos.x & 7) + ((pixel_pos.y & 3) << 3);
-	vec3 color = vec3(s_vis_pixels[(LIX & ~31) + pixel_id]) / 32.0;
+	vec3 color = vec3(s_vis_pixels[(LIX & ~31) + pixel_id]) / 64.0;
 	uint enc_col = encodeRGBA8(vec4(SATURATE(color), 1.0));
 	outputPixel(pixel_pos, enc_col);
 }
 
+void visualizeAllSamples(uint hbid) {
+	uint lhbid = hbid & (NUM_WARPS - 1);
+	uint tri_count = s_hblock_tri_counts[lhbid];
+	uint src_offset_64 = scratch64HBlockTrisOffset2(lhbid);
+
+	int y = int(LIX & 3);
+	uint count_shift = 16 + (y << 2), min_shift = (y << 1) + y;
+	uint buf_offset = (LIX >> 5) << SEGMENT_SHIFT;
+
+	s_vis_pixels[LIX] = 0;
+
+	for(uint i = (LIX & WARP_MASK) >> 2; i < tri_count; i += WARP_STEP / 4) {
+		uvec2 tri_data = g_scratch_64[src_offset_64 + i];
+		int minx = int((tri_data.y >> min_shift) & 7);
+		int countx = int((tri_data.y >> count_shift) & 15);
+		uint pixel_id = (y << 3) | minx;
+		for(int j = 0; j < countx; j++)
+			atomicAdd(s_vis_pixels[(LIX & ~31) | (pixel_id + j)], 1);
+	}
+
+	finishVisualizeSamples(computePixelPos(hbid));
+}
+
 void visualizeFragmentCounts(uint hbid, ivec2 pixel_pos) {
 	uint count = s_hblock_frag_counts[hbid & (NUM_WARPS - 1)];
-	vec4 color = vec4(SATURATE(vec3(count) / 1024.0), 1.0);
-	if(count > SEGMENT_SIZE * 16)
-		color.gb = vec2(0.0);
+	vec4 color = vec4(SATURATE(vec3(count) / 4096.0), 1.0);
+	if(count > SEGMENT_SIZE * MAX_SEGMENTS)
+		color.gb *= 0.25;
 	outputPixel(pixel_pos, encodeRGBA8(color));
 }
 
@@ -919,16 +974,17 @@ void visualizeTriangleCounts(uint hbid, ivec2 pixel_pos) {
 }
 
 void visualizeErrors(uint hbid) {
-	uint bit_shift = (hbid & (NUM_WARPS - 1));
-	uint color = 0xff000031;
-	if((s_raster_error & (1 << bit_shift)) != 0)
-		color += 0x64;
+	uint lhbid = hbid & (NUM_WARPS - 1);
+	uint color = 0xff000000;
+	if(s_raster_error != 0)
+		color += 0xff;
+	else {
+		color += 0x30;
+		if(s_hblock_tri_counts[lhbid] > MAX_HBLOCK_TRIS)
+			color += 0x40;
+	}
 
-	uint hbx = hbid & HBLOCK_COLS_MASK, hby = hbid >> HBLOCK_COLS_SHIFT;
-	ivec2 pixel_pos = ivec2((LIX & 7) + (hbx << HBLOCK_WIDTH_SHIFT),
-							((LIX >> 3) & 3) + (hby << HBLOCK_HEIGHT_SHIFT));
-
-	outputPixel(pixel_pos, color);
+	outputPixel(computePixelPos(hbid), color);
 }
 
 void rasterBin(int bin_id) {
@@ -957,9 +1013,16 @@ void rasterBin(int bin_id) {
 		groupMemoryBarrier();
 		barrier();
 		UPDATE_CLOCK(0);
+		s_segments[LIX] = 0;
+		s_segments[LSIZE + LIX] = 0;
 
-		if(s_raster_error == 0)
-			generateHBlocks(start_hby * HBLOCK_COLS);
+		if(s_raster_error == 0) {
+			int step = NUM_WARPS >> s_hblock_group_shift;
+			for(int i = 0; i < s_hblock_group_size; i++)
+				generateHBlocks(start_hby * HBLOCK_COLS + step * i);
+		}
+		barrier();
+		finalizeSegments();
 		barrier();
 
 		int hbid = start_hby * HBLOCK_COLS + int(LIX >> 5);
@@ -973,9 +1036,9 @@ void rasterBin(int bin_id) {
 		}
 		UPDATE_CLOCK(1);
 
+		//visualizeAllSamples(hbid);
 		ReductionContext context;
 		initReduceSamples(context);
-		//initVisualizeSamples();
 
 		for(int segment_id = 0;; segment_id++) {
 			int frag_count = int(s_hblock_frag_counts[hbid & (NUM_WARPS - 1)]);
@@ -987,7 +1050,6 @@ void rasterBin(int bin_id) {
 			UPDATE_CLOCK(2);
 
 			shadeAndReduceSamples(hbid, frag_count, context);
-			//visualizeSamples(frag_count);
 			UPDATE_CLOCK(5);
 
 #ifdef ALPHA_THRESHOLD
@@ -996,15 +1058,12 @@ void rasterBin(int bin_id) {
 #endif
 		}
 
-		uint hbx = hbid & HBLOCK_COLS_MASK, hby = hbid >> HBLOCK_COLS_SHIFT;
-		ivec2 pixel_pos = ivec2((LIX & 7) + (hbx << HBLOCK_WIDTH_SHIFT),
-								((LIX >> 3) & 3) + (hby << HBLOCK_HEIGHT_SHIFT));
+		ivec2 pixel_pos = computePixelPos(hbid);
 		finishReduceSamples(pixel_pos, context);
-
-		//finishVisualizeSamples(pixel_pos);
 		//visualizeFragmentCounts(hbid, pixel_pos);
 		//visualizeTriangleCounts(hbid, pixel_pos);
 		UPDATE_CLOCK(6);
+
 		barrier();
 	}
 }

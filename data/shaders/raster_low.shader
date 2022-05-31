@@ -90,7 +90,7 @@ shared int s_raster_error;
 shared uint s_vis_pixels[LSIZE];
 
 void outputPixel(ivec2 pixel_pos, uint color) {
-	color = tintColor(color, vec3(0.2, 0.3, 0.4), 0.8);
+	//color = tintColor(color, vec3(0.2, 0.3, 0.4), 0.8);
 	g_raster_image[s_bin_raster_offset + pixel_pos.x + (pixel_pos.y << BIN_SHIFT)] = color;
 }
 

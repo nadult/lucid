@@ -163,29 +163,15 @@ void computeOffsets() {
 }
 
 void dispatchQuad(int quad_idx) {
-	uvec4 aabb = decodeAABB32(g_quad_aabbs[quad_idx]);
-#if BIN_SIZE == 64
-	// Encodes tile ranges within a single bin
-	uint tile_ranges =
-		(aabb[0] & 0x3) | ((aabb[1] & 0x3) << 2) | ((aabb[2] & 0x3) << 4) | ((aabb[3] & 0x3) << 6);
-	aabb >>= BIN_SHIFT - TILE_SHIFT;
-#endif
+	uint bin_shift = BIN_SIZE == 64 ? BIN_SHIFT - TILE_SHIFT : 0;
+	uvec4 aabb = decodeAABB32(g_quad_aabbs[quad_idx]) >> bin_shift;
 	uint bsx = aabb[0], bsy = aabb[1], bex = aabb[2], bey = aabb[3];
 
 	for(uint by = bsy; by <= bey; by++) {
-#if BIN_SIZE == 64
-		uint tile_ranges_cury = (tile_ranges | (by < bey ? 0xc0 : 0)) & (by > bsy ? 0xf3 : 0xff);
-#endif
 		for(uint bx = bsx; bx <= bex; bx++) {
 			uint bin_id = bx + by * BIN_COUNT_X;
 			uint quad_offset = atomicAdd(s_bins[bin_id], 1);
-#if BIN_SIZE == 64
-			uint tile_ranges_cur =
-				(tile_ranges_cury | (bx < bex ? 0x30 : 0)) & (bx > bsx ? 0xfc : 0xff);
-			g_bin_quads[quad_offset] = (quad_idx & 0xffffff) | (tile_ranges_cur << 24);
-#else
 			g_bin_quads[quad_offset] = quad_idx;
-#endif
 		}
 	}
 }

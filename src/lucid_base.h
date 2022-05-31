@@ -28,7 +28,7 @@ struct ShadowContext {
 };
 
 DEFINE_ENUM(DrawCallOpt, has_vertex_colors, has_vertex_tex_coords, has_vertex_normals, is_opaque,
-			tex_opaque, has_uv_rect, has_texture);
+			tex_opaque, has_uv_rect, has_texture, has_color);
 using DrawCallOpts = EnumFlags<DrawCallOpt>;
 
 struct SceneDrawCall {

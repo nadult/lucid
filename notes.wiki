@@ -1,8 +1,9 @@
 *Skupiamy się na wydajnym renderingu przezroczystości; Chcemy szybko zamknąć ten temat*
 
 Aktualne cele:
-- przygotowanie zoptymalizowanej wersji w aktualnym schemacie renderingu
-- zrobienie wersji raster_tile i ew. raster_block
+- wersja micro ?
+- poprawienie bugów spowodawanych taką samą głębią geometrii
+- poprawienie problamów spowodowanych sliverami
 - zaimplementowanie WB-OIT ?
 
 - opisanie algorytmu

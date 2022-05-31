@@ -8,6 +8,7 @@
 #define INST_TEX_OPAQUE				0x10
 #define INST_HAS_UV_RECT			0x20
 #define INST_HAS_TEXTURE			0x40
+#define INST_HAS_COLOR				0x80
 
 // Different reasons for rejection of triangles/quads during setup
 #define REJECTION_TYPE_OTHER			0

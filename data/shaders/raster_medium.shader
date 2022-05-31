@@ -730,8 +730,12 @@ uint shadeSample(ivec2 bin_pixel_pos, uint scratch_tri_offset, out float out_dep
 	uint unormal, v0, v1, v2;
 	getTriangleSecondaryParams(scratch_tri_offset, unormal, v0, v1, v2);
 
-	uint instance_color = g_instances[instance_id].color;
-	vec4 color = decodeRGBA8(instance_color);
+	vec4 color;
+	if((instance_flags & INST_HAS_COLOR) != 0)
+		color = decodeRGBA8(g_instances[instance_id].color);
+	else
+		color = vec4(1.0);
+
 	if((instance_flags & INST_HAS_TEXTURE) != 0) {
 		vec2 tex0 = g_tex_coords[v0];
 		vec2 tex1 = g_tex_coords[v1] - tex0;

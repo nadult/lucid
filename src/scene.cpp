@@ -346,7 +346,9 @@ vector<SceneDrawCall> Scene::draws(const Frustum &frustum) const {
 		auto opts = scene_opts | mask(is_opaque, DrawCallOpt::is_opaque) |
 					mask(tex_opaque, DrawCallOpt::tex_opaque) |
 					mask(!material.diffuse_tex.is_clamped, DrawCallOpt::has_uv_rect) |
-					mask(material.diffuse_tex && has_tex_coords, DrawCallOpt::has_texture);
+					mask(material.diffuse_tex && has_tex_coords, DrawCallOpt::has_texture) |
+					mask(material.diffuse != float3(1.0) || material.opacity != 1.0,
+						 DrawCallOpt::has_color);
 		auto &offsets = mesh_primitive_offsets[i];
 		out.emplace_back(mesh.bounding_box, material.diffuse_tex.uv_rect, mesh.material_id,
 						 mesh.tris.size(), offsets.first, mesh.quads.size(), offsets.second, opts);

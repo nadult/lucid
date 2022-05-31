@@ -84,7 +84,9 @@ shared uint s_hblock_counts[NUM_WARPS * 2];
 shared uint s_buffer[BUFFER_SIZE + 1];
 shared uint s_mini_buffer[LSIZE];
 shared uint s_segments[LSIZE * 2];
+
 shared int s_raster_error;
+shared int s_medium_bin_count;
 
 // Only used when debugging
 shared uint s_vis_pixels[LSIZE];
@@ -993,12 +995,18 @@ void rasterBin(int bin_id) {
 			barrier();
 
 			if(s_raster_error != 0) {
-				visualizeErrors(bid);
+				if(LIX == 0) {
+					int id = atomicAdd(g_info.bin_level_counts[BIN_LEVEL_MEDIUM], 1);
+					MEDIUM_LEVEL_BINS(id) = int(bin_id);
+					s_medium_bin_count = max(s_medium_bin_count, id + 1);
+					return;
+				}
+				/*visualizeErrors(bid);
 				hbid += NUM_WARPS;
 				barrier();
 				if(LIX == 0)
 					s_raster_error = 0;
-				continue;
+				continue;*/
 			}
 		}
 		UPDATE_CLOCK(1);
@@ -1050,14 +1058,22 @@ int loadNextBin() {
 
 void main() {
 	initTimers();
-	if(LIX == 0)
+	if(LIX == 0) {
 		s_num_bins = g_info.bin_level_counts[BIN_LEVEL_LOW];
+		s_medium_bin_count = 0;
+	}
 
 	int bin_id = loadNextBin();
 	while(bin_id != -1) {
 		barrier();
 		rasterBin(bin_id);
 		bin_id = loadNextBin();
+	}
+
+	// If some of the bins are promoted to the next level, we have to adjust number of dispatches
+	if(LIX == 0 && s_medium_bin_count > 0) {
+		uint num_dispatches = min(s_medium_bin_count, MAX_DISPATCHES);
+		atomicMax(g_info.bin_level_dispatches[BIN_LEVEL_MEDIUM][0], num_dispatches);
 	}
 	commitTimers();
 }

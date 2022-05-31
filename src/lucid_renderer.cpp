@@ -450,7 +450,7 @@ void LucidRenderer::rasterLow(const Context &ctx) {
 	} else {
 		dispatchIndirect(LUCID_INFO_MEMBER_OFFSET(bin_level_dispatches[BIN_LEVEL_LOW]));
 	}
-	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_COMMAND_BARRIER_BIT);
 }
 
 void LucidRenderer::rasterMedium(const Context &ctx) {
@@ -548,7 +548,10 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 	int max_quads_per_bin = max(bin_quad_counts);
 	int num_bin_quads = accumulate(bin_quad_counts);
 
-	int sum_bins = accumulate(bins.bin_level_counts);
+	// When raster algorithm cannot process some bin because there is too many tris
+	// per block or too many samples, then such bin will be promoted to next level.
+	// This will result in some bins being processed twice
+	int num_promoted_bins = accumulate(bins.bin_level_counts) - m_bin_count;
 
 	int num_visible_total = bins.num_visible_quads[0] + bins.num_visible_quads[1];
 	auto visible_info = stdFormat("%d (%.2f %%)", num_visible_total,
@@ -586,11 +589,14 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 	};
 
 	vector<StatsRow> bin_level_rows = {
-		{"empty bins", format_percentage(bins.bin_level_counts[0], sum_bins)},
-		{"micro level bins", format_percentage(bins.bin_level_counts[BIN_LEVEL_MICRO], sum_bins)},
-		{"low level bins", format_percentage(bins.bin_level_counts[BIN_LEVEL_LOW], sum_bins)},
-		{"medium level bins", format_percentage(bins.bin_level_counts[BIN_LEVEL_MEDIUM], sum_bins)},
-		{"high level bins", format_percentage(bins.bin_level_counts[BIN_LEVEL_HIGH], sum_bins)},
+		{"empty bins", format_percentage(bins.bin_level_counts[0], m_bin_count)},
+		{"micro level bins",
+		 format_percentage(bins.bin_level_counts[BIN_LEVEL_MICRO], m_bin_count)},
+		{"low level bins", format_percentage(bins.bin_level_counts[BIN_LEVEL_LOW], m_bin_count)},
+		{"medium level bins",
+		 format_percentage(bins.bin_level_counts[BIN_LEVEL_MEDIUM], m_bin_count)},
+		{"high level bins", format_percentage(bins.bin_level_counts[BIN_LEVEL_HIGH], m_bin_count)},
+		{"promoted bins", format_percentage(num_promoted_bins, m_bin_count)},
 	};
 
 	string bin_dispatcher_info =

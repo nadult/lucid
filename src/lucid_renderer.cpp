@@ -320,12 +320,17 @@ void LucidRenderer::uploadInstances(const Context &ctx) {
 		if(num_quads == 0)
 			break;
 
+		auto opts = dc.opts;
+		u32 color = u32(mat_colors[dc.material_id]);
+		if(color != 0xffffffff)
+			opts |= DrawCallOpt::has_inst_color;
+
 		InstanceData out;
 		out.index_offset = dc.quad_offset * 4;
 		out.vertex_offset = 0;
 		out.num_quads = num_quads;
-		out.flags = (uint(dc.opts.bits) & 0xffff);
-		out.color = u32(mat_colors[dc.material_id]);
+		out.flags = (uint(opts.bits) & 0xffff);
+		out.color = color;
 		out.temp = 0;
 		float4 uv_rect(dc.uv_rect.x(), dc.uv_rect.y(), dc.uv_rect.width(), dc.uv_rect.height());
 		m_num_quads += dc.num_quads;

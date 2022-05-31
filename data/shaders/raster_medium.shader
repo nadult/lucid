@@ -321,6 +321,10 @@ void processQuads(int start_by) {
 		uint v1 = verts[1 + second_tri] & 0x03ffffff;
 		uint v2 = verts[2 + second_tri] & 0x03ffffff;
 
+		// TODO: detect such cases earlier
+		if(v0 == v1 || v1 == v2 || v2 == v0)
+			continue;
+
 		vec3 tri0 = vec3(g_verts[v0 * 3 + 0], g_verts[v0 * 3 + 1], g_verts[v0 * 3 + 2]) -
 					frustum.ws_shared_origin;
 		vec3 tri1 = vec3(g_verts[v1 * 3 + 0], g_verts[v1 * 3 + 1], g_verts[v1 * 3 + 2]) -

@@ -33,6 +33,8 @@
 #include <fwk/gfx/investigator3.h>
 #include <fwk/gfx/visualizer3.h>
 
+Ex<void> loadShaderPieces();
+
 FilePath mainPath() {
 	return platform == Platform::msvc ? FilePath::current().get() : executablePath().parent();
 }
@@ -175,11 +177,13 @@ void LucidApp::updateRenderer() {
 	if(updateViewport())
 		do_update = true;
 
-	for(auto entry : findFiles(dataPath("shaders"))) {
+	auto opts = FindFileOpt::regular_file | FindFileOpt::recursive;
+	for(auto entry : findFiles(dataPath("shaders"), opts)) {
 		if(entry.path.fileExtension() == "shader") {
 			auto time = lastModificationTime(entry.path);
 			auto &ref = m_shader_times[entry.path];
 			if(time && ref < *time) {
+				loadShaderPieces().get();
 				do_update = true;
 				ref = *time;
 			}

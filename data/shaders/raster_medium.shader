@@ -638,10 +638,10 @@ void generateHBlocks(uint start_hbid) {
 }
 
 void finalizeSegments() {
-	uint lhbid = LIX >> 4, seg_group_offset = lhbid << MAX_SEGMENTS_SHIFT;
+	uint lhbid = LIX >> 5, seg_group_offset = lhbid << MAX_SEGMENTS_SHIFT;
 	uint tri_count = s_hblock_tri_counts[lhbid];
 
-	for(uint seg_id = LIX & 15; seg_id < MAX_SEGMENTS; seg_id += 16) {
+	for(uint seg_id = LIX & WARP_MASK; seg_id < MAX_SEGMENTS; seg_id += WARP_SIZE) {
 		uint cur_value = s_segments[seg_group_offset + seg_id];
 		if(cur_value == 0)
 			break;

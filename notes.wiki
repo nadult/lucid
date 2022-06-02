@@ -225,3 +225,18 @@ san-miguel: 5198   955    188   3890
     sponza: 3852   62     83    3556
     teapot: 410    25     32    313
  white_oak: 12730  22     173   12398
+
+ added raster_mid (eb0d8398ec), 32x32, 2560x1330, timery wyłączone:
+             total  setup  bins  raster_low  raster_mid
+    #boxes: 1507   25     34    1386        4
+     bunny: 373    29     29    260         4
+conference: 1211   45     49    989         4
+    dragon: 967    135    56    523         197
+   gallery: 2920   183    73    2033        452
+  hairball: 12513  546    285   358         11180
+powerplant: 12599  1520   231   801         9913
+san-miguel: 8948   956    193   2542        5109
+ scrubPine: 581    13     36    480         5
+    sponza: 3739   63     82    3341        100
+    teapot: 395    25     31    295         5
+ white_oak: 13630  24     168   13133       5

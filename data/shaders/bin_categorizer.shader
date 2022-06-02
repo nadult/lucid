@@ -19,8 +19,6 @@ void main() {
 		s_bin_level_counts[LIX] = 0;
 	barrier();
 
-	// TODO: problem w tym, że aby dobrze porozdzielac taski musimy znac liczbe sampli...
-	//       da się to jakoś oszacować? co najmniej w tile dispatcherze...
 	for(uint i = LIX; i < BIN_COUNT; i += LSIZE) {
 		int num_quads = BIN_QUAD_COUNTS(i);
 

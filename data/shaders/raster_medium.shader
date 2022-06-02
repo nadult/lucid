@@ -5,8 +5,9 @@
 
 // NOTE: converting integer multiplications to shifts does not increase perf
 
-// Acceptable values: 128, 256, 512
-#define LSIZE 512
+// Acceptable values: 256, 512
+// TODO: we can go a bit faster with 1024
+#define LSIZE RASTER_LSIZE_MEDIUM
 
 #define NUM_WARPS (LSIZE / 32)
 

@@ -118,6 +118,7 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 
 	// TODO: Why adding more on intel causes problems?
 	// TODO: properly get number of compute units (use opencl?)
+	// TODO: max dispatches should also depend on lsize
 	// https://tinyurl.com/o7s9ph3
 	m_max_dispatches = gl_info->vendor == GlVendor::intel ? 32 : 128;
 	DASSERT(m_max_dispatches <= sizeof(shader::LucidInfo::dispatcher_item_counts) / sizeof(u32));
@@ -171,7 +172,8 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	defs["TILES_PER_BIN"] = m_tiles_per_bin;
 	defs["BLOCKS_PER_TILE"] = m_blocks_per_tile;
 	defs["BLOCKS_PER_BIN"] = m_blocks_per_bin;
-	defs["RASTER_LSIZE"] = raster_lsize;
+	defs["RASTER_LSIZE_LOW"] = raster_lsize_low;
+	defs["RASTER_LSIZE_MEDIUM"] = raster_lsize_medium;
 	defs["MAX_INSTANCE_QUADS"] = max_instance_quads;
 	defs["MAX_QUADS"] = max_quads;
 
@@ -449,12 +451,10 @@ void LucidRenderer::rasterLow(const Context &ctx) {
 	p_raster_low["background_color"] = u32(ctx.config.background_color);
 	ctx.lighting.setUniforms(p_raster_low.glProgram());
 
-	if(m_opts & Opt::debug_raster) {
-		// TODO: accurate LSIZE
-		dispatchAndDebugProgram(p_raster_low, m_max_dispatches, raster_lsize);
-	} else {
+	if(m_opts & Opt::debug_raster)
+		dispatchAndDebugProgram(p_raster_low, m_max_dispatches, raster_lsize_low);
+	else
 		dispatchIndirect(LUCID_INFO_MEMBER_OFFSET(bin_level_dispatches[BIN_LEVEL_LOW]));
-	}
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_COMMAND_BARRIER_BIT);
 }
 
@@ -473,12 +473,10 @@ void LucidRenderer::rasterMedium(const Context &ctx) {
 	p_raster_medium["background_color"] = u32(ctx.config.background_color);
 	ctx.lighting.setUniforms(p_raster_medium.glProgram());
 
-	if(m_opts & Opt::debug_raster) {
-		// TODO: accurate LSIZE
-		dispatchAndDebugProgram(p_raster_medium, m_max_dispatches, raster_lsize);
-	} else {
+	if(m_opts & Opt::debug_raster)
+		dispatchAndDebugProgram(p_raster_low, m_max_dispatches, raster_lsize_medium);
+	else
 		dispatchIndirect(LUCID_INFO_MEMBER_OFFSET(bin_level_dispatches[BIN_LEVEL_MEDIUM]));
-	}
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 }
 

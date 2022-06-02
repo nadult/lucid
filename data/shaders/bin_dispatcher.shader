@@ -149,8 +149,7 @@ int prefixSum32(int accum) {
 }
 
 void countSmallQuadBins(uint quad_idx) {
-	const int shift = BIN_SIZE == 64 ? BIN_SHIFT - TILE_SHIFT : 0;
-	ivec4 aabb = ivec4(decodeAABB32(g_quad_aabbs[quad_idx]) >> shift);
+	ivec4 aabb = decodeAABB32(g_quad_aabbs[quad_idx]);
 	int bsx = aabb[0], bsy = aabb[1], bex = aabb[2], bey = aabb[3];
 	int area = (bex - bsx + 1) * (bey - bsy + 1);
 
@@ -168,8 +167,7 @@ void countSmallQuadBins(uint quad_idx) {
 }
 
 void countLargeQuadBins(int quad_idx) {
-	const int shift = BIN_SIZE == 64 ? BIN_SHIFT - TILE_SHIFT : 0;
-	ivec4 aabb = ivec4(decodeAABB32(g_quad_aabbs[quad_idx]) >> shift);
+	ivec4 aabb = decodeAABB32(g_quad_aabbs[quad_idx]);
 	int bsx = aabb[0], bsy = aabb[1], bex = aabb[2], bey = aabb[3];
 	QuadScanlineInfo info = quadScanlineInfo(quad_idx, bsy);
 
@@ -255,12 +253,11 @@ void computeOffsets() {
 }
 
 void dispatchQuad(int quad_idx) {
-	uint bin_shift = BIN_SIZE == 64 ? BIN_SHIFT - TILE_SHIFT : 0;
-	uvec4 aabb = decodeAABB32(g_quad_aabbs[quad_idx]) >> bin_shift;
-	uint bsx = aabb[0], bsy = aabb[1], bex = aabb[2], bey = aabb[3];
+	ivec4 aabb = decodeAABB32(g_quad_aabbs[quad_idx]);
+	int bsx = aabb[0], bsy = aabb[1], bex = aabb[2], bey = aabb[3];
 
-	for(uint by = bsy; by <= bey; by++) {
-		for(uint bx = bsx; bx <= bex; bx++) {
+	for(int by = bsy; by <= bey; by++) {
+		for(int bx = bsx; bx <= bex; bx++) {
 			uint bin_id = bx + by * BIN_COUNT_X;
 			uint quad_offset = atomicAdd(s_bins[bin_id], 1);
 			g_bin_quads[quad_offset] = quad_idx;
@@ -271,8 +268,7 @@ void dispatchQuad(int quad_idx) {
 void dispatchLargeQuad(int large_quad_idx) {
 	int quad_idx = (MAX_QUADS - 1) - large_quad_idx;
 
-	uint bin_shift = BIN_SIZE == 64 ? BIN_SHIFT - TILE_SHIFT : 0;
-	ivec4 aabb = ivec4(decodeAABB32(g_quad_aabbs[quad_idx]) >> bin_shift);
+	ivec4 aabb = decodeAABB32(g_quad_aabbs[quad_idx]);
 	int bsx = aabb[0], bsy = aabb[1], bex = aabb[2], bey = aabb[3];
 	QuadScanlineInfo quad_scan_info = quadScanlineInfo(quad_idx, bsy);
 
@@ -306,8 +302,7 @@ void dispatchLargeQuad(int large_quad_idx, int num_large_quads) {
 
 	if(large_quad_idx < num_large_quads) {
 		int quad_idx = (MAX_QUADS - 1) - large_quad_idx;
-		const uint shift = BIN_SIZE == 64 ? BIN_SHIFT - TILE_SHIFT : 0;
-		uvec4 aabb = decodeAABB32(g_quad_aabbs[quad_idx]) >> shift;
+		uvec4 aabb = decodeAABB32(g_quad_aabbs[quad_idx]);
 		int width = int(aabb[2] - aabb[0] + 1), height = int(aabb[3] - aabb[1] + 1);
 		int base_offset = int(aabb[0] + aabb[1] * BIN_COUNT_X);
 		quad_info = ivec4(quad_idx, base_offset, width, height * BIN_COUNT_X);

@@ -51,8 +51,8 @@ uint encodeAABB32(uvec4 aabb) {
 		   ((aabb[3] & 0xff) << 24);
 }
 
-uvec4 decodeAABB32(uint aabb) {
-	return uvec4(aabb & 0xff, (aabb >> 8) & 0xff, (aabb >> 16) & 0xff, aabb >> 24);
+ivec4 decodeAABB32(uint aabb) {
+	return ivec4(aabb & 0xff, (aabb >> 8) & 0xff, (aabb >> 16) & 0xff, aabb >> 24);
 }
 
 vec3 decodeNormalUint(uint n) {

@@ -46,7 +46,6 @@ void computeScanlineParams(vec3 tri0, vec3 tri1, vec3 tri2, vec2 start, out vec3
 	vec3 nrm1 = cross(tri0, tri2 - tri0);
 	vec3 nrm2 = cross(tri1, tri0 - tri1);
 	float volume = dot(tri0, nrm0);
-	// TODO: not needed?
 	if(volume < 0)
 		nrm0 = -nrm0, nrm1 = -nrm1, nrm2 = -nrm2;
 
@@ -59,26 +58,21 @@ void computeScanlineParams(vec3 tri0, vec3 tri1, vec3 tri2, vec2 start, out vec3
 	float inv_ex[3] = {1.0 / edges[0].x, 1.0 / edges[1].x, 1.0 / edges[2].x};
 	vec3 scan_base = -vec3(edges[0].z * inv_ex[0], edges[1].z * inv_ex[1], edges[2].z * inv_ex[2]);
 	scan_step = -vec3(edges[0].y * inv_ex[0], edges[1].y * inv_ex[1], edges[2].y * inv_ex[2]);
-	uint xsigns =
-		(edges[0].x < 0.0 ? 1 : 0) | (edges[1].x < 0.0 ? 2 : 0) | (edges[2].x < 0.0 ? 4 : 0);
-	uint ysigns =
-		(edges[0].y < 0.0 ? 8 : 0) | (edges[1].y < 0.0 ? 16 : 0) | (edges[2].y < 0.0 ? 32 : 0);
-	uint sign_mask = xsigns | ysigns;
-	// TODO: translate masks
+
+	bvec3 xsigns = bvec3(edges[0].x >= 0.0, edges[1].x >= 0.0, edges[2].x >= 0.0);
 
 	float bin_offset = BIN_SIZE - 0.989;
-	vec3 scan = vec3(scan_step[0] * (start.y + ((sign_mask & 8) == 0 ? bin_offset : 0.0)) +
-						 scan_base[0] - (start.x + ((sign_mask & 1) == 0 ? bin_offset : 0.0)),
-					 scan_step[1] * (start.y + ((sign_mask & 16) == 0 ? bin_offset : 0.0)) +
-						 scan_base[1] - (start.x + ((sign_mask & 2) == 0 ? bin_offset : 0.0)),
-					 scan_step[2] * (start.y + ((sign_mask & 32) == 0 ? bin_offset : 0.0)) +
-						 scan_base[2] - (start.x + ((sign_mask & 4) == 0 ? bin_offset : 0.0)));
-	scan_min = vec3((sign_mask & 1) == 0 ? scan[0] : -1.0 / 0.0,
-					(sign_mask & 2) == 0 ? scan[1] : -1.0 / 0.0,
-					(sign_mask & 4) == 0 ? scan[2] : -1.0 / 0.0);
+	vec3 yoffset = vec3(edges[0].y >= 0.0 ? bin_offset : 0.0, edges[1].y >= 0.0 ? bin_offset : 0.0,
+						edges[2].y >= 0.0 ? bin_offset : 0.0);
+	vec3 xoffset = vec3(xsigns[0] ? bin_offset : 0.0, xsigns[1] ? bin_offset : 0.0,
+						xsigns[2] ? bin_offset : 0.0);
+
+	vec3 scan = scan_step * (yoffset + vec3(start.y)) + scan_base - (xoffset + vec3(start.x));
+	const float inf = 1.0 / 0.0;
+	scan_min =
+		vec3(xsigns[0] ? scan[0] : -inf, xsigns[1] ? scan[1] : -inf, xsigns[2] ? scan[2] : -inf);
 	scan_max =
-		vec3((sign_mask & 1) != 0 ? scan[0] : 1.0 / 0.0, (sign_mask & 2) != 0 ? scan[1] : 1.0 / 0.0,
-			 (sign_mask & 4) != 0 ? scan[2] : 1.0 / 0.0);
+		vec3(xsigns[0] ? inf : scan[0], xsigns[1] ? inf : scan[1], xsigns[2] ? inf : scan[2]);
 	scan_step *= BIN_SIZE;
 }
 

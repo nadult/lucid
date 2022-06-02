@@ -387,12 +387,17 @@ void LucidRenderer::computeBins(const Context &ctx) {
 	m_info->bindIndex(0);
 	m_quad_aabbs->bindIndex(1);
 	m_bin_quads->bindIndex(2);
+	m_quad_indices->bindIndex(3);
+	auto vbuffers = ctx.vao->buffers();
+	DASSERT(vbuffers.size() == 4);
+	vbuffers[0]->bindIndexAs(4, BufferType::shader_storage);
 
 	PERF_CHILD_SCOPE("dispatcher phase");
 	p_bin_dispatcher.use();
+	p_bin_dispatcher.setFrustum(ctx.camera);
 
 	if(m_opts & Opt::debug_bin_dispatcher)
-		dispatchAndDebugProgram(p_bin_dispatcher, m_max_dispatches, 1024);
+		dispatchAndDebugProgram(p_bin_dispatcher, m_max_dispatches, m_bin_size == 64 ? 512 : 1024);
 	else
 		dispatchIndirect(LUCID_INFO_MEMBER_OFFSET(num_binning_dispatches));
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);

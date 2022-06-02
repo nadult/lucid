@@ -1,4 +1,4 @@
-// $$include funcs structures
+// $$include funcs frustum structures
 
 // TODO: we have to put workgroup items in GMEM: in case when there is
 // only 1 active thread-group, all items won't fit in small SMEM array
@@ -20,6 +20,9 @@ layout(local_size_x = LSIZE) in;
 layout(std430, binding = 1) readonly buffer buf1_ { uint g_quad_aabbs[]; };
 layout(std430, binding = 2) writeonly buffer buf2_ { uint g_bin_quads[]; };
 
+layout(std430, binding = 3) readonly buffer buf3_ { uint g_quad_indices[]; };
+layout(std430, binding = 4) readonly buffer buf4_ { float g_verts[]; };
+
 shared int s_bins[BIN_COUNT];
 shared int s_rows[BIN_COUNT_Y + 1];
 shared int s_segments[LSIZE]; // TODO: merge rows and segments into single array
@@ -29,6 +32,110 @@ shared float s_inverses[BIN_COUNT_X + 1];
 const int xbin_warps = LSIZE / BIN_COUNT_X, ybin_warps = LSIZE / BIN_COUNT_Y;
 const int xbin_step = int(log2(xbin_warps)), ybin_step = int(log2(ybin_warps));
 const int xbin_count = 1 << xbin_step, ybin_count = 1 << ybin_step;
+
+struct QuadScanlineInfo {
+	vec3 scan_min[2];
+	vec3 scan_max[2];
+	vec3 scan_step[2];
+	bool second_empty;
+};
+
+void computeScanlineParams(vec3 tri0, vec3 tri1, vec3 tri2, vec2 start, out vec3 scan_min,
+						   out vec3 scan_max, out vec3 scan_step) {
+	vec3 nrm0 = cross(tri2, tri1 - tri2);
+	vec3 nrm1 = cross(tri0, tri2 - tri0);
+	vec3 nrm2 = cross(tri1, tri0 - tri1);
+	float volume = dot(tri0, nrm0);
+	// TODO: not needed?
+	if(volume < 0)
+		nrm0 = -nrm0, nrm1 = -nrm1, nrm2 = -nrm2;
+
+	vec3 edges[3] = {
+		vec3(dot(nrm0, frustum.ws_dirx), dot(nrm0, frustum.ws_diry), dot(nrm0, frustum.ws_dir0)),
+		vec3(dot(nrm1, frustum.ws_dirx), dot(nrm1, frustum.ws_diry), dot(nrm1, frustum.ws_dir0)),
+		vec3(dot(nrm2, frustum.ws_dirx), dot(nrm2, frustum.ws_diry), dot(nrm2, frustum.ws_dir0)),
+	};
+
+	float inv_ex[3] = {1.0 / edges[0].x, 1.0 / edges[1].x, 1.0 / edges[2].x};
+	vec3 scan_base = -vec3(edges[0].z * inv_ex[0], edges[1].z * inv_ex[1], edges[2].z * inv_ex[2]);
+	scan_step = -vec3(edges[0].y * inv_ex[0], edges[1].y * inv_ex[1], edges[2].y * inv_ex[2]);
+	uint xsigns =
+		(edges[0].x < 0.0 ? 1 : 0) | (edges[1].x < 0.0 ? 2 : 0) | (edges[2].x < 0.0 ? 4 : 0);
+	uint ysigns =
+		(edges[0].y < 0.0 ? 8 : 0) | (edges[1].y < 0.0 ? 16 : 0) | (edges[2].y < 0.0 ? 32 : 0);
+	uint sign_mask = xsigns | ysigns;
+	// TODO: translate masks
+
+	float bin_offset = BIN_SIZE - 0.989;
+	vec3 scan = vec3(scan_step[0] * (start.y + ((sign_mask & 8) == 0 ? bin_offset : 0.0)) +
+						 scan_base[0] - (start.x + ((sign_mask & 1) == 0 ? bin_offset : 0.0)),
+					 scan_step[1] * (start.y + ((sign_mask & 16) == 0 ? bin_offset : 0.0)) +
+						 scan_base[1] - (start.x + ((sign_mask & 2) == 0 ? bin_offset : 0.0)),
+					 scan_step[2] * (start.y + ((sign_mask & 32) == 0 ? bin_offset : 0.0)) +
+						 scan_base[2] - (start.x + ((sign_mask & 4) == 0 ? bin_offset : 0.0)));
+	scan_min = vec3((sign_mask & 1) == 0 ? scan[0] : -1.0 / 0.0,
+					(sign_mask & 2) == 0 ? scan[1] : -1.0 / 0.0,
+					(sign_mask & 4) == 0 ? scan[2] : -1.0 / 0.0);
+	scan_max =
+		vec3((sign_mask & 1) != 0 ? scan[0] : 1.0 / 0.0, (sign_mask & 2) != 0 ? scan[1] : 1.0 / 0.0,
+			 (sign_mask & 4) != 0 ? scan[2] : 1.0 / 0.0);
+	scan_step *= BIN_SIZE;
+}
+
+QuadScanlineInfo quadScanlineInfo(int quad_idx, int bsy) {
+	QuadScanlineInfo info;
+
+	// TODO: mark 2nd triangle as empty earlier?
+	uint v0 = g_quad_indices[quad_idx * 4 + 0] & 0x03ffffff;
+	uint v1 = g_quad_indices[quad_idx * 4 + 1] & 0x03ffffff;
+	uint v2 = g_quad_indices[quad_idx * 4 + 2] & 0x03ffffff;
+	uint v3 = g_quad_indices[quad_idx * 4 + 3] & 0x03ffffff;
+	info.second_empty = v2 == v3;
+
+	// TODO: thread divergence here; can we decrease it somehow?
+	// Best way to add separate pass for small triangles?
+	vec3 quad0 = vec3(g_verts[v0 * 3 + 0], g_verts[v0 * 3 + 1], g_verts[v0 * 3 + 2]) -
+				 frustum.ws_shared_origin;
+	vec3 quad1 = vec3(g_verts[v1 * 3 + 0], g_verts[v1 * 3 + 1], g_verts[v1 * 3 + 2]) -
+				 frustum.ws_shared_origin;
+	vec3 quad2 = vec3(g_verts[v2 * 3 + 0], g_verts[v2 * 3 + 1], g_verts[v2 * 3 + 2]) -
+				 frustum.ws_shared_origin;
+	vec3 quad3 = vec3(g_verts[v3 * 3 + 0], g_verts[v3 * 3 + 1], g_verts[v3 * 3 + 2]) -
+				 frustum.ws_shared_origin;
+
+	vec2 start = vec2(0.49, bsy * BIN_SIZE + 0.49);
+	// TODO: merge these
+	computeScanlineParams(quad0, quad1, quad2, start, info.scan_min[0], info.scan_max[0],
+						  info.scan_step[0]);
+	computeScanlineParams(quad0, quad2, quad3, start, info.scan_min[1], info.scan_max[1],
+						  info.scan_step[1]);
+	return info;
+}
+
+void quadScanStep(in out QuadScanlineInfo info, out int bmin, out int bmax) {
+	float xmin[2] = {
+		max(max(info.scan_min[0][0], info.scan_min[0][1]), max(info.scan_min[0][2], 0.0)),
+		max(max(info.scan_min[1][0], info.scan_min[1][1]), max(info.scan_min[1][2], 0.0))};
+	float xmax[2] = {min(min(info.scan_max[0][0], info.scan_max[0][1]),
+						 min(info.scan_max[0][2], VIEWPORT_SIZE_X)),
+					 min(min(info.scan_max[1][0], info.scan_max[1][1]),
+						 min(info.scan_max[1][2], VIEWPORT_SIZE_X))};
+
+	info.scan_min[0] += info.scan_step[0];
+	info.scan_max[0] += info.scan_step[0];
+	info.scan_min[1] += info.scan_step[1];
+	info.scan_max[1] += info.scan_step[1];
+
+	// There can be holes between two tris, exploit this
+	bmin = int(xmin[0] + 1.0);
+	bmax = int(xmax[0]);
+	if(!info.second_empty) {
+		bmin = min(bmin, int(xmin[1] + 1.0));
+		bmax = max(bmax, int(xmax[1]));
+	}
+	bmin = bmin >> BIN_SHIFT;
+	bmax = bmax >> BIN_SHIFT;
+}
 
 int prefixSum32(int accum) {
 	int temp;
@@ -60,41 +167,26 @@ void countSmallQuadBins(uint quad_idx) {
 		atomicAdd(s_bins[bmy * BIN_COUNT_X + bmx], 1);*/
 }
 
-void countLargeQuadBins(uint quad_idx) {
+void countLargeQuadBins(int quad_idx) {
 	const int shift = BIN_SIZE == 64 ? BIN_SHIFT - TILE_SHIFT : 0;
 	ivec4 aabb = ivec4(decodeAABB32(g_quad_aabbs[quad_idx]) >> shift);
 	int bsx = aabb[0], bsy = aabb[1], bex = aabb[2], bey = aabb[3];
+	QuadScanlineInfo info = quadScanlineInfo(quad_idx, bsy);
 
-	bex++, bey++;
-	atomicAdd(s_bins[bsx + bsy * BIN_COUNT_X], 1);
-	if(bex < BIN_COUNT_X)
-		atomicAdd(s_bins[bex + bsy * BIN_COUNT_X], -1);
-	if(bey < BIN_COUNT_Y)
-		atomicAdd(s_bins[bsx + bey * BIN_COUNT_X], -1);
-	if(bex < BIN_COUNT_X && bey < BIN_COUNT_Y)
-		atomicAdd(s_bins[bex + bey * BIN_COUNT_X], 1);
+	for(int by = bsy; by <= bey; by++) {
+		int bmin, bmax;
+		quadScanStep(info, bmin, bmax);
+		bmin = max(bmin, bsx), bmax = min(bmax, bex);
+
+		if(bmax >= bmin) {
+			atomicAdd(s_bins[bmin + by * BIN_COUNT_X], 1);
+			if(bmax + 1 < BIN_COUNT_X)
+				atomicAdd(s_bins[bmax + 1 + by * BIN_COUNT_X], -1);
+		}
+	}
 }
 
 void accumulateLargeQuadCounts() {
-	// Accumulating large quad counts across columns
-	if(LIX < BIN_COUNT_X * xbin_count) {
-		uint bx = LIX >> xbin_step;
-		int accum = 0;
-		for(uint by = 0, suby = LIX & (xbin_count - 1); by < BIN_COUNT_Y; by += xbin_count) {
-			uint idx = bx + (by + suby) * BIN_COUNT_X;
-			int cur = by + suby < BIN_COUNT_Y ? s_bins[idx] : 0, temp;
-			for(int i = 1; i < xbin_count; i <<= 1) {
-				temp = shuffleUpNV(cur, i, xbin_count);
-				cur += suby >= i ? temp : 0;
-			}
-			cur += accum;
-			if(by + suby < BIN_COUNT_Y)
-				s_bins[idx] = cur;
-			accum = shuffleNV(cur, xbin_count - 1, xbin_count);
-		}
-	}
-	barrier();
-
 	// Accumulating large quad counts across rows
 	if(LIX < BIN_COUNT_Y * ybin_count) {
 		uint by = LIX >> ybin_step;
@@ -176,6 +268,28 @@ void dispatchQuad(int quad_idx) {
 	}
 }
 
+void dispatchLargeQuad(int large_quad_idx) {
+	int quad_idx = (MAX_QUADS - 1) - large_quad_idx;
+
+	uint bin_shift = BIN_SIZE == 64 ? BIN_SHIFT - TILE_SHIFT : 0;
+	ivec4 aabb = ivec4(decodeAABB32(g_quad_aabbs[quad_idx]) >> bin_shift);
+	int bsx = aabb[0], bsy = aabb[1], bex = aabb[2], bey = aabb[3];
+	QuadScanlineInfo quad_scan_info = quadScanlineInfo(quad_idx, bsy);
+
+	for(int by = bsy; by <= bey; by++) {
+		int bmin, bmax;
+		quadScanStep(quad_scan_info, bmin, bmax);
+		bmin = max(bmin, bsx), bmax = min(bmax, bex);
+
+		for(int bx = bmin; bx <= bmax; bx++) {
+			uint bin_id = bx + by * BIN_COUNT_X;
+			uint quad_offset = atomicAdd(s_bins[bin_id], 1);
+			g_bin_quads[quad_offset] = quad_idx;
+		}
+	}
+}
+
+/*
 // This is an optimization of dispatchQuad which is more work efficient
 // This is especially useful if there is large variation in quad sizes
 // and for large quads in general
@@ -238,7 +352,7 @@ void dispatchLargeQuad(int large_quad_idx, int num_large_quads) {
 			}
 		}
 	}
-}
+}*/
 
 shared int s_num_quads[2], s_size_type;
 shared int s_quads_offset, s_active_work_group_id;
@@ -388,14 +502,10 @@ void main() {
 				dispatchQuad(quad_idx);
 			}
 		} else { // Large quads
-#if BIN_SIZE == 64
 			int num_quads = s_num_quads[1];
 			int large_quad_idx = quads_offset + int(LIX);
 			if(large_quad_idx < num_quads)
-				dispatchQuad((MAX_QUADS - 1) - large_quad_idx);
-#else
-			dispatchLargeQuad(quads_offset + int(LIX), s_num_quads[1]);
-#endif
+				dispatchLargeQuad(large_quad_idx);
 		}
 	}
 	barrier();

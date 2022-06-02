@@ -232,6 +232,7 @@ void processQuad(uint quad_id, uint v0, uint v1, uint v2, uint v3, uint local_in
 	aabb = clamp(aabb + vec4(0.49, 0.49, -0.49, -0.49), vec4(0.0),
 				 vec4(max_screen_pos, max_screen_pos));
 
+	// TODO: simplift this
 	uvec4 aabb_ui = uvec4(aabb);
 	uint enc_aabb = encodeAABB32(aabb_ui >> (BIN_SIZE == 64 ? TILE_SHIFT : BIN_SHIFT));
 	uvec4 bin_aabb = aabb_ui >> BIN_SHIFT;

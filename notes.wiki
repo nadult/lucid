@@ -240,3 +240,18 @@ san-miguel: 8948   956    193   2542        5109
     sponza: 3739   63     82    3341        100
     teapot: 395    25     31    295         5
  white_oak: 13630  24     168   13133       5
+
+ added scanline test to bin_dispatcher:
+             total  setup  bins  raster_low  raster_mid
+    #boxes: 1506   25     36    1389        4           
+     bunny: 372    29     29    261         4
+conference: 1381   45     216   990         4           (+170)
+    dragon: 948    136    51    523         196         (-20)
+   gallery: 2921   184    68    2039        455
+  hairball: 12371  547    302   362         11069       (-140)
+powerplant: 11604  1528   339   911         8712        (-1000)
+san-miguel: 8765   956    214   2466        4985        (-190)
+ scrubPine: 586    13     49    476         5
+    sponza: 3867   61     217   3343        102         (+70)
+    teapot: 401    25     32    296         5
+ white_oak: 13132  25     380   12471       5           (-500)

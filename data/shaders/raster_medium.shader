@@ -896,7 +896,7 @@ void shadeAndReduceSamples(uint hbid, uint sample_count, in out ReductionContext
 	}
 
 	// TODO: check if encode+decode for out_color is really needed (to save 2 regs)
-	ctx.out_color = encodeRGB10(out_color);
+	ctx.out_color = encodeRGB10(SATURATE(out_color));
 }
 
 void finishReduceSamples(ivec2 pixel_pos, ReductionContext ctx) {

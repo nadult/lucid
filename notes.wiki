@@ -2,6 +2,7 @@
 
 Aktualne cele:
 - poprawienie bugów spowodawanych taką samą głębią geometrii
+- przeniesienie więcej kodu do wspólnych bibliotek;; poprawienie raster.shader
 - wersja high
 - wersja micro ?
 - zaimplementowanie WB-OIT ?
@@ -11,7 +12,6 @@ Aktualne cele:
 - wrzucenie gdzieś do sieci
 
 Bugi: 
-- poprawka trybu additive
 - poprawny backface test
 
 -----------------------------------------------------------------------------------------

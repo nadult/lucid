@@ -185,7 +185,7 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	defs["BINNING_LSHIFT"] = log2(binning_lsize);
 
 	p_init_counters = EX_PASS(Program::makeCompute("init_counters", defs));
-	p_setup = EX_PASS(Program::makeCompute("setup", defs));
+	p_quad_setup = EX_PASS(Program::makeCompute("quad_setup", defs));
 	p_bin_categorizer = EX_PASS(Program::makeCompute("bin_categorizer", defs));
 
 	if(m_opts & Opt::timers)
@@ -371,11 +371,11 @@ void LucidRenderer::setupQuads(const Context &ctx) {
 	m_quad_aabbs->bindIndex(5);
 	m_tri_aabbs->bindIndex(6);
 
-	p_setup["enable_backface_culling"] = ctx.config.backface_culling;
-	p_setup["num_instances"] = m_num_instances;
-	p_setup["view_proj_matrix"] = m_view_proj_matrix;
-	p_setup.setFrustum(ctx.camera);
-	p_setup.use();
+	p_quad_setup["enable_backface_culling"] = ctx.config.backface_culling;
+	p_quad_setup["num_instances"] = m_num_instances;
+	p_quad_setup["view_proj_matrix"] = m_view_proj_matrix;
+	p_quad_setup.setFrustum(ctx.camera);
+	p_quad_setup.use();
 
 	glDispatchCompute((m_num_instances + 3) / 4, 1, 1);
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_COMMAND_BARRIER_BIT);

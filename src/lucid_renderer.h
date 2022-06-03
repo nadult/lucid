@@ -59,7 +59,7 @@ class LucidRenderer {
 
 	Opts m_opts;
 
-	Program p_init_counters, p_setup;
+	Program p_init_counters, p_quad_setup;
 	Program p_bin_dispatcher, p_bin_categorizer;
 	Program p_raster_low, p_raster_medium;
 	Program p_compose, p_dummy;

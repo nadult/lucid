@@ -303,14 +303,12 @@ void processQuads(int start_by) {
 
 		uvec4 aabb = g_tri_aabbs[quad_idx];
 		aabb = decodeAABB64(second_tri != 0 ? aabb.zw : aabb.xy);
-
 		int min_by = clamp(int(aabb[1]) - s_bin_pos.y, 0, BIN_MASK) >> HBLOCK_HEIGHT_SHIFT;
 		int max_by = clamp(int(aabb[3]) - s_bin_pos.y, 0, BIN_MASK) >> HBLOCK_HEIGHT_SHIFT;
 
 		int end_by = start_by + HBLOCK_ROWS_STEP_MASK;
 		min_by = max(start_by, min_by);
 		max_by = min(end_by, max_by);
-
 		if(max_by < min_by)
 			continue;
 
@@ -321,9 +319,10 @@ void processQuads(int start_by) {
 		uint v0 = verts[0] & 0x03ffffff;
 		uint v1 = verts[1 + second_tri] & 0x03ffffff;
 		uint v2 = verts[2 + second_tri] & 0x03ffffff;
+		uint cull_flag = (verts[3] >> (30 + second_tri)) & 1;
 
 		// TODO: detect such cases earlier
-		if(v0 == v1 || v1 == v2 || v2 == v0)
+		if(cull_flag == 1)
 			continue;
 
 		vec3 tri0 = vec3(g_verts[v0 * 3 + 0], g_verts[v0 * 3 + 1], g_verts[v0 * 3 + 2]) -

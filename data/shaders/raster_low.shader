@@ -294,11 +294,6 @@ void processQuads() {
 			atomicOr(s_raster_error, ~0);
 #endif
 
-		uvec4 aabb = g_tri_aabbs[quad_idx];
-		aabb = decodeAABB64(second_tri != 0 ? aabb.zw : aabb.xy);
-		int min_by = clamp(int(aabb[1]) - s_bin_pos.y, 0, BIN_MASK) >> BLOCK_SHIFT;
-		int max_by = clamp(int(aabb[3]) - s_bin_pos.y, 0, BIN_MASK) >> BLOCK_SHIFT;
-
 		uvec4 verts = uvec4(g_quad_indices[quad_idx * 4 + 0], g_quad_indices[quad_idx * 4 + 1],
 							g_quad_indices[quad_idx * 4 + 2], g_quad_indices[quad_idx * 4 + 3]);
 		uint instance_id =
@@ -306,9 +301,10 @@ void processQuads() {
 		uint v0 = verts[0] & 0x03ffffff;
 		uint v1 = verts[1 + second_tri] & 0x03ffffff;
 		uint v2 = verts[2 + second_tri] & 0x03ffffff;
+		uint cull_flag = (verts[3] >> (30 + second_tri)) & 1;
 
 		// TODO: detect such cases earlier
-		if(v0 == v1 || v1 == v2 || v2 == v0)
+		if(cull_flag == 1)
 			continue;
 
 		vec3 tri0 = vec3(g_verts[v0 * 3 + 0], g_verts[v0 * 3 + 1], g_verts[v0 * 3 + 2]) -
@@ -317,6 +313,11 @@ void processQuads() {
 					frustum.ws_shared_origin;
 		vec3 tri2 = vec3(g_verts[v2 * 3 + 0], g_verts[v2 * 3 + 1], g_verts[v2 * 3 + 2]) -
 					frustum.ws_shared_origin;
+
+		uvec4 aabb = g_tri_aabbs[quad_idx];
+		aabb = decodeAABB64(second_tri != 0 ? aabb.zw : aabb.xy);
+		int min_by = clamp(int(aabb[1]) - s_bin_pos.y, 0, BIN_MASK) >> BLOCK_SHIFT;
+		int max_by = clamp(int(aabb[3]) - s_bin_pos.y, 0, BIN_MASK) >> BLOCK_SHIFT;
 
 		// TODO: store only if samples were generated
 		// TODO: do triangle storing later

@@ -141,30 +141,35 @@ void processQuad(uint quad_id, uint v0, uint v1, uint v2, uint v3, uint local_in
 	// TODO: make sure that quads are convex?
 	// in later phases; We have to cut them as early as possible!
 
-	if(v0 == v2 || ((v0 == v1 || v1 == v2) && (v2 == v3 || (v3 == v0)))) {
+	bool cull0 = v0 == v1 || v1 == v2 || v2 == v0;
+	bool cull1 = v0 == v2 || v2 == v3 || v3 == v0;
+
+	if(cull0 && cull1) {
 		atomicAdd(s_rejected_quads[REJECTION_TYPE_OTHER], 1);
 		return;
 	}
 
 	vec3 vws[4] = {vertexLoad(v0), vertexLoad(v1), vertexLoad(v2), vertexLoad(v3)};
 
-	// TODO: on conference a piece of chair disappears
 	if(enable_backface_culling) {
-		vec3 edge10 = vws[1] - vws[0];
-		vec3 edge20 = vws[2] - vws[0];
-		vec3 edge30 = vws[3] - vws[0];
-		vec3 nrm1 = cross(edge10, edge20);
-		vec3 nrm2 = cross(edge20, edge30);
-		vec3 point = frustum.ws_origin[0] - vws[0];
+		vec3 p0 = vws[0] - frustum.ws_origin[0];
+		vec3 p1 = vws[1] - frustum.ws_origin[0];
+		vec3 p2 = vws[2] - frustum.ws_origin[0];
+		vec3 p3 = vws[3] - frustum.ws_origin[0];
+		vec3 nrm0 = cross(p2, p1 - p2);
+		vec3 nrm1 = cross(p3, p2 - p3);
+		float volume0 = dot(p0, nrm0);
+		float volume1 = dot(p0, nrm1);
 
-		// TODO: what about orthogonal projection?
-		// TODO: is this really a good way to back-face cull?
-		// TODO: do this per triangle
-		if(dot(nrm1, point) < 0.0 && ((v3 == v2) || dot(nrm2, point) <= 0.0)) {
+		cull0 = cull0 || volume0 <= 0.0;
+		cull1 = cull1 || volume1 <= 0.0;
+
+		if(cull0 && cull1) {
 			atomicAdd(s_rejected_quads[REJECTION_TYPE_BACKFACE], 1);
 			return;
 		}
 	}
+	int cull_flags = (cull0 ? 1 : 0) | (cull1 ? 2 : 0);
 
 	vec4 vndc[4] = {
 		view_proj_matrix * vec4(vws[0], 1.0),
@@ -248,7 +253,7 @@ void processQuad(uint quad_id, uint v0, uint v1, uint v2, uint v3, uint local_in
 
 	s_quad_aabbs[out_idx] = enc_aabb;
 	s_tri_aabbs[out_idx] = uvec4(encodeAABB64(uvec4(aabb0)), encodeAABB64(uvec4(aabb1)));
-	s_quad_indices[out_idx] = uvec4(v0, v1, v2, v3);
+	s_quad_indices[out_idx] = uvec4(v0, v1, v2, v3 | (cull_flags << 30));
 }
 
 void addVisibleQuad(uint idx, uint local_instance_id) {
@@ -259,7 +264,8 @@ void addVisibleQuad(uint idx, uint local_instance_id) {
 	uint v0 = (s_quad_indices[LIX].x & 0x03ffffff) | ((instance_id & 0x3f) << 26);
 	uint v1 = (s_quad_indices[LIX].y & 0x03ffffff) | ((instance_id & 0xfc0) << 20);
 	uint v2 = (s_quad_indices[LIX].z & 0x03ffffff) | ((instance_id & 0x3f000) << 14);
-	uint v3 = s_quad_indices[LIX].w & 0x03ffffff;
+	uint v3 = s_quad_indices[LIX].w; // includes cull_flags
+
 	g_quad_indices[idx * 4 + 0] = v0;
 	g_quad_indices[idx * 4 + 1] = v1;
 	g_quad_indices[idx * 4 + 2] = v2;

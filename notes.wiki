@@ -1,8 +1,7 @@
 *Skupiamy się na wydajnym renderingu przezroczystości; Chcemy szybko zamknąć ten temat*
 
 Aktualne cele:
-- poprawienie bugów spowodawanych taką samą głębią geometrii
-- przeniesienie więcej kodu do wspólnych bibliotek;; poprawienie raster.shader
+- przeniesienie więcej kodu do wspólnych bibliotek; poprawienie raster.shader
 - wersja high
 - wersja micro ?
 - zaimplementowanie WB-OIT ?
@@ -10,9 +9,6 @@ Aktualne cele:
 
 - opisanie algorytmu
 - wrzucenie gdzieś do sieci
-
-Bugi: 
-- poprawny backface test
 
 -----------------------------------------------------------------------------------------
                                  === Co dalej ===

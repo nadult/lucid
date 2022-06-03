@@ -37,7 +37,7 @@ struct QuadScanlineInfo {
 	vec3 scan_min[2];
 	vec3 scan_max[2];
 	vec3 scan_step[2];
-	bool second_empty;
+	uint cull_flags;
 };
 
 void computeScanlineParams(vec3 tri0, vec3 tri1, vec3 tri2, vec2 start, out vec3 scan_min,
@@ -83,8 +83,10 @@ QuadScanlineInfo quadScanlineInfo(int quad_idx, int bsy) {
 	uint v0 = g_quad_indices[quad_idx * 4 + 0] & 0x03ffffff;
 	uint v1 = g_quad_indices[quad_idx * 4 + 1] & 0x03ffffff;
 	uint v2 = g_quad_indices[quad_idx * 4 + 2] & 0x03ffffff;
-	uint v3 = g_quad_indices[quad_idx * 4 + 3] & 0x03ffffff;
-	info.second_empty = v2 == v3;
+	uint v3 = g_quad_indices[quad_idx * 4 + 3];
+	info.cull_flags = v3 >> 30;
+	// ASSERT(info.cull_flags == 1 || info.cull_flags == 2);
+	v3 &= 0x03ffffff;
 
 	// TODO: thread divergence here; can we decrease it somehow?
 	// Best way to add separate pass for small triangles?
@@ -98,11 +100,20 @@ QuadScanlineInfo quadScanlineInfo(int quad_idx, int bsy) {
 				 frustum.ws_shared_origin;
 
 	vec2 start = vec2(0.49, bsy * BIN_SIZE + 0.49);
-	// TODO: merge these
-	computeScanlineParams(quad0, quad1, quad2, start, info.scan_min[0], info.scan_max[0],
-						  info.scan_step[0]);
-	computeScanlineParams(quad0, quad2, quad3, start, info.scan_min[1], info.scan_max[1],
-						  info.scan_step[1]);
+	if((info.cull_flags & 1) == 0)
+		computeScanlineParams(quad0, quad1, quad2, start, info.scan_min[0], info.scan_max[0],
+							  info.scan_step[0]);
+	if((info.cull_flags & 2) == 0)
+		computeScanlineParams(quad0, quad2, quad3, start, info.scan_min[1], info.scan_max[1],
+							  info.scan_step[1]);
+
+	// Making sure that if one of the triangles is culled then it's the second one
+	if(info.cull_flags == 1) {
+		info.scan_min[0] = info.scan_min[1];
+		info.scan_max[0] = info.scan_max[1];
+		info.scan_step[0] = info.scan_step[1];
+	}
+
 	return info;
 }
 
@@ -117,13 +128,14 @@ void quadScanStep(in out QuadScanlineInfo info, out int bmin, out int bmax) {
 
 	info.scan_min[0] += info.scan_step[0];
 	info.scan_max[0] += info.scan_step[0];
+
 	info.scan_min[1] += info.scan_step[1];
 	info.scan_max[1] += info.scan_step[1];
 
-	// There can be holes between two tris: exploit this? Maybe it's not worth it?
+	// There can be holes between two tris, should we exploit this? Maybe it's not worth it?
 	bmin = int(xmin[0] + 1.0);
 	bmax = int(xmax[0]);
-	if(!info.second_empty) {
+	if(info.cull_flags == 0) {
 		bmin = min(bmin, int(xmin[1] + 1.0));
 		bmax = max(bmax, int(xmax[1]));
 	}

@@ -12,8 +12,9 @@
 #define LSIZE BINNING_LSIZE
 #define LSHIFT BINNING_LSHIFT
 
-#define ITEM_STEPS 4
-#define ITEM_SIZE (LSIZE * ITEM_STEPS)
+#define SMALL_TASK_STEPS 4
+#define SMALL_TASK_SHIFT (LSHIFT + 2)
+#define SMALL_TASK_SIZE (LSIZE * SMALL_TASK_STEPS)
 
 layout(local_size_x = LSIZE) in;
 
@@ -22,6 +23,8 @@ layout(std430, binding = 2) writeonly buffer buf2_ { uint g_bin_quads[]; };
 
 layout(std430, binding = 3) readonly buffer buf3_ { uint g_quad_indices[]; };
 layout(std430, binding = 4) readonly buffer buf4_ { float g_verts[]; };
+
+layout(std430, binding = 5) buffer buf5_ { int g_tasks[]; };
 
 shared int s_bins[BIN_COUNT];
 shared int s_temp[LSIZE];
@@ -346,14 +349,16 @@ void dispatchLargeQuad(int large_quad_idx, int num_quads) {
 	}
 }
 
-shared int s_num_quads[2], s_size_type;
+shared int s_num_quads[2];
 shared int s_quads_offset, s_active_work_group_id;
-shared int s_item_id, s_num_items;
-shared int s_num_processed_items, s_num_all_items;
 
-// TODO: Zamiast tego jedna tablica w gmem?
-// TODO: 16 bits is enough for workgroup items ?
-shared int s_workgroup_items[MAX_BIN_WORKGROUP_ITEMS];
+shared int s_first_task[2], s_last_task[2], s_num_tasks[2];
+shared int s_num_finished_tasks, s_num_all_tasks;
+
+#define MAX_SMALL_TASKS (MAX_QUADS / SMALL_TASK_SIZE + 256)
+#define MAX_LARGE_TASKS (MAX_QUADS / LSIZE + 256)
+
+#define LARGE_TASKS_OFFSET MAX_SMALL_TASKS
 
 void main() {
 #ifdef ENABLE_TIMERS
@@ -362,29 +367,37 @@ void main() {
 
 	if(LIX < 2) {
 		s_num_quads[LIX] = g_info.num_visible_quads[LIX];
+		s_first_task[LIX] = -1;
+		s_last_task[LIX] = -1;
+		s_num_tasks[LIX] = 0;
 		// TODO: we can probably improve perf by dividing work more evenly
 		// Two types of quads make it a bit tricky
 		if(LIX == 0) {
-			int num_small_quads = (s_num_quads[0] + ITEM_SIZE - 1) / ITEM_SIZE;
-			int num_large_quads = (s_num_quads[1] + LSIZE - 1) / LSIZE;
-			s_num_all_items = num_small_quads + num_large_quads;
-			s_item_id = 0;
+			int num_small_tasks = (s_num_quads[0] + SMALL_TASK_SIZE - 1) / SMALL_TASK_SIZE;
+			int num_large_tasks = (s_num_quads[1] + LSIZE - 1) / LSIZE;
+			s_num_all_tasks = num_small_tasks + num_large_tasks;
 		}
 	}
 
 	for(uint i = LIX; i < BIN_COUNT; i += LSIZE)
 		s_bins[i] = 0;
-	if(LIX < BIN_COUNT_Y)
-		s_temp[LIX] = 0;
 	barrier();
 
 	// Computing large quads bin coverage
 	int num_quads = s_num_quads[1];
-	while(num_quads > 0 && s_item_id < MAX_BIN_WORKGROUP_ITEMS - 1) {
+	while(num_quads > 0) {
 		if(LIX == 0) {
 			int quads_offset = atomicAdd(g_info.num_estimated_quads[1], LSIZE);
-			if(quads_offset < num_quads)
-				s_workgroup_items[s_item_id++] = -quads_offset - 1;
+			if(quads_offset < num_quads) {
+				int task = quads_offset >> LSHIFT;
+				int last_task = s_last_task[1];
+				if(last_task == -1)
+					s_first_task[1] = task;
+				else
+					g_tasks[LARGE_TASKS_OFFSET + last_task] = task;
+				s_last_task[1] = task;
+				s_num_tasks[1]++;
+			}
 			s_quads_offset = quads_offset;
 		}
 		barrier();
@@ -405,11 +418,19 @@ void main() {
 
 	// Computing small quads bin coverage
 	num_quads = s_num_quads[0];
-	while(num_quads > 0 && s_item_id < MAX_BIN_WORKGROUP_ITEMS - 1) {
+	while(num_quads > 0) {
 		if(LIX == 0) {
-			int quads_offset = atomicAdd(g_info.num_estimated_quads[0], ITEM_SIZE);
-			if(quads_offset < num_quads)
-				s_workgroup_items[s_item_id++] = quads_offset;
+			int quads_offset = atomicAdd(g_info.num_estimated_quads[0], SMALL_TASK_SIZE);
+			if(quads_offset < num_quads) {
+				int task = quads_offset >> SMALL_TASK_SHIFT;
+				int last_task = s_last_task[0];
+				if(last_task == -1)
+					s_first_task[0] = task;
+				else
+					g_tasks[last_task] = task;
+				s_last_task[0] = task;
+				s_num_tasks[0]++;
+			}
 			s_quads_offset = quads_offset;
 		}
 		barrier();
@@ -418,7 +439,7 @@ void main() {
 		if(quad_offset >= num_quads)
 			break;
 
-		for(int s = 0; s < ITEM_STEPS; s++) {
+		for(int s = 0; s < SMALL_TASK_STEPS; s++) {
 			int quad_idx = quad_offset + (LSIZE * s) + int(LIX);
 			if(quad_idx >= num_quads)
 				break;
@@ -431,7 +452,7 @@ void main() {
 
 	// Thread groups which didn't do any estimation can quit early:
 	// they won't participate in dispatching either
-	if(s_item_id == 0)
+	if(s_num_tasks[0] + s_num_tasks[1] == 0)
 		return;
 
 	// Copying bin counters to global memory buffer
@@ -443,15 +464,14 @@ void main() {
 	// Finishing estimation phase
 	if(LIX == 0) {
 		s_active_work_group_id = atomicAdd(g_info.a_bin_dispatcher_work_groups, 1);
-		s_num_processed_items = atomicAdd(g_info.a_bin_dispatcher_items, s_item_id) + s_item_id;
-		s_num_items = s_item_id;
-		g_info.dispatcher_item_counts[s_active_work_group_id] = s_num_items;
-		s_item_id = 0;
+		int num_tasks = s_num_tasks[0] + s_num_tasks[1];
+		s_num_finished_tasks = atomicAdd(g_info.a_bin_dispatcher_items, num_tasks) + num_tasks;
+		g_info.dispatcher_task_counts[s_active_work_group_id] = num_tasks;
 	}
 	barrier();
 
 	// Last group is responsible for computing bin offsets
-	if(s_num_processed_items == s_num_all_items) {
+	if(s_num_finished_tasks == s_num_all_tasks) {
 		groupMemoryBarrier();
 		computeOffsets();
 		if(LIX == 0)
@@ -471,31 +491,38 @@ void main() {
 			s_bins[i] = atomicAdd(BIN_QUAD_OFFSETS_TEMP(i), s_bins[i]);
 	barrier();
 
-	// Dispatching quads
-	while(s_item_id < s_num_items) {
+	// Dispatching small quads
+	while(s_num_tasks[0] > 0) {
 		barrier();
 		if(LIX == 0) {
-			int quads_offset = s_workgroup_items[s_item_id++];
-			s_size_type = quads_offset < 0 ? 1 : 0;
-			s_quads_offset = quads_offset < 0 ? -quads_offset - 1 : quads_offset;
+			int task = s_first_task[0];
+			s_first_task[0] = g_tasks[task];
+			s_num_tasks[0]--;
+			s_quads_offset = task << SMALL_TASK_SHIFT;
 		}
 		barrier();
 		int quads_offset = s_quads_offset;
-		int size_type = s_size_type;
-
-		if(size_type == 0) { // Small quads
-			int num_quads = s_num_quads[0];
-			for(int s = 0; s < ITEM_STEPS; s++) {
-				int quad_idx = quads_offset + LSIZE * s + int(LIX);
-				if(quad_idx >= num_quads)
-					break;
-				dispatchQuad(quad_idx);
-			}
-		} else { // Large quads
-			int num_quads = s_num_quads[1];
-			int large_quad_idx = quads_offset + int(LIX);
-			dispatchLargeQuad(large_quad_idx, num_quads);
+		for(int s = 0; s < SMALL_TASK_STEPS; s++) {
+			int quad_idx = quads_offset + LSIZE * s + int(LIX);
+			if(quad_idx >= num_quads)
+				break;
+			dispatchQuad(quad_idx);
 		}
+	}
+
+	// Dispatching large quads
+	num_quads = s_num_quads[1];
+	while(s_num_tasks[1] > 0) {
+		barrier();
+		if(LIX == 0) {
+			int task = s_first_task[1];
+			s_first_task[1] = g_tasks[LARGE_TASKS_OFFSET + task];
+			s_num_tasks[1]--;
+			s_quads_offset = task << LSHIFT;
+		}
+		barrier();
+		int large_quad_idx = s_quads_offset + int(LIX);
+		dispatchLargeQuad(large_quad_idx, num_quads);
 	}
 	barrier();
 

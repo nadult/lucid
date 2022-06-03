@@ -46,7 +46,7 @@ struct LucidInfo {
 	uint num_rejected_quads[REJECTION_TYPE_COUNT];
 	uint timers[TIMERS_COUNT];
 
-	int dispatcher_item_counts[128];
+	int dispatcher_task_counts[128];
 	int dispatcher_timers[128];
 	int temp[17 + 64];
 };

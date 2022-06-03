@@ -121,7 +121,7 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	// TODO: max dispatches should also depend on lsize
 	// https://tinyurl.com/o7s9ph3
 	m_max_dispatches = gl_info->vendor == GlVendor::intel ? 32 : 128;
-	DASSERT(m_max_dispatches <= sizeof(shader::LucidInfo::dispatcher_item_counts) / sizeof(u32));
+	DASSERT(m_max_dispatches <= sizeof(shader::LucidInfo::dispatcher_task_counts) / sizeof(u32));
 
 	m_opts = opts;
 	m_size = view_size;
@@ -391,6 +391,7 @@ void LucidRenderer::computeBins(const Context &ctx) {
 	auto vbuffers = ctx.vao->buffers();
 	DASSERT(vbuffers.size() == 4);
 	vbuffers[0]->bindIndexAs(4, BufferType::shader_storage);
+	m_scratch_64->bindIndex(5);
 
 	PERF_CHILD_SCOPE("dispatcher phase");
 	p_bin_dispatcher.use();
@@ -608,7 +609,7 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 	};
 
 	string bin_dispatcher_info =
-		toString(span(bins.dispatcher_item_counts, bins.a_bin_dispatcher_work_groups));
+		toString(span(bins.dispatcher_task_counts, bins.a_bin_dispatcher_work_groups));
 	if(m_opts & Opt::timers) {
 		auto timers = span(bins.dispatcher_timers, bins.a_bin_dispatcher_work_groups);
 		float sum = accumulate(timers);

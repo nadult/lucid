@@ -12,7 +12,7 @@ layout(local_size_x = LSIZE) in;
 #define MAX_INSTANCES 4
 
 uniform mat4 view_proj_matrix;
-uniform int enable_backface_culling; // TODO: bool
+uniform bool enable_backface_culling;
 uniform int num_instances;
 
 // TODO: check if readonly/restrict makes a difference
@@ -149,7 +149,7 @@ void processQuad(uint quad_id, uint v0, uint v1, uint v2, uint v3, uint local_in
 	vec3 vws[4] = {vertexLoad(v0), vertexLoad(v1), vertexLoad(v2), vertexLoad(v3)};
 
 	// TODO: on conference a piece of chair disappears
-	if(enable_backface_culling != 0) {
+	if(enable_backface_culling) {
 		vec3 edge10 = vws[1] - vws[0];
 		vec3 edge20 = vws[2] - vws[0];
 		vec3 edge30 = vws[3] - vws[0];

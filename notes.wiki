@@ -1,17 +1,18 @@
 *Skupiamy się na wydajnym renderingu przezroczystości; Chcemy szybko zamknąć ten temat*
 
 Aktualne cele:
-- wersja micro ?
 - poprawienie bugów spowodawanych taką samą głębią geometrii
-- poprawienie problamów spowodowanych sliverami
+- wersja high
+- wersja micro ?
 - zaimplementowanie WB-OIT ?
+- jakieś bardziej praktyczne testy: particle, particle przecinające się z normalną geometrią
 
 - opisanie algorytmu
 - wrzucenie gdzieś do sieci
 
 Bugi: 
-- na Hairballu jak się zzoomujemy, to przez slivery możemy mieć pierdyliard bin-trisów
-- miganie na sponzie w górnej części, na powerplant przy rurach (screenshot)
+- poprawka trybu additive
+- poprawny backface test
 
 -----------------------------------------------------------------------------------------
                                  === Co dalej ===

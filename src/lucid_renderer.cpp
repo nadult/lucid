@@ -371,7 +371,7 @@ void LucidRenderer::setupQuads(const Context &ctx) {
 	m_quad_aabbs->bindIndex(5);
 	m_tri_aabbs->bindIndex(6);
 
-	p_setup["enable_backface_culling"] = ctx.config.backface_culling ? 1 : 0;
+	p_setup["enable_backface_culling"] = ctx.config.backface_culling;
 	p_setup["num_instances"] = m_num_instances;
 	p_setup["view_proj_matrix"] = m_view_proj_matrix;
 	p_setup.setFrustum(ctx.camera);

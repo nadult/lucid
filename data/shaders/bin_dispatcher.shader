@@ -1,10 +1,5 @@
 // $$include funcs frustum structures
 
-// TODO: we have to put workgroup items in GMEM: in case when there is
-// only 1 active thread-group, all items won't fit in small SMEM array
-
-// TODO: Do we want to perform rasterization here? Especially if we're dealing with slivers?
-
 #define LID gl_LocalInvocationID
 #define LIX gl_LocalInvocationIndex
 #define WGID gl_WorkGroupID
@@ -80,7 +75,6 @@ void computeScanlineParams(vec3 tri0, vec3 tri1, vec3 tri2, vec2 start, out vec3
 QuadScanlineInfo quadScanlineInfo(int quad_idx, int bsy) {
 	QuadScanlineInfo info;
 
-	// TODO: mark 2nd triangle as empty earlier?
 	uint v0 = g_quad_indices[quad_idx * 4 + 0] & 0x03ffffff;
 	uint v1 = g_quad_indices[quad_idx * 4 + 1] & 0x03ffffff;
 	uint v2 = g_quad_indices[quad_idx * 4 + 2] & 0x03ffffff;
@@ -89,8 +83,6 @@ QuadScanlineInfo quadScanlineInfo(int quad_idx, int bsy) {
 	// ASSERT(info.cull_flags == 1 || info.cull_flags == 2);
 	v3 &= 0x03ffffff;
 
-	// TODO: thread divergence here; can we decrease it somehow?
-	// Best way to add separate pass for small triangles?
 	vec3 quad0 = vec3(g_verts[v0 * 3 + 0], g_verts[v0 * 3 + 1], g_verts[v0 * 3 + 2]) -
 				 frustum.ws_shared_origin;
 	vec3 quad1 = vec3(g_verts[v1 * 3 + 0], g_verts[v1 * 3 + 1], g_verts[v1 * 3 + 2]) -
@@ -146,12 +138,12 @@ void quadScanStep(in out QuadScanlineInfo info, out int bmin, out int bmax) {
 
 int prefixSum32(int accum) {
 	int temp;
-	uint sub_id = LIX & 31;
-	temp = shuffleUpNV(accum, 1, 32), accum += sub_id >= 1 ? temp : 0;
-	temp = shuffleUpNV(accum, 2, 32), accum += sub_id >= 2 ? temp : 0;
-	temp = shuffleUpNV(accum, 4, 32), accum += sub_id >= 4 ? temp : 0;
-	temp = shuffleUpNV(accum, 8, 32), accum += sub_id >= 8 ? temp : 0;
-	temp = shuffleUpNV(accum, 16, 32), accum += sub_id >= 16 ? temp : 0;
+	uint thread_id = LIX & 31;
+	temp = shuffleUpNV(accum, 1, 32), accum += thread_id >= 1 ? temp : 0;
+	temp = shuffleUpNV(accum, 2, 32), accum += thread_id >= 2 ? temp : 0;
+	temp = shuffleUpNV(accum, 4, 32), accum += thread_id >= 4 ? temp : 0;
+	temp = shuffleUpNV(accum, 8, 32), accum += thread_id >= 8 ? temp : 0;
+	temp = shuffleUpNV(accum, 16, 32), accum += thread_id >= 16 ? temp : 0;
 	return accum;
 }
 
@@ -272,15 +264,37 @@ void dispatchQuad(int quad_idx) {
 	}
 }
 
-// TODO: better desc
-// This is an optimization of dispatchQuad which is more work efficient
-// This is especially useful if there is a large variation in quad sizes
-// and for large quads in general.
+void dispatchLargeQuadSimple(int large_quad_idx, int num_quads) {
+	if(large_quad_idx >= num_quads)
+		return;
+	int quad_idx = (MAX_QUADS - 1) - large_quad_idx;
+
+	ivec4 aabb = decodeAABB32(g_quad_aabbs[quad_idx]);
+	int bsx = aabb[0], bsy = aabb[1], bex = aabb[2], bey = aabb[3];
+	QuadScanlineInfo quad_scan_info = quadScanlineInfo(quad_idx, bsy);
+
+	for(int by = bsy; by <= bey; by++) {
+		int bmin, bmax;
+		quadScanStep(quad_scan_info, bmin, bmax);
+		bmin = max(bmin, bsx), bmax = min(bmax, bex);
+
+		for(int bx = bmin; bx <= bmax; bx++) {
+			uint bin_id = bx + by * BIN_COUNT_X;
+			uint quad_offset = atomicAdd(s_bins[bin_id], 1);
+			g_bin_quads[quad_offset] = quad_idx;
+		}
+	}
+}
+
+// This is an optimization of dispatchLargeQuadSimple which is more work efficient.
+// This is especially useful if there is a large variation in quad sizes and for
+// large quads in general.
 //
-// Basic idea: within each warp we divide quad-rows into segments which contain
-// more or less equal amount of bin-quad instances (samples in this context).
-// Each thread processes single segment.
-void dispatchLargeQuad(int large_quad_idx, int num_quads) {
+// Work balancing happens at each bin row. First we find out how many bins do we have
+// to write to and then we divide this work equally across all threads within a warp.
+// We do this by dividing those items into 32 segments and then assigning 1 segment
+// to each thread.
+void dispatchLargeQuadBalanced(int large_quad_idx, int num_quads) {
 	bool is_valid = large_quad_idx < num_quads;
 	if(allInvocationsARB(!is_valid))
 		return;
@@ -310,31 +324,31 @@ void dispatchLargeQuad(int large_quad_idx, int num_quads) {
 		int warp_num_samples = shuffleNV(sample_offset, 31, 32);
 		sample_offset -= num_samples;
 
-		int warp_offset = int(LIX & ~31), warp_sub_id = int(LIX & 31);
+		int warp_offset = int(LIX & ~31), thread_id = int(LIX & 31);
 		int segment_size = (warp_num_samples + 31) / 32;
 		int segment_id = sample_offset / segment_size;
 		int segment_offset = sample_offset - segment_id * segment_size;
 		if(num_samples > 0) {
 			if(segment_offset == 0)
-				s_temp[warp_offset + segment_id] = warp_sub_id;
+				s_temp[warp_offset + segment_id] = thread_id;
 			for(int k = 1; segment_offset + num_samples > segment_size * k; k++)
-				s_temp[warp_offset + segment_id + k] = warp_sub_id;
+				s_temp[warp_offset + segment_id + k] = thread_id;
 		}
 
-		int cur_sub_id = s_temp[LIX];
-		int cur_sample_id = warp_sub_id * segment_size;
-		int cur_offset = cur_sample_id - shuffleNV(sample_offset, cur_sub_id, 32);
+		int cur_src_thread_id = s_temp[LIX];
+		int cur_sample_id = thread_id * segment_size;
+		int cur_offset = cur_sample_id - shuffleNV(sample_offset, cur_src_thread_id, 32);
 		int cur_num_samples = min(warp_num_samples - cur_sample_id, segment_size);
+		int base_bin_id = by * BIN_COUNT_X + bmin;
 
 		int i = 0;
-		int base_bin_id = by * BIN_COUNT_X + bmin;
 		while(anyInvocationARB(i < cur_num_samples)) {
-			int cur_quad_idx = shuffleNV(quad_idx, cur_sub_id, 32);
-			int cur_bin_id = shuffleNV(base_bin_id, cur_sub_id, 32);
-			int cur_width = shuffleNV(num_samples, cur_sub_id, 32);
+			int cur_quad_idx = shuffleNV(quad_idx, cur_src_thread_id, 32);
+			int cur_bin_id = shuffleNV(base_bin_id, cur_src_thread_id, 32);
+			int cur_width = shuffleNV(num_samples, cur_src_thread_id, 32);
 
 			if(cur_width == 0) {
-				cur_sub_id++;
+				cur_src_thread_id++;
 				continue;
 			}
 			if(i < cur_num_samples) {
@@ -342,7 +356,7 @@ void dispatchLargeQuad(int large_quad_idx, int num_quads) {
 				g_bin_quads[quad_offset] = cur_quad_idx;
 				cur_offset++;
 				if(cur_offset == cur_width)
-					cur_offset = 0, cur_sub_id++;
+					cur_offset = 0, cur_src_thread_id++;
 				i++;
 			}
 		}
@@ -480,6 +494,7 @@ void main() {
 
 	// Waiting until all bin offsets are computed
 	// TODO: can we do something useful while waiting?
+	// We could run bin categorizer here ! All it needs is bin quad counts
 	if(LIX == 0)
 		while(g_info.a_bin_dispatcher_phase == 0)
 			;
@@ -522,7 +537,7 @@ void main() {
 		}
 		barrier();
 		int large_quad_idx = s_quads_offset + int(LIX);
-		dispatchLargeQuad(large_quad_idx, num_quads);
+		dispatchLargeQuadBalanced(large_quad_idx, num_quads);
 	}
 	barrier();
 

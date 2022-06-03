@@ -24,9 +24,7 @@ layout(std430, binding = 3) readonly buffer buf3_ { uint g_quad_indices[]; };
 layout(std430, binding = 4) readonly buffer buf4_ { float g_verts[]; };
 
 shared int s_bins[BIN_COUNT];
-shared int s_rows[BIN_COUNT_Y + 1];
-shared int s_segments[LSIZE]; // TODO: merge rows and segments into single array
-shared float s_inverses[BIN_COUNT_X + 1];
+shared int s_temp[LSIZE];
 
 // Constants useful for efficient processing of bin counts
 const int xbin_warps = LSIZE / BIN_COUNT_X, ybin_warps = LSIZE / BIN_COUNT_Y;
@@ -233,14 +231,14 @@ void computeOffsets() {
 	barrier();
 	// Storing accumulated bin quad counts for each row
 	if(LIX < BIN_COUNT_Y)
-		s_rows[LIX] = BIN_QUAD_OFFSETS((BIN_COUNT_X - 1) + LIX * BIN_COUNT_X);
+		s_temp[LIX] = BIN_QUAD_OFFSETS((BIN_COUNT_X - 1) + LIX * BIN_COUNT_X);
 	barrier();
 	if(LIX < BIN_COUNT_X * xbin_count) {
 		uint bx = LIX >> xbin_step;
 		int accum = 0;
 		for(uint by = 0, suby = LIX & (xbin_count - 1); by < BIN_COUNT_Y; by += xbin_count) {
 			uint idx = by + suby;
-			int cur = idx < BIN_COUNT_Y && idx > 0 ? s_rows[idx - 1] : 0, temp;
+			int cur = idx < BIN_COUNT_Y && idx > 0 ? s_temp[idx - 1] : 0, temp;
 			for(int i = 1; i < xbin_count; i <<= 1) {
 				temp = shuffleUpNV(cur, i, xbin_count);
 				cur += suby >= i ? temp : 0;
@@ -315,12 +313,12 @@ void dispatchLargeQuad(int large_quad_idx, int num_quads) {
 		int segment_offset = sample_offset - segment_id * segment_size;
 		if(num_samples > 0) {
 			if(segment_offset == 0)
-				s_segments[warp_offset + segment_id] = warp_sub_id;
+				s_temp[warp_offset + segment_id] = warp_sub_id;
 			for(int k = 1; segment_offset + num_samples > segment_size * k; k++)
-				s_segments[warp_offset + segment_id + k] = warp_sub_id;
+				s_temp[warp_offset + segment_id + k] = warp_sub_id;
 		}
 
-		int cur_sub_id = s_segments[LIX];
+		int cur_sub_id = s_temp[LIX];
 		int cur_sample_id = warp_sub_id * segment_size;
 		int cur_offset = cur_sample_id - shuffleNV(sample_offset, cur_sub_id, 32);
 		int cur_num_samples = min(warp_num_samples - cur_sample_id, segment_size);
@@ -374,12 +372,10 @@ void main() {
 		}
 	}
 
-	if(LIX < BIN_COUNT_X + 1)
-		s_inverses[LIX] = 1.0 / float(LIX);
 	for(uint i = LIX; i < BIN_COUNT; i += LSIZE)
 		s_bins[i] = 0;
 	if(LIX < BIN_COUNT_Y)
-		s_rows[LIX] = 0;
+		s_temp[LIX] = 0;
 	barrier();
 
 	// Computing large quads bin coverage

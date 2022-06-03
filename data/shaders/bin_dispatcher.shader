@@ -120,7 +120,7 @@ void quadScanStep(in out QuadScanlineInfo info, out int bmin, out int bmax) {
 	info.scan_min[1] += info.scan_step[1];
 	info.scan_max[1] += info.scan_step[1];
 
-	// There can be holes between two tris, exploit this
+	// There can be holes between two tris: exploit this? Maybe it's not worth it?
 	bmin = int(xmin[0] + 1.0);
 	bmax = int(xmax[0]);
 	if(!info.second_empty) {
@@ -259,89 +259,82 @@ void dispatchQuad(int quad_idx) {
 	}
 }
 
-void dispatchLargeQuad(int large_quad_idx) {
-	int quad_idx = (MAX_QUADS - 1) - large_quad_idx;
-
-	ivec4 aabb = decodeAABB32(g_quad_aabbs[quad_idx]);
-	int bsx = aabb[0], bsy = aabb[1], bex = aabb[2], bey = aabb[3];
-	QuadScanlineInfo quad_scan_info = quadScanlineInfo(quad_idx, bsy);
-
-	for(int by = bsy; by <= bey; by++) {
-		int bmin, bmax;
-		quadScanStep(quad_scan_info, bmin, bmax);
-		bmin = max(bmin, bsx), bmax = min(bmax, bex);
-
-		for(int bx = bmin; bx <= bmax; bx++) {
-			uint bin_id = bx + by * BIN_COUNT_X;
-			uint quad_offset = atomicAdd(s_bins[bin_id], 1);
-			g_bin_quads[quad_offset] = quad_idx;
-		}
-	}
-}
-
-/*
+// TODO: better desc
 // This is an optimization of dispatchQuad which is more work efficient
-// This is especially useful if there is large variation in quad sizes
-// and for large quads in general
+// This is especially useful if there is a large variation in quad sizes
+// and for large quads in general.
 //
-// Basic idea: within each warp we divide quads into segments which contain
+// Basic idea: within each warp we divide quad-rows into segments which contain
 // more or less equal amount of bin-quad instances (samples in this context).
 // Each thread processes single segment.
-void dispatchLargeQuad(int large_quad_idx, int num_large_quads) {
-	if(allInvocationsARB(large_quad_idx >= num_large_quads))
+void dispatchLargeQuad(int large_quad_idx, int num_quads) {
+	bool is_valid = large_quad_idx < num_quads;
+	if(allInvocationsARB(!is_valid))
 		return;
 
-	int num_samples = 0;
-	ivec4 quad_info;
+	QuadScanlineInfo quad_scan_info;
+	int quad_idx = (MAX_QUADS - 1) - large_quad_idx;
+	int bsx, bsy = 0, bex, bey = -1;
 
-	if(large_quad_idx < num_large_quads) {
-		int quad_idx = (MAX_QUADS - 1) - large_quad_idx;
-		uvec4 aabb = decodeAABB32(g_quad_aabbs[quad_idx]);
-		int width = int(aabb[2] - aabb[0] + 1), height = int(aabb[3] - aabb[1] + 1);
-		int base_offset = int(aabb[0] + aabb[1] * BIN_COUNT_X);
-		quad_info = ivec4(quad_idx, base_offset, width, height * BIN_COUNT_X);
-		num_samples = width * height;
+	if(is_valid) {
+		ivec4 aabb = decodeAABB32(g_quad_aabbs[quad_idx]);
+		bsx = aabb[0], bsy = aabb[1], bex = aabb[2], bey = aabb[3];
+		quad_scan_info = quadScanlineInfo(quad_idx, bsy);
 	}
 
-	int warp_offset = int(LIX & ~31), warp_sub_id = int(LIX & 31);
-	int sample_offset = prefixSum32(num_samples);
-	int warp_num_samples = shuffleNV(sample_offset, 31, 32);
-	sample_offset -= num_samples;
+	for(int by = bsy; anyInvocationARB(by <= bey); by++) {
+		int bmin = 0, bmax = -1;
+		if(by <= bey) {
+			quadScanStep(quad_scan_info, bmin, bmax);
+			bmin = max(bmin, bsx), bmax = min(bmax, bex);
+		}
 
-	int segment_size = (warp_num_samples + 31) / 32;
-	int segment_id = sample_offset / segment_size;
-	int segment_offset = sample_offset - segment_id * segment_size;
-	if(segment_offset == 0)
-		s_segments[warp_offset + segment_id] = warp_sub_id;
-	for(int k = 1; segment_offset + num_samples > segment_size * k; k++)
-		s_segments[warp_offset + segment_id + k] = warp_sub_id;
+		int num_samples = max(0, bmax - bmin + 1);
+		if(allInvocationsARB(num_samples == 0))
+			continue;
 
-	int cur_quad_idx = s_segments[LIX];
-	int cur_sample_id = warp_sub_id * segment_size;
-	int cur_offset = cur_sample_id - shuffleNV(sample_offset, cur_quad_idx, 32);
-	int cur_samples = warp_num_samples - cur_sample_id;
-	ivec4 cur_info = shuffleNV(quad_info, cur_quad_idx, 32);
-	int cur_y = int((cur_offset + 0.5) * s_inverses[cur_info[2]]);
-	int cur_x = cur_offset - cur_y * cur_info[2];
-	cur_y *= BIN_COUNT_X;
+		int sample_offset = prefixSum32(num_samples);
+		int warp_num_samples = shuffleNV(sample_offset, 31, 32);
+		sample_offset -= num_samples;
 
-	// TODO: somehow process 4 samples at once?
-	for(int i = 0; i < segment_size; i++) {
-		// 0:quad_idx 1:base_offset 2:width 3:height
-		ivec4 cur_info = shuffleNV(quad_info, cur_quad_idx, 32);
+		int warp_offset = int(LIX & ~31), warp_sub_id = int(LIX & 31);
+		int segment_size = (warp_num_samples + 31) / 32;
+		int segment_id = sample_offset / segment_size;
+		int segment_offset = sample_offset - segment_id * segment_size;
+		if(num_samples > 0) {
+			if(segment_offset == 0)
+				s_segments[warp_offset + segment_id] = warp_sub_id;
+			for(int k = 1; segment_offset + num_samples > segment_size * k; k++)
+				s_segments[warp_offset + segment_id + k] = warp_sub_id;
+		}
 
-		if(i < cur_samples) {
-			uint quad_offset = atomicAdd(s_bins[cur_info[1] + cur_x + cur_y], 1);
-			g_bin_quads[quad_offset] = cur_info[0];
-			cur_x++;
-			if(cur_x == cur_info[2]) {
-				cur_x = 0, cur_y += BIN_COUNT_X;
-				if(cur_y == cur_info[3])
-					cur_y = 0, cur_quad_idx++;
+		int cur_sub_id = s_segments[LIX];
+		int cur_sample_id = warp_sub_id * segment_size;
+		int cur_offset = cur_sample_id - shuffleNV(sample_offset, cur_sub_id, 32);
+		int cur_num_samples = min(warp_num_samples - cur_sample_id, segment_size);
+
+		int i = 0;
+		int base_bin_id = by * BIN_COUNT_X + bmin;
+		while(anyInvocationARB(i < cur_num_samples)) {
+			int cur_quad_idx = shuffleNV(quad_idx, cur_sub_id, 32);
+			int cur_bin_id = shuffleNV(base_bin_id, cur_sub_id, 32);
+			int cur_width = shuffleNV(num_samples, cur_sub_id, 32);
+
+			if(cur_width == 0) {
+				cur_sub_id++;
+				continue;
+			}
+			if(i < cur_num_samples) {
+				uint quad_offset = atomicAdd(s_bins[cur_bin_id + cur_offset], 1);
+				g_bin_quads[quad_offset] = cur_quad_idx;
+				cur_offset++;
+				if(cur_offset == cur_width)
+					cur_offset = 0, cur_sub_id++;
+				i++;
 			}
 		}
 	}
-}*/
+}
 
 shared int s_num_quads[2], s_size_type;
 shared int s_quads_offset, s_active_work_group_id;
@@ -493,8 +486,7 @@ void main() {
 		} else { // Large quads
 			int num_quads = s_num_quads[1];
 			int large_quad_idx = quads_offset + int(LIX);
-			if(large_quad_idx < num_quads)
-				dispatchLargeQuad(large_quad_idx);
+			dispatchLargeQuad(large_quad_idx, num_quads);
 		}
 	}
 	barrier();

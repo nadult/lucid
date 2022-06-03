@@ -245,13 +245,28 @@ san-miguel: 8948   956    193   2542        5109
              total  setup  bins  raster_low  raster_mid
     #boxes: 1506   25     36    1389        4           
      bunny: 372    29     29    261         4
-conference: 1381   45     216   990         4           (+170)
-    dragon: 948    136    51    523         196         (-20)
+conference: 1381   45     216   990         4           +170
+    dragon: 948    136    51    523         196         -20
    gallery: 2921   184    68    2039        455
-  hairball: 12371  547    302   362         11069       (-140)
-powerplant: 11604  1528   339   911         8712        (-1000)
-san-miguel: 8765   956    214   2466        4985        (-190)
+  hairball: 12371  547    302   362         11069       -140
+powerplant: 11604  1528   339   911         8712        -1000
+san-miguel: 8765   956    214   2466        4985        -190
  scrubPine: 586    13     49    476         5
-    sponza: 3867   61     217   3343        102         (+70)
+    sponza: 3867   61     217   3343        102         +70
     teapot: 401    25     32    296         5
- white_oak: 13132  25     380   12471       5           (-500)
+ white_oak: 13132  25     380   12471       5           -500
+
+ work-balancing in bin_dispatcher:                     improved bins:
+            total  setup  bins  raster_low  raster_mid
+    #boxes: 1521   25     39    1401        4
+     bunny: 371    29     29    262         4
+conference: 1252   45     76    1000        5           -140
+    dragon: 961    137    51    526         197
+   gallery: 2940   182    70    2047        453
+  hairball: 12474  546    309   369         11087
+powerplant: 11760  1526   346   903         8820        +8
+san-miguel: 8886   964    179   2520        5040        -30
+ scrubPine: 586    13     54    472         5           +5
+    sponza: 3759   61     96    3331        100         -115
+    teapot: 389    24     31    291         5
+ white_oak: 12660  23     155   12347       4           -235

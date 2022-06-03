@@ -12,7 +12,7 @@ layout(local_size_x = LSIZE) in;
 #define MAX_INSTANCES 4
 
 uniform mat4 view_proj_matrix;
-uniform int enable_backface_culling;
+uniform int enable_backface_culling; // TODO: bool
 uniform int num_instances;
 
 // TODO: check if readonly/restrict makes a difference
@@ -159,6 +159,7 @@ void processQuad(uint quad_id, uint v0, uint v1, uint v2, uint v3, uint local_in
 
 		// TODO: what about orthogonal projection?
 		// TODO: is this really a good way to back-face cull?
+		// TODO: do this per triangle
 		if(dot(nrm1, point) < 0.0 && ((v3 == v2) || dot(nrm2, point) <= 0.0)) {
 			atomicAdd(s_rejected_quads[REJECTION_TYPE_BACKFACE], 1);
 			return;

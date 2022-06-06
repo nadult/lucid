@@ -2,6 +2,7 @@
 
 Aktualne cele:
 - przeniesienie więcej kodu do wspólnych bibliotek; poprawienie raster.shader
+- precomputowanie danych dużych trisów (max 1M)
 - wersja high
 - wersja micro ?
 - zaimplementowanie WB-OIT ?

@@ -44,7 +44,8 @@ class LucidRenderer {
 
 	void setupQuads(const Context &);
 	void computeBins(const Context &);
-	void bindRaster(const Context &);
+	void bindRasterCommon(const Context &);
+	void bindRaster(Program &, const Context &);
 	void rasterLow(const Context &);
 	void rasterMedium(const Context &);
 	void compose(const Context &);

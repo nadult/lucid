@@ -103,6 +103,11 @@ void setupView(const IRect &viewport, PFramebuffer fbo) {
 LucidRenderer::LucidRenderer() = default;
 FWK_MOVABLE_CLASS_IMPL(LucidRenderer)
 
+void setLocalSize(ShaderDefs &defs, int lsize) {
+	defs["LSIZE"] = lsize;
+	defs["LSHIFT"] = (int)log2(lsize);
+}
+
 Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	m_bin_size = opts & Opt::bin_size_32 ? 32 : 64;
 	m_tile_size = opts & Opt::bin_size_32 ? 8 : 16;
@@ -172,24 +177,22 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	defs["TILES_PER_BIN"] = m_tiles_per_bin;
 	defs["BLOCKS_PER_TILE"] = m_blocks_per_tile;
 	defs["BLOCKS_PER_BIN"] = m_blocks_per_bin;
-	defs["RASTER_LSIZE_LOW"] = raster_lsize_low;
-	defs["RASTER_LSIZE_MEDIUM"] = raster_lsize_medium;
 	defs["MAX_INSTANCE_QUADS"] = max_instance_quads;
 	defs["MAX_QUADS"] = max_quads;
 
 	defs["MAX_DISPATCHES"] = m_max_dispatches;
 	defs["MAX_BIN_WORKGROUP_ITEMS"] = max_bin_workgroup_items;
-
-	int binning_lsize = m_bin_size == 64 ? 512 : 1024;
-	defs["BINNING_LSIZE"] = binning_lsize;
-	defs["BINNING_LSHIFT"] = log2(binning_lsize);
+	int bin_dispatcher_lsize = m_bin_size == 64 ? 512 : 1024;
 
 	p_init_counters = EX_PASS(Program::makeCompute("init_counters", defs));
+
+	defs["BIN_DISPATCHER_BATCH_SIZE"] = bin_dispatcher_lsize;
 	p_quad_setup = EX_PASS(Program::makeCompute("quad_setup", defs));
 	p_bin_categorizer = EX_PASS(Program::makeCompute("bin_categorizer", defs));
 
 	if(m_opts & Opt::timers)
 		defs["ENABLE_TIMERS"] = 1;
+	setLocalSize(defs, bin_dispatcher_lsize);
 	p_bin_dispatcher = EX_PASS(Program::makeCompute(
 		"bin_dispatcher", defs, mask(m_opts & Opt::debug_bin_dispatcher, ProgramOpt::debug)));
 
@@ -200,12 +203,15 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	if(m_opts & Opt::alpha_threshold)
 		defs["ALPHA_THRESHOLD"] = 1;
 
-	p_raster_low = EX_PASS(Program::makeCompute(
-		"raster_low", defs, mask(m_opts & Opt::debug_raster, ProgramOpt::debug)));
-	p_raster_medium = EX_PASS(Program::makeCompute(
-		"raster_medium", defs, mask(m_opts & Opt::debug_raster, ProgramOpt::debug)));
+	auto raster_opts = mask(m_opts & Opt::debug_raster, ProgramOpt::debug);
+	setLocalSize(defs, raster_lsize_low);
+	p_raster_low = EX_PASS(Program::makeCompute("raster_low", defs, raster_opts));
+	setLocalSize(defs, raster_lsize_medium);
+	p_raster_medium = EX_PASS(Program::makeCompute("raster_medium", defs, raster_opts));
 
 	mkdirRecursive("temp").ignore();
+	if(auto disas = p_bin_dispatcher.getDisassembly())
+		saveFile("temp/bin_dispatcher.asm", *disas).ignore();
 	if(auto disas = p_raster_low.getDisassembly())
 		saveFile("temp/raster_low.asm", *disas).ignore();
 	if(auto disas = p_raster_medium.getDisassembly())
@@ -272,7 +278,7 @@ void LucidRenderer::render(const Context &ctx) {
 	if(false)
 		dummyIterateBins(ctx);
 
-	bindRaster(ctx);
+	bindRasterCommon(ctx);
 	rasterLow(ctx);
 	rasterMedium(ctx);
 	copyInfo();
@@ -419,7 +425,7 @@ void LucidRenderer::dummyIterateBins(const Context &ctx) {
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 }
 
-void LucidRenderer::bindRaster(const Context &ctx) {
+void LucidRenderer::bindRasterCommon(const Context &ctx) {
 	m_info->bindIndex(0);
 
 	m_tri_aabbs->bindIndex(1);
@@ -441,22 +447,23 @@ void LucidRenderer::bindRaster(const Context &ctx) {
 	m_uv_rects->bindIndex(12);
 	m_raster_image->bindIndex(13); // TODO: too many bindings
 }
-
-void LucidRenderer::rasterLow(const Context &ctx) {
-	PERF_GPU_SCOPE();
-
-	p_raster_low.use();
+void LucidRenderer::bindRaster(Program &program, const Context &ctx) {
+	program.use();
 
 	GlTexture::bind({ctx.opaque_tex, ctx.trans_tex});
 	//GlTexture::bind({ctx.depth_buffer, ctx.shadows.map});
 
-	ctx.lighting.setUniforms(p_raster_low.glProgram());
-	p_raster_low.setFrustum(ctx.camera);
-	p_raster_low.setViewport(ctx.camera, m_size);
-	p_raster_low.setShadows(ctx.shadows.matrix, ctx.shadows.enable);
-	p_raster_low["background_color"] = u32(ctx.config.background_color);
-	ctx.lighting.setUniforms(p_raster_low.glProgram());
+	ctx.lighting.setUniforms(program.glProgram());
+	program.setFrustum(ctx.camera);
+	program.setViewport(ctx.camera, m_size);
+	program.setShadows(ctx.shadows.matrix, ctx.shadows.enable);
+	program["background_color"] = u32(ctx.config.background_color);
+	ctx.lighting.setUniforms(program.glProgram());
+}
 
+void LucidRenderer::rasterLow(const Context &ctx) {
+	PERF_GPU_SCOPE();
+	bindRaster(p_raster_low, ctx);
 	if(m_opts & Opt::debug_raster)
 		dispatchAndDebugProgram(p_raster_low, m_max_dispatches, raster_lsize_low);
 	else
@@ -466,21 +473,9 @@ void LucidRenderer::rasterLow(const Context &ctx) {
 
 void LucidRenderer::rasterMedium(const Context &ctx) {
 	PERF_GPU_SCOPE();
-
-	p_raster_medium.use();
-
-	GlTexture::bind({ctx.opaque_tex, ctx.trans_tex});
-	//GlTexture::bind({ctx.depth_buffer, ctx.shadows.map});
-
-	ctx.lighting.setUniforms(p_raster_medium.glProgram());
-	p_raster_medium.setFrustum(ctx.camera);
-	p_raster_medium.setViewport(ctx.camera, m_size);
-	p_raster_medium.setShadows(ctx.shadows.matrix, ctx.shadows.enable);
-	p_raster_medium["background_color"] = u32(ctx.config.background_color);
-	ctx.lighting.setUniforms(p_raster_medium.glProgram());
-
+	bindRaster(p_raster_medium, ctx);
 	if(m_opts & Opt::debug_raster)
-		dispatchAndDebugProgram(p_raster_low, m_max_dispatches, raster_lsize_medium);
+		dispatchAndDebugProgram(p_raster_medium, m_max_dispatches, raster_lsize_medium);
 	else
 		dispatchIndirect(LUCID_INFO_MEMBER_OFFSET(bin_level_dispatches[BIN_LEVEL_MEDIUM]));
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);

@@ -1,12 +1,10 @@
 // $$include funcs lighting frustum viewport raster
+// LSIZE & LSHIFT predefined
 
 // TODO: add synthetic test: 256 planes one after another
 // TODO: cleanup in the beginning (group definitions)
 
 // NOTE: converting integer multiplications to shifts does not increase perf
-
-// Acceptable values: 128, 256, 512
-#define LSIZE RASTER_LSIZE_LOW
 
 #define NUM_WARPS (LSIZE / 32)
 

@@ -20,7 +20,7 @@ struct InstanceData {
 #define TIMERS_COUNT 8
 
 // This structure contains all the necessary counters, atomics, etc.
-// In shader code it's available as g_info; In the same buffer after
+// In shader code it's available as g_info; In the same SSBO just after
 // this structure some basic per-bin counters are also kept (g_counts)
 // TODO: consistent naming (count or num)
 struct LucidInfo {

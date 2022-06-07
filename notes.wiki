@@ -2,6 +2,8 @@
 
 Aktualne cele:
 - przeniesienie więcej kodu do wspólnych bibliotek; poprawienie raster.shader
+- load balancing w raster_low: jak mamy 512 wątków, to możemy od razu wygenerować wszystkie segmenty
+  i jak warp skończy przetwarzać jeden segment to może się przełączyć na kolejny
 - precomputowanie danych dużych trisów (max 1M)
 - wersja high
 - wersja micro ?

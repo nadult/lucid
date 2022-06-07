@@ -75,11 +75,14 @@ uint scratch64HBlockRowTrisOffset(uint hby) {
 		   (hby & HBLOCK_ROWS_STEP_MASK) * MAX_SCRATCH_TRIS;
 }
 
-uint scratch64HBlockTrisOffset1(uint lhbid) {
+uint scratch64HBlockTrisOffset(uint lhbid) {
 	return (gl_WorkGroupID.x << WORKGROUP_64_SCRATCH_SHIFT) + 96 * 1024 + lhbid * MAX_HBLOCK_TRIS;
 }
 
-uint scratch64HBlockTrisOffset2(uint lhbid) {
+// TODO: Once we've generated HBlock-tris we no longer need current HBlock-row-tris, so sorted HBlocks
+// overlap hblock-row-tris memory. But it only works in 32x32, in 64x64 with large amount of tris
+// we might be generating half hblock-row at a time...
+uint scratch64SortedHBlockTrisOffset(uint lhbid) {
 	return (gl_WorkGroupID.x << WORKGROUP_64_SCRATCH_SHIFT) + 112 * 1024 + lhbid * MAX_HBLOCK_TRIS;
 }
 
@@ -486,7 +489,7 @@ void generateHBlocks(uint start_hbid) {
 		barrier();
 	}
 
-	uint dst_offset_64 = scratch64HBlockTrisOffset1(lhbid);
+	uint dst_offset_64 = scratch64HBlockTrisOffset(lhbid);
 	tri_count = s_hblock_tri_counts[lhbid];
 	int startx = int(hbx << 3);
 
@@ -560,8 +563,8 @@ void generateHBlocks(uint start_hbid) {
 	}
 	barrier();
 
-	// Computing prefix sum across whole blocks (at most 8 * 32 elements)
-	// TODO: this will get more complicated when we're processing more than 256 elements/hblock
+	// Computing prefix sum across whole blocks
+	// Can handle at most wgsize * 32 elements (from 256 to 1024)
 	if(LIX < 8 * NUM_WARPS) {
 		uint wgsize = 8 << group_shift, wgmask = wgsize - 1;
 		uint group_hbid = LIX >> (3 + group_shift), group_sub_idx = LIX & wgmask;
@@ -596,7 +599,7 @@ void generateHBlocks(uint start_hbid) {
 	// Storing triangle fragment offsets to scratch mem
 	// Also finding first triangle for each segment
 	src_offset_64 = dst_offset_64;
-	dst_offset_64 = scratch64HBlockTrisOffset2(lhbid);
+	dst_offset_64 = scratch64SortedHBlockTrisOffset(lhbid);
 	uint seg_block_offset = lhbid << MAX_SEGMENTS_SHIFT;
 	for(uint i = group_thread; i < tri_count; i += group_size) {
 		uint tri_offset = 0;
@@ -652,7 +655,7 @@ void loadSamples(uint hbid, int segment_id) {
 	uint seg_group_offset = lhbid << MAX_SEGMENTS_SHIFT;
 	uint segment_data = s_segments[seg_group_offset + segment_id];
 	uint tri_count = segment_data >> 16, first_tri = segment_data & 0xffff;
-	uint src_offset_64 = scratch64HBlockTrisOffset2(lhbid) + first_tri;
+	uint src_offset_64 = scratch64SortedHBlockTrisOffset(lhbid) + first_tri;
 
 	int y = int(LIX & 3);
 	uint count_shift = 16 + (y << 2), min_shift = (y << 1) + y;
@@ -937,7 +940,7 @@ void finishVisualizeSamples(ivec2 pixel_pos) {
 void visualizeAllSamples(uint hbid) {
 	uint lhbid = hbid & (NUM_WARPS - 1);
 	uint tri_count = s_hblock_tri_counts[lhbid];
-	uint src_offset_64 = scratch64HBlockTrisOffset2(lhbid);
+	uint src_offset_64 = scratch64SortedHBlockTrisOffset(lhbid);
 
 	int y = int(LIX & 3);
 	uint count_shift = 16 + (y << 2), min_shift = (y << 1) + y;
@@ -1022,6 +1025,7 @@ void rasterBin(int bin_id) {
 			for(int i = 0; i < s_hblock_group_size; i++)
 				generateHBlocks(start_hby * HBLOCK_COLS + step * i);
 		}
+		groupMemoryBarrier();
 		barrier();
 		finalizeSegments();
 		barrier();

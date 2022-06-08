@@ -56,7 +56,7 @@ class LucidRenderer {
 	// performance of simple constructs
 	void dummyIterateBins(const Context &);
 
-	void dispatchAndDebugProgram(Program &, int gsize, int lsize);
+	void debugProgram(Program &, ZStr title);
 
 	Opts m_opts;
 

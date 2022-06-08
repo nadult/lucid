@@ -243,18 +243,11 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	return {};
 }
 
-void LucidRenderer::dispatchAndDebugProgram(Program &program, int gsize, int lsize) {
-	program.use();
-	shaderDebugUseBuffer(m_errors);
-	glDispatchCompute(gsize, 1, 1);
+void LucidRenderer::debugProgram(Program &program, ZStr name) {
 	auto source_ranges = program.sourceRanges();
-	auto records = shaderDebugRecords(m_errors, {lsize, 1, 1}, {gsize, 1, 1}, 256, source_ranges);
-	if(records) {
-		makeSorted(records);
-		print("TODO:name messages:\n");
-		for(auto &record : records)
-			print("%\n", record);
-	}
+	ShaderDebugInfo records(m_errors, 1024, source_ranges);
+	if(records)
+		print("% debug records: %\n", name, records);
 }
 
 static void dispatchIndirect(int bin_counters_offset) {
@@ -404,10 +397,11 @@ void LucidRenderer::computeBins(const Context &ctx) {
 	p_bin_dispatcher.setFrustum(ctx.camera);
 
 	if(m_opts & Opt::debug_bin_dispatcher)
-		dispatchAndDebugProgram(p_bin_dispatcher, m_max_dispatches, m_bin_size == 64 ? 512 : 1024);
-	else
-		dispatchIndirect(LUCID_INFO_MEMBER_OFFSET(num_binning_dispatches));
+		shaderDebugUseBuffer(m_errors);
+	dispatchIndirect(LUCID_INFO_MEMBER_OFFSET(num_binning_dispatches));
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+	if(m_opts & Opt::debug_bin_dispatcher)
+		debugProgram(p_bin_dispatcher, "bin_dispatcher");
 
 	PERF_SIBLING_SCOPE("categorizer phase");
 	p_bin_categorizer.use();
@@ -465,9 +459,10 @@ void LucidRenderer::rasterLow(const Context &ctx) {
 	PERF_GPU_SCOPE();
 	bindRaster(p_raster_low, ctx);
 	if(m_opts & Opt::debug_raster)
-		dispatchAndDebugProgram(p_raster_low, m_max_dispatches, raster_lsize_low);
-	else
-		dispatchIndirect(LUCID_INFO_MEMBER_OFFSET(bin_level_dispatches[BIN_LEVEL_LOW]));
+		shaderDebugUseBuffer(m_errors);
+	dispatchIndirect(LUCID_INFO_MEMBER_OFFSET(bin_level_dispatches[BIN_LEVEL_LOW]));
+	if(m_opts & Opt::debug_raster)
+		debugProgram(p_raster_low, "raster_low");
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_COMMAND_BARRIER_BIT);
 }
 
@@ -475,9 +470,10 @@ void LucidRenderer::rasterMedium(const Context &ctx) {
 	PERF_GPU_SCOPE();
 	bindRaster(p_raster_medium, ctx);
 	if(m_opts & Opt::debug_raster)
-		dispatchAndDebugProgram(p_raster_medium, m_max_dispatches, raster_lsize_medium);
-	else
-		dispatchIndirect(LUCID_INFO_MEMBER_OFFSET(bin_level_dispatches[BIN_LEVEL_MEDIUM]));
+		shaderDebugUseBuffer(m_errors);
+	dispatchIndirect(LUCID_INFO_MEMBER_OFFSET(bin_level_dispatches[BIN_LEVEL_MEDIUM]));
+	if(m_opts & Opt::debug_raster)
+		debugProgram(p_raster_medium, "raster_medium");
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 }
 

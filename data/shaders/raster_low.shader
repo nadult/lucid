@@ -47,7 +47,7 @@ layout(local_size_x = LSIZE) in;
 #define WORKGROUP_64_SCRATCH_SIZE (64 * 1024)
 #define WORKGROUP_64_SCRATCH_SHIFT 16
 
-#define TRI_SCRATCH(var_idx) g_tri_storage[var_idx * (MAX_VISIBLE_QUADS * 2) + scratch_tri_idx]
+#define TRI_SCRATCH(var_idx) g_tri_storage[scratch_tri_idx * 16 + var_idx]
 
 uint scratch64BlockRowTrisOffset(uint by) {
 	return (gl_WorkGroupID.x << WORKGROUP_64_SCRATCH_SHIFT) + by * (MAX_BLOCK_ROW_TRIS * 2);

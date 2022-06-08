@@ -262,7 +262,7 @@ void processQuad(uint quad_id, uint v0, uint v1, uint v2, uint v3, uint local_in
 	s_quad_indices[out_idx] = uvec4(v0, v1, v2, v3 | (cull_flags << 30));
 }
 
-#define TRI_SCRATCH(var_idx) g_tri_storage[var_idx * (MAX_VISIBLE_QUADS * 2) + scratch_tri_idx]
+#define TRI_SCRATCH(var_idx) g_tri_storage[scratch_tri_idx * 16 + var_idx]
 
 void storeTri(uint scratch_tri_idx, uint instance_id, uint v0, uint v1, uint v2) {
 	vec3 tri0 = vertexLoad(v0) - frustum.ws_shared_origin;

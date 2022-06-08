@@ -25,6 +25,7 @@
 
 #define SEGMENT_SIZE 256
 #define SEGMENT_SHIFT 8
+#define INVALID_SEGMENT 0xffff
 
 #define MAX_SEGMENTS_SHIFT 6
 #define MAX_SEGMENTS 64
@@ -623,12 +624,13 @@ void generateHBlocks(uint start_hbid) {
 			atomicOr(s_raster_error, 1 << lhbid);
 			break;
 		}
+		seg_offset <<= 24;
 		if(first_seg && tri_value > 0)
-			s_segments[seg_block_offset + seg_id] = i + 1;
+			s_segments[seg_block_offset + seg_id] = i | seg_offset;
 
 		uvec2 tri_data = g_scratch_64[src_offset_64 + block_tri_idx];
 		uint tri_idx = tri_data.y & 0xffff;
-		g_scratch_64[dst_offset_64 + i] = uvec2(tri_idx | (tri_offset << 16), tri_data.x);
+		g_scratch_64[dst_offset_64 + i] = uvec2(tri_idx | seg_offset, tri_data.x);
 	}
 	barrier();
 }
@@ -636,17 +638,18 @@ void generateHBlocks(uint start_hbid) {
 void finalizeSegments() {
 	uint lhbid = LIX >> 5, seg_group_offset = lhbid << MAX_SEGMENTS_SHIFT;
 	uint tri_count = s_hblock_tri_counts[lhbid];
+	uint num_segments = (s_hblock_frag_counts[lhbid] + SEGMENT_SIZE - 1) >> SEGMENT_SHIFT;
+	// TODO: make sure that num_segments <= MAX_SEGMENTS
 
-	for(uint seg_id = LIX & WARP_MASK; seg_id < MAX_SEGMENTS; seg_id += WARP_SIZE) {
+	for(uint seg_id = LIX & WARP_MASK; seg_id < num_segments; seg_id += WARP_SIZE) {
 		uint cur_value = s_segments[seg_group_offset + seg_id];
-		if(cur_value == 0)
-			break;
-
+		cur_value &= 0xffffff;
 		uint next_value =
-			seg_id + 1 == MAX_SEGMENTS ? 0 : s_segments[seg_group_offset + seg_id + 1];
-		next_value = next_value == 0 ? tri_count : min(tri_count, next_value);
-		uint seg_tri_count = next_value - (cur_value - 1);
-		s_segments[seg_group_offset + seg_id] = (cur_value - 1) | (seg_tri_count << 16);
+			seg_id + 1 < num_segments ? s_segments[seg_group_offset + seg_id + 1] : tri_count;
+		bool next_tri_overlaps = next_value > 0xffffff;
+		next_value &= 0xffffff;
+		uint seg_tri_count = next_value - cur_value + (next_tri_overlaps ? 1 : 0);
+		s_segments[seg_group_offset + seg_id] = cur_value | (seg_tri_count << 16);
 	}
 }
 
@@ -657,16 +660,18 @@ void loadSamples(uint hbid, int segment_id) {
 	uint tri_count = segment_data >> 16, first_tri = segment_data & 0xffff;
 	uint src_offset_64 = scratch64SortedHBlockTrisOffset(lhbid) + first_tri;
 
+	// TODO: we can use 4,2,1 threads per tri depending on tri_count
 	int y = int(LIX & 3);
 	uint count_shift = 16 + (y << 2), min_shift = (y << 1) + y;
 	int mask1 = y >= 1 ? ~0 : 0, mask2 = y >= 2 ? ~0 : 0;
-	int first_offset = segment_id << SEGMENT_SHIFT;
 	uint buf_offset = (LIX >> 5) << SEGMENT_SHIFT;
 
 	// TODO: group differently for better memory accesses (and measure)
 	for(uint i = (LIX & WARP_MASK) >> 2; i < tri_count; i += WARP_STEP / 4) {
 		uvec2 tri_data = g_scratch_64[src_offset_64 + i];
-		int tri_offset = int(tri_data.x >> 16) - first_offset;
+		int tri_offset = int(tri_data.x >> 24);
+		if(i == 0 && tri_offset != 0)
+			tri_offset -= SEGMENT_SIZE;
 		uint tri_idx = tri_data.x & 0xffff;
 
 		int minx = int((tri_data.y >> min_shift) & 7);
@@ -1017,8 +1022,8 @@ void rasterBin(int bin_id) {
 		groupMemoryBarrier();
 		barrier();
 		UPDATE_CLOCK(0);
-		s_segments[LIX] = 0;
-		s_segments[LSIZE + LIX] = 0;
+		s_segments[LIX] = INVALID_SEGMENT;
+		s_segments[LSIZE + LIX] = INVALID_SEGMENT;
 
 		if(s_raster_error == 0) {
 			int step = NUM_WARPS >> s_hblock_group_shift;

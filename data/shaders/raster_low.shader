@@ -23,6 +23,8 @@
 #define SEGMENT_SIZE 256
 #define SEGMENT_SHIFT 8
 
+#define INVALID_SEGMENT 0xffff
+
 #define MAX_SEGMENTS_SHIFT 5
 #define MAX_SEGMENTS WARP_STEP
 
@@ -408,8 +410,8 @@ void generateBlocks(uint bid) {
 	uint tri_count = s_block_row_tri_count[by];
 	uint buf_offset = lbid << MAX_BLOCK_TRIS_SHIFT;
 
-	s_segments[LIX] = 0;
-	s_segments[LIX + LSIZE] = 0;
+	s_segments[LIX] = INVALID_SEGMENT;
+	s_segments[LIX + LSIZE] = INVALID_SEGMENT;
 
 	{
 		uint bx_bits_shift = 24 + bx;
@@ -549,8 +551,8 @@ void generateBlocks(uint bid) {
 		uint value = 0;
 
 		if(warp_offset < tri_count) {
-			uint tri_idx = min(warp_offset + 31, tri_count - 1);
-			value = s_buffer[buf_offset + tri_idx];
+			uint block_tri_idx = min(warp_offset + 31, tri_count - 1);
+			value = s_buffer[buf_offset + block_tri_idx];
 		}
 		value = (value & 0xfff) | ((value & 0xfff000) << 4);
 		uint sum = value, temp;
@@ -587,7 +589,7 @@ void generateBlocks(uint bid) {
 		}
 
 		uint tri_value = s_buffer[buf_offset + i];
-		uint tile_tri_idx = tri_value >> 24;
+		uint block_tri_idx = tri_value >> 24;
 		tri_value = (tri_value & 0xfff) | ((tri_value & 0xfff000) << 4);
 		tri_value = (tri_value + s_mini_buffer[(lbid << 3) + (i >> 5)]) - tri_offset;
 
@@ -604,54 +606,56 @@ void generateBlocks(uint bid) {
 			seg_id0++, first_seg0 = true;
 		if(seg_offset1 + tri_value1 > SEGMENT_SIZE)
 			seg_id1++, first_seg1 = true;
+		seg_offset0 <<= 24;
+		seg_offset1 <<= 24;
 
 		if(first_seg0 && tri_value0 > 0)
-			s_segments[seg_block1_offset + seg_id0] = i + 1;
+			s_segments[seg_block1_offset + seg_id0] = i | seg_offset0;
 		if(first_seg1 && tri_value1 > 0)
-			s_segments[seg_block2_offset + seg_id1] = i + 1;
+			s_segments[seg_block2_offset + seg_id1] = i | seg_offset1;
 
-		uint tri_idx = g_scratch_32[src_offset_32 + tile_tri_idx] & 0xffff;
-		uvec2 tri_data = g_scratch_64[src_offset_64 + tile_tri_idx];
-		g_scratch_64[dst_offset_64 + i] = uvec2(tri_idx | (tri_offset0 << 16), tri_data.x);
-		g_scratch_64[dst_offset_64 + i + MAX_BLOCK_TRIS] =
-			uvec2(tri_idx | (tri_offset1 << 16), tri_data.y);
+		uint tri_idx = g_scratch_32[src_offset_32 + block_tri_idx] & 0xffff;
+		uvec2 tri_data = g_scratch_64[src_offset_64 + block_tri_idx];
+		g_scratch_64[dst_offset_64 + i] = uvec2(tri_idx | seg_offset0, tri_data.x);
+		g_scratch_64[dst_offset_64 + i + MAX_BLOCK_TRIS] = uvec2(tri_idx | seg_offset1, tri_data.y);
 	}
-	barrier();
-	{
-		uint hbid = LIX >> 4, seg_group_offset = hbid << MAX_SEGMENTS_SHIFT;
-		uint counts = s_hblock_counts[hbid] & 0xffff;
-		uint tri_count = counts & 0xffff;
+}
 
-		for(uint seg_id = LIX & 15; seg_id < MAX_SEGMENTS; seg_id += 16) {
-			uint cur_value = s_segments[seg_group_offset + seg_id];
-			if(cur_value == 0)
-				break;
+void finalizeSegments() {
+	uint hbid = LIX >> 4, seg_group_offset = hbid << MAX_SEGMENTS_SHIFT;
+	uint counts = s_hblock_counts[hbid];
+	uint num_segments = ((counts >> 16) + SEGMENT_SIZE - 1) >> SEGMENT_SHIFT;
+	uint tri_count = counts & 0xffff;
 
-			uint next_value =
-				seg_id + 1 == MAX_SEGMENTS ? 0 : s_segments[seg_group_offset + seg_id + 1];
-			next_value = next_value == 0 ? tri_count : min(tri_count, next_value);
-			uint seg_tri_count = next_value - (cur_value - 1);
-			s_segments[seg_group_offset + seg_id] = (cur_value - 1) | (seg_tri_count << 8);
-		}
+	for(uint seg_id = LIX & 15; seg_id < num_segments; seg_id += 16) {
+		uint cur_value = s_segments[seg_group_offset + seg_id];
+		cur_value &= 0xffffff;
+		uint next_value =
+			seg_id + 1 < num_segments ? s_segments[seg_group_offset + seg_id + 1] : tri_count;
+		bool next_tri_overlaps = next_value > 0xffffff;
+		next_value &= 0xffffff;
+		uint seg_tri_count = next_value - cur_value + (next_tri_overlaps ? 1 : 0);
+		s_segments[seg_group_offset + seg_id] = cur_value | (seg_tri_count << 16);
 	}
 }
 
 void loadSamples(uint hbid, int segment_id) {
 	uint seg_group_offset = (hbid & (NUM_WARPS * 2 - 1)) << MAX_SEGMENTS_SHIFT;
 	uint segment_data = s_segments[seg_group_offset + segment_id];
-	uint tri_count = segment_data >> 8, first_tri = segment_data & 0xff;
+	uint tri_count = segment_data >> 16, first_tri = segment_data & 0xffff;
 	uint src_offset_64 = scratch64HalfBlockTrisOffset(hbid & (NUM_WARPS * 2 - 1)) + first_tri;
 
 	int y = int(LIX & 3);
 	uint count_shift = 16 + (y << 2), min_shift = (y << 1) + y;
 	int mask1 = y >= 1 ? ~0 : 0, mask2 = y >= 2 ? ~0 : 0;
-	int first_offset = segment_id << SEGMENT_SHIFT;
 	uint buf_offset = (LIX >> 5) << SEGMENT_SHIFT;
 
 	// TODO: group differently for better memory accesses (and measure)
 	for(uint i = (LIX & WARP_MASK) >> 2; i < tri_count; i += WARP_STEP / 4) {
 		uvec2 tri_data = g_scratch_64[src_offset_64 + i];
-		int tri_offset = int(tri_data.x >> 16) - first_offset;
+		int tri_offset = int(tri_data.x >> 24);
+		if(i == 0 && tri_offset != 0)
+			tri_offset -= SEGMENT_SIZE;
 		uint tri_idx = tri_data.x & 0xfff;
 
 		int minx = int((tri_data.y >> min_shift) & 7);
@@ -671,7 +675,7 @@ void loadSamples(uint hbid, int segment_id) {
 
 		uint scratch_tri_offset = scratch64TriOffset(tri_idx);
 		uint pixel_id = (y << 3) | minx;
-		uint value = pixel_id | (scratch_tri_offset << 8);
+		uint value = pixel_id | (scratch_tri_offset << 5);
 
 		for(int j = 0; j < countx; j++) {
 			s_buffer[buf_offset + tri_offset] = value;
@@ -797,7 +801,7 @@ void shadeAndReduceSamples(uint hbid, uint sample_count, in out ReductionContext
 		if(sample_id < sample_count) {
 			uint value = s_buffer[buf_offset + sample_id];
 			uint sample_pixel_id = value & 31;
-			uint scratch_tri_offset = value >> 8;
+			uint scratch_tri_offset = value >> 5;
 			ivec2 pix_pos = half_block_pos + ivec2(sample_pixel_id & 7, sample_pixel_id >> 3);
 			float sample_depth;
 			uint sample_color = shadeSample(pix_pos, scratch_tri_offset, sample_depth);
@@ -990,8 +994,10 @@ void rasterBin(int bin_id) {
 		if((hbid & NUM_WARPS) == 0) {
 			uint bid = (hbid & ~(NUM_WARPS - 1)) >> 1;
 			generateBlocks(bid);
-			groupMemoryBarrier();
 			barrier();
+			finalizeSegments();
+			barrier();
+			groupMemoryBarrier();
 
 			if(s_raster_error != 0) {
 				if(LIX == 0) {

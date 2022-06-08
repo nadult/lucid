@@ -223,7 +223,6 @@ void getTriangleVertexTexCoords(uint scratch_tri_offset, out vec2 tex0, out vec2
 }
 
 void generateRowTris(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, int min_by, int max_by) {
-
 	vec2 scan_start = vec2(s_bin_pos) + vec2(-0.5f, float(min_by) * 8.0 + 0.5f);
 	vec3 scan_min, scan_max, scan_step;
 	computeScanlineParams(tri0, tri1, tri2, scan_start, scan_min, scan_max, scan_step);
@@ -615,9 +614,11 @@ void generateBlocks(uint bid) {
 			s_segments[seg_block2_offset + seg_id1] = i | seg_offset1;
 
 		uint tri_idx = g_scratch_32[src_offset_32 + block_tri_idx] & 0xffff;
+		uint scratch_tri_idx = scratch64TriOffset(tri_idx);
 		uvec2 tri_data = g_scratch_64[src_offset_64 + block_tri_idx];
-		g_scratch_64[dst_offset_64 + i] = uvec2(tri_idx | seg_offset0, tri_data.x);
-		g_scratch_64[dst_offset_64 + i + MAX_BLOCK_TRIS] = uvec2(tri_idx | seg_offset1, tri_data.y);
+		g_scratch_64[dst_offset_64 + i] = uvec2(scratch_tri_idx | seg_offset0, tri_data.x);
+		g_scratch_64[dst_offset_64 + i + MAX_BLOCK_TRIS] =
+			uvec2(scratch_tri_idx | seg_offset1, tri_data.y);
 	}
 }
 
@@ -656,7 +657,7 @@ void loadSamples(uint hbid, int segment_id) {
 		int tri_offset = int(tri_data.x >> 24);
 		if(i == 0 && tri_offset != 0)
 			tri_offset -= SEGMENT_SIZE;
-		uint tri_idx = tri_data.x & 0xfff;
+		uint scratch_tri_idx = tri_data.x & 0xffffff;
 
 		int minx = int((tri_data.y >> min_shift) & 7);
 		int countx = int((tri_data.y >> count_shift) & 15);
@@ -673,9 +674,8 @@ void loadSamples(uint hbid, int segment_id) {
 		if(countx <= 0)
 			continue;
 
-		uint scratch_tri_offset = scratch64TriOffset(tri_idx);
 		uint pixel_id = (y << 3) | minx;
-		uint value = pixel_id | (scratch_tri_offset << 5);
+		uint value = pixel_id | (scratch_tri_idx << 5);
 
 		for(int j = 0; j < countx; j++) {
 			s_buffer[buf_offset + tri_offset] = value;
@@ -801,10 +801,10 @@ void shadeAndReduceSamples(uint hbid, uint sample_count, in out ReductionContext
 		if(sample_id < sample_count) {
 			uint value = s_buffer[buf_offset + sample_id];
 			uint sample_pixel_id = value & 31;
-			uint scratch_tri_offset = value >> 5;
+			uint scratch_tri_idx = value >> 5;
 			ivec2 pix_pos = half_block_pos + ivec2(sample_pixel_id & 7, sample_pixel_id >> 3);
 			float sample_depth;
-			uint sample_color = shadeSample(pix_pos, scratch_tri_offset, sample_depth);
+			uint sample_color = shadeSample(pix_pos, scratch_tri_idx, sample_depth);
 			sample_s = uvec2(sample_color, floatBitsToUint(sample_depth));
 			atomicOr(s_mini_buffer[mini_offset + sample_pixel_id], reduce_pixel_bit);
 		}

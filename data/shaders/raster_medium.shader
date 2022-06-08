@@ -630,7 +630,8 @@ void generateHBlocks(uint start_hbid) {
 
 		uvec2 tri_data = g_scratch_64[src_offset_64 + block_tri_idx];
 		uint tri_idx = tri_data.y & 0xffff;
-		g_scratch_64[dst_offset_64 + i] = uvec2(tri_idx | seg_offset, tri_data.x);
+		uint scratch_tri_idx = scratch64TriOffset(tri_idx);
+		g_scratch_64[dst_offset_64 + i] = uvec2(scratch_tri_idx | seg_offset, tri_data.x);
 	}
 	barrier();
 }
@@ -672,7 +673,7 @@ void loadSamples(uint hbid, int segment_id) {
 		int tri_offset = int(tri_data.x >> 24);
 		if(i == 0 && tri_offset != 0)
 			tri_offset -= SEGMENT_SIZE;
-		uint tri_idx = tri_data.x & 0xffff;
+		uint scratch_tri_idx = tri_data.x & 0xffffff;
 
 		int minx = int((tri_data.y >> min_shift) & 7);
 		int countx = int((tri_data.y >> count_shift) & 15);
@@ -689,9 +690,8 @@ void loadSamples(uint hbid, int segment_id) {
 		if(countx <= 0)
 			continue;
 
-		uint scratch_tri_offset = scratch64TriOffset(tri_idx);
 		uint pixel_id = (y << 3) | minx;
-		uint value = pixel_id | (scratch_tri_offset << 8);
+		uint value = pixel_id | (scratch_tri_idx << 5);
 
 		for(int j = 0; j < countx; j++) {
 			s_buffer[buf_offset + tri_offset] = value;
@@ -824,10 +824,10 @@ void shadeAndReduceSamples(uint hbid, uint sample_count, in out ReductionContext
 		if(sample_id < sample_count) {
 			uint value = s_buffer[buf_offset + sample_id];
 			uint sample_pixel_id = value & 31;
-			uint scratch_tri_offset = value >> 8;
+			uint scratch_tri_idx = value >> 5;
 			ivec2 pix_pos = half_block_pos + ivec2(sample_pixel_id & 7, sample_pixel_id >> 3);
 			float sample_depth;
-			uint sample_color = shadeSample(pix_pos, scratch_tri_offset, sample_depth);
+			uint sample_color = shadeSample(pix_pos, scratch_tri_idx, sample_depth);
 			sample_s = uvec2(sample_color, floatBitsToUint(sample_depth));
 			atomicOr(s_mini_buffer[mini_offset + sample_pixel_id], reduce_pixel_bit);
 		}

@@ -19,10 +19,14 @@ uniform int num_instances;
 layout(std430, binding = 1) readonly restrict buffer buf1_ { uint g_input_indices[]; };
 layout(std430, binding = 2) readonly restrict buffer buf2_ { InstanceData g_instances[]; };
 layout(std430, binding = 3) readonly restrict buffer buf3_ { float g_input_verts[]; };
+layout(std430, binding = 4) readonly restrict buffer buf4_ { vec2 g_input_tex_coords[]; };
+layout(std430, binding = 5) readonly restrict buffer buf5_ { uint g_input_colors[]; };
+layout(std430, binding = 6) readonly restrict buffer buf6_ { uint g_input_normals[]; };
 
-layout(std430, binding = 4) buffer buf4_ { uint g_quad_indices[]; };
-layout(std430, binding = 5) buffer buf5_ { uint g_quad_aabbs[]; };
-layout(std430, binding = 6) buffer buf6_ { uvec4 g_tri_aabbs[]; };
+layout(std430, binding = 7) buffer buf7_ { uint g_quad_indices[]; };
+layout(std430, binding = 8) buffer buf8_ { uint g_quad_aabbs[]; };
+layout(std430, binding = 9) buffer buf9_ { uvec4 g_tri_aabbs[]; };
+layout(std430, binding = 10) buffer buf10_ { uvec2 g_tri_storage[]; };
 
 shared uint s_instance_id[MAX_INSTANCES];
 
@@ -38,6 +42,8 @@ shared int s_quad_offset[MAX_INSTANCES], s_vertex_offset[MAX_INSTANCES];
 // For each instance we count two types of triangles: small and big
 shared int s_num_visible[MAX_INSTANCES * 2];
 shared int s_out_offset[2];
+
+shared vec3 s_ray_dir0;
 
 // TODO: do something about divergence in input data
 // TODO: muszę też mieć możliwość dodawania nowych wierzchołków
@@ -249,11 +255,110 @@ void processQuad(uint quad_id, uint v0, uint v1, uint v2, uint v3, uint local_in
 
 	// TODO: for slivers try to encode in small amount of data, bins wihch for sure won't
 	// intersect with the quad; For example: corner_id (2 bits), vertical coverage (7 bits, percentage),
-	// horiz covergae (7 bits, percentage); This way we can encode 2 cropping lines in 32 bits (maybe)
+	// horiz coverage (7 bits, percentage); This way we can encode 2 cropping lines in 32 bits (maybe)
 
 	s_quad_aabbs[out_idx] = enc_aabb;
 	s_tri_aabbs[out_idx] = uvec4(encodeAABB64(uvec4(aabb0)), encodeAABB64(uvec4(aabb1)));
 	s_quad_indices[out_idx] = uvec4(v0, v1, v2, v3 | (cull_flags << 30));
+}
+
+#define TRI_SCRATCH(var_idx) g_tri_storage[var_idx * (MAX_VISIBLE_QUADS * 2) + scratch_tri_idx]
+
+void storeTri(uint scratch_tri_idx, uint instance_id, uint v0, uint v1, uint v2) {
+	vec3 tri0 = vertexLoad(v0) - frustum.ws_shared_origin;
+	vec3 tri1 = vertexLoad(v1) - frustum.ws_shared_origin;
+	vec3 tri2 = vertexLoad(v2) - frustum.ws_shared_origin;
+
+	vec3 normal = cross(tri0 - tri2, tri1 - tri0);
+	float multiplier = 1.0 / length(normal);
+	normal *= multiplier;
+	uint unormal = encodeNormalUint(normal);
+
+	vec3 edge0 = (tri0 - tri2) * multiplier;
+	vec3 edge1 = (tri1 - tri0) * multiplier;
+
+	float plane_dist = dot(normal, tri0);
+	vec3 nrm_tri0 = cross(tri0, normal);
+	float param0 = dot(edge0, nrm_tri0);
+	float param1 = dot(edge1, nrm_tri0);
+
+	uint instance_flags = g_instances[instance_id].flags;
+	uint instance_color = g_instances[instance_id].color;
+
+	// Nice optimization for barycentric computations:
+	// dot(cross(edge, dir), normal) == dot(dir, cross(normal, edge))
+	edge0 = cross(normal, edge0);
+	edge1 = cross(normal, edge1);
+
+	edge0 = vec3(dot(edge0, frustum.ws_dirx), dot(edge0, frustum.ws_diry), dot(edge0, s_ray_dir0));
+	edge1 = vec3(dot(edge1, frustum.ws_dirx), dot(edge1, frustum.ws_diry), dot(edge1, s_ray_dir0));
+
+	vec3 pnormal = normal * (1.0 / plane_dist);
+	vec3 depth_eq = vec3(dot(pnormal, frustum.ws_dirx), dot(pnormal, frustum.ws_diry),
+						 dot(pnormal, s_ray_dir0));
+
+	TRI_SCRATCH(0) = uvec2(floatBitsToUint(depth_eq.x), floatBitsToUint(depth_eq.y));
+	TRI_SCRATCH(1) = uvec2(floatBitsToUint(depth_eq.z), instance_flags | (instance_id << 16));
+	TRI_SCRATCH(2) = uvec2(floatBitsToUint(param0), floatBitsToUint(param1));
+	TRI_SCRATCH(3) = uvec2(floatBitsToUint(edge0.x), floatBitsToUint(edge0.y));
+	TRI_SCRATCH(4) = uvec2(floatBitsToUint(edge0.z), floatBitsToUint(edge1.x));
+	TRI_SCRATCH(5) = uvec2(floatBitsToUint(edge1.y), floatBitsToUint(edge1.z));
+	TRI_SCRATCH(6) = uvec2(unormal, instance_color);
+
+	uint vcolor2 = 0;
+	if((instance_flags & INST_HAS_VERTEX_COLORS) != 0) {
+		TRI_SCRATCH(7) = uvec2(g_input_colors[v0], g_input_colors[v1]);
+		vcolor2 = g_input_colors[v2];
+	}
+	uint vnormal2 = 0;
+	if((instance_flags & INST_HAS_VERTEX_NORMALS) != 0) {
+		TRI_SCRATCH(9) = uvec2(g_input_normals[v0], g_input_normals[v1]);
+		vnormal2 = g_input_normals[v2];
+	}
+
+	if((instance_flags & (INST_HAS_VERTEX_COLORS | INST_HAS_VERTEX_NORMALS)) != 0) {
+		TRI_SCRATCH(8) = uvec2(vcolor2, vnormal2);
+	}
+	if((instance_flags & INST_HAS_TEXTURE) != 0) {
+		vec2 tex0 = g_input_tex_coords[v0];
+		vec2 tex1 = g_input_tex_coords[v1];
+		vec2 tex2 = g_input_tex_coords[v2];
+		tex1 -= tex0;
+		tex2 -= tex0;
+		TRI_SCRATCH(10) = floatBitsToUint(tex0);
+		TRI_SCRATCH(11) = floatBitsToUint(tex1);
+		TRI_SCRATCH(12) = floatBitsToUint(tex2);
+	}
+
+	vec3 nrm0 = cross(tri2, tri1 - tri2);
+	vec3 nrm1 = cross(tri0, tri2 - tri0);
+	vec3 nrm2 = cross(tri1, tri0 - tri1);
+	float volume = dot(tri0, nrm0);
+	if(volume < 0)
+		nrm0 = -nrm0, nrm1 = -nrm1, nrm2 = -nrm2;
+
+	vec3 edges[3] = {
+		vec3(dot(nrm0, frustum.ws_dirx), dot(nrm0, frustum.ws_diry), dot(nrm0, frustum.ws_dir0)),
+		vec3(dot(nrm1, frustum.ws_dirx), dot(nrm1, frustum.ws_diry), dot(nrm1, frustum.ws_dir0)),
+		vec3(dot(nrm2, frustum.ws_dirx), dot(nrm2, frustum.ws_diry), dot(nrm2, frustum.ws_dir0)),
+	};
+
+	float inv_ex[3] = {1.0 / edges[0].x, 1.0 / edges[1].x, 1.0 / edges[2].x};
+	vec3 scan_base = -vec3(edges[0].z * inv_ex[0], edges[1].z * inv_ex[1], edges[2].z * inv_ex[2]);
+	vec3 scan_step = -vec3(edges[0].y * inv_ex[0], edges[1].y * inv_ex[1], edges[2].y * inv_ex[2]);
+
+	bool sign0 = edges[0].x < 0.0;
+	bool sign1 = edges[1].x < 0.0;
+	bool sign2 = edges[2].x < 0.0;
+
+	vec2 start = vec2(-0.5, 0.5);
+	vec3 scan = scan_step * start.y + scan_base - vec3(start.x);
+	uvec3 uscan = floatBitsToUint(scan);
+	uscan = (uscan & ~1) | uvec3(sign0 ? 1 : 0, sign1 ? 1 : 0, sign2 ? 1 : 0);
+
+	TRI_SCRATCH(13) = uscan.xy;
+	TRI_SCRATCH(14) = uvec2(uscan.z, floatBitsToUint(scan_step.x));
+	TRI_SCRATCH(15) = floatBitsToUint(scan_step.yz);
 }
 
 void addVisibleQuad(uint idx, uint local_instance_id) {
@@ -273,9 +378,19 @@ void addVisibleQuad(uint idx, uint local_instance_id) {
 
 	g_quad_aabbs[idx] = s_quad_aabbs[LIX];
 	g_tri_aabbs[idx] = s_tri_aabbs[LIX];
+
+	uint cull_flags = v3 >> 30;
+	v0 &= 0x03ffffff, v1 &= 0x03ffffff, v2 &= 0x03ffffff, v3 &= 0x03ffffff;
+
+	// TODO: shading data per-quad, not per triangle
+	if((cull_flags & 1) == 0)
+		storeTri(idx * 2 + 0, instance_id, v0, v1, v2);
+	if((cull_flags & 2) == 0)
+		storeTri(idx * 2 + 1, instance_id, v0, v2, v3);
 }
 
 void main() {
+	// TODO: use persistent threads?
 	// TODO: drop MAX_INSTANCES ? just use 1 ?
 	if(LIX < MAX_INSTANCES) {
 		int instance_id = int(WGID.x * MAX_INSTANCES + LIX);
@@ -294,6 +409,8 @@ void main() {
 		s_num_visible[LIX] = 0;
 	if(LIX < REJECTION_TYPE_COUNT)
 		s_rejected_quads[LIX] = 0;
+	if(LIX == 0)
+		s_ray_dir0 = frustum.ws_dir0 + (frustum.ws_dirx + frustum.ws_diry) * 0.5;
 	barrier();
 	for(int i = 0; i < MAX_INSTANCES; i++) {
 		if(LIX < s_num_quads[i]) {
@@ -312,19 +429,24 @@ void main() {
 		if(LIX < 2)
 			s_out_offset[LIX] =
 				atomicAdd(g_info.num_visible_quads[LIX], s_num_visible[i * 2 + LIX]);
+		// TODO: properly handle overflow
 		barrier();
 
-		int out_offset = -1;
-		if(LIX < s_num_visible[i * 2 + 0])
-			out_offset = s_out_offset[0] + int(LIX);
-		// TODO: hole in the middle makes it a bit less effective
-		else if(LIX >= LSIZE - s_num_visible[i * 2 + 1]) {
-			int idx = s_out_offset[1] + int((LSIZE - 1) - LIX);
-			out_offset = (MAX_QUADS - 1) - idx;
-		}
+		uint num_small = s_num_visible[i * 2 + 0];
+		uint num_large = s_num_visible[i * 2 + 1];
 
-		if(out_offset != -1)
-			addVisibleQuad(out_offset, i);
+		{ // Storing basic quad info
+			int out_offset = -1;
+			if(LIX < num_small)
+				out_offset = s_out_offset[0] + int(LIX);
+			// TODO: hole in the middle makes it a bit less effective
+			else if(LIX >= LSIZE - num_large) {
+				int idx = s_out_offset[1] + int((LSIZE - 1) - LIX);
+				out_offset = (MAX_VISIBLE_QUADS - 1) - idx;
+			}
+			if(out_offset != -1)
+				addVisibleQuad(out_offset, i);
+		}
 	}
 	barrier();
 	if(LIX < REJECTION_TYPE_COUNT)

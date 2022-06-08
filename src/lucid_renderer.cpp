@@ -145,12 +145,15 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	// TODO: LucidRenderer constructed 2x at the beginning
 
 	m_quad_indices.emplace(BufferType::shader_storage, max_quads * 4 * sizeof(u32));
-	m_quad_aabbs.emplace(BufferType::shader_storage, max_quads * sizeof(u32));
-	m_tri_aabbs.emplace(BufferType::shader_storage, max_quads * sizeof(int4));
+	m_quad_aabbs.emplace(BufferType::shader_storage, max_visible_quads * sizeof(u32));
+	m_tri_aabbs.emplace(BufferType::shader_storage, max_visible_quads * sizeof(int4));
 
 	uint bin_counters_size = LUCID_INFO_SIZE + m_bin_count * 7;
 	m_info.emplace(BufferType::shader_storage, bin_counters_size * sizeof(u32));
 	m_bin_quads.emplace(BufferType::shader_storage, max_bin_quads * sizeof(u32));
+
+	int tri_storage_size = max_visible_quads * 2 * 36; // TODO: control this size
+	m_tri_storage.emplace(BufferType::shader_storage, tri_storage_size * sizeof(u64));
 
 	// TODO: control size of scratch mem
 	m_scratch_32.emplace(BufferType::shader_storage, (32 * 1024) * m_max_dispatches * sizeof(u32));
@@ -179,6 +182,8 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	defs["BLOCKS_PER_BIN"] = m_blocks_per_bin;
 	defs["MAX_INSTANCE_QUADS"] = max_instance_quads;
 	defs["MAX_QUADS"] = max_quads;
+	defs["MAX_VISIBLE_QUADS"] = max_visible_quads;
+	defs["MAX_VISIBLE_QUADS_SHIFT"] = (int)log2(max_visible_quads);
 
 	defs["MAX_DISPATCHES"] = m_max_dispatches;
 	defs["MAX_BIN_WORKGROUP_ITEMS"] = max_bin_workgroup_items;
@@ -363,12 +368,21 @@ void LucidRenderer::setupQuads(const Context &ctx) {
 	m_info->bindIndex(0);
 	ctx.quads_ib->bindIndexAs(1, BufferType::shader_storage);
 	m_instance_data->bindIndex(2);
+
 	auto vbuffers = ctx.vao->buffers();
 	DASSERT(vbuffers.size() == 4);
 	vbuffers[0]->bindIndexAs(3, BufferType::shader_storage);
-	m_quad_indices->bindIndex(4);
-	m_quad_aabbs->bindIndex(5);
-	m_tri_aabbs->bindIndex(6);
+	if(auto tex_vb = vbuffers[2])
+		tex_vb->bindIndexAs(4, BufferType::shader_storage);
+	if(auto col_vb = vbuffers[1])
+		col_vb->bindIndexAs(5, BufferType::shader_storage);
+	if(auto nrm_vb = vbuffers[3])
+		nrm_vb->bindIndexAs(6, BufferType::shader_storage);
+
+	m_quad_indices->bindIndex(7);
+	m_quad_aabbs->bindIndex(8);
+	m_tri_aabbs->bindIndex(9);
+	m_tri_storage->bindIndex(10);
 
 	p_quad_setup["enable_backface_culling"] = ctx.config.backface_culling;
 	p_quad_setup["num_instances"] = m_num_instances;
@@ -440,6 +454,7 @@ void LucidRenderer::bindRasterCommon(const Context &ctx) {
 	m_instance_data->bindIndex(11);
 	m_uv_rects->bindIndex(12);
 	m_raster_image->bindIndex(13); // TODO: too many bindings
+	m_tri_storage->bindIndex(14);
 }
 void LucidRenderer::bindRaster(Program &program, const Context &ctx) {
 	program.use();

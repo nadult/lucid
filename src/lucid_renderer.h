@@ -19,6 +19,7 @@ class LucidRenderer {
 	static constexpr int max_width = 2560, max_height = 2048;
 	static constexpr int max_quads = 10 * 1024 * 1024, max_verts = 12 * 1024 * 1024;
 	static constexpr int max_instance_quads = 1024;
+	static constexpr int max_visible_quads = 2 * 1024 * 1024;
 
 	static constexpr int raster_lsize_low = 256;
 	static constexpr int raster_lsize_medium = 512;
@@ -68,6 +69,7 @@ class LucidRenderer {
 	PBuffer m_errors, m_scratch_32, m_scratch_64, m_instance_data, m_uv_rects;
 	PBuffer m_quad_indices, m_quad_aabbs, m_tri_aabbs;
 	PBuffer m_info, m_bin_quads, m_raster_image;
+	PBuffer m_tri_storage;
 	array<PBuffer, 3> m_old_info;
 
 	PFramebuffer m_initial_fbo;

@@ -265,7 +265,7 @@ void dispatchQuad(int quad_idx) {
 void dispatchLargeQuadSimple(int large_quad_idx, int num_quads) {
 	if(large_quad_idx >= num_quads)
 		return;
-	int quad_idx = (MAX_QUADS - 1) - large_quad_idx;
+	int quad_idx = (MAX_VISIBLE_QUADS - 1) - large_quad_idx;
 
 	ivec4 aabb = decodeAABB32(g_quad_aabbs[quad_idx]);
 	int bsx = aabb[0], bsy = aabb[1], bex = aabb[2], bey = aabb[3];
@@ -298,7 +298,7 @@ void dispatchLargeQuadBalanced(int large_quad_idx, int num_quads) {
 		return;
 
 	QuadScanlineInfo quad_scan_info;
-	int quad_idx = (MAX_QUADS - 1) - large_quad_idx;
+	int quad_idx = (MAX_VISIBLE_QUADS - 1) - large_quad_idx;
 	int bsx, bsy = 0, bex, bey = -1;
 
 	if(is_valid) {
@@ -367,8 +367,8 @@ shared int s_quads_offset, s_active_work_group_id;
 shared int s_first_task[2], s_last_task[2], s_num_tasks[2];
 shared int s_num_finished_tasks, s_num_all_tasks;
 
-#define MAX_SMALL_TASKS (MAX_QUADS / SMALL_TASK_SIZE + 256)
-#define MAX_LARGE_TASKS (MAX_QUADS / LSIZE + 256)
+#define MAX_SMALL_TASKS (MAX_VISIBLE_QUADS / SMALL_TASK_SIZE + 256)
+#define MAX_LARGE_TASKS (MAX_VISIBLE_QUADS / LSIZE + 256)
 
 #define LARGE_TASKS_OFFSET MAX_SMALL_TASKS
 
@@ -420,7 +420,7 @@ void main() {
 
 		int large_quad_idx = large_quads_offset + int(LIX);
 		if(large_quad_idx < num_quads)
-			countLargeQuadBins((MAX_QUADS - 1) - large_quad_idx);
+			countLargeQuadBins((MAX_VISIBLE_QUADS - 1) - large_quad_idx);
 
 		barrier();
 	}

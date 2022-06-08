@@ -58,17 +58,11 @@ layout(local_size_x = LSIZE) in;
 #define WORKGROUP_64_SCRATCH_SIZE (128 * 1024)
 #define WORKGROUP_64_SCRATCH_SHIFT 17
 
-#define TRI_SCRATCH(var_idx) g_scratch_64[scratch_tri_offset + (var_idx << MAX_SCRATCH_TRIS_SHIFT)]
+#define TRI_SCRATCH(var_idx) g_tri_storage[var_idx * (MAX_VISIBLE_QUADS * 2) + scratch_tri_idx]
 
-#if BIN_SIZE == 64
 uint scratch32HBlockRowTrisOffset(uint hby) {
 	return (gl_WorkGroupID.x << WORKGROUP_32_SCRATCH_SHIFT) +
 		   (hby & HBLOCK_ROWS_STEP_MASK) * MAX_SCRATCH_TRIS;
-}
-#endif
-
-uint scratch64TriOffset(uint tri_idx) {
-	return (gl_WorkGroupID.x << WORKGROUP_64_SCRATCH_SHIFT) + tri_idx;
 }
 
 uint scratch64HBlockRowTrisOffset(uint hby) {
@@ -91,7 +85,6 @@ shared int s_num_scratch_tris;
 shared int s_num_bins, s_bin_id, s_bin_raster_offset;
 shared uint s_bin_quad_count, s_bin_quad_offset;
 shared ivec2 s_bin_pos;
-shared vec3 s_bin_ray_dir0;
 
 shared uint s_hblock_row_tri_counts[HBLOCK_ROWS];
 shared int s_hblock_tri_counts[NUM_WARPS];
@@ -132,58 +125,7 @@ uint max32(uint value, int width) {
 	return value;
 }
 
-// TODO: don't store triangles which generate very small number of samples in scratch,
-// instead precompute them directly when sampling; We would have to somehow group those triangles together
-//
-// TODO: use scratch based on uints, not uvec2, maybe it will be a bit faster?
-
-void storeTriangle(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, uint v0, uint v1, uint v2,
-				   uint instance_id) {
-	uint scratch_tri_offset = scratch64TriOffset(tri_idx);
-	vec3 normal = cross(tri0 - tri2, tri1 - tri0);
-	float multiplier = 1.0 / length(normal);
-	normal *= multiplier;
-	uint unormal = encodeNormalUint(normal);
-
-	vec3 edge0 = (tri0 - tri2) * multiplier;
-	vec3 edge1 = (tri1 - tri0) * multiplier;
-
-	float plane_dist = dot(normal, tri0);
-	vec3 nrm_tri0 = cross(tri0, normal);
-	float param0 = dot(edge0, nrm_tri0);
-	float param1 = dot(edge1, nrm_tri0);
-
-	uint instance_flags = g_instances[instance_id].flags;
-	uint instance_color = g_instances[instance_id].color;
-	// TODO: flag for instance color?
-
-	// Nice optimization for barycentric computations:
-	// dot(cross(edge, dir), normal) == dot(dir, cross(normal, edge))
-	edge0 = cross(normal, edge0);
-	edge1 = cross(normal, edge1);
-
-	edge0 =
-		vec3(dot(edge0, frustum.ws_dirx), dot(edge0, frustum.ws_diry), dot(edge0, s_bin_ray_dir0));
-	edge1 =
-		vec3(dot(edge1, frustum.ws_dirx), dot(edge1, frustum.ws_diry), dot(edge1, s_bin_ray_dir0));
-
-	vec3 pnormal = normal * (1.0 / plane_dist);
-	vec3 depth_eq = vec3(dot(pnormal, frustum.ws_dirx), dot(pnormal, frustum.ws_diry),
-						 dot(pnormal, s_bin_ray_dir0));
-
-	TRI_SCRATCH(0) = uvec2(floatBitsToUint(depth_eq.x), floatBitsToUint(depth_eq.y));
-	TRI_SCRATCH(1) = uvec2(floatBitsToUint(depth_eq.z), instance_flags | (instance_id << 16));
-	TRI_SCRATCH(2) = uvec2(floatBitsToUint(param0), floatBitsToUint(param1));
-	TRI_SCRATCH(3) = uvec2(floatBitsToUint(edge0.x), floatBitsToUint(edge0.y));
-	TRI_SCRATCH(4) = uvec2(floatBitsToUint(edge0.z), floatBitsToUint(edge1.x));
-	TRI_SCRATCH(5) = uvec2(floatBitsToUint(edge1.y), floatBitsToUint(edge1.z));
-
-	// TODO: instance color...
-	TRI_SCRATCH(6) = uvec2(unormal, v0);
-	TRI_SCRATCH(7) = uvec2(v1, v2);
-}
-
-void getTriangleParams(uint scratch_tri_offset, out vec3 depth_eq, out vec2 bary_params,
+void getTriangleParams(uint scratch_tri_idx, out vec3 depth_eq, out vec2 bary_params,
 					   out vec3 edge0, out vec3 edge1, out uint instance_id,
 					   out uint instance_flags) {
 	{
@@ -201,26 +143,68 @@ void getTriangleParams(uint scratch_tri_offset, out vec3 depth_eq, out vec2 bary
 	}
 }
 
-void getTriangleSecondaryParams(uint scratch_tri_offset, out uint unormal, out uint v0, out uint v1,
-								out uint v2) {
+void getTriangleSecondaryParams(uint scratch_tri_idx, out uint unormal, out uint instance_color) {
 	uvec2 val0 = TRI_SCRATCH(6);
-	uvec2 val1 = TRI_SCRATCH(7);
 	unormal = val0.x;
-	v0 = val0.y;
-	v1 = val1.x;
-	v2 = val1.y;
+	instance_color = val0.y;
 }
 
-int generateRowTris(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, int min_hby, int max_hby) {
-	vec2 scan_start = vec2(s_bin_pos) + vec2(-0.5f, float(min_hby) * HBLOCK_HEIGHT + 0.5f);
-	vec3 scan_min, scan_max, scan_step;
-	computeScanlineParams(tri0, tri1, tri2, scan_start, scan_min, scan_max, scan_step);
+void getTriangleVertexColors(uint scratch_tri_idx, out vec4 color0, out vec4 color1,
+							 out vec4 color2) {
+	uvec2 val0 = TRI_SCRATCH(7);
+	uvec2 val1 = TRI_SCRATCH(8);
+	color0 = decodeRGBA8(val0[0]);
+	color1 = decodeRGBA8(val0[1]);
+	color2 = decodeRGBA8(val1[0]);
+}
 
-#if BIN_SIZE == 64
+void getTriangleVertexNormals(uint scratch_tri_idx, out vec3 normal0, out vec3 normal1,
+							  out vec3 normal2) {
+	uvec2 val0 = TRI_SCRATCH(9);
+	uvec2 val1 = TRI_SCRATCH(8);
+	normal0 = decodeNormalUint(val0[0]);
+	normal1 = decodeNormalUint(val0[1]);
+	normal2 = decodeNormalUint(val1[1]);
+}
+
+void getTriangleVertexTexCoords(uint scratch_tri_idx, out vec2 tex0, out vec2 tex1, out vec2 tex2) {
+	uvec2 val0 = TRI_SCRATCH(10);
+	uvec2 val1 = TRI_SCRATCH(11);
+	uvec2 val2 = TRI_SCRATCH(12);
+	tex0 = uintBitsToFloat(val0);
+	tex1 = uintBitsToFloat(val1);
+	tex2 = uintBitsToFloat(val2);
+}
+
+void loadScanlineParams(uint scratch_tri_idx, out vec3 scan_min, out vec3 scan_max,
+						out vec3 scan_step) {
+	uvec2 val0 = TRI_SCRATCH(13);
+	uvec2 val1 = TRI_SCRATCH(14);
+	uvec2 val2 = TRI_SCRATCH(15);
+	bool sign0 = (val0.x & 1) == 1;
+	bool sign1 = (val0.y & 1) == 1;
+	bool sign2 = (val1.x & 1) == 1;
+
+	// TODO: mask lower bits
+	vec3 scan = uintBitsToFloat(uvec3(val0.x, val0.y, val1.x));
+	scan_step = uintBitsToFloat(uvec3(val1.y, val2.x, val2.y));
+
+	scan_min = vec3(sign0 ? -1.0 / 0.0 : scan[0], sign1 ? -1.0 / 0.0 : scan[1],
+					sign2 ? -1.0 / 0.0 : scan[2]);
+	scan_max =
+		vec3(sign0 ? scan[0] : 1.0 / 0.0, sign1 ? scan[1] : 1.0 / 0.0, sign2 ? scan[2] : 1.0 / 0.0);
+}
+
+void generateRowTris(uint scratch_tri_idx, int min_hby, int max_hby) {
+	vec3 scan_min, scan_max, scan_step;
+	loadScanlineParams(scratch_tri_idx, scan_min, scan_max, scan_step);
+
+	vec3 start_offset = scan_step * float(min_hby * 4 + s_bin_pos.y) - vec3(s_bin_pos.x);
+	scan_min += start_offset;
+	scan_max += start_offset;
+
 	uint dst_offset_32 = scratch32HBlockRowTrisOffset(0);
-#endif
 	uint dst_offset_64 = scratch64HBlockRowTrisOffset(0);
-	int scratch_tri_idx = -1;
 
 	// TODO: is it worth it to make this loop more work-efficient?
 	for(int hby = min_hby; hby <= max_hby; hby++) {
@@ -249,13 +233,6 @@ int generateRowTris(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, int min_hby, 
 
 		if(bx_mask == 0)
 			continue;
-		if(scratch_tri_idx == -1) {
-			scratch_tri_idx = atomicAdd(s_num_scratch_tris, 1);
-			if(scratch_tri_idx > MAX_SCRATCH_TRIS) {
-				atomicOr(s_raster_error, 0xffffffff);
-				return -1;
-			}
-		}
 
 		uint hbid_row = (hby & HBLOCK_ROWS_STEP_MASK) << HBLOCK_COLS_SHIFT;
 		uint min_hbid = findLSB(bx_mask), max_hbid = findMSB(bx_mask) + 1;
@@ -267,16 +244,13 @@ int generateRowTris(uint tri_idx, vec3 tri0, vec3 tri1, vec3 tri2, int min_hby, 
 		uint roffset = atomicAdd(s_hblock_row_tri_counts[hby], 1) +
 					   (hby & HBLOCK_ROWS_STEP_MASK) * MAX_SCRATCH_TRIS;
 #if BIN_SIZE == 64
-		g_scratch_32[dst_offset_32 + roffset] = scratch_tri_idx | (bx_mask << 16);
+		g_scratch_32[dst_offset_32 + roffset] = scratch_tri_idx | (bx_mask << 24);
 		g_scratch_64[dst_offset_64 + roffset] = uvec2(min_bits, max_bits);
 #else
-		g_scratch_64[dst_offset_64 + roffset] =
-			uvec2(min_bits | ((scratch_tri_idx & 0xfff) << 20),
-				  max_bits | ((scratch_tri_idx & 0xff000) << 8) | (bx_mask << 28));
+		g_scratch_32[dst_offset_32 + roffset] = scratch_tri_idx;
+		g_scratch_64[dst_offset_64 + roffset] = uvec2(min_bits, max_bits | (bx_mask << 28));
 #endif
 	}
-
-	return scratch_tri_idx;
 }
 
 void processQuads(int start_by) {
@@ -293,8 +267,9 @@ void processQuads(int start_by) {
 		uint quad_idx = g_bin_quads[s_bin_quad_offset + i] & 0xffffff;
 
 #ifdef SHADER_DEBUG
-		if(quad_idx >= MAX_QUADS || (quad_idx >= g_info.num_visible_quads[0] &&
-									 quad_idx < (MAX_QUADS - 1 - g_info.num_visible_quads[1])))
+		if(quad_idx >= MAX_VISIBLE_QUADS ||
+		   (quad_idx >= g_info.num_visible_quads[0] &&
+			quad_idx < (MAX_VISIBLE_QUADS - 1 - g_info.num_visible_quads[1])))
 			atomicOr(s_raster_error, ~0);
 #endif
 
@@ -313,28 +288,16 @@ void processQuads(int start_by) {
 							g_quad_indices[quad_idx * 4 + 2], g_quad_indices[quad_idx * 4 + 3]);
 		uint instance_id =
 			(verts[0] >> 26) | ((verts[1] >> 20) & 0xfc0) | ((verts[2] >> 14) & 0x3f000);
-		uint v0 = verts[0] & 0x03ffffff;
-		uint v1 = verts[1 + second_tri] & 0x03ffffff;
-		uint v2 = verts[2 + second_tri] & 0x03ffffff;
 		uint cull_flag = (verts[3] >> (30 + second_tri)) & 1;
 
 		// TODO: detect such cases earlier
 		if(cull_flag == 1)
 			continue;
 
-		vec3 tri0 = vec3(g_verts[v0 * 3 + 0], g_verts[v0 * 3 + 1], g_verts[v0 * 3 + 2]) -
-					frustum.ws_shared_origin;
-		vec3 tri1 = vec3(g_verts[v1 * 3 + 0], g_verts[v1 * 3 + 1], g_verts[v1 * 3 + 2]) -
-					frustum.ws_shared_origin;
-		vec3 tri2 = vec3(g_verts[v2 * 3 + 0], g_verts[v2 * 3 + 1], g_verts[v2 * 3 + 2]) -
-					frustum.ws_shared_origin;
-
 		// TODO: store only if samples were generated
 		// TODO: do triangle storing later
-		uint tri_idx = i * 2 + (LIX & 1);
-		int scratch_tri_idx = generateRowTris(tri_idx, tri0, tri1, tri2, min_by, max_by);
-		if(scratch_tri_idx != -1)
-			storeTriangle(scratch_tri_idx, tri0, tri1, tri2, v0, v1, v2, instance_id);
+		uint scratch_tri_idx = quad_idx * 2 + second_tri;
+		generateRowTris(scratch_tri_idx, min_by, max_by);
 	}
 	barrier();
 
@@ -453,9 +416,7 @@ void generateHBlocks(uint start_hbid) {
 	uint tri_count = s_hblock_row_tri_counts[hby];
 	uint buf_offset = group_hbid << (MAX_HBLOCK_TRIS0_SHIFT + group_shift);
 
-#if BIN_SIZE == 64
 	uint src_offset_32 = scratch32HBlockRowTrisOffset(hby);
-#endif
 	uint src_offset_64 = scratch64HBlockRowTrisOffset(hby);
 
 	{
@@ -493,15 +454,16 @@ void generateHBlocks(uint start_hbid) {
 	uint dst_offset_64 = scratch64HBlockTrisOffset(lhbid);
 	tri_count = s_hblock_tri_counts[lhbid];
 	int startx = int(hbx << 3);
+	vec2 block_pos = vec2(hbx << HBLOCK_WIDTH_SHIFT, hby << HBLOCK_HEIGHT_SHIFT) + vec2(s_bin_pos);
 
 	for(uint i = group_thread; i < tri_count; i += group_size) {
 		uint row_idx = s_buffer[buf_offset + i];
 
 		uvec2 tri_info = g_scratch_64[src_offset_64 + row_idx];
 #if BIN_SIZE == 64
-		uint tri_idx = g_scratch_32[src_offset_32 + row_idx] & 0xffff;
+		uint scratch_tri_idx = g_scratch_32[src_offset_32 + row_idx] & 0xffffff;
 #else
-		uint tri_idx = (tri_info.x >> 20) | ((tri_info.y & 0xff00000) >> 8);
+		uint scratch_tri_idx = g_scratch_32[src_offset_32 + row_idx];
 #endif
 
 		const ivec4 bin_shifts = ivec4(0, BIN_SHIFT, BIN_SHIFT * 2, BIN_SHIFT * 3);
@@ -518,9 +480,8 @@ void generateHBlocks(uint start_hbid) {
 		uint bits = min_bits | count_bits;
 
 		cpos *= 0.5 / float(num_frags);
-		cpos += vec2(hbx << HBLOCK_WIDTH_SHIFT, hby << HBLOCK_HEIGHT_SHIFT);
+		cpos += block_pos;
 
-		uint scratch_tri_offset = scratch64TriOffset(tri_idx);
 		vec2 val0 = uintBitsToFloat(TRI_SCRATCH(0));
 		vec2 val1 = uintBitsToFloat(TRI_SCRATCH(1));
 		vec3 depth_eq = vec3(val0.x, val0.y, val1.x);
@@ -530,7 +491,7 @@ void generateHBlocks(uint start_hbid) {
 		if(num_frags == 0) // This means that bx_mask is invalid
 			RECORD(0, 0, 0, 0);
 
-		g_scratch_64[dst_offset_64 + i] = uvec2(bits, tri_idx | (num_frags << 20));
+		g_scratch_64[dst_offset_64 + i] = uvec2(bits, scratch_tri_idx | (num_frags << 24));
 		s_buffer[buf_offset + i] = i | (uint(depth) << 12);
 	}
 	barrier();
@@ -551,7 +512,7 @@ void generateHBlocks(uint start_hbid) {
 
 	for(uint i = group_thread; i < tri_count; i += group_size) {
 		uint idx = s_buffer[buf_offset + i] & 0xfff;
-		uint num_frags = g_scratch_64[dst_offset_64 + idx].y >> 20;
+		uint num_frags = g_scratch_64[dst_offset_64 + idx].y >> 24;
 
 		// Computing triangle-ordered sample offsets within each block
 		uint temp;
@@ -575,8 +536,8 @@ void generateHBlocks(uint start_hbid) {
 		uint tri_count = s_hblock_tri_counts[lhbid];
 		uint value = 0;
 		if(warp_offset < tri_count) {
-			uint tri_idx = min(warp_offset + 31, tri_count - 1);
-			value = s_buffer[buf_offset + tri_idx] & 0xfffff;
+			uint hblock_tri_idx = min(warp_offset + 31, tri_count - 1);
+			value = s_buffer[buf_offset + hblock_tri_idx] & 0xfffff;
 		}
 
 		uint sum = value, temp;
@@ -629,8 +590,7 @@ void generateHBlocks(uint start_hbid) {
 			s_segments[seg_block_offset + seg_id] = i | seg_offset;
 
 		uvec2 tri_data = g_scratch_64[src_offset_64 + block_tri_idx];
-		uint tri_idx = tri_data.y & 0xffff;
-		uint scratch_tri_idx = scratch64TriOffset(tri_idx);
+		uint scratch_tri_idx = tri_data.y & 0xffffff;
 		g_scratch_64[dst_offset_64 + i] = uvec2(scratch_tri_idx | seg_offset, tri_data.x);
 	}
 	barrier();
@@ -701,14 +661,16 @@ void loadSamples(uint hbid, int segment_id) {
 	}
 }
 
-uint shadeSample(ivec2 bin_pixel_pos, uint scratch_tri_offset, out float out_depth) {
-	float px = float(bin_pixel_pos.x), py = float(bin_pixel_pos.y);
+uint shadeSample(ivec2 pixel_pos, uint scratch_tri_idx, out float out_depth) {
+	float px = float(pixel_pos.x), py = float(pixel_pos.y);
 
 	vec3 depth_eq, edge0_eq, edge1_eq;
 	uint instance_id, instance_flags;
 	vec2 bary_params;
-	getTriangleParams(scratch_tri_offset, depth_eq, bary_params, edge0_eq, edge1_eq, instance_id,
+	getTriangleParams(scratch_tri_idx, depth_eq, bary_params, edge0_eq, edge1_eq, instance_id,
 					  instance_flags);
+	uint instance_color, unormal;
+	getTriangleSecondaryParams(scratch_tri_idx, unormal, instance_color);
 
 	float inv_ray_pos = depth_eq.x * px + (depth_eq.y * py + depth_eq.z);
 	out_depth = inv_ray_pos;
@@ -728,19 +690,10 @@ uint shadeSample(ivec2 bin_pixel_pos, uint scratch_tri_offset, out float out_dep
 	}
 	bary -= bary_params;
 
-	uint unormal, v0, v1, v2;
-	getTriangleSecondaryParams(scratch_tri_offset, unormal, v0, v1, v2);
-
-	vec4 color;
-	if((instance_flags & INST_HAS_COLOR) != 0)
-		color = decodeRGBA8(g_instances[instance_id].color);
-	else
-		color = vec4(1.0);
-
+	vec4 color = decodeRGBA8(instance_color);
 	if((instance_flags & INST_HAS_TEXTURE) != 0) {
-		vec2 tex0 = g_tex_coords[v0];
-		vec2 tex1 = g_tex_coords[v1] - tex0;
-		vec2 tex2 = g_tex_coords[v2] - tex0;
+		vec2 tex0, tex1, tex2;
+		getTriangleVertexTexCoords(scratch_tri_idx, tex0, tex1, tex2);
 
 		vec2 tex_coord = bary[0] * tex1 + (bary[1] * tex2 + tex0);
 		vec2 tex_dx = bary_dx[0] * tex1 + bary_dx[1] * tex2;
@@ -761,9 +714,8 @@ uint shadeSample(ivec2 bin_pixel_pos, uint scratch_tri_offset, out float out_dep
 	}
 
 	if((instance_flags & INST_HAS_VERTEX_COLORS) != 0) {
-		vec4 col0 = decodeRGBA8(g_colors[v0]);
-		vec4 col1 = decodeRGBA8(g_colors[v1]);
-		vec4 col2 = decodeRGBA8(g_colors[v2]);
+		vec4 col0, col1, col2;
+		getTriangleVertexColors(scratch_tri_idx, col0, col1, col2);
 		color *= (1.0 - bary[0] - bary[1]) * col0 + (bary[0] * col1 + bary[1] * col2);
 	}
 
@@ -772,9 +724,10 @@ uint shadeSample(ivec2 bin_pixel_pos, uint scratch_tri_offset, out float out_dep
 
 	vec3 normal;
 	if((instance_flags & INST_HAS_VERTEX_NORMALS) != 0) {
-		vec3 nrm0 = decodeNormalUint(g_normals[v0]);
-		vec3 nrm1 = decodeNormalUint(g_normals[v1]) - nrm0;
-		vec3 nrm2 = decodeNormalUint(g_normals[v2]) - nrm0;
+		vec3 nrm0, nrm1, nrm2;
+		getTriangleVertexNormals(scratch_tri_idx, nrm0, nrm1, nrm2);
+		nrm1 -= nrm0;
+		nrm2 -= nrm0;
 		normal = bary[0] * nrm1 + (bary[1] * nrm2 + nrm0);
 	} else {
 		normal = decodeNormalUint(unormal);
@@ -813,7 +766,7 @@ void shadeAndReduceSamples(uint hbid, uint sample_count, in out ReductionContext
 	uint hby = hbid >> HBLOCK_COLS_SHIFT;
 	uint mini_offset = LIX & ~31;
 	uint reduce_pixel_bit = 1u << (LIX & 31);
-	ivec2 half_block_pos = ivec2(hbx << HBLOCK_WIDTH_SHIFT, hby << HBLOCK_HEIGHT_SHIFT);
+	ivec2 half_block_pos = ivec2(hbx << HBLOCK_WIDTH_SHIFT, hby << HBLOCK_HEIGHT_SHIFT) + s_bin_pos;
 	vec3 out_color = decodeRGB10(ctx.out_color);
 
 	for(uint i = 0; i < sample_count; i += WARP_STEP) {
@@ -1008,8 +961,6 @@ void rasterBin(int bin_id) {
 			s_bin_pos = bin_pos;
 			s_bin_quad_count = BIN_QUAD_COUNTS(bin_id);
 			s_bin_quad_offset = BIN_QUAD_OFFSETS(bin_id);
-			s_bin_ray_dir0 = frustum.ws_dir0 + frustum.ws_dirx * (bin_pos.x + 0.5) +
-							 frustum.ws_diry * (bin_pos.y + 0.5);
 			s_raster_error = 0;
 		}
 

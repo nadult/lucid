@@ -215,6 +215,8 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	p_raster_medium = EX_PASS(Program::makeCompute("raster_medium", defs, raster_opts));
 
 	mkdirRecursive("temp").ignore();
+	if(auto disas = p_quad_setup.getDisassembly())
+		saveFile("temp/quad_setup.asm", *disas).ignore();
 	if(auto disas = p_bin_dispatcher.getDisassembly())
 		saveFile("temp/bin_dispatcher.asm", *disas).ignore();
 	if(auto disas = p_raster_low.getDisassembly())
@@ -385,12 +387,16 @@ void LucidRenderer::setupQuads(const Context &ctx) {
 	m_tri_storage->bindIndex(10);
 
 	p_quad_setup["enable_backface_culling"] = ctx.config.backface_culling;
-	p_quad_setup["num_instances"] = m_num_instances;
 	p_quad_setup["view_proj_matrix"] = m_view_proj_matrix;
 	p_quad_setup.setFrustum(ctx.camera);
 	p_quad_setup.use();
 
-	glDispatchCompute((m_num_instances + 3) / 4, 1, 1);
+	int max_dispatches = m_max_dispatches / 2; // TODO: tweak this properly...
+	int packet_size = clamp(m_num_instances / max_dispatches, 1, 2);
+
+	p_quad_setup["u_num_instances"] = m_num_instances;
+	p_quad_setup["u_packet_size"] = packet_size;
+	glDispatchCompute((m_num_instances + packet_size - 1) / packet_size, 1, 1);
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_COMMAND_BARRIER_BIT);
 }
 

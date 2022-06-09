@@ -9,11 +9,12 @@ layout(local_size_x = LSIZE) in;
 #define LIX gl_LocalInvocationIndex
 #define WGID gl_WorkGroupID
 
-#define MAX_INSTANCES 4
+#define MAX_PACKET_SIZE 4
 
 uniform mat4 view_proj_matrix;
 uniform bool enable_backface_culling;
-uniform int num_instances;
+uniform int u_num_instances;
+uniform int u_packet_size;
 
 // TODO: check if readonly/restrict makes a difference
 layout(std430, binding = 1) readonly restrict buffer buf1_ { uint g_input_indices[]; };
@@ -28,7 +29,7 @@ layout(std430, binding = 8) buffer buf8_ { uint g_quad_aabbs[]; };
 layout(std430, binding = 9) buffer buf9_ { uvec4 g_tri_aabbs[]; };
 layout(std430, binding = 10) buffer buf10_ { uvec2 g_tri_storage[]; };
 
-shared uint s_instance_id[MAX_INSTANCES];
+shared uint s_instance_id[MAX_PACKET_SIZE];
 
 shared uint s_rejected_quads[REJECTION_TYPE_COUNT];
 
@@ -36,11 +37,11 @@ shared uint s_quad_aabbs[LSIZE];
 shared uvec4 s_tri_aabbs[LSIZE];
 shared uvec4 s_quad_indices[LSIZE];
 
-shared int s_num_quads[MAX_INSTANCES], s_index_offset[MAX_INSTANCES];
-shared int s_quad_offset[MAX_INSTANCES], s_vertex_offset[MAX_INSTANCES];
+shared int s_num_quads[MAX_PACKET_SIZE], s_index_offset[MAX_PACKET_SIZE];
+shared int s_quad_offset[MAX_PACKET_SIZE], s_vertex_offset[MAX_PACKET_SIZE];
 
 // For each instance we count two types of triangles: small and big
-shared int s_num_visible[MAX_INSTANCES * 2];
+shared int s_num_visible[MAX_PACKET_SIZE * 2];
 shared int s_out_offset[2];
 
 shared vec3 s_ray_dir0;
@@ -390,11 +391,12 @@ void addVisibleQuad(uint idx, uint local_instance_id) {
 }
 
 void main() {
-	// TODO: use persistent threads?
-	// TODO: drop MAX_INSTANCES ? just use 1 ?
-	if(LIX < MAX_INSTANCES) {
-		int instance_id = int(WGID.x * MAX_INSTANCES + LIX);
-		if(instance_id < num_instances) {
+	// TODO: Could we just use 1?
+	int packet_size = u_packet_size;
+
+	if(LIX < packet_size) {
+		int instance_id = int(WGID.x * packet_size + LIX);
+		if(instance_id < u_num_instances) {
 			int num_quads = g_instances[instance_id].num_quads;
 			s_num_quads[LIX] = num_quads;
 			s_vertex_offset[LIX] = g_instances[instance_id].vertex_offset;
@@ -405,14 +407,14 @@ void main() {
 			s_num_quads[LIX] = 0;
 		}
 	}
-	if(LIX < MAX_INSTANCES * 2)
+	if(LIX < packet_size * 2)
 		s_num_visible[LIX] = 0;
 	if(LIX < REJECTION_TYPE_COUNT)
 		s_rejected_quads[LIX] = 0;
 	if(LIX == 0)
 		s_ray_dir0 = frustum.ws_dir0 + (frustum.ws_dirx + frustum.ws_diry) * 0.5;
 	barrier();
-	for(int i = 0; i < MAX_INSTANCES; i++) {
+	for(int i = 0; i < packet_size; i++) {
 		if(LIX < s_num_quads[i]) {
 			int vertex_offset = s_vertex_offset[i];
 			int index_offset = s_index_offset[i] + int(LIX) * 4;

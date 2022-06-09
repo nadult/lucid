@@ -29,6 +29,7 @@ layout(std430, binding = 8) buffer buf8_ { uint g_quad_aabbs[]; };
 layout(std430, binding = 9) buffer buf9_ { uvec4 g_tri_aabbs[]; };
 layout(std430, binding = 10) buffer buf10_ { uvec2 g_tri_storage[]; };
 layout(std430, binding = 11) buffer buf11_ { uvec4 g_quad_storage[]; };
+layout(std430, binding = 12) buffer buf12_ { uvec4 g_scan_storage[]; };
 
 shared uint s_instance_id[MAX_PACKET_SIZE];
 
@@ -264,10 +265,11 @@ void processQuad(uint quad_id, uint v0, uint v1, uint v2, uint v3, uint local_in
 	s_quad_indices[out_idx] = uvec4(v0, v1, v2, v3 | (cull_flags << 30));
 }
 
-#define TRI_SCRATCH(var_idx) g_tri_storage[scratch_tri_idx * 10 + var_idx]
+#define TRI_SCRATCH(var_idx) g_tri_storage[scratch_tri_idx * 8 + var_idx]
 #define QUAD_SCRATCH(var_idx) g_quad_storage[scratch_quad_idx + var_idx * MAX_VISIBLE_QUADS]
 #define QUAD_TEX_SCRATCH(var_idx)                                                                  \
 	g_quad_storage[scratch_quad_idx * 2 + MAX_VISIBLE_QUADS * 2 + var_idx]
+#define SCAN_SCRATCH(var_idx) g_scan_storage[scratch_tri_idx * 2 + var_idx]
 
 void storeQuad(uint scratch_quad_idx, uint instance_flags, uint v0, uint v1, uint v2, uint v3) {
 	if((instance_flags & INST_HAS_VERTEX_COLORS) != 0)
@@ -354,9 +356,8 @@ void storeTri(uint scratch_tri_idx, uint instance_id_flags, uint instance_color,
 	uvec3 uscan = floatBitsToUint(scan);
 	uscan = (uscan & ~1) | uvec3(sign0 ? 1 : 0, sign1 ? 1 : 0, sign2 ? 1 : 0);
 
-	TRI_SCRATCH(7) = uscan.xy;
-	TRI_SCRATCH(8) = uvec2(uscan.z, floatBitsToUint(scan_step.x));
-	TRI_SCRATCH(9) = floatBitsToUint(scan_step.yz);
+	SCAN_SCRATCH(0) = uvec4(uscan.xyz, 0);
+	SCAN_SCRATCH(1) = uvec4(floatBitsToUint(scan_step), 0);
 }
 
 void addVisibleQuad(uint idx, uint local_instance_id) {

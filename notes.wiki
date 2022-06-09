@@ -316,3 +316,18 @@ san-miguel: 10470  3384   180   2150        4534
     sponza: 3694   124    85    3213        102
     teapot: 394    34     33    286         5
  white_oak: 11403  52     159   10885       4
+
+ Added scan storage:
+             total  setup  bins  raster_low  raster_mid
+    #boxes: 1521   31     40    1388        4
+     bunny: 416    79     30    253         4
+conference: 1214   61     72    949         4
+    dragon: 1136   458    50    387         188
+   gallery: 3251   849    67    1720        428
+  hairball: 13982  3673   299   310         9589
+powerplant: 11373  3300   341   829         6638
+san-miguel: 10132  3196   182   2165        4372
+ scrubPine: 563    13     53    452         5
+    sponza: 3694   116    89    3216        102
+    teapot: 401    32     34    293         5
+ white_oak: 11204  49     159   10836       4

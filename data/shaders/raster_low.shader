@@ -48,10 +48,11 @@ layout(local_size_x = LSIZE) in;
 #define WORKGROUP_64_SCRATCH_SHIFT 16
 
 // TODO: names
-#define TRI_SCRATCH(var_idx) g_tri_storage[scratch_tri_idx * 10 + var_idx]
+#define TRI_SCRATCH(var_idx) g_tri_storage[scratch_tri_idx * 8 + var_idx]
 #define QUAD_SCRATCH(var_idx) g_quad_storage[scratch_quad_idx + var_idx * MAX_VISIBLE_QUADS]
 #define QUAD_TEX_SCRATCH(var_idx)                                                                  \
 	g_quad_storage[scratch_quad_idx * 2 + MAX_VISIBLE_QUADS * 2 + var_idx]
+#define SCAN_SCRATCH(var_idx) g_scan_storage[scratch_tri_idx * 2 + var_idx]
 
 uint scratch64BlockRowTrisOffset(uint by) {
 	return (gl_WorkGroupID.x << WORKGROUP_64_SCRATCH_SHIFT) + by * (MAX_BLOCK_ROW_TRIS * 2);
@@ -146,16 +147,14 @@ void getTriangleVertexTexCoords(uint scratch_tri_idx, out vec2 tex0, out vec2 te
 
 void loadScanlineParams(uint scratch_tri_idx, out vec3 scan_min, out vec3 scan_max,
 						out vec3 scan_step) {
-	uvec2 val0 = TRI_SCRATCH(7);
-	uvec2 val1 = TRI_SCRATCH(8);
-	uvec2 val2 = TRI_SCRATCH(9);
+	uvec4 val0 = SCAN_SCRATCH(0);
+	uvec4 val1 = SCAN_SCRATCH(1);
+	// TODO: pass these differently
 	bool sign0 = (val0.x & 1) == 1;
 	bool sign1 = (val0.y & 1) == 1;
-	bool sign2 = (val1.x & 1) == 1;
-
-	// TODO: mask lower bits
-	vec3 scan = uintBitsToFloat(uvec3(val0.x, val0.y, val1.x));
-	scan_step = uintBitsToFloat(uvec3(val1.y, val2.x, val2.y));
+	bool sign2 = (val0.z & 1) == 1;
+	vec3 scan = uintBitsToFloat(val0.xyz);
+	scan_step = uintBitsToFloat(val1.xyz);
 
 	scan_min = vec3(sign0 ? -1.0 / 0.0 : scan[0], sign1 ? -1.0 / 0.0 : scan[1],
 					sign2 ? -1.0 / 0.0 : scan[2]);

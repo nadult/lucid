@@ -152,9 +152,10 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	m_info.emplace(BufferType::shader_storage, bin_counters_size * sizeof(u32));
 	m_bin_quads.emplace(BufferType::shader_storage, max_bin_quads * sizeof(u32));
 
-	int tri_storage_size = max_visible_quads * 2 * 10; // TODO: control this size
+	int tri_storage_size = max_visible_quads * 2 * 8; // TODO: control this size
 	m_tri_storage.emplace(BufferType::shader_storage, tri_storage_size * sizeof(u64));
 	m_quad_storage.emplace(BufferType::shader_storage, max_visible_quads * 4 * sizeof(int4));
+	m_scan_storage.emplace(BufferType::shader_storage, max_visible_quads * 2 * 2 * sizeof(int4));
 
 	// TODO: control size of scratch mem
 	m_scratch_32.emplace(BufferType::shader_storage, (32 * 1024) * m_max_dispatches * sizeof(u32));
@@ -387,6 +388,7 @@ void LucidRenderer::setupQuads(const Context &ctx) {
 	m_tri_aabbs->bindIndex(9);
 	m_tri_storage->bindIndex(10);
 	m_quad_storage->bindIndex(11);
+	m_scan_storage->bindIndex(12);
 
 	p_quad_setup["enable_backface_culling"] = ctx.config.backface_culling;
 	p_quad_setup["view_proj_matrix"] = m_view_proj_matrix;
@@ -464,6 +466,7 @@ void LucidRenderer::bindRasterCommon(const Context &ctx) {
 	m_raster_image->bindIndex(13); // TODO: too many bindings
 	m_tri_storage->bindIndex(14);
 	m_quad_storage->bindIndex(15);
+	m_scan_storage->bindIndex(16);
 }
 void LucidRenderer::bindRaster(Program &program, const Context &ctx) {
 	program.use();

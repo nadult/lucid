@@ -73,14 +73,22 @@ layout(local_size_x = LSIZE) in;
 	g_quad_storage[scratch_quad_idx * 2 + MAX_VISIBLE_QUADS * 2 + var_idx]
 #define SCAN_SCRATCH(var_idx) g_scan_storage[scratch_tri_idx * 2 + var_idx]
 
+uint currentHBlockRow(uint hby) {
+#if BIN_SIZE == 64
+	return hby & HBLOCK_ROWS_STEP_MASK;
+#else
+	return hby;
+#endif
+}
+
 uint scratch32HBlockRowTrisOffset(uint hby) {
 	return (gl_WorkGroupID.x << WORKGROUP_32_SCRATCH_SHIFT) +
-		   (hby & HBLOCK_ROWS_STEP_MASK) * MAX_HBLOCK_ROW_TRIS;
+		   currentHBlockRow(hby) * MAX_HBLOCK_ROW_TRIS;
 }
 
 uint scratch64HBlockRowTrisOffset(uint hby) {
 	return (gl_WorkGroupID.x << WORKGROUP_64_SCRATCH_SHIFT) +
-		   (hby & HBLOCK_ROWS_STEP_MASK) * MAX_HBLOCK_ROW_TRIS;
+		   currentHBlockRow(hby) * MAX_HBLOCK_ROW_TRIS;
 }
 
 uint scratch64HBlockTrisOffset(uint lhbid) {
@@ -258,7 +266,7 @@ void generateRowTris(uint scratch_tri_idx, int start_hby) {
 		if(bx_mask == 0)
 			continue;
 
-		uint hbid_row = (hby & HBLOCK_ROWS_STEP_MASK) << HBLOCK_COLS_SHIFT;
+		uint hbid_row = currentHBlockRow(hby) << HBLOCK_COLS_SHIFT;
 		uint min_hbid = findLSB(bx_mask), max_hbid = findMSB(bx_mask) + 1;
 		// Accumulation is done at the end of processBlocks
 		atomicAdd(s_hblock_tri_counts[hbid_row + min_hbid], 1);
@@ -266,7 +274,7 @@ void generateRowTris(uint scratch_tri_idx, int start_hby) {
 			atomicAdd(s_hblock_tri_counts[hbid_row + max_hbid], -1);
 
 		uint roffset = atomicAdd(s_hblock_row_tri_counts[hby], 1) +
-					   (hby & HBLOCK_ROWS_STEP_MASK) * MAX_HBLOCK_ROW_TRIS;
+					   currentHBlockRow(hby) * MAX_HBLOCK_ROW_TRIS;
 #if BIN_SIZE == 64
 		g_scratch_32[dst_offset_32 + roffset] = scratch_tri_idx | (bx_mask << 24);
 		g_scratch_64[dst_offset_64 + roffset] = uvec2(min_bits, max_bits);

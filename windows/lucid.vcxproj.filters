@@ -121,9 +121,6 @@
     <None Include="..\data\shaders\dummy.shader">
       <Filter>shaders</Filter>
     </None>
-    <None Include="..\data\shaders\init_counters.shader">
-      <Filter>shaders</Filter>
-    </None>
     <None Include="..\data\shaders\simple.shader">
       <Filter>shaders</Filter>
     </None>

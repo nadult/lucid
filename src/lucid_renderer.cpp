@@ -175,8 +175,6 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	defs["MAX_VISIBLE_QUADS_SHIFT"] = (int)log2(max_visible_quads);
 	defs["MAX_DISPATCHES"] = m_max_dispatches;
 
-	p_init_counters = EX_PASS(Program::makeCompute("init_counters", defs));
-
 	int bin_dispatcher_lsize = m_bin_size == 64 ? 512 : 1024;
 	defs["BIN_DISPATCHER_LSIZE"] = bin_dispatcher_lsize;
 	defs["BIN_DISPATCHER_LSHIFT"] = (int)log2(bin_dispatcher_lsize);
@@ -251,12 +249,12 @@ void LucidRenderer::render(const Context &ctx) {
 	testGlError("LucidRenderer::render init");
 
 	m_info->invalidate();
-	glBindBuffer(GL_DISPATCH_INDIRECT_BUFFER, m_info->id());
+	m_info->clear(GlFormat::r32i, 0, 0, (LUCID_INFO_SIZE + m_bin_count) * sizeof(u32));
 
+	glBindBuffer(GL_DISPATCH_INDIRECT_BUFFER, m_info->id());
 	m_view_proj_matrix = ctx.camera.matrix();
 	m_frustum_rays = ctx.camera;
 
-	initCounters(ctx);
 	uploadInstances(ctx);
 	quadSetup(ctx);
 	computeBins(ctx);
@@ -274,22 +272,6 @@ void LucidRenderer::render(const Context &ctx) {
 
 	compose(ctx);
 	testGlError("LucidRenderer::render finish");
-}
-
-void LucidRenderer::initCounters(const Context &ctx) {
-	PERF_GPU_SCOPE();
-
-	// TODO: num_verts should be computed on gpu (only those vertices which are actually used
-	// should be transformed)
-	auto vbuffers = ctx.vao->buffers();
-	DASSERT(vbuffers.size() == 4);
-	int num_verts = vbuffers[0]->size() / sizeof(float3);
-
-	m_info->bindIndex(0);
-	p_init_counters.use();
-	p_init_counters["num_verts"] = num_verts;
-	glDispatchCompute(1, 1, 1);
-	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 }
 
 void LucidRenderer::uploadInstances(const Context &ctx) {

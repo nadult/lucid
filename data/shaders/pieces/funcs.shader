@@ -55,6 +55,15 @@ ivec4 decodeAABB32(uint aabb) {
 	return ivec4(aabb & 0xff, (aabb >> 8) & 0xff, (aabb >> 16) & 0xff, aabb >> 24);
 }
 
+uint encodeAABB28(uvec4 aabb) {
+	return ((aabb[0] & 0x7f) << 0) | ((aabb[1] & 0x7f) << 7) | ((aabb[2] & 0x7f) << 14) |
+		   ((aabb[3] & 0x7f) << 21);
+}
+
+ivec4 decodeAABB28(uint aabb) {
+	return ivec4(aabb & 0x7f, (aabb >> 7) & 0x7f, (aabb >> 14) & 0x7f, (aabb >> 21) & 0x7f);
+}
+
 vec3 decodeNormalUint(uint n) {
 	float x = (float((n >> 0) & 0x3ffu) - 512.0) * (1.0 / 511.0);
 	float y = (float((n >> 10) & 0x3ffu) - 512.0) * (1.0 / 511.0);

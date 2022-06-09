@@ -146,7 +146,7 @@ int prefixSum32(int accum) {
 }
 
 void countSmallQuadBins(uint quad_idx) {
-	ivec4 aabb = decodeAABB32(g_quad_aabbs[quad_idx]);
+	ivec4 aabb = decodeAABB28(g_quad_aabbs[quad_idx]);
 	int bsx = aabb[0], bsy = aabb[1], bex = aabb[2], bey = aabb[3];
 	int area = (bex - bsx + 1) * (bey - bsy + 1);
 
@@ -164,7 +164,7 @@ void countSmallQuadBins(uint quad_idx) {
 }
 
 void countLargeQuadBins(int quad_idx) {
-	ivec4 aabb = decodeAABB32(g_quad_aabbs[quad_idx]);
+	ivec4 aabb = decodeAABB28(g_quad_aabbs[quad_idx]);
 	int bsx = aabb[0], bsy = aabb[1], bex = aabb[2], bey = aabb[3];
 	QuadScanlineInfo info = quadScanlineInfo(quad_idx, bsy);
 
@@ -250,14 +250,17 @@ void computeOffsets() {
 }
 
 void dispatchQuad(int quad_idx) {
-	ivec4 aabb = decodeAABB32(g_quad_aabbs[quad_idx]);
+	uint enc_aabb = g_quad_aabbs[quad_idx];
+	uint cull_flags = enc_aabb & 0xf0000000;
+	uint bin_quad_idx = uint(quad_idx) | cull_flags;
+	ivec4 aabb = decodeAABB28(enc_aabb);
 	int bsx = aabb[0], bsy = aabb[1], bex = aabb[2], bey = aabb[3];
 
 	for(int by = bsy; by <= bey; by++) {
 		for(int bx = bsx; bx <= bex; bx++) {
 			uint bin_id = bx + by * BIN_COUNT_X;
 			uint quad_offset = atomicAdd(s_bins[bin_id], 1);
-			g_bin_quads[quad_offset] = quad_idx;
+			g_bin_quads[quad_offset] = bin_quad_idx;
 		}
 	}
 }
@@ -267,7 +270,10 @@ void dispatchLargeQuadSimple(int large_quad_idx, int num_quads) {
 		return;
 	int quad_idx = (MAX_VISIBLE_QUADS - 1) - large_quad_idx;
 
-	ivec4 aabb = decodeAABB32(g_quad_aabbs[quad_idx]);
+	uint enc_aabb = g_quad_aabbs[quad_idx];
+	uint cull_flags = enc_aabb & 0xf0000000;
+	uint bin_quad_idx = uint(quad_idx) | cull_flags;
+	ivec4 aabb = decodeAABB28(enc_aabb);
 	int bsx = aabb[0], bsy = aabb[1], bex = aabb[2], bey = aabb[3];
 	QuadScanlineInfo quad_scan_info = quadScanlineInfo(quad_idx, bsy);
 
@@ -279,7 +285,7 @@ void dispatchLargeQuadSimple(int large_quad_idx, int num_quads) {
 		for(int bx = bmin; bx <= bmax; bx++) {
 			uint bin_id = bx + by * BIN_COUNT_X;
 			uint quad_offset = atomicAdd(s_bins[bin_id], 1);
-			g_bin_quads[quad_offset] = quad_idx;
+			g_bin_quads[quad_offset] = bin_quad_idx;
 		}
 	}
 }
@@ -298,11 +304,15 @@ void dispatchLargeQuadBalanced(int large_quad_idx, int num_quads) {
 		return;
 
 	QuadScanlineInfo quad_scan_info;
-	int quad_idx = (MAX_VISIBLE_QUADS - 1) - large_quad_idx;
+	uint bin_quad_idx;
 	int bsx, bsy = 0, bex, bey = -1;
 
 	if(is_valid) {
-		ivec4 aabb = decodeAABB32(g_quad_aabbs[quad_idx]);
+		int quad_idx = (MAX_VISIBLE_QUADS - 1) - large_quad_idx;
+		uint enc_aabb = g_quad_aabbs[quad_idx];
+		uint cull_flags = enc_aabb & 0xf0000000;
+		bin_quad_idx = uint(quad_idx) | cull_flags;
+		ivec4 aabb = decodeAABB28(enc_aabb);
 		bsx = aabb[0], bsy = aabb[1], bex = aabb[2], bey = aabb[3];
 		quad_scan_info = quadScanlineInfo(quad_idx, bsy);
 	}
@@ -341,7 +351,7 @@ void dispatchLargeQuadBalanced(int large_quad_idx, int num_quads) {
 
 		int i = 0;
 		while(anyInvocationARB(i < cur_num_samples)) {
-			int cur_quad_idx = shuffleNV(quad_idx, cur_src_thread_id, 32);
+			uint cur_bin_quad_idx = shuffleNV(bin_quad_idx, cur_src_thread_id, 32);
 			int cur_bin_id = shuffleNV(base_bin_id, cur_src_thread_id, 32);
 			int cur_width = shuffleNV(num_samples, cur_src_thread_id, 32);
 
@@ -351,7 +361,7 @@ void dispatchLargeQuadBalanced(int large_quad_idx, int num_quads) {
 			}
 			if(i < cur_num_samples) {
 				uint quad_offset = atomicAdd(s_bins[cur_bin_id + cur_offset], 1);
-				g_bin_quads[quad_offset] = cur_quad_idx;
+				g_bin_quads[quad_offset] = cur_bin_quad_idx;
 				cur_offset++;
 				if(cur_offset == cur_width)
 					cur_offset = 0, cur_src_thread_id++;

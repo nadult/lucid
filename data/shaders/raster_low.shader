@@ -229,7 +229,11 @@ void processQuads() {
 	// TODO: divide big tris across different threads
 	for(uint i = LIX >> 1; i < s_bin_quad_count; i += LSIZE / 2) {
 		uint second_tri = LIX & 1;
-		uint quad_idx = g_bin_quads[s_bin_quad_offset + i] & 0xffffff;
+		uint bin_quad_idx = g_bin_quads[s_bin_quad_offset + i];
+		uint quad_idx = bin_quad_idx & 0xfffffff;
+		uint cull_flag = (bin_quad_idx >> (30 + second_tri)) & 1;
+		if(cull_flag == 1)
+			continue;
 
 #ifdef SHADER_DEBUG
 		if(quad_idx >= MAX_VISIBLE_QUADS ||
@@ -237,17 +241,6 @@ void processQuads() {
 			quad_idx < (MAX_VISIBLE_QUADS - 1 - g_info.num_visible_quads[1])))
 			atomicOr(s_raster_error, ~0);
 #endif
-
-		uvec4 verts = uvec4(g_quad_indices[quad_idx * 4 + 0], g_quad_indices[quad_idx * 4 + 1],
-							g_quad_indices[quad_idx * 4 + 2], g_quad_indices[quad_idx * 4 + 3]);
-		// TODO: better encoding of instance_id
-		uint instance_id =
-			(verts[0] >> 26) | ((verts[1] >> 20) & 0xfc0) | ((verts[2] >> 14) & 0x3f000);
-		uint cull_flag = (verts[3] >> (30 + second_tri)) & 1;
-
-		// TODO: detect such cases earlier
-		if(cull_flag == 1)
-			continue;
 
 		uvec4 aabb = g_tri_aabbs[quad_idx];
 		aabb = decodeAABB64(second_tri != 0 ? aabb.zw : aabb.xy);

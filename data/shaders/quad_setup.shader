@@ -248,7 +248,7 @@ void processQuad(uint quad_id, uint v0, uint v1, uint v2, uint v3, uint local_in
 				 vec4(max_screen_pos, max_screen_pos));
 
 	uvec4 bin_aabb = uvec4(aabb) >> BIN_SHIFT;
-	uint enc_aabb = encodeAABB32(bin_aabb);
+	uint enc_aabb = encodeAABB28(bin_aabb) | (cull_flags << 30);
 
 	uvec2 bin_size = uvec2(bin_aabb[2] - bin_aabb[0] + 1, bin_aabb[3] - bin_aabb[1] + 1);
 	int size_type_idx = bin_size.x * bin_size.y <= 4 ? 0 : 1;

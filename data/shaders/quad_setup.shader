@@ -449,7 +449,7 @@ void main() {
 		if(num_finished == gl_NumWorkGroups.x - 1) {
 			groupMemoryBarrier();
 			int num_quads = g_info.num_visible_quads[0] + g_info.num_visible_quads[1];
-			int batch_size = BIN_DISPATCHER_BATCH_SIZE;
+			int batch_size = BIN_DISPATCHER_LSIZE;
 			int num_dispatches = (num_quads + (batch_size - 1)) / batch_size;
 			g_info.num_binning_dispatches[0] = uint(clamp(num_dispatches, 4, MAX_DISPATCHES));
 			g_info.num_binning_dispatches[1] = 1;

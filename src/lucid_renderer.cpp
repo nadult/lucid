@@ -103,11 +103,6 @@ void setupView(const IRect &viewport, PFramebuffer fbo) {
 LucidRenderer::LucidRenderer() = default;
 FWK_MOVABLE_CLASS_IMPL(LucidRenderer)
 
-void setLocalSize(ShaderDefs &defs, int lsize) {
-	defs["LSIZE"] = lsize;
-	defs["LSHIFT"] = (int)log2(lsize);
-}
-
 Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	m_bin_size = opts & Opt::bin_size_32 ? 32 : 64;
 	m_tile_size = opts & Opt::bin_size_32 ? 8 : 16;
@@ -150,7 +145,7 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	m_scan_storage.emplace(BufferType::shader_storage, max_visible_quads * 2 * 2 * sizeof(int4));
 
 	// TODO: control size of scratch mem
-	m_scratch_32.emplace(BufferType::shader_storage, (32 * 1024) * m_max_dispatches * sizeof(u32));
+	m_scratch_32.emplace(BufferType::shader_storage, (64 * 1024) * m_max_dispatches * sizeof(u32));
 	m_scratch_64.emplace(BufferType::shader_storage, (128 * 1024) * m_max_dispatches * sizeof(u64));
 	m_raster_image.emplace(BufferType::shader_storage,
 						   m_bin_count * square(m_bin_size) * sizeof(u32));
@@ -179,17 +174,17 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	defs["MAX_VISIBLE_QUADS"] = max_visible_quads;
 	defs["MAX_VISIBLE_QUADS_SHIFT"] = (int)log2(max_visible_quads);
 	defs["MAX_DISPATCHES"] = m_max_dispatches;
-	int bin_dispatcher_lsize = m_bin_size == 64 ? 512 : 1024;
 
 	p_init_counters = EX_PASS(Program::makeCompute("init_counters", defs));
 
-	defs["BIN_DISPATCHER_BATCH_SIZE"] = bin_dispatcher_lsize;
+	int bin_dispatcher_lsize = m_bin_size == 64 ? 512 : 1024;
+	defs["BIN_DISPATCHER_LSIZE"] = bin_dispatcher_lsize;
+	defs["BIN_DISPATCHER_LSHIFT"] = (int)log2(bin_dispatcher_lsize);
 	p_quad_setup = EX_PASS(Program::makeCompute("quad_setup", defs));
 	p_bin_categorizer = EX_PASS(Program::makeCompute("bin_categorizer", defs));
 
 	if(m_opts & Opt::timers)
 		defs["ENABLE_TIMERS"] = 1;
-	setLocalSize(defs, bin_dispatcher_lsize);
 	p_bin_dispatcher = EX_PASS(Program::makeCompute(
 		"bin_dispatcher", defs, mask(m_opts & Opt::debug_bin_dispatcher, ProgramOpt::debug)));
 
@@ -201,9 +196,7 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 		defs["ALPHA_THRESHOLD"] = 1;
 
 	auto raster_opts = mask(m_opts & Opt::debug_raster, ProgramOpt::debug);
-	setLocalSize(defs, raster_lsize_low);
 	p_raster_low = EX_PASS(Program::makeCompute("raster_low", defs, raster_opts));
-	setLocalSize(defs, raster_lsize_medium);
 	p_raster_medium = EX_PASS(Program::makeCompute("raster_medium", defs, raster_opts));
 
 	mkdirRecursive("temp").ignore();

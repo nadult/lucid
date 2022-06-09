@@ -1,5 +1,7 @@
 // $$include funcs frustum structures
-// LSIZE & LSHIFT predefined
+
+#define LSIZE BIN_DISPATCHER_LSIZE
+#define LSHIFT BIN_DISPATCHER_LSHIFT
 
 #define LID gl_LocalInvocationID
 #define LIX gl_LocalInvocationIndex

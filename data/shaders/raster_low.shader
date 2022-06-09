@@ -1,5 +1,7 @@
 // $$include funcs lighting frustum viewport raster
-// LSIZE & LSHIFT predefined
+
+#define LSIZE 256
+#define LSHIFT 8
 
 // TODO: add synthetic test: 256 planes one after another
 // TODO: cleanup in the beginning (group definitions)

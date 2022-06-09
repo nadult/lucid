@@ -21,9 +21,6 @@ class LucidRenderer {
 	static constexpr int max_instance_quads = 1024;
 	static constexpr int max_visible_quads = 2 * 1024 * 1024;
 
-	static constexpr int raster_lsize_low = 256;
-	static constexpr int raster_lsize_medium = 512;
-
 	LucidRenderer();
 	FWK_MOVABLE_CLASS(LucidRenderer)
 	Ex<void> exConstruct(Opts, int2 view_size);

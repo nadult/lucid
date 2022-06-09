@@ -1,6 +1,14 @@
 // $$include funcs lighting frustum viewport raster
-// LSIZE & LSHIFT predefined
-// TODO: 1024 for medium ?
+
+// TODO: fix 64x64 version
+
+#if BIN_SIZE == 64
+#define LSIZE 512
+#define LSHIFT 9
+#else
+#define LSIZE 1024
+#define LSHIFT 10
+#endif
 
 #define NUM_WARPS (LSIZE / 32)
 
@@ -20,8 +28,8 @@
 
 #define MAX_GROUP_SIZE 4
 
-#define MAX_SCRATCH_TRIS 8192
-#define MAX_SCRATCH_TRIS_SHIFT 13
+#define MAX_HBLOCK_ROW_TRIS 8192
+#define MAX_HBLOCK_ROW_TRIS_SHIFT 13
 
 #define SEGMENT_SIZE 256
 #define SEGMENT_SHIFT 8
@@ -52,8 +60,8 @@
 
 layout(local_size_x = LSIZE) in;
 
-#define WORKGROUP_32_SCRATCH_SIZE (32 * 1024)
-#define WORKGROUP_32_SCRATCH_SHIFT 15
+#define WORKGROUP_32_SCRATCH_SIZE (64 * 1024)
+#define WORKGROUP_32_SCRATCH_SHIFT 16
 
 #define WORKGROUP_64_SCRATCH_SIZE (128 * 1024)
 #define WORKGROUP_64_SCRATCH_SHIFT 17
@@ -67,23 +75,23 @@ layout(local_size_x = LSIZE) in;
 
 uint scratch32HBlockRowTrisOffset(uint hby) {
 	return (gl_WorkGroupID.x << WORKGROUP_32_SCRATCH_SHIFT) +
-		   (hby & HBLOCK_ROWS_STEP_MASK) * MAX_SCRATCH_TRIS;
+		   (hby & HBLOCK_ROWS_STEP_MASK) * MAX_HBLOCK_ROW_TRIS;
 }
 
 uint scratch64HBlockRowTrisOffset(uint hby) {
-	return (gl_WorkGroupID.x << WORKGROUP_64_SCRATCH_SHIFT) + 64 * 1024 +
-		   (hby & HBLOCK_ROWS_STEP_MASK) * MAX_SCRATCH_TRIS;
+	return (gl_WorkGroupID.x << WORKGROUP_64_SCRATCH_SHIFT) +
+		   (hby & HBLOCK_ROWS_STEP_MASK) * MAX_HBLOCK_ROW_TRIS;
 }
 
 uint scratch64HBlockTrisOffset(uint lhbid) {
-	return (gl_WorkGroupID.x << WORKGROUP_64_SCRATCH_SHIFT) + 96 * 1024 + lhbid * MAX_HBLOCK_TRIS;
+	return (gl_WorkGroupID.x << WORKGROUP_64_SCRATCH_SHIFT) + 64 * 1024 + lhbid * MAX_HBLOCK_TRIS;
 }
 
 // TODO: Once we've generated HBlock-tris we no longer need current HBlock-row-tris, so sorted HBlocks
 // overlap hblock-row-tris memory. But it only works in 32x32, in 64x64 with large amount of tris
 // we might be generating half hblock-row at a time...
 uint scratch64SortedHBlockTrisOffset(uint lhbid) {
-	return (gl_WorkGroupID.x << WORKGROUP_64_SCRATCH_SHIFT) + 112 * 1024 + lhbid * MAX_HBLOCK_TRIS;
+	return (gl_WorkGroupID.x << WORKGROUP_64_SCRATCH_SHIFT) + 96 * 1024 + lhbid * MAX_HBLOCK_TRIS;
 }
 
 shared int s_num_scratch_tris;
@@ -201,18 +209,19 @@ void loadScanlineParams(uint scratch_tri_idx, out vec3 scan_min, out vec3 scan_m
 					xsign2 ? scan[2] : 1.0 / 0.0);
 }
 
-void generateRowTris(uint scratch_tri_idx, int start_hby, int end_hby) {
+void generateRowTris(uint scratch_tri_idx, int start_hby) {
 	vec3 scan_min, scan_max, scan_step;
 	uint y_aabb;
 	loadScanlineParams(scratch_tri_idx, scan_min, scan_max, scan_step, y_aabb);
 	int min_hby = clamp(int(y_aabb & 0xffff) - s_bin_pos.y, 0, BIN_MASK) >> HBLOCK_HEIGHT_SHIFT;
 	int max_hby = clamp(int(y_aabb >> 16) - s_bin_pos.y, 0, BIN_MASK) >> HBLOCK_HEIGHT_SHIFT;
 
-	// TODO: with 1024 threads start/end hby won't be needed
+#if HBLOCK_ROWS_STEP < HBLOCK_ROWS
 	min_hby = max(start_hby, min_hby);
-	max_hby = min(end_hby, max_hby);
+	max_hby = min(start_hby + HBLOCK_ROWS_STEP_MASK, max_hby);
 	if(max_hby < min_hby)
 		return;
+#endif
 
 	vec3 start_offset = scan_step * float(min_hby * 4 + s_bin_pos.y) - vec3(s_bin_pos.x);
 	scan_min += start_offset;
@@ -257,7 +266,7 @@ void generateRowTris(uint scratch_tri_idx, int start_hby, int end_hby) {
 			atomicAdd(s_hblock_tri_counts[hbid_row + max_hbid], -1);
 
 		uint roffset = atomicAdd(s_hblock_row_tri_counts[hby], 1) +
-					   (hby & HBLOCK_ROWS_STEP_MASK) * MAX_SCRATCH_TRIS;
+					   (hby & HBLOCK_ROWS_STEP_MASK) * MAX_HBLOCK_ROW_TRIS;
 #if BIN_SIZE == 64
 		g_scratch_32[dst_offset_32 + roffset] = scratch_tri_idx | (bx_mask << 24);
 		g_scratch_64[dst_offset_64 + roffset] = uvec2(min_bits, max_bits);
@@ -268,14 +277,12 @@ void generateRowTris(uint scratch_tri_idx, int start_hby, int end_hby) {
 	}
 }
 
-void processQuads(int start_by) {
+void processQuads(int start_hby) {
 	if(LIX == 0)
 		s_num_scratch_tris = 0;
 	if(LIX < NUM_WARPS)
 		s_hblock_tri_counts[LIX] = 0;
 	barrier();
-
-	int end_by = start_by + HBLOCK_ROWS_STEP_MASK;
 
 	// TODO: this loop is slooooow
 	// TODO: divide big tris across different threads
@@ -297,7 +304,7 @@ void processQuads(int start_by) {
 		// TODO: store only if samples were generated
 		// TODO: do triangle storing later
 		uint scratch_tri_idx = quad_idx * 2 + second_tri;
-		generateRowTris(scratch_tri_idx, start_by, end_by);
+		generateRowTris(scratch_tri_idx, start_hby);
 	}
 	barrier();
 

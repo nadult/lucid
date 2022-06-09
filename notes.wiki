@@ -361,3 +361,11 @@ san-miguel: 9566   2926   182   2129        4150
     sponza: 3694   114    86    3226        101
     teapot: 395    31     31    286         5
  white_oak: 11211  45     171   10842       5
+
+ Increased LSIZE in raster_medium to 1024:
+            total  setup  bins  raster_low  raster_mid
+    dragon: 1038   428    50    352         155
+   gallery: 3002   787    66    1642        329
+  hairball: 12534  3350   292   294         8386
+powerplant: 10022  3023   280   786         5786
+san-miguel: 9446   2905   179   2106        4081

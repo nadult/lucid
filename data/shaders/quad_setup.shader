@@ -24,19 +24,23 @@ layout(std430, binding = 4) readonly restrict buffer buf4_ { vec2 g_input_tex_co
 layout(std430, binding = 5) readonly restrict buffer buf5_ { uint g_input_colors[]; };
 layout(std430, binding = 6) readonly restrict buffer buf6_ { uint g_input_normals[]; };
 
-layout(std430, binding = 7) buffer buf7_ { uint g_quad_indices[]; };
-layout(std430, binding = 8) buffer buf8_ { uint g_quad_aabbs[]; };
-layout(std430, binding = 9) buffer buf9_ { uvec4 g_tri_aabbs[]; };
-layout(std430, binding = 10) buffer buf10_ { uvec2 g_tri_storage[]; };
-layout(std430, binding = 11) buffer buf11_ { uvec4 g_quad_storage[]; };
-layout(std430, binding = 12) buffer buf12_ { uvec4 g_scan_storage[]; };
+layout(std430, binding = 7) writeonly restrict buffer buf7_ { uint g_quad_aabbs[]; };
+layout(std430, binding = 8) writeonly restrict buffer buf8_ { uvec2 g_tri_storage[]; };
+layout(std430, binding = 9) writeonly restrict buffer buf9_ { uvec4 g_quad_storage[]; };
+layout(std430, binding = 10) writeonly restrict buffer buf10_ { uvec4 g_scan_storage[]; };
+
+#define TRI_SCRATCH(var_idx) g_tri_storage[scratch_tri_idx * 8 + var_idx]
+#define QUAD_SCRATCH(var_idx) g_quad_storage[scratch_quad_idx + var_idx * MAX_VISIBLE_QUADS]
+#define QUAD_TEX_SCRATCH(var_idx)                                                                  \
+	g_quad_storage[scratch_quad_idx * 2 + MAX_VISIBLE_QUADS * 2 + var_idx]
+#define SCAN_SCRATCH(var_idx) g_scan_storage[scratch_tri_idx * 2 + var_idx]
 
 shared uint s_instance_id[MAX_PACKET_SIZE];
 
 shared uint s_rejected_quads[REJECTION_TYPE_COUNT];
 
 shared uint s_quad_aabbs[LSIZE];
-shared uvec4 s_tri_aabbs[LSIZE];
+shared uvec2 s_tri_y_aabbs[LSIZE];
 shared uvec4 s_quad_indices[LSIZE];
 
 shared int s_num_quads[MAX_PACKET_SIZE], s_index_offset[MAX_PACKET_SIZE];
@@ -256,20 +260,11 @@ void processQuad(uint quad_id, uint v0, uint v1, uint v2, uint v3, uint local_in
 	if(size_type_idx == 1)
 		out_idx = (LSIZE - 1) - out_idx;
 
-	// TODO: for slivers try to encode in small amount of data, bins wihch for sure won't
-	// intersect with the quad; For example: corner_id (2 bits), vertical coverage (7 bits, percentage),
-	// horiz coverage (7 bits, percentage); This way we can encode 2 cropping lines in 32 bits (maybe)
-
 	s_quad_aabbs[out_idx] = enc_aabb;
-	s_tri_aabbs[out_idx] = uvec4(encodeAABB64(uvec4(aabb0)), encodeAABB64(uvec4(aabb1)));
-	s_quad_indices[out_idx] = uvec4(v0, v1, v2, v3 | (cull_flags << 30));
+	s_tri_y_aabbs[out_idx].x = uint(aabb0[1]) | (uint(aabb0[3]) << 16);
+	s_tri_y_aabbs[out_idx].y = uint(aabb1[1]) | (uint(aabb1[3]) << 16);
+	s_quad_indices[out_idx] = uvec4(v0, v1, v2, v3);
 }
-
-#define TRI_SCRATCH(var_idx) g_tri_storage[scratch_tri_idx * 8 + var_idx]
-#define QUAD_SCRATCH(var_idx) g_quad_storage[scratch_quad_idx + var_idx * MAX_VISIBLE_QUADS]
-#define QUAD_TEX_SCRATCH(var_idx)                                                                  \
-	g_quad_storage[scratch_quad_idx * 2 + MAX_VISIBLE_QUADS * 2 + var_idx]
-#define SCAN_SCRATCH(var_idx) g_scan_storage[scratch_tri_idx * 2 + var_idx]
 
 void storeQuad(uint scratch_quad_idx, uint instance_flags, uint v0, uint v1, uint v2, uint v3) {
 	if((instance_flags & INST_HAS_VERTEX_COLORS) != 0)
@@ -291,11 +286,8 @@ void storeQuad(uint scratch_quad_idx, uint instance_flags, uint v0, uint v1, uin
 	}
 }
 
-void storeTri(uint scratch_tri_idx, uint instance_id_flags, uint instance_color, uint v0, uint v1,
-			  uint v2) {
-	vec3 tri0 = vertexLoad(v0) - frustum.ws_shared_origin;
-	vec3 tri1 = vertexLoad(v1) - frustum.ws_shared_origin;
-	vec3 tri2 = vertexLoad(v2) - frustum.ws_shared_origin;
+void storeTri(uint scratch_tri_idx, uint instance_id_flags, uint instance_color, vec3 tri0,
+			  vec3 tri1, vec3 tri2, uint y_aabb) {
 
 	vec3 normal = cross(tri0 - tri2, tri1 - tri0);
 	float multiplier = 1.0 / length(normal);
@@ -347,50 +339,43 @@ void storeTri(uint scratch_tri_idx, uint instance_id_flags, uint instance_color,
 	vec3 scan_base = -vec3(edges[0].z * inv_ex[0], edges[1].z * inv_ex[1], edges[2].z * inv_ex[2]);
 	vec3 scan_step = -vec3(edges[0].y * inv_ex[0], edges[1].y * inv_ex[1], edges[2].y * inv_ex[2]);
 
-	bool sign0 = edges[0].x < 0.0;
-	bool sign1 = edges[1].x < 0.0;
-	bool sign2 = edges[2].x < 0.0;
+	uint x_signs =
+		(edges[0].x < 0.0 ? 1 : 0) | (edges[1].x < 0.0 ? 2 : 0) | (edges[2].x < 0.0 ? 4 : 0);
+	uint y_signs =
+		(edges[0].y < 0.0 ? 8 : 0) | (edges[1].y < 0.0 ? 16 : 0) | (edges[2].y < 0.0 ? 32 : 0);
 
 	vec2 start = vec2(-0.5, 0.5);
 	vec3 scan = scan_step * start.y + scan_base - vec3(start.x);
-	uvec3 uscan = floatBitsToUint(scan);
-	uscan = (uscan & ~1) | uvec3(sign0 ? 1 : 0, sign1 ? 1 : 0, sign2 ? 1 : 0);
-
-	SCAN_SCRATCH(0) = uvec4(uscan.xyz, 0);
-	SCAN_SCRATCH(1) = uvec4(floatBitsToUint(scan_step), 0);
+	SCAN_SCRATCH(0) = uvec4(floatBitsToUint(scan), y_aabb);
+	SCAN_SCRATCH(1) = uvec4(floatBitsToUint(scan_step), x_signs | y_signs);
 }
 
 void addVisibleQuad(uint idx, uint local_instance_id) {
 	uint instance_id = s_instance_id[local_instance_id];
 
-	// Encode AABB+instance in 64-bit ?
-	// Max verts: 2^26, max_instances: 2^18
-	uint v0 = (s_quad_indices[LIX].x & 0x03ffffff) | ((instance_id & 0x3f) << 26);
-	uint v1 = (s_quad_indices[LIX].y & 0x03ffffff) | ((instance_id & 0xfc0) << 20);
-	uint v2 = (s_quad_indices[LIX].z & 0x03ffffff) | ((instance_id & 0x3f000) << 14);
-	uint v3 = s_quad_indices[LIX].w; // includes cull_flags
-
-	g_quad_indices[idx * 4 + 0] = v0;
-	g_quad_indices[idx * 4 + 1] = v1;
-	g_quad_indices[idx * 4 + 2] = v2;
-	g_quad_indices[idx * 4 + 3] = v3;
-
+	uint v0 = s_quad_indices[LIX].x;
+	uint v1 = s_quad_indices[LIX].y;
+	uint v2 = s_quad_indices[LIX].z;
+	uint v3 = s_quad_indices[LIX].w;
 	g_quad_aabbs[idx] = s_quad_aabbs[LIX];
-	g_tri_aabbs[idx] = s_tri_aabbs[LIX];
-
-	uint cull_flags = v3 >> 30;
-	v0 &= 0x03ffffff, v1 &= 0x03ffffff, v2 &= 0x03ffffff, v3 &= 0x03ffffff;
+	uint cull_flags = s_quad_aabbs[LIX] >> 30;
 
 	uint instance_flags = g_instances[instance_id].flags;
+	// TODO: better place for instance color & flags?
 	uint instance_color = g_instances[instance_id].color;
 	uint instance_id_flags = instance_flags | (instance_id << 16);
 
-	storeQuad(idx, instance_flags, v0, v1, v2, v3);
-	// TODO: shading data per-quad, not per triangle
+	vec3 tri0 = vertexLoad(v0) - frustum.ws_shared_origin;
+	vec3 tri1 = vertexLoad(v1) - frustum.ws_shared_origin;
+	vec3 tri2 = vertexLoad(v2) - frustum.ws_shared_origin;
+	vec3 tri3 = vertexLoad(v3) - frustum.ws_shared_origin;
 	if((cull_flags & 1) == 0)
-		storeTri(idx * 2 + 0, instance_id_flags, instance_color, v0, v1, v2);
+		storeTri(idx * 2 + 0, instance_id_flags, instance_color, tri0, tri1, tri2,
+				 s_tri_y_aabbs[LIX].x);
 	if((cull_flags & 2) == 0)
-		storeTri(idx * 2 + 1, instance_id_flags, instance_color, v0, v2, v3);
+		storeTri(idx * 2 + 1, instance_id_flags, instance_color, tri0, tri2, tri3,
+				 s_tri_y_aabbs[LIX].y);
+	storeQuad(idx, instance_flags, v0, v1, v2, v3);
 }
 
 void main() {
@@ -452,6 +437,7 @@ void main() {
 			if(out_offset != -1)
 				addVisibleQuad(out_offset, i);
 		}
+		barrier();
 	}
 	barrier();
 	if(LIX < REJECTION_TYPE_COUNT)

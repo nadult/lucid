@@ -3,25 +3,16 @@
 #define LIX gl_LocalInvocationIndex
 #define LID gl_LocalInvocationID
 
-layout(std430, binding = 1) readonly buffer buf1_ { uvec4 g_tri_aabbs[]; };
-layout(std430, binding = 2) readonly buffer buf2_ { uint g_quad_indices[]; };
+layout(std430, binding = 1) readonly restrict buffer buf1_ { uint g_bin_quads[]; };
+layout(std430, binding = 2) writeonly restrict buffer buf2_ { uint g_raster_image[]; };
 
-layout(std430, binding = 3) readonly buffer buf3_ { float g_verts[]; };
-layout(std430, binding = 4) readonly buffer buf4_ { vec2 g_tex_coords[]; };
-layout(std430, binding = 5) readonly buffer buf5_ { uint g_colors[]; };
-layout(std430, binding = 6) readonly buffer buf6_ { uint g_normals[]; };
-
-layout(std430, binding = 8) buffer buf8_ { uint g_bin_quads[]; };
-
-layout(std430, binding = 9) coherent buffer buf9_ { uint g_scratch_32[]; };
-layout(std430, binding = 10) coherent buffer buf10_ { uvec2 g_scratch_64[]; };
-
-layout(std430, binding = 11) readonly buffer buf11_ { InstanceData g_instances[]; };
-layout(std430, binding = 12) readonly buffer buf12_ { vec4 g_uv_rects[]; };
-layout(std430, binding = 13) writeonly buffer buf13_ { uint g_raster_image[]; };
-layout(std430, binding = 14) readonly restrict buffer buf14_ { uvec2 g_tri_storage[]; };
-layout(std430, binding = 15) readonly restrict buffer buf15_ { uvec4 g_quad_storage[]; };
-layout(std430, binding = 16) readonly restrict buffer buf16_ { uvec4 g_scan_storage[]; };
+layout(std430, binding = 3) coherent restrict buffer buf3_ { uint g_scratch_32[]; };
+layout(std430, binding = 4) coherent restrict buffer buf4_ { uvec2 g_scratch_64[]; };
+layout(std430, binding = 5) readonly restrict buffer buf5_ { InstanceData g_instances[]; };
+layout(std430, binding = 6) readonly restrict buffer buf6_ { vec4 g_uv_rects[]; };
+layout(std430, binding = 7) readonly restrict buffer buf7_ { uvec2 g_tri_storage[]; };
+layout(std430, binding = 8) readonly restrict buffer buf8_ { uvec4 g_quad_storage[]; };
+layout(std430, binding = 9) readonly restrict buffer buf9_ { uvec4 g_scan_storage[]; };
 
 layout(binding = 0) uniform sampler2D opaque_texture;
 layout(binding = 1) uniform sampler2D transparent_texture;

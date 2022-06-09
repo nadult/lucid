@@ -14,10 +14,10 @@ layout(local_size_x = LSIZE) in;
 layout(std430, binding = 1) readonly buffer buf1_ { uint g_quad_aabbs[]; };
 layout(std430, binding = 2) writeonly buffer buf2_ { uint g_bin_quads[]; };
 
-layout(std430, binding = 3) readonly buffer buf3_ { uint g_quad_indices[]; };
-layout(std430, binding = 4) readonly buffer buf4_ { float g_verts[]; };
+layout(std430, binding = 3) buffer buf3_ { int g_tasks[]; };
+layout(std430, binding = 4) buffer buf4_ { uvec4 g_scan_storage[]; };
 
-layout(std430, binding = 5) buffer buf5_ { int g_tasks[]; };
+#define SCAN_SCRATCH(var_idx) g_scan_storage[scratch_tri_idx * 2 + var_idx]
 
 shared int s_bins[BIN_COUNT];
 shared int s_temp[LSIZE];
@@ -34,34 +34,24 @@ struct QuadScanlineInfo {
 	uint cull_flags;
 };
 
-void computeScanlineParams(vec3 tri0, vec3 tri1, vec3 tri2, vec2 start, out vec3 scan_min,
-						   out vec3 scan_max, out vec3 scan_step) {
-	vec3 nrm0 = cross(tri2, tri1 - tri2);
-	vec3 nrm1 = cross(tri0, tri2 - tri0);
-	vec3 nrm2 = cross(tri1, tri0 - tri1);
-	float volume = dot(tri0, nrm0);
-	if(volume < 0)
-		nrm0 = -nrm0, nrm1 = -nrm1, nrm2 = -nrm2;
+void loadScanlineParams(uint scratch_tri_idx, vec2 start, out vec3 scan_min, out vec3 scan_max,
+						out vec3 scan_step) {
+	uvec4 val0 = SCAN_SCRATCH(0);
+	uvec4 val1 = SCAN_SCRATCH(1);
+	vec3 scan = uintBitsToFloat(val0.xyz);
+	scan_step = uintBitsToFloat(val1.xyz);
 
-	vec3 edges[3] = {
-		vec3(dot(nrm0, frustum.ws_dirx), dot(nrm0, frustum.ws_diry), dot(nrm0, frustum.ws_dir0)),
-		vec3(dot(nrm1, frustum.ws_dirx), dot(nrm1, frustum.ws_diry), dot(nrm1, frustum.ws_dir0)),
-		vec3(dot(nrm2, frustum.ws_dirx), dot(nrm2, frustum.ws_diry), dot(nrm2, frustum.ws_dir0)),
-	};
-
-	float inv_ex[3] = {1.0 / edges[0].x, 1.0 / edges[1].x, 1.0 / edges[2].x};
-	vec3 scan_base = -vec3(edges[0].z * inv_ex[0], edges[1].z * inv_ex[1], edges[2].z * inv_ex[2]);
-	scan_step = -vec3(edges[0].y * inv_ex[0], edges[1].y * inv_ex[1], edges[2].y * inv_ex[2]);
-
-	bvec3 xsigns = bvec3(edges[0].x >= 0.0, edges[1].x >= 0.0, edges[2].x >= 0.0);
+	// Note: these are negated
+	bvec3 xsigns = bvec3((val1.w & 1) == 0, (val1.w & 2) == 0, (val1.w & 4) == 0);
+	bvec3 ysigns = bvec3((val1.w & 8) == 0, (val1.w & 16) == 0, (val1.w & 32) == 0);
 
 	float bin_offset = BIN_SIZE - 0.989;
-	vec3 yoffset = vec3(edges[0].y >= 0.0 ? bin_offset : 0.0, edges[1].y >= 0.0 ? bin_offset : 0.0,
-						edges[2].y >= 0.0 ? bin_offset : 0.0);
+	vec3 yoffset = vec3(ysigns[0] ? bin_offset : 0.0, ysigns[1] ? bin_offset : 0.0,
+						ysigns[2] ? bin_offset : 0.0);
 	vec3 xoffset = vec3(xsigns[0] ? bin_offset : 0.0, xsigns[1] ? bin_offset : 0.0,
 						xsigns[2] ? bin_offset : 0.0);
 
-	vec3 scan = scan_step * (yoffset + vec3(start.y)) + scan_base - (xoffset + vec3(start.x));
+	scan += scan_step * (yoffset + vec3(start.y)) - (xoffset + vec3(start.x));
 	const float inf = 1.0 / 0.0;
 	scan_min =
 		vec3(xsigns[0] ? scan[0] : -inf, xsigns[1] ? scan[1] : -inf, xsigns[2] ? scan[2] : -inf);
@@ -70,33 +60,18 @@ void computeScanlineParams(vec3 tri0, vec3 tri1, vec3 tri2, vec2 start, out vec3
 	scan_step *= BIN_SIZE;
 }
 
-QuadScanlineInfo quadScanlineInfo(int quad_idx, int bsy) {
+QuadScanlineInfo quadScanlineInfo(int quad_idx, int bsy, uint cull_flags) {
 	QuadScanlineInfo info;
-
-	uint v0 = g_quad_indices[quad_idx * 4 + 0] & 0x03ffffff;
-	uint v1 = g_quad_indices[quad_idx * 4 + 1] & 0x03ffffff;
-	uint v2 = g_quad_indices[quad_idx * 4 + 2] & 0x03ffffff;
-	uint v3 = g_quad_indices[quad_idx * 4 + 3];
-	info.cull_flags = v3 >> 30;
+	info.cull_flags = cull_flags >> 30;
 	// ASSERT(info.cull_flags == 1 || info.cull_flags == 2);
-	v3 &= 0x03ffffff;
 
-	vec3 quad0 = vec3(g_verts[v0 * 3 + 0], g_verts[v0 * 3 + 1], g_verts[v0 * 3 + 2]) -
-				 frustum.ws_shared_origin;
-	vec3 quad1 = vec3(g_verts[v1 * 3 + 0], g_verts[v1 * 3 + 1], g_verts[v1 * 3 + 2]) -
-				 frustum.ws_shared_origin;
-	vec3 quad2 = vec3(g_verts[v2 * 3 + 0], g_verts[v2 * 3 + 1], g_verts[v2 * 3 + 2]) -
-				 frustum.ws_shared_origin;
-	vec3 quad3 = vec3(g_verts[v3 * 3 + 0], g_verts[v3 * 3 + 1], g_verts[v3 * 3 + 2]) -
-				 frustum.ws_shared_origin;
-
-	vec2 start = vec2(0.49, bsy * BIN_SIZE + 0.49);
+	vec2 start = vec2(0.99, bsy * BIN_SIZE - 0.01);
 	if((info.cull_flags & 1) == 0)
-		computeScanlineParams(quad0, quad1, quad2, start, info.scan_min[0], info.scan_max[0],
-							  info.scan_step[0]);
+		loadScanlineParams(quad_idx * 2 + 0, start, info.scan_min[0], info.scan_max[0],
+						   info.scan_step[0]);
 	if((info.cull_flags & 2) == 0)
-		computeScanlineParams(quad0, quad2, quad3, start, info.scan_min[1], info.scan_max[1],
-							  info.scan_step[1]);
+		loadScanlineParams(quad_idx * 2 + 1, start, info.scan_min[1], info.scan_max[1],
+						   info.scan_step[1]);
 
 	// Making sure that if one of the triangles is culled then it's the second one
 	if(info.cull_flags == 1) {
@@ -164,9 +139,11 @@ void countSmallQuadBins(uint quad_idx) {
 }
 
 void countLargeQuadBins(int quad_idx) {
-	ivec4 aabb = decodeAABB28(g_quad_aabbs[quad_idx]);
+	uint enc_aabb = g_quad_aabbs[quad_idx];
+	uint cull_flags = enc_aabb & 0xf0000000;
+	ivec4 aabb = decodeAABB28(enc_aabb);
 	int bsx = aabb[0], bsy = aabb[1], bex = aabb[2], bey = aabb[3];
-	QuadScanlineInfo info = quadScanlineInfo(quad_idx, bsy);
+	QuadScanlineInfo info = quadScanlineInfo(quad_idx, bsy, cull_flags);
 
 	for(int by = bsy; by <= bey; by++) {
 		int bmin, bmax;
@@ -275,7 +252,7 @@ void dispatchLargeQuadSimple(int large_quad_idx, int num_quads) {
 	uint bin_quad_idx = uint(quad_idx) | cull_flags;
 	ivec4 aabb = decodeAABB28(enc_aabb);
 	int bsx = aabb[0], bsy = aabb[1], bex = aabb[2], bey = aabb[3];
-	QuadScanlineInfo quad_scan_info = quadScanlineInfo(quad_idx, bsy);
+	QuadScanlineInfo quad_scan_info = quadScanlineInfo(quad_idx, bsy, cull_flags);
 
 	for(int by = bsy; by <= bey; by++) {
 		int bmin, bmax;
@@ -314,7 +291,7 @@ void dispatchLargeQuadBalanced(int large_quad_idx, int num_quads) {
 		bin_quad_idx = uint(quad_idx) | cull_flags;
 		ivec4 aabb = decodeAABB28(enc_aabb);
 		bsx = aabb[0], bsy = aabb[1], bex = aabb[2], bey = aabb[3];
-		quad_scan_info = quadScanlineInfo(quad_idx, bsy);
+		quad_scan_info = quadScanlineInfo(quad_idx, bsy, cull_flags);
 	}
 
 	for(int by = bsy; anyInvocationARB(by <= bey); by++) {

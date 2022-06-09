@@ -146,28 +146,32 @@ void getTriangleVertexTexCoords(uint scratch_tri_idx, out vec2 tex0, out vec2 te
 }
 
 void loadScanlineParams(uint scratch_tri_idx, out vec3 scan_min, out vec3 scan_max,
-						out vec3 scan_step) {
+						out vec3 scan_step, out uint y_aabb) {
 	uvec4 val0 = SCAN_SCRATCH(0);
 	uvec4 val1 = SCAN_SCRATCH(1);
-	// TODO: pass these differently
-	bool sign0 = (val0.x & 1) == 1;
-	bool sign1 = (val0.y & 1) == 1;
-	bool sign2 = (val0.z & 1) == 1;
+	bool xsign0 = (val1.w & 1) == 1;
+	bool xsign1 = (val1.w & 2) == 2;
+	bool xsign2 = (val1.w & 4) == 4;
 	vec3 scan = uintBitsToFloat(val0.xyz);
 	scan_step = uintBitsToFloat(val1.xyz);
+	y_aabb = val0.w;
 
-	scan_min = vec3(sign0 ? -1.0 / 0.0 : scan[0], sign1 ? -1.0 / 0.0 : scan[1],
-					sign2 ? -1.0 / 0.0 : scan[2]);
-	scan_max =
-		vec3(sign0 ? scan[0] : 1.0 / 0.0, sign1 ? scan[1] : 1.0 / 0.0, sign2 ? scan[2] : 1.0 / 0.0);
+	scan_min = vec3(xsign0 ? -1.0 / 0.0 : scan[0], xsign1 ? -1.0 / 0.0 : scan[1],
+					xsign2 ? -1.0 / 0.0 : scan[2]);
+	scan_max = vec3(xsign0 ? scan[0] : 1.0 / 0.0, xsign1 ? scan[1] : 1.0 / 0.0,
+					xsign2 ? scan[2] : 1.0 / 0.0);
 }
 
-void generateRowTris(uint tri_idx, int min_by, int max_by) {
+void generateRowTris(uint tri_idx) {
 	uint dst_offset_64 = scratch64BlockRowTrisOffset(0);
 
 	vec3 scan_min, scan_max, scan_step;
-	loadScanlineParams(tri_idx, scan_min, scan_max, scan_step);
+	uint y_aabb;
+	loadScanlineParams(tri_idx, scan_min, scan_max, scan_step, y_aabb);
+	int min_by = clamp(int(y_aabb & 0xffff) - s_bin_pos.y, 0, BIN_MASK) >> BLOCK_SHIFT;
+	int max_by = clamp(int(y_aabb >> 16) - s_bin_pos.y, 0, BIN_MASK) >> BLOCK_SHIFT;
 
+	// TODO: add start to loadScanline
 	vec3 start_offset = scan_step * float(min_by * 8 + s_bin_pos.y) - vec3(s_bin_pos.x);
 	scan_min += start_offset;
 	scan_max += start_offset;
@@ -242,14 +246,9 @@ void processQuads() {
 			atomicOr(s_raster_error, ~0);
 #endif
 
-		uvec4 aabb = g_tri_aabbs[quad_idx];
-		aabb = decodeAABB64(second_tri != 0 ? aabb.zw : aabb.xy);
-		int min_by = clamp(int(aabb[1]) - s_bin_pos.y, 0, BIN_MASK) >> BLOCK_SHIFT;
-		int max_by = clamp(int(aabb[3]) - s_bin_pos.y, 0, BIN_MASK) >> BLOCK_SHIFT;
-
 		// TODO: scratch_tri_idx -> storage_
 		uint scratch_tri_idx = quad_idx * 2 + second_tri;
-		generateRowTris(scratch_tri_idx, min_by, max_by);
+		generateRowTris(scratch_tri_idx);
 	}
 }
 

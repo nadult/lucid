@@ -43,7 +43,7 @@ class LucidRenderer {
 	void initCounters(const Context &);
 	void uploadInstances(const Context &);
 
-	void setupQuads(const Context &);
+	void quadSetup(const Context &);
 	void computeBins(const Context &);
 	void bindRasterCommon(const Context &);
 	void bindRaster(Program &, const Context &);
@@ -67,8 +67,7 @@ class LucidRenderer {
 	Program p_compose, p_dummy;
 
 	PBuffer m_errors, m_scratch_32, m_scratch_64, m_instance_data, m_uv_rects;
-	PBuffer m_quad_indices, m_quad_aabbs, m_tri_aabbs;
-	PBuffer m_info, m_bin_quads, m_raster_image;
+	PBuffer m_quad_aabbs, m_info, m_bin_quads, m_raster_image;
 	PBuffer m_tri_storage, m_quad_storage, m_scan_storage;
 	array<PBuffer, 3> m_old_info;
 

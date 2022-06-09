@@ -137,20 +137,12 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	// TODO: properly handle situations when limits were reached
 	uint max_bin_quads = max_quads * 3 / 2;
 
-	// TODO: won't work for small number of dispatches
-	// TODO: what if gpu will allow only single active TG ? then we're fucked, because
-	// there won't be enough space for workgroups
-	int max_bin_workgroup_items = m_bin_size == 64 ? 256 : 128;
-
 	// TODO: LucidRenderer constructed 2x at the beginning
-
-	m_quad_indices.emplace(BufferType::shader_storage, max_quads * 4 * sizeof(u32));
-	m_quad_aabbs.emplace(BufferType::shader_storage, max_visible_quads * sizeof(u32));
-	m_tri_aabbs.emplace(BufferType::shader_storage, max_visible_quads * sizeof(int4));
 
 	uint bin_counters_size = LUCID_INFO_SIZE + m_bin_count * 7;
 	m_info.emplace(BufferType::shader_storage, bin_counters_size * sizeof(u32));
 	m_bin_quads.emplace(BufferType::shader_storage, max_bin_quads * sizeof(u32));
+	m_quad_aabbs.emplace(BufferType::shader_storage, max_visible_quads * sizeof(u32));
 
 	int tri_storage_size = max_visible_quads * 2 * 8; // TODO: control this size
 	m_tri_storage.emplace(BufferType::shader_storage, tri_storage_size * sizeof(u64));
@@ -186,9 +178,7 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	defs["MAX_QUADS"] = max_quads;
 	defs["MAX_VISIBLE_QUADS"] = max_visible_quads;
 	defs["MAX_VISIBLE_QUADS_SHIFT"] = (int)log2(max_visible_quads);
-
 	defs["MAX_DISPATCHES"] = m_max_dispatches;
-	defs["MAX_BIN_WORKGROUP_ITEMS"] = max_bin_workgroup_items;
 	int bin_dispatcher_lsize = m_bin_size == 64 ? 512 : 1024;
 
 	p_init_counters = EX_PASS(Program::makeCompute("init_counters", defs));
@@ -275,7 +265,7 @@ void LucidRenderer::render(const Context &ctx) {
 
 	initCounters(ctx);
 	uploadInstances(ctx);
-	setupQuads(ctx);
+	quadSetup(ctx);
 	computeBins(ctx);
 	if(false)
 		dummyIterateBins(ctx);
@@ -363,7 +353,7 @@ void LucidRenderer::uploadInstances(const Context &ctx) {
 	m_num_instances = instances.size();
 }
 
-void LucidRenderer::setupQuads(const Context &ctx) {
+void LucidRenderer::quadSetup(const Context &ctx) {
 	// TODO: co robić z trójkątami, które są na tyle małe, że wogóle ich nie widać nawet w pełnej rozdziałce?
 	// TODO: backface-culling ?
 
@@ -383,12 +373,10 @@ void LucidRenderer::setupQuads(const Context &ctx) {
 	if(auto nrm_vb = vbuffers[3])
 		nrm_vb->bindIndexAs(6, BufferType::shader_storage);
 
-	m_quad_indices->bindIndex(7);
-	m_quad_aabbs->bindIndex(8);
-	m_tri_aabbs->bindIndex(9);
-	m_tri_storage->bindIndex(10);
-	m_quad_storage->bindIndex(11);
-	m_scan_storage->bindIndex(12);
+	m_quad_aabbs->bindIndex(7);
+	m_tri_storage->bindIndex(8);
+	m_quad_storage->bindIndex(9);
+	m_scan_storage->bindIndex(10);
 
 	p_quad_setup["enable_backface_culling"] = ctx.config.backface_culling;
 	p_quad_setup["view_proj_matrix"] = m_view_proj_matrix;
@@ -410,11 +398,8 @@ void LucidRenderer::computeBins(const Context &ctx) {
 	m_info->bindIndex(0);
 	m_quad_aabbs->bindIndex(1);
 	m_bin_quads->bindIndex(2);
-	m_quad_indices->bindIndex(3);
-	auto vbuffers = ctx.vao->buffers();
-	DASSERT(vbuffers.size() == 4);
-	vbuffers[0]->bindIndexAs(4, BufferType::shader_storage);
-	m_scratch_64->bindIndex(5);
+	m_scratch_64->bindIndex(3);
+	m_scan_storage->bindIndex(4);
 
 	PERF_CHILD_SCOPE("dispatcher phase");
 	p_bin_dispatcher.use();
@@ -445,29 +430,17 @@ void LucidRenderer::dummyIterateBins(const Context &ctx) {
 
 void LucidRenderer::bindRasterCommon(const Context &ctx) {
 	m_info->bindIndex(0);
-
-	m_tri_aabbs->bindIndex(1);
-	m_quad_indices->bindIndex(2);
-	auto vbuffers = ctx.vao->buffers();
-	DASSERT(vbuffers.size() == 4);
-	vbuffers[0]->bindIndexAs(3, BufferType::shader_storage);
-	if(auto tex_vb = vbuffers[2])
-		tex_vb->bindIndexAs(4, BufferType::shader_storage);
-	if(auto col_vb = vbuffers[1])
-		col_vb->bindIndexAs(5, BufferType::shader_storage);
-	if(auto nrm_vb = vbuffers[3])
-		nrm_vb->bindIndexAs(6, BufferType::shader_storage);
-
-	m_bin_quads->bindIndex(8);
-	m_scratch_32->bindIndex(9);
-	m_scratch_64->bindIndex(10);
-	m_instance_data->bindIndex(11);
-	m_uv_rects->bindIndex(12);
-	m_raster_image->bindIndex(13); // TODO: too many bindings
-	m_tri_storage->bindIndex(14);
-	m_quad_storage->bindIndex(15);
-	m_scan_storage->bindIndex(16);
+	m_bin_quads->bindIndex(1);
+	m_raster_image->bindIndex(2);
+	m_scratch_32->bindIndex(3);
+	m_scratch_64->bindIndex(4);
+	m_instance_data->bindIndex(5);
+	m_uv_rects->bindIndex(6);
+	m_tri_storage->bindIndex(7);
+	m_quad_storage->bindIndex(8);
+	m_scan_storage->bindIndex(9);
 }
+
 void LucidRenderer::bindRaster(Program &program, const Context &ctx) {
 	program.use();
 
@@ -691,7 +664,7 @@ vector<int> generateMinHistogram(CSpan<float2> ranges, int res) {
 void LucidRenderer::printTriangleSizeHistogram() const {
 	HashMap<int, int> tri_height_histogram;
 
-	auto quad_aabbs = m_quad_aabbs->download<u32>(m_num_quads);
+	/*auto quad_aabbs = m_quad_aabbs->download<u32>(m_num_quads);
 	auto tri_aabbs = m_tri_aabbs->download<int4>(m_num_quads);
 	for(int i : intRange(quad_aabbs)) {
 		if(quad_aabbs[i] == ~0u)
@@ -718,12 +691,12 @@ void LucidRenderer::printTriangleSizeHistogram() const {
 	printf("Triangle pixel-height histogram:\n");
 	for(auto &pair : pairs) {
 		printf("%4d: %.2f%% (%d)\n", pair.second, float(pair.first) * 100.0 / total, pair.first);
-	}
+	}*/
 }
 
 void LucidRenderer::printHistograms() const {
 	vector<IRect> quads;
-	{
+	/*{
 		auto quad_aabbs = m_quad_aabbs->download<u32>(m_num_quads);
 		auto tri_aabbs = m_tri_aabbs->download<int4>(m_num_quads);
 		quads.resize(m_num_quads);
@@ -740,7 +713,7 @@ void LucidRenderer::printHistograms() const {
 			max1 = vmax(max1, min1);
 			quads[i] = {vmin(min0, min1), vmax(max0, max1)};
 		}
-	}
+	}*/
 
 	constexpr int max_dim = 16;
 	auto get_quad = [&](IRect &out, int idx, int shift) {

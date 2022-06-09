@@ -630,7 +630,7 @@ vector<LucidApp::StatPoint> LucidApp::selectPerfPoints() const {
 
 	array<ZStr, 3> selection[] = {
 		{"total", "LucidRenderer::render", ""},
-		{"setup", "LucidRenderer::setupQuads", ""},
+		{"setup", "LucidRenderer::quadSetup", ""},
 		{"bins", "LucidRenderer::computeBins", ""},
 		{"tiles", "LucidRenderer::computeTiles", ""},
 		{"raster_low", "LucidRenderer::rasterLow", ""},

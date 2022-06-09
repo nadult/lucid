@@ -333,16 +333,31 @@ san-miguel: 10132  3196   182   2165        4372
  white_oak: 11204  49     159   10836       4
 
  Passing cull_flags through bin_quads:
-                 total  setup  bins  raster_low  raster_mid
-         #boxes: 1498   31     40    1367        4
-          bunny: 412    78     29    246         4
-     conference: 1208   61     75    947         4
-         dragon: 1110   461    50    369         176
-        gallery: 3182   842    68    1670        410
-       hairball: 13746  3696   299   301         9114
-     powerplant: 10963  3291   340   798         6403
-     san-miguel: 9893   3169   183   2138        4227
-      scrubPine: 565    14     55    451         5
-         sponza: 3728   119    89    3245        104
-         teapot: 396    32     34    288         5
-      white_oak: 11564  49     164   11001       5
+            total  setup  bins  raster_low  raster_mid
+    #boxes: 1498   31     40    1367        4
+     bunny: 412    78     29    246         4
+conference: 1208   61     75    947         4
+    dragon: 1110   461    50    369         176
+   gallery: 3182   842    68    1670        410
+  hairball: 13746  3696   299   301         9114
+powerplant: 10963  3291   340   798         6403
+san-miguel: 9893   3169   183   2138        4227
+ scrubPine: 565    14     55    451         5
+    sponza: 3728   119    89    3245        104
+    teapot: 396    32     34    288         5
+ white_oak: 11564  49     164   11001       5
+
+Removed quad_indices & tri_aabbs:
+            total  setup  bins  raster_low  raster_mid
+    #boxes: 1487   29     37    1365        4
+     bunny: 409    75     30    247         5
+conference: 1195   59     68    935         4
+    dragon: 1050   423    51    353         170
+   gallery: 3079   785    67    1636        399
+  hairball: 12983  3381   295   300         8920
+powerplant: 10442  3023   280   790         6205
+san-miguel: 9566   2926   182   2129        4150
+ scrubPine: 557    13     51    447         5
+    sponza: 3694   114    86    3226        101
+    teapot: 395    31     31    286         5
+ white_oak: 11211  45     171   10842       5

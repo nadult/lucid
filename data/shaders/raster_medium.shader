@@ -185,25 +185,34 @@ void getTriangleVertexTexCoords(uint scratch_tri_idx, out vec2 tex0, out vec2 te
 }
 
 void loadScanlineParams(uint scratch_tri_idx, out vec3 scan_min, out vec3 scan_max,
-						out vec3 scan_step) {
+						out vec3 scan_step, out uint y_aabb) {
 	uvec4 val0 = SCAN_SCRATCH(0);
 	uvec4 val1 = SCAN_SCRATCH(1);
-	// TODO: pass these differently
-	bool sign0 = (val0.x & 1) == 1;
-	bool sign1 = (val0.y & 1) == 1;
-	bool sign2 = (val0.z & 1) == 1;
+	bool xsign0 = (val1.w & 1) == 1;
+	bool xsign1 = (val1.w & 2) == 2;
+	bool xsign2 = (val1.w & 4) == 4;
 	vec3 scan = uintBitsToFloat(val0.xyz);
 	scan_step = uintBitsToFloat(val1.xyz);
+	y_aabb = val0.w;
 
-	scan_min = vec3(sign0 ? -1.0 / 0.0 : scan[0], sign1 ? -1.0 / 0.0 : scan[1],
-					sign2 ? -1.0 / 0.0 : scan[2]);
-	scan_max =
-		vec3(sign0 ? scan[0] : 1.0 / 0.0, sign1 ? scan[1] : 1.0 / 0.0, sign2 ? scan[2] : 1.0 / 0.0);
+	scan_min = vec3(xsign0 ? -1.0 / 0.0 : scan[0], xsign1 ? -1.0 / 0.0 : scan[1],
+					xsign2 ? -1.0 / 0.0 : scan[2]);
+	scan_max = vec3(xsign0 ? scan[0] : 1.0 / 0.0, xsign1 ? scan[1] : 1.0 / 0.0,
+					xsign2 ? scan[2] : 1.0 / 0.0);
 }
 
-void generateRowTris(uint scratch_tri_idx, int min_hby, int max_hby) {
+void generateRowTris(uint scratch_tri_idx, int start_hby, int end_hby) {
 	vec3 scan_min, scan_max, scan_step;
-	loadScanlineParams(scratch_tri_idx, scan_min, scan_max, scan_step);
+	uint y_aabb;
+	loadScanlineParams(scratch_tri_idx, scan_min, scan_max, scan_step, y_aabb);
+	int min_hby = clamp(int(y_aabb & 0xffff) - s_bin_pos.y, 0, BIN_MASK) >> HBLOCK_HEIGHT_SHIFT;
+	int max_hby = clamp(int(y_aabb >> 16) - s_bin_pos.y, 0, BIN_MASK) >> HBLOCK_HEIGHT_SHIFT;
+
+	// TODO: with 1024 threads start/end hby won't be needed
+	min_hby = max(start_hby, min_hby);
+	max_hby = min(end_hby, max_hby);
+	if(max_hby < min_hby)
+		return;
 
 	vec3 start_offset = scan_step * float(min_hby * 4 + s_bin_pos.y) - vec3(s_bin_pos.x);
 	scan_min += start_offset;
@@ -266,6 +275,8 @@ void processQuads(int start_by) {
 		s_hblock_tri_counts[LIX] = 0;
 	barrier();
 
+	int end_by = start_by + HBLOCK_ROWS_STEP_MASK;
+
 	// TODO: this loop is slooooow
 	// TODO: divide big tris across different threads
 	for(uint i = LIX >> 1; i < s_bin_quad_count; i += LSIZE / 2) {
@@ -283,21 +294,10 @@ void processQuads(int start_by) {
 			atomicOr(s_raster_error, ~0);
 #endif
 
-		uvec4 aabb = g_tri_aabbs[quad_idx];
-		aabb = decodeAABB64(second_tri != 0 ? aabb.zw : aabb.xy);
-		int min_by = clamp(int(aabb[1]) - s_bin_pos.y, 0, BIN_MASK) >> HBLOCK_HEIGHT_SHIFT;
-		int max_by = clamp(int(aabb[3]) - s_bin_pos.y, 0, BIN_MASK) >> HBLOCK_HEIGHT_SHIFT;
-
-		int end_by = start_by + HBLOCK_ROWS_STEP_MASK;
-		min_by = max(start_by, min_by);
-		max_by = min(end_by, max_by);
-		if(max_by < min_by)
-			continue;
-
 		// TODO: store only if samples were generated
 		// TODO: do triangle storing later
 		uint scratch_tri_idx = quad_idx * 2 + second_tri;
-		generateRowTris(scratch_tri_idx, min_by, max_by);
+		generateRowTris(scratch_tri_idx, start_by, end_by);
 	}
 	barrier();
 

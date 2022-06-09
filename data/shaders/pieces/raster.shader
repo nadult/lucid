@@ -20,6 +20,7 @@ layout(std430, binding = 11) readonly buffer buf11_ { InstanceData g_instances[]
 layout(std430, binding = 12) readonly buffer buf12_ { vec4 g_uv_rects[]; };
 layout(std430, binding = 13) writeonly buffer buf13_ { uint g_raster_image[]; };
 layout(std430, binding = 14) readonly restrict buffer buf14_ { uvec2 g_tri_storage[]; };
+layout(std430, binding = 15) readonly restrict buffer buf15_ { uvec4 g_quad_storage[]; };
 
 layout(binding = 0) uniform sampler2D opaque_texture;
 layout(binding = 1) uniform sampler2D transparent_texture;

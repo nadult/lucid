@@ -270,3 +270,49 @@ san-miguel: 8886   964    179   2520        5040        -30
     sponza: 3759   61     96    3331        100         -115
     teapot: 389    24     31    291         5
  white_oak: 12660  23     155   12347       4           -235
+
+
+Data storage in quad_setup (initial version):
+                 total  setup  bins  raster_low  raster_mid
+         #boxes: 1551   129    42    1317        4
+          bunny: 479    140    30    256         4
+     conference: 1223   69     75    945         4
+         dragon: 1395   610    50    457         217
+        gallery: 4063   1610   69    1695        444
+       hairball: 19974  8031   296   330         11118
+     powerplant: 12972  3939   347   828         7662
+     san-miguel: 11706  4695   187   2124        4512
+      scrubPine: 562    26     60    430         5
+         sponza: 3579   166    90    3072        100
+         teapot: 510    139    35    293         5
+      white_oak: 11110  99     153   10522       4
+
+Improved task management in quad_setup:
+            total  setup  bins  raster_low  raster_mid
+    #boxes: 1478   37     41    1335        4
+     bunny: 444    95     30    261         4
+conference: 1233   67     74    961         4
+    dragon: 1377   590    51    461         217
+   gallery: 4068   1609   68    1709        451
+  hairball: 19753  7631   293   326         11087
+powerplant: 12900  3912   339   819         7655
+san-miguel: 11492  4612   180   2077        4435
+ scrubPine: 544    15     52    432         5
+    sponza: 3587   152    91    3088        98
+    teapot: 414    40     34    295         5
+ white_oak: 10881  63     163   10498       5
+
+ Added quad storage:
+            total  setup  bins  raster_low  raster_mid
+    #boxes: 1511   34     40    1380        4
+     bunny: 428    86     29    251         5
+conference: 1214   65     75    946         4
+    dragon: 1241   509    50    425         200
+   gallery: 3425   931    68    1776        458
+  hairball: 15396  4511   295   311         10134
+powerplant: 11795  3361   341   805         7096
+san-miguel: 10470  3384   180   2150        4534
+ scrubPine: 558    14     52    443         5
+    sponza: 3694   124    85    3213        102
+    teapot: 394    34     33    286         5
+ white_oak: 11403  52     159   10885       4

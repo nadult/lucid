@@ -47,7 +47,11 @@ layout(local_size_x = LSIZE) in;
 #define WORKGROUP_64_SCRATCH_SIZE (64 * 1024)
 #define WORKGROUP_64_SCRATCH_SHIFT 16
 
-#define TRI_SCRATCH(var_idx) g_tri_storage[scratch_tri_idx * 16 + var_idx]
+// TODO: names
+#define TRI_SCRATCH(var_idx) g_tri_storage[scratch_tri_idx * 10 + var_idx]
+#define QUAD_SCRATCH(var_idx) g_quad_storage[scratch_quad_idx + var_idx * MAX_VISIBLE_QUADS]
+#define QUAD_TEX_SCRATCH(var_idx)                                                                  \
+	g_quad_storage[scratch_quad_idx * 2 + MAX_VISIBLE_QUADS * 2 + var_idx]
 
 uint scratch64BlockRowTrisOffset(uint by) {
 	return (gl_WorkGroupID.x << WORKGROUP_64_SCRATCH_SHIFT) + by * (MAX_BLOCK_ROW_TRIS * 2);
@@ -112,36 +116,39 @@ void getTriangleSecondaryParams(uint scratch_tri_idx, out uint unormal, out uint
 
 void getTriangleVertexColors(uint scratch_tri_idx, out vec4 color0, out vec4 color1,
 							 out vec4 color2) {
-	uvec2 val0 = TRI_SCRATCH(7);
-	uvec2 val1 = TRI_SCRATCH(8);
-	color0 = decodeRGBA8(val0[0]);
-	color1 = decodeRGBA8(val0[1]);
-	color2 = decodeRGBA8(val1[0]);
+	uint scratch_quad_idx = scratch_tri_idx >> 1;
+	uint second_tri = scratch_tri_idx & 1;
+	uvec4 colors = QUAD_SCRATCH(0);
+	color0 = decodeRGBA8(colors[0]);
+	color1 = decodeRGBA8(colors[1 + second_tri]);
+	color2 = decodeRGBA8(colors[2 + second_tri]);
 }
 
 void getTriangleVertexNormals(uint scratch_tri_idx, out vec3 normal0, out vec3 normal1,
 							  out vec3 normal2) {
-	uvec2 val0 = TRI_SCRATCH(9);
-	uvec2 val1 = TRI_SCRATCH(8);
-	normal0 = decodeNormalUint(val0[0]);
-	normal1 = decodeNormalUint(val0[1]);
-	normal2 = decodeNormalUint(val1[1]);
+	uint scratch_quad_idx = scratch_tri_idx >> 1;
+	uint second_tri = scratch_tri_idx & 1;
+	uvec4 normals = QUAD_SCRATCH(1);
+	normal0 = decodeNormalUint(normals[0]);
+	normal1 = decodeNormalUint(normals[1 + second_tri]);
+	normal2 = decodeNormalUint(normals[2 + second_tri]);
 }
 
 void getTriangleVertexTexCoords(uint scratch_tri_idx, out vec2 tex0, out vec2 tex1, out vec2 tex2) {
-	uvec2 val0 = TRI_SCRATCH(10);
-	uvec2 val1 = TRI_SCRATCH(11);
-	uvec2 val2 = TRI_SCRATCH(12);
-	tex0 = uintBitsToFloat(val0);
-	tex1 = uintBitsToFloat(val1);
-	tex2 = uintBitsToFloat(val2);
+	uint scratch_quad_idx = scratch_tri_idx >> 1;
+	uint second_tri = scratch_tri_idx & 1;
+	uvec4 tex_coords0 = QUAD_TEX_SCRATCH(0);
+	uvec4 tex_coords1 = QUAD_TEX_SCRATCH(1);
+	tex0 = uintBitsToFloat(tex_coords0.xy);
+	tex1 = uintBitsToFloat(second_tri == 0 ? tex_coords0.zw : tex_coords1.xy);
+	tex2 = uintBitsToFloat(second_tri == 0 ? tex_coords1.xy : tex_coords1.zw);
 }
 
 void loadScanlineParams(uint scratch_tri_idx, out vec3 scan_min, out vec3 scan_max,
 						out vec3 scan_step) {
-	uvec2 val0 = TRI_SCRATCH(13);
-	uvec2 val1 = TRI_SCRATCH(14);
-	uvec2 val2 = TRI_SCRATCH(15);
+	uvec2 val0 = TRI_SCRATCH(7);
+	uvec2 val1 = TRI_SCRATCH(8);
+	uvec2 val2 = TRI_SCRATCH(9);
 	bool sign0 = (val0.x & 1) == 1;
 	bool sign1 = (val0.y & 1) == 1;
 	bool sign2 = (val1.x & 1) == 1;

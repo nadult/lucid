@@ -28,6 +28,7 @@ layout(std430, binding = 7) buffer buf7_ { uint g_quad_indices[]; };
 layout(std430, binding = 8) buffer buf8_ { uint g_quad_aabbs[]; };
 layout(std430, binding = 9) buffer buf9_ { uvec4 g_tri_aabbs[]; };
 layout(std430, binding = 10) buffer buf10_ { uvec2 g_tri_storage[]; };
+layout(std430, binding = 11) buffer buf11_ { uvec4 g_quad_storage[]; };
 
 shared uint s_instance_id[MAX_PACKET_SIZE];
 
@@ -263,9 +264,33 @@ void processQuad(uint quad_id, uint v0, uint v1, uint v2, uint v3, uint local_in
 	s_quad_indices[out_idx] = uvec4(v0, v1, v2, v3 | (cull_flags << 30));
 }
 
-#define TRI_SCRATCH(var_idx) g_tri_storage[scratch_tri_idx * 16 + var_idx]
+#define TRI_SCRATCH(var_idx) g_tri_storage[scratch_tri_idx * 10 + var_idx]
+#define QUAD_SCRATCH(var_idx) g_quad_storage[scratch_quad_idx + var_idx * MAX_VISIBLE_QUADS]
+#define QUAD_TEX_SCRATCH(var_idx)                                                                  \
+	g_quad_storage[scratch_quad_idx * 2 + MAX_VISIBLE_QUADS * 2 + var_idx]
 
-void storeTri(uint scratch_tri_idx, uint instance_id, uint v0, uint v1, uint v2) {
+void storeQuad(uint scratch_quad_idx, uint instance_flags, uint v0, uint v1, uint v2, uint v3) {
+	if((instance_flags & INST_HAS_VERTEX_COLORS) != 0)
+		QUAD_SCRATCH(0) =
+			uvec4(g_input_colors[v0], g_input_colors[v1], g_input_colors[v2], g_input_colors[v3]);
+	if((instance_flags & INST_HAS_VERTEX_NORMALS) != 0)
+		QUAD_SCRATCH(1) = uvec4(g_input_normals[v0], g_input_normals[v1], g_input_normals[v2],
+								g_input_normals[v3]);
+	if((instance_flags & INST_HAS_TEXTURE) != 0) {
+		vec2 tex0 = g_input_tex_coords[v0];
+		vec2 tex1 = g_input_tex_coords[v1];
+		vec2 tex2 = g_input_tex_coords[v2];
+		vec2 tex3 = g_input_tex_coords[v3];
+		tex1 -= tex0;
+		tex2 -= tex0;
+		tex3 -= tex0;
+		QUAD_TEX_SCRATCH(0) = floatBitsToUint(vec4(tex0, tex1));
+		QUAD_TEX_SCRATCH(1) = floatBitsToUint(vec4(tex2, tex3));
+	}
+}
+
+void storeTri(uint scratch_tri_idx, uint instance_id_flags, uint instance_color, uint v0, uint v1,
+			  uint v2) {
 	vec3 tri0 = vertexLoad(v0) - frustum.ws_shared_origin;
 	vec3 tri1 = vertexLoad(v1) - frustum.ws_shared_origin;
 	vec3 tri2 = vertexLoad(v2) - frustum.ws_shared_origin;
@@ -283,9 +308,6 @@ void storeTri(uint scratch_tri_idx, uint instance_id, uint v0, uint v1, uint v2)
 	float param0 = dot(edge0, nrm_tri0);
 	float param1 = dot(edge1, nrm_tri0);
 
-	uint instance_flags = g_instances[instance_id].flags;
-	uint instance_color = g_instances[instance_id].color;
-
 	// Nice optimization for barycentric computations:
 	// dot(cross(edge, dir), normal) == dot(dir, cross(normal, edge))
 	edge0 = cross(normal, edge0);
@@ -299,37 +321,12 @@ void storeTri(uint scratch_tri_idx, uint instance_id, uint v0, uint v1, uint v2)
 						 dot(pnormal, s_ray_dir0));
 
 	TRI_SCRATCH(0) = uvec2(floatBitsToUint(depth_eq.x), floatBitsToUint(depth_eq.y));
-	TRI_SCRATCH(1) = uvec2(floatBitsToUint(depth_eq.z), instance_flags | (instance_id << 16));
+	TRI_SCRATCH(1) = uvec2(floatBitsToUint(depth_eq.z), instance_id_flags);
 	TRI_SCRATCH(2) = uvec2(floatBitsToUint(param0), floatBitsToUint(param1));
 	TRI_SCRATCH(3) = uvec2(floatBitsToUint(edge0.x), floatBitsToUint(edge0.y));
 	TRI_SCRATCH(4) = uvec2(floatBitsToUint(edge0.z), floatBitsToUint(edge1.x));
 	TRI_SCRATCH(5) = uvec2(floatBitsToUint(edge1.y), floatBitsToUint(edge1.z));
 	TRI_SCRATCH(6) = uvec2(unormal, instance_color);
-
-	uint vcolor2 = 0;
-	if((instance_flags & INST_HAS_VERTEX_COLORS) != 0) {
-		TRI_SCRATCH(7) = uvec2(g_input_colors[v0], g_input_colors[v1]);
-		vcolor2 = g_input_colors[v2];
-	}
-	uint vnormal2 = 0;
-	if((instance_flags & INST_HAS_VERTEX_NORMALS) != 0) {
-		TRI_SCRATCH(9) = uvec2(g_input_normals[v0], g_input_normals[v1]);
-		vnormal2 = g_input_normals[v2];
-	}
-
-	if((instance_flags & (INST_HAS_VERTEX_COLORS | INST_HAS_VERTEX_NORMALS)) != 0) {
-		TRI_SCRATCH(8) = uvec2(vcolor2, vnormal2);
-	}
-	if((instance_flags & INST_HAS_TEXTURE) != 0) {
-		vec2 tex0 = g_input_tex_coords[v0];
-		vec2 tex1 = g_input_tex_coords[v1];
-		vec2 tex2 = g_input_tex_coords[v2];
-		tex1 -= tex0;
-		tex2 -= tex0;
-		TRI_SCRATCH(10) = floatBitsToUint(tex0);
-		TRI_SCRATCH(11) = floatBitsToUint(tex1);
-		TRI_SCRATCH(12) = floatBitsToUint(tex2);
-	}
 
 	vec3 nrm0 = cross(tri2, tri1 - tri2);
 	vec3 nrm1 = cross(tri0, tri2 - tri0);
@@ -357,9 +354,9 @@ void storeTri(uint scratch_tri_idx, uint instance_id, uint v0, uint v1, uint v2)
 	uvec3 uscan = floatBitsToUint(scan);
 	uscan = (uscan & ~1) | uvec3(sign0 ? 1 : 0, sign1 ? 1 : 0, sign2 ? 1 : 0);
 
-	TRI_SCRATCH(13) = uscan.xy;
-	TRI_SCRATCH(14) = uvec2(uscan.z, floatBitsToUint(scan_step.x));
-	TRI_SCRATCH(15) = floatBitsToUint(scan_step.yz);
+	TRI_SCRATCH(7) = uscan.xy;
+	TRI_SCRATCH(8) = uvec2(uscan.z, floatBitsToUint(scan_step.x));
+	TRI_SCRATCH(9) = floatBitsToUint(scan_step.yz);
 }
 
 void addVisibleQuad(uint idx, uint local_instance_id) {
@@ -383,11 +380,16 @@ void addVisibleQuad(uint idx, uint local_instance_id) {
 	uint cull_flags = v3 >> 30;
 	v0 &= 0x03ffffff, v1 &= 0x03ffffff, v2 &= 0x03ffffff, v3 &= 0x03ffffff;
 
+	uint instance_flags = g_instances[instance_id].flags;
+	uint instance_color = g_instances[instance_id].color;
+	uint instance_id_flags = instance_flags | (instance_id << 16);
+
+	storeQuad(idx, instance_flags, v0, v1, v2, v3);
 	// TODO: shading data per-quad, not per triangle
 	if((cull_flags & 1) == 0)
-		storeTri(idx * 2 + 0, instance_id, v0, v1, v2);
+		storeTri(idx * 2 + 0, instance_id_flags, instance_color, v0, v1, v2);
 	if((cull_flags & 2) == 0)
-		storeTri(idx * 2 + 1, instance_id, v0, v2, v3);
+		storeTri(idx * 2 + 1, instance_id_flags, instance_color, v0, v2, v3);
 }
 
 void main() {

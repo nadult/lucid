@@ -67,11 +67,12 @@ layout(local_size_x = LSIZE) in;
 #define WORKGROUP_64_SCRATCH_SHIFT 17
 
 // TODO: names
-#define TRI_SCRATCH(var_idx) g_tri_storage[scratch_tri_idx * 8 + var_idx]
+#define TRI_SCRATCH(var_idx) g_tri_storage[scratch_tri_idx * 5 + var_idx]
 #define QUAD_SCRATCH(var_idx) g_quad_storage[scratch_quad_idx + var_idx * MAX_VISIBLE_QUADS]
 #define QUAD_TEX_SCRATCH(var_idx)                                                                  \
 	g_quad_storage[scratch_quad_idx * 2 + MAX_VISIBLE_QUADS * 2 + var_idx]
 #define SCAN_SCRATCH(var_idx) g_scan_storage[scratch_tri_idx * 2 + var_idx]
+#define DEPTH_SCRATCH() g_scan_storage[MAX_VISIBLE_QUADS * 4 + scratch_tri_idx]
 
 uint currentHBlockRow(uint hby) {
 #if BIN_SIZE == 64
@@ -150,22 +151,23 @@ void getTriangleParams(uint scratch_tri_idx, out vec3 depth_eq, out vec2 bary_pa
 					   out vec3 edge0, out vec3 edge1, out uint instance_id,
 					   out uint instance_flags) {
 	{
-		uvec2 val0 = TRI_SCRATCH(0), val1 = TRI_SCRATCH(1), val2 = TRI_SCRATCH(2);
+		uvec4 val0 = DEPTH_SCRATCH();
+		uvec2 val2 = TRI_SCRATCH(0);
 		depth_eq =
-			vec3(uintBitsToFloat(val0[0]), uintBitsToFloat(val0[1]), uintBitsToFloat(val1[0]));
+			vec3(uintBitsToFloat(val0[0]), uintBitsToFloat(val0[1]), uintBitsToFloat(val0[2]));
 		bary_params = vec2(uintBitsToFloat(val2[0]), uintBitsToFloat(val2[1]));
-		instance_flags = val1[1] & 0xffff;
-		instance_id = val1[1] >> 16;
+		instance_flags = val0[3] & 0xffff;
+		instance_id = val0[3] >> 16;
 	}
 	{
-		uvec2 val0 = TRI_SCRATCH(3), val1 = TRI_SCRATCH(4), val2 = TRI_SCRATCH(5);
+		uvec2 val0 = TRI_SCRATCH(1), val1 = TRI_SCRATCH(2), val2 = TRI_SCRATCH(3);
 		edge0 = vec3(uintBitsToFloat(val0[0]), uintBitsToFloat(val0[1]), uintBitsToFloat(val1[0]));
 		edge1 = vec3(uintBitsToFloat(val1[1]), uintBitsToFloat(val2[0]), uintBitsToFloat(val2[1]));
 	}
 }
 
 void getTriangleSecondaryParams(uint scratch_tri_idx, out uint unormal, out uint instance_color) {
-	uvec2 val0 = TRI_SCRATCH(6);
+	uvec2 val0 = TRI_SCRATCH(4);
 	unormal = val0.x;
 	instance_color = val0.y;
 }
@@ -497,9 +499,7 @@ void generateHBlocks(uint start_hbid) {
 		cpos *= 0.5 / float(num_frags);
 		cpos += block_pos;
 
-		vec2 val0 = uintBitsToFloat(TRI_SCRATCH(0));
-		vec2 val1 = uintBitsToFloat(TRI_SCRATCH(1));
-		vec3 depth_eq = vec3(val0.x, val0.y, val1.x);
+		vec3 depth_eq = uintBitsToFloat(DEPTH_SCRATCH().xyz);
 		float ray_pos = depth_eq.x * cpos.x + (depth_eq.y * cpos.y + depth_eq.z);
 		float depth = 0xffffe * SATURATE(inversesqrt(ray_pos + 1)); // 20 bits
 

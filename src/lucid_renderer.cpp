@@ -142,7 +142,7 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	int tri_storage_size = max_visible_quads * 2 * 8; // TODO: control this size
 	m_tri_storage.emplace(BufferType::shader_storage, tri_storage_size * sizeof(u64));
 	m_quad_storage.emplace(BufferType::shader_storage, max_visible_quads * 4 * sizeof(int4));
-	m_scan_storage.emplace(BufferType::shader_storage, max_visible_quads * 2 * 2 * sizeof(int4));
+	m_scan_storage.emplace(BufferType::shader_storage, max_visible_quads * 2 * 3 * sizeof(int4));
 
 	// TODO: control size of scratch mem
 	m_scratch_32.emplace(BufferType::shader_storage, (64 * 1024) * m_max_dispatches * sizeof(u32));

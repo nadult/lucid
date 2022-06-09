@@ -369,3 +369,18 @@ san-miguel: 9566   2926   182   2129        4150
   hairball: 12534  3350   292   294         8386
 powerplant: 10022  3023   280   786         5786
 san-miguel: 9446   2905   179   2106        4081
+
+Keeping depth_eq data together:
+            total  setup  bins  raster_low  raster_mid
+    #boxes: 1508   24     37    1392        5
+     bunny: 400    66     29    250         4
+conference: 1207   57     71    948         4
+    dragon: 993    377    50    356         155
+   gallery: 2971   710    68    1686        344
+  hairball: 11919  2921   295   293         8287
+powerplant: 9776   2770   284   799         5788
+san-miguel: 9299   2693   179   2116        4153
+ scrubPine: 544    12     49    439         5
+    sponza: 3621   102    88    3187        69
+    teapot: 382    25     30    284         4
+ white_oak: 11571  40     159   11205       4

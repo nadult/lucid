@@ -29,11 +29,13 @@ layout(std430, binding = 8) writeonly restrict buffer buf8_ { uvec2 g_tri_storag
 layout(std430, binding = 9) writeonly restrict buffer buf9_ { uvec4 g_quad_storage[]; };
 layout(std430, binding = 10) writeonly restrict buffer buf10_ { uvec4 g_scan_storage[]; };
 
-#define TRI_SCRATCH(var_idx) g_tri_storage[scratch_tri_idx * 8 + var_idx]
+// TODO: Jak zwiększyć szansę trafienia w cache?
+#define TRI_SCRATCH(var_idx) g_tri_storage[scratch_tri_idx * 5 + var_idx]
 #define QUAD_SCRATCH(var_idx) g_quad_storage[scratch_quad_idx + var_idx * MAX_VISIBLE_QUADS]
 #define QUAD_TEX_SCRATCH(var_idx)                                                                  \
 	g_quad_storage[scratch_quad_idx * 2 + MAX_VISIBLE_QUADS * 2 + var_idx]
 #define SCAN_SCRATCH(var_idx) g_scan_storage[scratch_tri_idx * 2 + var_idx]
+#define DEPTH_SCRATCH() g_scan_storage[MAX_VISIBLE_QUADS * 4 + scratch_tri_idx]
 
 shared uint s_instance_id[MAX_PACKET_SIZE];
 
@@ -147,7 +149,7 @@ vec4 computeAABB(vec3 v0, vec3 v1, vec3 v2) {
 				max(max(v0.y, v1.y), v2.y));
 }
 
-void processQuad(uint quad_id, uint v0, uint v1, uint v2, uint v3, uint local_instance_id) {
+void processInputQuad(uint quad_id, uint v0, uint v1, uint v2, uint v3, uint local_instance_id) {
 	// Clipping: https://www.casual-effects.com/research/McGuire2011Clipping/McGuire-Clipping.pdf
 	// clipped triangle might be a polygon of up to 7 vertices...
 	// TODO: we have to do culling, otherwise triangles behind camera can waste a lot of cycles
@@ -314,13 +316,13 @@ void storeTri(uint scratch_tri_idx, uint instance_id_flags, uint instance_color,
 	vec3 depth_eq = vec3(dot(pnormal, frustum.ws_dirx), dot(pnormal, frustum.ws_diry),
 						 dot(pnormal, s_ray_dir0));
 
-	TRI_SCRATCH(0) = uvec2(floatBitsToUint(depth_eq.x), floatBitsToUint(depth_eq.y));
-	TRI_SCRATCH(1) = uvec2(floatBitsToUint(depth_eq.z), instance_id_flags);
-	TRI_SCRATCH(2) = uvec2(floatBitsToUint(param0), floatBitsToUint(param1));
-	TRI_SCRATCH(3) = uvec2(floatBitsToUint(edge0.x), floatBitsToUint(edge0.y));
-	TRI_SCRATCH(4) = uvec2(floatBitsToUint(edge0.z), floatBitsToUint(edge1.x));
-	TRI_SCRATCH(5) = uvec2(floatBitsToUint(edge1.y), floatBitsToUint(edge1.z));
-	TRI_SCRATCH(6) = uvec2(unormal, instance_color);
+	// (65%)
+	DEPTH_SCRATCH() = uvec4(floatBitsToUint(depth_eq), instance_id_flags);
+	TRI_SCRATCH(0) = uvec2(floatBitsToUint(param0), floatBitsToUint(param1));
+	TRI_SCRATCH(1) = uvec2(floatBitsToUint(edge0.x), floatBitsToUint(edge0.y));
+	TRI_SCRATCH(2) = uvec2(floatBitsToUint(edge0.z), floatBitsToUint(edge1.x));
+	TRI_SCRATCH(3) = uvec2(floatBitsToUint(edge1.y), floatBitsToUint(edge1.z));
+	TRI_SCRATCH(4) = uvec2(unormal, instance_color);
 
 	vec3 nrm0 = cross(tri2, tri1 - tri2);
 	vec3 nrm1 = cross(tri0, tri2 - tri0);
@@ -346,6 +348,8 @@ void storeTri(uint scratch_tri_idx, uint instance_id_flags, uint instance_color,
 
 	vec2 start = vec2(-0.5, 0.5);
 	vec3 scan = scan_step * start.y + scan_base - vec3(start.x);
+
+	// (15%)
 	SCAN_SCRATCH(0) = uvec4(floatBitsToUint(scan), y_aabb);
 	SCAN_SCRATCH(1) = uvec4(floatBitsToUint(scan_step), x_signs | y_signs);
 }
@@ -413,7 +417,7 @@ void main() {
 			uint v2 = g_input_indices[index_offset + 2] + vertex_offset;
 			uint v3 = g_input_indices[index_offset + 3] + vertex_offset;
 
-			processQuad(s_quad_offset[i] + int(LIX), v0, v1, v2, v3, i);
+			processInputQuad(s_quad_offset[i] + int(LIX), v0, v1, v2, v3, i);
 		}
 		barrier();
 		if(LIX < 2)

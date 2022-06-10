@@ -278,7 +278,6 @@ void storeQuad(uint scratch_quad_idx, uint instance_flags, uint v0, uint v1, uin
 
 void storeTri(uint scratch_tri_idx, uint instance_flags_id, vec3 tri0, vec3 tri1, vec3 tri2,
 			  uint y_aabb) {
-
 	vec3 normal = cross(tri0 - tri2, tri1 - tri0);
 	float multiplier = 1.0 / length(normal);
 	normal *= multiplier;
@@ -343,15 +342,15 @@ void storeTri(uint scratch_tri_idx, uint instance_flags_id, vec3 tri0, vec3 tri1
 	g_uvec4_storage[scan_offset + 1] = uvec4(floatBitsToUint(scan_step), x_signs | y_signs);
 }
 
-void addVisibleQuad(uint idx, uint local_instance_id) {
+void addVisibleQuad(uint quad_idx, uint src_idx, uint local_instance_id) {
 	uint instance_id = s_instance_id[local_instance_id];
-	g_quad_aabbs[idx] = s_quad_aabbs[LIX];
+	g_quad_aabbs[quad_idx] = s_quad_aabbs[src_idx];
 
-	uint v0 = s_quad_indices[LIX].x;
-	uint v1 = s_quad_indices[LIX].y;
-	uint v2 = s_quad_indices[LIX].z;
-	uint v3 = s_quad_indices[LIX].w;
-	uint cull_flags = s_quad_aabbs[LIX] >> 30;
+	uint v0 = s_quad_indices[src_idx].x;
+	uint v1 = s_quad_indices[src_idx].y;
+	uint v2 = s_quad_indices[src_idx].z;
+	uint v3 = s_quad_indices[src_idx].w;
+	uint cull_flags = s_quad_aabbs[src_idx] >> 30;
 	uint instance_flags = g_instances[instance_id].flags;
 
 	vec3 tri0 = vertexLoad(v0) - frustum.ws_shared_origin;
@@ -361,10 +360,10 @@ void addVisibleQuad(uint idx, uint local_instance_id) {
 
 	uint instance_flags_id = instance_flags | (instance_id << 16);
 	if((cull_flags & 1) == 0)
-		storeTri(idx * 2 + 0, instance_flags_id, tri0, tri1, tri2, s_tri_y_aabbs[LIX].x);
+		storeTri(quad_idx * 2 + 0, instance_flags_id, tri0, tri1, tri2, s_tri_y_aabbs[src_idx].x);
 	if((cull_flags & 2) == 0)
-		storeTri(idx * 2 + 1, instance_flags_id, tri0, tri2, tri3, s_tri_y_aabbs[LIX].y);
-	storeQuad(idx, instance_flags, v0, v1, v2, v3);
+		storeTri(quad_idx * 2 + 1, instance_flags_id, tri0, tri2, tri3, s_tri_y_aabbs[src_idx].y);
+	storeQuad(quad_idx, instance_flags, v0, v1, v2, v3);
 }
 
 void main() {
@@ -413,20 +412,17 @@ void main() {
 
 		uint num_small = s_num_visible[i * 2 + 0];
 		uint num_large = s_num_visible[i * 2 + 1];
-
-		{ // Storing basic quad info
-			int out_offset = -1;
-			if(LIX < num_small)
-				out_offset = s_out_offset[0] + int(LIX);
-			// TODO: properly handle these
-			// TODO: hole in the middle makes it a bit less effective
-			else if(LIX >= LSIZE - num_large) {
-				int idx = s_out_offset[1] + int((LSIZE - 1) - LIX);
-				out_offset = (MAX_VISIBLE_QUADS - 1) - idx;
-			}
-			if(out_offset != -1)
-				addVisibleQuad(out_offset, i);
+		int quad_idx = -1, src_idx;
+		if(LIX < num_small) {
+			src_idx = int(LIX);
+			quad_idx = s_out_offset[0] + src_idx;
+		} else if(LIX - num_small < num_large) {
+			src_idx = int(LIX - num_small);
+			quad_idx = (MAX_VISIBLE_QUADS - 1) - (s_out_offset[1] + src_idx);
+			src_idx = (LSIZE - 1) - src_idx;
 		}
+		if(quad_idx != -1)
+			addVisibleQuad(quad_idx, src_idx, i);
 		barrier();
 	}
 	barrier();

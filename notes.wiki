@@ -414,3 +414,18 @@ san-miguel: 8875   2348   178   2125        4081
     sponza: 3551   92     97    3140        69
     teapot: 379    22     30    293         5
  white_oak: 11325  29     171   10962       5
+
+ Optimized tri storage in quad_setup:
+            total  setup  bins  raster_low  raster_mid
+    #boxes: 1448   18     38    1342        4
+     bunny: 374    53     29    250         5
+conference: 1202   51     71    956         5
+    dragon: 883    293    50    347         151
+   gallery: 2766   552    67    1657        332
+  hairball: 10765  1790   295   296         8300
+powerplant: 9474   2569   283   797         5731
+san-miguel: 8858   2334   179   2111        4093
+ scrubPine: 560    11     53    454         5
+    sponza: 3584   90     108   3160        69
+    teapot: 386    19     30    295         4
+ white_oak: 11452  29     166   10984       4

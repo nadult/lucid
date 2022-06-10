@@ -28,22 +28,22 @@ layout(std430, binding = 7) writeonly restrict buffer buf7_ { uint g_quad_aabbs[
 layout(std430, binding = 8) writeonly restrict buffer buf8_ { uvec4 g_uvec4_storage[]; };
 layout(std430, binding = 9) writeonly restrict buffer buf9_ { uint g_uint_storage[]; };
 
-shared uint s_instance_id[MAX_PACKET_SIZE];
-shared uint s_rejected_quads[REJECTION_TYPE_COUNT];
-
 shared uint s_quad_aabbs[LSIZE];
 shared uvec2 s_tri_y_aabbs[LSIZE];
 shared uvec4 s_quad_indices[LSIZE];
 
 // TODO: just keep InstanceData here ?
-shared int s_num_quads[MAX_PACKET_SIZE], s_index_offset[MAX_PACKET_SIZE];
-shared int s_quad_offset[MAX_PACKET_SIZE], s_vertex_offset[MAX_PACKET_SIZE];
+shared InstanceData s_instances[MAX_PACKET_SIZE];
+shared int s_quad_offset[MAX_PACKET_SIZE];
+shared int s_instance_id[MAX_PACKET_SIZE];
 
 // For each instance we count two types of triangles: small and big
 shared int s_num_visible[MAX_PACKET_SIZE * 2];
 shared int s_out_offset[2];
 
 shared vec3 s_ray_dir0;
+
+shared uint s_rejected_quads[REJECTION_TYPE_COUNT];
 
 // TODO: do something about divergence in input data
 // TODO: muszę też mieć możliwość dodawania nowych wierzchołków
@@ -276,7 +276,7 @@ void storeQuad(uint scratch_quad_idx, uint instance_flags, uint v0, uint v1, uin
 	}
 }
 
-void storeTri(uint scratch_tri_idx, uint instance_flags_id, vec3 tri0, vec3 tri1, vec3 tri2,
+void storeTri(int scratch_tri_idx, uint instance_flags_id, vec3 tri0, vec3 tri1, vec3 tri2,
 			  uint y_aabb) {
 	vec3 normal = cross(tri0 - tri2, tri1 - tri0);
 	float multiplier = 1.0 / length(normal);
@@ -342,8 +342,7 @@ void storeTri(uint scratch_tri_idx, uint instance_flags_id, vec3 tri0, vec3 tri1
 	g_uvec4_storage[scan_offset + 1] = uvec4(floatBitsToUint(scan_step), x_signs | y_signs);
 }
 
-void addVisibleQuad(uint quad_idx, uint src_idx, uint local_instance_id) {
-	uint instance_id = s_instance_id[local_instance_id];
+void addVisibleQuad(int quad_idx, int src_idx, int instance_id) {
 	g_quad_aabbs[quad_idx] = s_quad_aabbs[src_idx];
 
 	uint v0 = s_quad_indices[src_idx].x;
@@ -357,13 +356,24 @@ void addVisibleQuad(uint quad_idx, uint src_idx, uint local_instance_id) {
 	vec3 tri1 = vertexLoad(v1) - frustum.ws_shared_origin;
 	vec3 tri2 = vertexLoad(v2) - frustum.ws_shared_origin;
 	vec3 tri3 = vertexLoad(v3) - frustum.ws_shared_origin;
-
-	uint instance_flags_id = instance_flags | (instance_id << 16);
-	if((cull_flags & 1) == 0)
-		storeTri(quad_idx * 2 + 0, instance_flags_id, tri0, tri1, tri2, s_tri_y_aabbs[src_idx].x);
-	if((cull_flags & 2) == 0)
-		storeTri(quad_idx * 2 + 1, instance_flags_id, tri0, tri2, tri3, s_tri_y_aabbs[src_idx].y);
 	storeQuad(quad_idx, instance_flags, v0, v1, v2, v3);
+}
+
+void addVisibleTri(int quad_idx, int src_idx, uint instance_flags_id, int second_tri) {
+	uint cull_flag = (s_quad_aabbs[src_idx] >> (30 + second_tri)) & 1;
+	if(cull_flag == 1)
+		return;
+
+	uint v0 = s_quad_indices[src_idx].x;
+	uint v1 = s_quad_indices[src_idx][1 + second_tri];
+	uint v2 = s_quad_indices[src_idx][2 + second_tri];
+
+	vec3 tri0 = vertexLoad(v0) - frustum.ws_shared_origin;
+	vec3 tri1 = vertexLoad(v1) - frustum.ws_shared_origin;
+	vec3 tri2 = vertexLoad(v2) - frustum.ws_shared_origin;
+
+	uint y_aabb = s_tri_y_aabbs[src_idx][second_tri];
+	storeTri(quad_idx * 2 + second_tri, instance_flags_id, tri0, tri1, tri2, y_aabb);
 }
 
 void main() {
@@ -373,14 +383,12 @@ void main() {
 	if(LIX < packet_size) {
 		int instance_id = int(WGID.x * packet_size + LIX);
 		if(instance_id < u_num_instances) {
-			int num_quads = g_instances[instance_id].num_quads;
-			s_num_quads[LIX] = num_quads;
-			s_vertex_offset[LIX] = g_instances[instance_id].vertex_offset;
-			s_index_offset[LIX] = g_instances[instance_id].index_offset;
-			s_quad_offset[LIX] = atomicAdd(g_info.num_input_quads, num_quads);
+			InstanceData instance = g_instances[instance_id];
+			s_instances[LIX] = instance;
+			s_quad_offset[LIX] = atomicAdd(g_info.num_input_quads, instance.num_quads);
 			s_instance_id[LIX] = instance_id;
 		} else {
-			s_num_quads[LIX] = 0;
+			s_instances[LIX].num_quads = 0;
 		}
 	}
 	if(LIX < packet_size * 2)
@@ -391,16 +399,13 @@ void main() {
 		s_ray_dir0 = frustum.ws_dir0 + (frustum.ws_dirx + frustum.ws_diry) * 0.5;
 	barrier();
 	for(int i = 0; i < packet_size; i++) {
-		if(LIX < s_num_quads[i]) {
-			int vertex_offset = s_vertex_offset[i];
-			int index_offset = s_index_offset[i] + int(LIX) * 4;
-
-			// Note: loading indices to SMEM first is a bit slower
+		if(LIX < s_instances[i].num_quads) {
+			int vertex_offset = s_instances[i].vertex_offset;
+			int index_offset = s_instances[i].index_offset + int(LIX) * 4;
 			uint v0 = g_indices[index_offset + 0] + vertex_offset;
 			uint v1 = g_indices[index_offset + 1] + vertex_offset;
 			uint v2 = g_indices[index_offset + 2] + vertex_offset;
 			uint v3 = g_indices[index_offset + 3] + vertex_offset;
-
 			processInputQuad(s_quad_offset[i] + int(LIX), v0, v1, v2, v3, i);
 		}
 		barrier();
@@ -410,19 +415,43 @@ void main() {
 		// TODO: properly handle overflow
 		barrier();
 
-		uint num_small = s_num_visible[i * 2 + 0];
-		uint num_large = s_num_visible[i * 2 + 1];
-		int quad_idx = -1, src_idx;
-		if(LIX < num_small) {
-			src_idx = int(LIX);
-			quad_idx = s_out_offset[0] + src_idx;
-		} else if(LIX - num_small < num_large) {
-			src_idx = int(LIX - num_small);
-			quad_idx = (MAX_VISIBLE_QUADS - 1) - (s_out_offset[1] + src_idx);
-			src_idx = (LSIZE - 1) - src_idx;
+		int num_small = s_num_visible[i * 2 + 0];
+		int num_large = s_num_visible[i * 2 + 1];
+		int num_tris = (num_small + num_large) * 2;
+
+		int instance_id = int(s_instance_id[i]);
+		uint instance_flags_id = s_instances[i].flags | (uint(instance_id) << 16);
+
+		for(int j = int(LIX); j < num_tris; j += LSIZE) {
+			int local_quad_idx = j >> 1;
+			int second_tri = j & 1;
+
+			int quad_idx, src_idx;
+			if(local_quad_idx < num_small) {
+				src_idx = local_quad_idx;
+				quad_idx = s_out_offset[0] + src_idx;
+			} else {
+				src_idx = local_quad_idx - num_small;
+				quad_idx = (MAX_VISIBLE_QUADS - 1) - (s_out_offset[1] + src_idx);
+				src_idx = (LSIZE - 1) - src_idx;
+			}
+
+			addVisibleTri(quad_idx, src_idx, instance_flags_id, second_tri);
 		}
-		if(quad_idx != -1)
-			addVisibleQuad(quad_idx, src_idx, i);
+
+		{ // Storing quad info
+			int local_quad_idx = int(LIX), quad_idx = -1, src_idx;
+			if(LIX < num_small) {
+				src_idx = local_quad_idx;
+				quad_idx = s_out_offset[0] + src_idx;
+			} else if(local_quad_idx - num_small < num_large) {
+				src_idx = local_quad_idx - num_small;
+				quad_idx = (MAX_VISIBLE_QUADS - 1) - (s_out_offset[1] + src_idx);
+				src_idx = (LSIZE - 1) - src_idx;
+			}
+			if(quad_idx != -1)
+				addVisibleQuad(quad_idx, src_idx, instance_id);
+		}
 		barrier();
 	}
 	barrier();

@@ -62,9 +62,6 @@ LucidApp::LucidApp()
 	for(auto scene_name : LoadedSetup::findAll())
 		m_setups.emplace_back(new LoadedSetup(scene_name));
 	selectSetup(0);
-
-	updateViewport();
-	updateRenderer();
 }
 
 LucidApp::~LucidApp() = default;

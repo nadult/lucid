@@ -128,12 +128,9 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 
 	// TODO: this takes a lot of memory
 	// TODO: what should we do when quads won't fit?
-	// TODO: better estimate needed
-	// TODO: properly handle situations when limits were reached
-	// TODO: it should depend on bin size
+	// TODO: better estimate needed; it should depend on bin size
+	// TODO: properly handle situations when limits are reached
 	uint max_bin_quads = max_quads * 3 / 2;
-
-	// TODO: LucidRenderer constructed 2x at the beginning
 
 	uint bin_counters_size = LUCID_INFO_SIZE + m_bin_count * 7;
 	m_info.emplace(BufferType::shader_storage, bin_counters_size * sizeof(u32));

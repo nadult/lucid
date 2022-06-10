@@ -82,6 +82,9 @@ int main(int argc, char **argv) {
 	LucidApp app;
 	if(config)
 		app.setConfig(*config);
+	app.updateViewport();
+	app.updateRenderer();
+
 	gl_device.runMainLoop(LucidApp::mainLoop, &app);
 	app.printPerfStats();
 

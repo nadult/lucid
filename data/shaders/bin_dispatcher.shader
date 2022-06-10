@@ -19,9 +19,6 @@ layout(std430, binding = 2) writeonly buffer buf2_ { uint g_bin_quads[]; };
 layout(std430, binding = 3) buffer buf3_ { int g_tasks[]; };
 layout(std430, binding = 4) buffer buf4_ { uvec4 g_uvec4_storage[]; };
 
-#define SCAN_SCRATCH(var_idx)                                                                      \
-	g_uvec4_storage[scratch_tri_idx * 2 + (MAX_VISIBLE_TRIS * 2 + var_idx)]
-
 shared int s_bins[BIN_COUNT];
 shared int s_temp[LSIZE];
 
@@ -39,8 +36,9 @@ struct QuadScanlineInfo {
 
 void loadScanlineParams(uint scratch_tri_idx, vec2 start, out vec3 scan_min, out vec3 scan_max,
 						out vec3 scan_step) {
-	uvec4 val0 = SCAN_SCRATCH(0);
-	uvec4 val1 = SCAN_SCRATCH(1);
+	uint scan_offset = STORAGE_TRI_SCAN_OFFSET + scratch_tri_idx * 2;
+	uvec4 val0 = g_uvec4_storage[scan_offset + 0];
+	uvec4 val1 = g_uvec4_storage[scan_offset + 1];
 	vec3 scan = uintBitsToFloat(val0.xyz);
 	scan_step = uintBitsToFloat(val1.xyz);
 

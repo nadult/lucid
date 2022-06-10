@@ -141,8 +141,9 @@ uint max32(uint value, int width) {
 
 void loadScanlineParams(uint scratch_tri_idx, out vec3 scan_min, out vec3 scan_max,
 						out vec3 scan_step, out uint y_aabb) {
-	uvec4 val0 = SCAN_SCRATCH(0);
-	uvec4 val1 = SCAN_SCRATCH(1);
+	uint scan_offset = STORAGE_TRI_SCAN_OFFSET + scratch_tri_idx * 2;
+	uvec4 val0 = g_uvec4_storage[scan_offset + 0];
+	uvec4 val1 = g_uvec4_storage[scan_offset + 1];
 	bool xsign0 = (val1.w & 1) == 1;
 	bool xsign1 = (val1.w & 2) == 2;
 	bool xsign2 = (val1.w & 4) == 4;
@@ -436,7 +437,8 @@ void generateHBlocks(uint start_hbid) {
 		cpos *= 0.5 / float(num_frags);
 		cpos += block_pos;
 
-		vec3 depth_eq = uintBitsToFloat(DEPTH_SCRATCH().xyz);
+		uint depth_offset = STORAGE_TRI_DEPTH_OFFSET + scratch_tri_idx;
+		vec3 depth_eq = uintBitsToFloat(g_uvec4_storage[depth_offset].xyz);
 		float ray_pos = depth_eq.x * cpos.x + (depth_eq.y * cpos.y + depth_eq.z);
 		float depth = 0xffffe * SATURATE(inversesqrt(ray_pos + 1)); // 20 bits
 

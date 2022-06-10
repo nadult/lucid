@@ -18,28 +18,17 @@ uniform int u_packet_size;
 
 // TODO: check if readonly/restrict makes a difference
 layout(std430, binding = 1) readonly restrict buffer buf1_ { InstanceData g_instances[]; };
-layout(std430, binding = 2) readonly restrict buffer buf2_ { uint g_input_indices[]; };
-layout(std430, binding = 3) readonly restrict buffer buf3_ { float g_input_verts[]; };
-layout(std430, binding = 4) readonly restrict buffer buf4_ { vec2 g_input_tex_coords[]; };
-layout(std430, binding = 5) readonly restrict buffer buf5_ { uint g_input_colors[]; };
-layout(std430, binding = 6) readonly restrict buffer buf6_ { uint g_input_normals[]; };
+layout(std430, binding = 2) readonly restrict buffer buf2_ { uint g_indices[]; };
+layout(std430, binding = 3) readonly restrict buffer buf3_ { float g_verts[]; };
+layout(std430, binding = 4) readonly restrict buffer buf4_ { vec2 g_tex_coords[]; };
+layout(std430, binding = 5) readonly restrict buffer buf5_ { uint g_colors[]; };
+layout(std430, binding = 6) readonly restrict buffer buf6_ { uint g_normals[]; };
 
 layout(std430, binding = 7) writeonly restrict buffer buf7_ { uint g_quad_aabbs[]; };
 layout(std430, binding = 8) writeonly restrict buffer buf8_ { uvec4 g_uvec4_storage[]; };
 layout(std430, binding = 9) writeonly restrict buffer buf9_ { uint g_uint_storage[]; };
 
-#define TRI_SCRATCH(var_idx) g_uvec4_storage[scratch_tri_idx * 2 + var_idx]
-#define QUAD_SCRATCH(var_idx)                                                                      \
-	g_uvec4_storage[MAX_VISIBLE_QUADS * 10 + scratch_quad_idx + var_idx * MAX_VISIBLE_QUADS]
-#define QUAD_TEX_SCRATCH(var_idx)                                                                  \
-	g_uvec4_storage[scratch_quad_idx * 2 + MAX_VISIBLE_QUADS * 12 + var_idx]
-#define SCAN_SCRATCH(var_idx)                                                                      \
-	g_uvec4_storage[scratch_tri_idx * 2 + (MAX_VISIBLE_TRIS * 2 + var_idx)]
-#define DEPTH_SCRATCH() g_uvec4_storage[MAX_VISIBLE_TRIS * 4 + scratch_tri_idx]
-#define UINT_SCRATCH() g_uint_storage[scratch_tri_idx]
-
 shared uint s_instance_id[MAX_PACKET_SIZE];
-
 shared uint s_rejected_quads[REJECTION_TYPE_COUNT];
 
 shared uint s_quad_aabbs[LSIZE];
@@ -79,8 +68,7 @@ shared vec3 s_ray_dir0;
 //       byłyby przycinane do konkretnych bloków
 
 vec3 vertexLoad(uint vindex) {
-	return vec3(g_input_verts[vindex * 3 + 0], g_input_verts[vindex * 3 + 1],
-				g_input_verts[vindex * 3 + 2]);
+	return vec3(g_verts[vindex * 3 + 0], g_verts[vindex * 3 + 1], g_verts[vindex * 3 + 2]);
 }
 
 uint vertexClipMask(vec4 pos) {
@@ -271,22 +259,20 @@ void processInputQuad(uint quad_id, uint v0, uint v1, uint v2, uint v3, uint loc
 }
 
 void storeQuad(uint scratch_quad_idx, uint instance_flags, uint v0, uint v1, uint v2, uint v3) {
-	if((instance_flags & INST_HAS_VERTEX_COLORS) != 0)
-		QUAD_SCRATCH(0) =
-			uvec4(g_input_colors[v0], g_input_colors[v1], g_input_colors[v2], g_input_colors[v3]);
-	if((instance_flags & INST_HAS_VERTEX_NORMALS) != 0)
-		QUAD_SCRATCH(1) = uvec4(g_input_normals[v0], g_input_normals[v1], g_input_normals[v2],
-								g_input_normals[v3]);
+	if((instance_flags & INST_HAS_VERTEX_COLORS) != 0) {
+		uvec4 colors = uvec4(g_colors[v0], g_colors[v1], g_colors[v2], g_colors[v3]);
+		g_uvec4_storage[STORAGE_QUAD_COLOR_OFFSET + scratch_quad_idx] = colors;
+	}
+	if((instance_flags & INST_HAS_VERTEX_NORMALS) != 0) {
+		uvec4 normals = uvec4(g_normals[v0], g_normals[v1], g_normals[v2], g_normals[v3]);
+		g_uvec4_storage[STORAGE_QUAD_NORMAL_OFFSET + scratch_quad_idx] = normals;
+	}
 	if((instance_flags & INST_HAS_TEXTURE) != 0) {
-		vec2 tex0 = g_input_tex_coords[v0];
-		vec2 tex1 = g_input_tex_coords[v1];
-		vec2 tex2 = g_input_tex_coords[v2];
-		vec2 tex3 = g_input_tex_coords[v3];
-		tex1 -= tex0;
-		tex2 -= tex0;
-		tex3 -= tex0;
-		QUAD_TEX_SCRATCH(0) = floatBitsToUint(vec4(tex0, tex1));
-		QUAD_TEX_SCRATCH(1) = floatBitsToUint(vec4(tex2, tex3));
+		vec2 tex0 = g_tex_coords[v0], tex1 = g_tex_coords[v1] - tex0;
+		vec2 tex2 = g_tex_coords[v2] - tex0, tex3 = g_tex_coords[v3] - tex0;
+		uint tex_offset = STORAGE_QUAD_TEXTURE_OFFSET + scratch_quad_idx * 2;
+		g_uvec4_storage[tex_offset + 0] = floatBitsToUint(vec4(tex0, tex1));
+		g_uvec4_storage[tex_offset + 1] = floatBitsToUint(vec4(tex2, tex3));
 	}
 }
 
@@ -297,10 +283,8 @@ void storeTri(uint scratch_tri_idx, uint instance_flags_id, vec3 tri0, vec3 tri1
 	float multiplier = 1.0 / length(normal);
 	normal *= multiplier;
 
-	if((instance_flags_id & INST_HAS_VERTEX_NORMALS) == 0) {
-		uint unormal = encodeNormalUint(normal);
-		UINT_SCRATCH() = unormal;
-	}
+	if((instance_flags_id & INST_HAS_VERTEX_NORMALS) == 0)
+		g_uint_storage[scratch_tri_idx] = encodeNormalUint(normal);
 
 	vec3 edge0 = (tri0 - tri2) * multiplier;
 	vec3 edge1 = (tri1 - tri0) * multiplier;
@@ -322,9 +306,11 @@ void storeTri(uint scratch_tri_idx, uint instance_flags_id, vec3 tri0, vec3 tri1
 	vec3 depth_eq = vec3(dot(pnormal, frustum.ws_dirx), dot(pnormal, frustum.ws_diry),
 						 dot(pnormal, s_ray_dir0));
 
-	DEPTH_SCRATCH() = uvec4(floatBitsToUint(depth_eq), instance_flags_id);
-	TRI_SCRATCH(0) = floatBitsToUint(vec4(edge0, param0));
-	TRI_SCRATCH(1) = floatBitsToUint(vec4(edge1, param1));
+	g_uvec4_storage[STORAGE_TRI_DEPTH_OFFSET + scratch_tri_idx] =
+		uvec4(floatBitsToUint(depth_eq), instance_flags_id);
+	uint bary_offset = STORAGE_TRI_BARY_OFFSET + scratch_tri_idx * 2;
+	g_uvec4_storage[bary_offset + 0] = floatBitsToUint(vec4(edge0, param0));
+	g_uvec4_storage[bary_offset + 1] = floatBitsToUint(vec4(edge1, param1));
 	// TODO: use separate threads to store triangles ? Maybe it will be more efficient ?
 
 	vec3 nrm0 = cross(tri2, tri1 - tri2);
@@ -352,9 +338,9 @@ void storeTri(uint scratch_tri_idx, uint instance_flags_id, vec3 tri0, vec3 tri1
 	vec2 start = vec2(-0.5, 0.5);
 	vec3 scan = scan_step * start.y + scan_base - vec3(start.x);
 
-	// (15%)
-	SCAN_SCRATCH(0) = uvec4(floatBitsToUint(scan), y_aabb);
-	SCAN_SCRATCH(1) = uvec4(floatBitsToUint(scan_step), x_signs | y_signs);
+	uint scan_offset = STORAGE_TRI_SCAN_OFFSET + scratch_tri_idx * 2;
+	g_uvec4_storage[scan_offset + 0] = uvec4(floatBitsToUint(scan), y_aabb);
+	g_uvec4_storage[scan_offset + 1] = uvec4(floatBitsToUint(scan_step), x_signs | y_signs);
 }
 
 void addVisibleQuad(uint idx, uint local_instance_id) {
@@ -411,10 +397,10 @@ void main() {
 			int index_offset = s_index_offset[i] + int(LIX) * 4;
 
 			// Note: loading indices to SMEM first is a bit slower
-			uint v0 = g_input_indices[index_offset + 0] + vertex_offset;
-			uint v1 = g_input_indices[index_offset + 1] + vertex_offset;
-			uint v2 = g_input_indices[index_offset + 2] + vertex_offset;
-			uint v3 = g_input_indices[index_offset + 3] + vertex_offset;
+			uint v0 = g_indices[index_offset + 0] + vertex_offset;
+			uint v1 = g_indices[index_offset + 1] + vertex_offset;
+			uint v2 = g_indices[index_offset + 2] + vertex_offset;
+			uint v3 = g_indices[index_offset + 3] + vertex_offset;
 
 			processInputQuad(s_quad_offset[i] + int(LIX), v0, v1, v2, v3, i);
 		}

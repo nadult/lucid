@@ -16,17 +16,6 @@ layout(std430, binding = 8) readonly restrict buffer buf8_ { uint g_uint_storage
 layout(binding = 0) uniform sampler2D opaque_texture;
 layout(binding = 1) uniform sampler2D transparent_texture;
 
-// TODO: names
-#define TRI_SCRATCH(var_idx) g_uvec4_storage[scratch_tri_idx * 2 + var_idx]
-#define QUAD_SCRATCH(var_idx)                                                                      \
-	g_uvec4_storage[MAX_VISIBLE_QUADS * 10 + scratch_quad_idx + var_idx * MAX_VISIBLE_QUADS]
-#define QUAD_TEX_SCRATCH(var_idx)                                                                  \
-	g_uvec4_storage[scratch_quad_idx * 2 + MAX_VISIBLE_QUADS * 12 + var_idx]
-#define SCAN_SCRATCH(var_idx)                                                                      \
-	g_uvec4_storage[scratch_tri_idx * 2 + (MAX_VISIBLE_TRIS * 2 + var_idx)]
-#define DEPTH_SCRATCH() g_uvec4_storage[MAX_VISIBLE_TRIS * 4 + scratch_tri_idx]
-#define UINT_SCRATCH() g_uint_storage[scratch_tri_idx]
-
 // TODO: separate opaque and transparent objects, draw opaque objects first to texture
 // then read it and use depth to optimize drawing
 uniform uint background_color;
@@ -92,9 +81,10 @@ void computeScanlineParams(vec3 tri0, vec3 tri1, vec3 tri2, vec2 start, out vec3
 void getTriangleParams(uint scratch_tri_idx, out vec3 depth_eq, out vec2 bary_params,
 					   out vec3 edge0, out vec3 edge1, out uint instance_id,
 					   out uint instance_flags) {
-	uvec4 val0 = DEPTH_SCRATCH();
-	uvec4 val1 = TRI_SCRATCH(0);
-	uvec4 val2 = TRI_SCRATCH(1);
+	uint bary_offset = STORAGE_TRI_BARY_OFFSET + scratch_tri_idx * 2;
+	uvec4 val0 = g_uvec4_storage[STORAGE_TRI_DEPTH_OFFSET + scratch_tri_idx];
+	uvec4 val1 = g_uvec4_storage[bary_offset + 0];
+	uvec4 val2 = g_uvec4_storage[bary_offset + 1];
 	depth_eq = uintBitsToFloat(val0.xyz);
 	bary_params = uintBitsToFloat(uvec2(val1.w, val2.w));
 	instance_flags = val0[3] & 0xffff;
@@ -107,7 +97,7 @@ void getTriangleVertexColors(uint scratch_tri_idx, out vec4 color0, out vec4 col
 							 out vec4 color2) {
 	uint scratch_quad_idx = scratch_tri_idx >> 1;
 	uint second_tri = scratch_tri_idx & 1;
-	uvec4 colors = QUAD_SCRATCH(0);
+	uvec4 colors = g_uvec4_storage[STORAGE_QUAD_COLOR_OFFSET + scratch_quad_idx];
 	color0 = decodeRGBA8(colors[0]);
 	color1 = decodeRGBA8(colors[1 + second_tri]);
 	color2 = decodeRGBA8(colors[2 + second_tri]);
@@ -117,7 +107,7 @@ void getTriangleVertexNormals(uint scratch_tri_idx, out vec3 normal0, out vec3 n
 							  out vec3 normal2) {
 	uint scratch_quad_idx = scratch_tri_idx >> 1;
 	uint second_tri = scratch_tri_idx & 1;
-	uvec4 normals = QUAD_SCRATCH(1);
+	uvec4 normals = g_uvec4_storage[STORAGE_QUAD_NORMAL_OFFSET + scratch_quad_idx];
 	normal0 = decodeNormalUint(normals[0]);
 	normal1 = decodeNormalUint(normals[1 + second_tri]);
 	normal2 = decodeNormalUint(normals[2 + second_tri]);
@@ -126,8 +116,9 @@ void getTriangleVertexNormals(uint scratch_tri_idx, out vec3 normal0, out vec3 n
 void getTriangleVertexTexCoords(uint scratch_tri_idx, out vec2 tex0, out vec2 tex1, out vec2 tex2) {
 	uint scratch_quad_idx = scratch_tri_idx >> 1;
 	uint second_tri = scratch_tri_idx & 1;
-	uvec4 tex_coords0 = QUAD_TEX_SCRATCH(0);
-	uvec4 tex_coords1 = QUAD_TEX_SCRATCH(1);
+	uint tex_offset = STORAGE_QUAD_TEXTURE_OFFSET + scratch_quad_idx * 2;
+	uvec4 tex_coords0 = g_uvec4_storage[tex_offset + 0];
+	uvec4 tex_coords1 = g_uvec4_storage[tex_offset + 1];
 	tex0 = uintBitsToFloat(tex_coords0.xy);
 	tex1 = uintBitsToFloat(second_tri == 0 ? tex_coords0.zw : tex_coords1.xy);
 	tex2 = uintBitsToFloat(second_tri == 0 ? tex_coords1.xy : tex_coords1.zw);
@@ -204,7 +195,7 @@ uint shadeSample(ivec2 pixel_pos, uint scratch_tri_idx, out float out_depth) {
 		nrm2 -= nrm0;
 		normal = bary[0] * nrm1 + (bary[1] * nrm2 + nrm0);
 	} else {
-		normal = decodeNormalUint(UINT_SCRATCH());
+		normal = decodeNormalUint(g_uint_storage[scratch_tri_idx]);
 	}
 
 	float light_value = max(0.0, dot(-lighting.sun_dir, normal) * 0.7 + 0.3);

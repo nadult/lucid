@@ -86,46 +86,26 @@ void outputPixel(ivec2 pixel_pos, uint color) {
 	g_raster_image[s_bin_raster_offset + pixel_pos.x + (pixel_pos.y << BIN_SHIFT)] = color;
 }
 
-void loadScanlineParams(uint scratch_tri_idx, out vec3 scan_min, out vec3 scan_max,
-						out vec3 scan_step, out uint y_aabb) {
-	uint scan_offset = STORAGE_TRI_SCAN_OFFSET + scratch_tri_idx * 2;
-	uvec4 val0 = g_uvec4_storage[scan_offset + 0];
-	uvec4 val1 = g_uvec4_storage[scan_offset + 1];
-	bool xsign0 = (val1.w & 1) == 1;
-	bool xsign1 = (val1.w & 2) == 2;
-	bool xsign2 = (val1.w & 4) == 4;
-	vec3 scan = uintBitsToFloat(val0.xyz);
-	scan_step = uintBitsToFloat(val1.xyz);
-	y_aabb = val0.w;
-
-	scan_min = vec3(xsign0 ? -1.0 / 0.0 : scan[0], xsign1 ? -1.0 / 0.0 : scan[1],
-					xsign2 ? -1.0 / 0.0 : scan[2]);
-	scan_max = vec3(xsign0 ? scan[0] : 1.0 / 0.0, xsign1 ? scan[1] : 1.0 / 0.0,
-					xsign2 ? scan[2] : 1.0 / 0.0);
-}
-
 void generateRowTris(uint tri_idx) {
 	uint dst_offset_64 = scratch64BlockRowTrisOffset(0);
 
-	vec3 scan_min, scan_max, scan_step;
-	uint y_aabb;
-	loadScanlineParams(tri_idx, scan_min, scan_max, scan_step, y_aabb);
-	int min_by = clamp(int(y_aabb & 0xffff) - s_bin_pos.y, 0, BIN_MASK) >> BLOCK_SHIFT;
-	int max_by = clamp(int(y_aabb >> 16) - s_bin_pos.y, 0, BIN_MASK) >> BLOCK_SHIFT;
+	uint scan_offset = STORAGE_TRI_SCAN_OFFSET + tri_idx * 2;
+	uvec4 val0 = g_uvec4_storage[scan_offset + 0];
+	uvec4 val1 = g_uvec4_storage[scan_offset + 1];
+	int min_by = clamp(int(val0.w & 0xffff) - s_bin_pos.y, 0, BIN_MASK) >> BLOCK_SHIFT;
+	int max_by = clamp(int(val0.w >> 16) - s_bin_pos.y, 0, BIN_MASK) >> BLOCK_SHIFT;
 
-	// TODO: add start to loadScanline
-	vec3 start_offset = scan_step * float(min_by * 8 + s_bin_pos.y) - vec3(s_bin_pos.x);
-	scan_min += start_offset;
-	scan_max += start_offset;
+	vec2 start = vec2(s_bin_pos.x, s_bin_pos.y + min_by * 8);
+	ScanlineParams scan = loadScanlineParams(val0, val1, start);
 
 	// TODO: is it worth it to make this loop more work-efficient?
 	for(int by = min_by; by <= max_by; by++) {
 #define SCAN_STEP(id)                                                                              \
-	int min##id = int(max(max(scan_min[0], scan_min[1]), max(scan_min[2], 0.0)));                  \
-	int max##id = int(min(min(scan_max[0], scan_max[1]), min(scan_max[2], BIN_SIZE))) - 1;         \
+	int min##id = int(max(max(scan.min[0], scan.min[1]), max(scan.min[2], 0.0)));                  \
+	int max##id = int(min(min(scan.max[0], scan.max[1]), min(scan.max[2], BIN_SIZE))) - 1;         \
 	if(min##id > max##id)                                                                          \
 		min##id = BIN_MASK, max##id = 0;                                                           \
-	scan_min += scan_step, scan_max += scan_step;
+	scan.min += scan.step, scan.max += scan.step;
 
 		uint bx_mask;
 		uvec2 min_bits, max_bits;

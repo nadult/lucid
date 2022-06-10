@@ -139,30 +139,15 @@ uint max32(uint value, int width) {
 	return value;
 }
 
-void loadScanlineParams(uint scratch_tri_idx, out vec3 scan_min, out vec3 scan_max,
-						out vec3 scan_step, out uint y_aabb) {
+void generateRowTris(uint scratch_tri_idx, int start_hby) {
 	uint scan_offset = STORAGE_TRI_SCAN_OFFSET + scratch_tri_idx * 2;
 	uvec4 val0 = g_uvec4_storage[scan_offset + 0];
 	uvec4 val1 = g_uvec4_storage[scan_offset + 1];
-	bool xsign0 = (val1.w & 1) == 1;
-	bool xsign1 = (val1.w & 2) == 2;
-	bool xsign2 = (val1.w & 4) == 4;
-	vec3 scan = uintBitsToFloat(val0.xyz);
-	scan_step = uintBitsToFloat(val1.xyz);
-	y_aabb = val0.w;
+	int min_hby = clamp(int(val0.w & 0xffff) - s_bin_pos.y, 0, BIN_MASK) >> HBLOCK_HEIGHT_SHIFT;
+	int max_hby = clamp(int(val0.w >> 16) - s_bin_pos.y, 0, BIN_MASK) >> HBLOCK_HEIGHT_SHIFT;
 
-	scan_min = vec3(xsign0 ? -1.0 / 0.0 : scan[0], xsign1 ? -1.0 / 0.0 : scan[1],
-					xsign2 ? -1.0 / 0.0 : scan[2]);
-	scan_max = vec3(xsign0 ? scan[0] : 1.0 / 0.0, xsign1 ? scan[1] : 1.0 / 0.0,
-					xsign2 ? scan[2] : 1.0 / 0.0);
-}
-
-void generateRowTris(uint scratch_tri_idx, int start_hby) {
-	vec3 scan_min, scan_max, scan_step;
-	uint y_aabb;
-	loadScanlineParams(scratch_tri_idx, scan_min, scan_max, scan_step, y_aabb);
-	int min_hby = clamp(int(y_aabb & 0xffff) - s_bin_pos.y, 0, BIN_MASK) >> HBLOCK_HEIGHT_SHIFT;
-	int max_hby = clamp(int(y_aabb >> 16) - s_bin_pos.y, 0, BIN_MASK) >> HBLOCK_HEIGHT_SHIFT;
+	vec2 start = vec2(s_bin_pos.x, s_bin_pos.y + min_hby * 4);
+	ScanlineParams scan = loadScanlineParams(val0, val1, start);
 
 #if HBLOCK_ROWS_STEP < HBLOCK_ROWS
 	min_hby = max(start_hby, min_hby);
@@ -171,21 +156,17 @@ void generateRowTris(uint scratch_tri_idx, int start_hby) {
 		return;
 #endif
 
-	vec3 start_offset = scan_step * float(min_hby * 4 + s_bin_pos.y) - vec3(s_bin_pos.x);
-	scan_min += start_offset;
-	scan_max += start_offset;
-
 	uint dst_offset_32 = scratch32HBlockRowTrisOffset(0);
 	uint dst_offset_64 = scratch64HBlockRowTrisOffset(0);
 
 	// TODO: is it worth it to make this loop more work-efficient?
 	for(int hby = min_hby; hby <= max_hby; hby++) {
 #define SCAN_STEP(id)                                                                              \
-	int min##id = int(max(max(scan_min[0], scan_min[1]), max(scan_min[2], 0.0)));                  \
-	int max##id = int(min(min(scan_max[0], scan_max[1]), min(scan_max[2], BIN_SIZE))) - 1;         \
+	int min##id = int(max(max(scan.min[0], scan.min[1]), max(scan.min[2], 0.0)));                  \
+	int max##id = int(min(min(scan.max[0], scan.max[1]), min(scan.max[2], BIN_SIZE))) - 1;         \
 	if(min##id > max##id)                                                                          \
 		min##id = BIN_MASK, max##id = 0;                                                           \
-	scan_min += scan_step, scan_max += scan_step;
+	scan.min += scan.step, scan.max += scan.step;
 
 #define BX_MASK_ROW(id)                                                                            \
 	((((1 << HBLOCK_COLS) - 1) << (min##id >> HBLOCK_WIDTH_SHIFT)) &                               \

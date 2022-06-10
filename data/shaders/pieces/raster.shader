@@ -47,35 +47,25 @@ void initTimers() {}
 void commitTimers() {}
 #endif
 
-// Algorithm inspired by Nanite scanline rasterizer
-void computeScanlineParams(vec3 tri0, vec3 tri1, vec3 tri2, vec2 start, out vec3 scan_min,
-						   out vec3 scan_max, out vec3 scan_step) {
-	vec3 nrm0 = cross(tri2, tri1 - tri2);
-	vec3 nrm1 = cross(tri0, tri2 - tri0);
-	vec3 nrm2 = cross(tri1, tri0 - tri1);
-	float volume = dot(tri0, nrm0);
-	if(volume < 0)
-		nrm0 = -nrm0, nrm1 = -nrm1, nrm2 = -nrm2;
+struct ScanlineParams {
+	vec3 min, max, step;
+};
 
-	vec3 edges[3] = {
-		vec3(dot(nrm0, frustum.ws_dirx), dot(nrm0, frustum.ws_diry), dot(nrm0, frustum.ws_dir0)),
-		vec3(dot(nrm1, frustum.ws_dirx), dot(nrm1, frustum.ws_diry), dot(nrm1, frustum.ws_dir0)),
-		vec3(dot(nrm2, frustum.ws_dirx), dot(nrm2, frustum.ws_diry), dot(nrm2, frustum.ws_dir0)),
-	};
+ScanlineParams loadScanlineParams(uvec4 val0, uvec4 val1, vec2 start) {
+	ScanlineParams params;
+	bool xsign0 = (val1.w & 1) == 1;
+	bool xsign1 = (val1.w & 2) == 2;
+	bool xsign2 = (val1.w & 4) == 4;
 
-	float inv_ex[3] = {1.0 / edges[0].x, 1.0 / edges[1].x, 1.0 / edges[2].x};
-	vec3 scan_base = -vec3(edges[0].z * inv_ex[0], edges[1].z * inv_ex[1], edges[2].z * inv_ex[2]);
-	scan_step = -vec3(edges[0].y * inv_ex[0], edges[1].y * inv_ex[1], edges[2].y * inv_ex[2]);
+	vec3 scan = uintBitsToFloat(val0.xyz);
+	params.step = uintBitsToFloat(val1.xyz);
 
-	bool sign0 = edges[0].x < 0.0;
-	bool sign1 = edges[1].x < 0.0;
-	bool sign2 = edges[2].x < 0.0;
-
-	vec3 scan = scan_step * start.y + scan_base - vec3(start.x);
-	scan_min = vec3(sign0 ? -1.0 / 0.0 : scan[0], sign1 ? -1.0 / 0.0 : scan[1],
-					sign2 ? -1.0 / 0.0 : scan[2]);
-	scan_max =
-		vec3(sign0 ? scan[0] : 1.0 / 0.0, sign1 ? scan[1] : 1.0 / 0.0, sign2 ? scan[2] : 1.0 / 0.0);
+	scan += params.step * start.y - vec3(start.x);
+	params.min = vec3(xsign0 ? -1.0 / 0.0 : scan[0], xsign1 ? -1.0 / 0.0 : scan[1],
+					  xsign2 ? -1.0 / 0.0 : scan[2]);
+	params.max = vec3(xsign0 ? scan[0] : 1.0 / 0.0, xsign1 ? scan[1] : 1.0 / 0.0,
+					  xsign2 ? scan[2] : 1.0 / 0.0);
+	return params;
 }
 
 void getTriangleParams(uint scratch_tri_idx, out vec3 depth_eq, out vec2 bary_params,

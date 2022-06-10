@@ -42,22 +42,17 @@ void loadScanlineParams(uint scratch_tri_idx, vec2 start, out vec3 scan_min, out
 	vec3 scan = uintBitsToFloat(val0.xyz);
 	scan_step = uintBitsToFloat(val1.xyz);
 
-	// Note: these are negated
-	bvec3 xsigns = bvec3((val1.w & 1) == 0, (val1.w & 2) == 0, (val1.w & 4) == 0);
-	bvec3 ysigns = bvec3((val1.w & 8) == 0, (val1.w & 16) == 0, (val1.w & 32) == 0);
+	bvec3 xneg = bvec3((val1.w & 1) != 0, (val1.w & 2) != 0, (val1.w & 4) != 0);
+	bvec3 yneg = bvec3((val1.w & 8) != 0, (val1.w & 16) != 0, (val1.w & 32) != 0);
 
-	float bin_offset = BIN_SIZE - 0.989;
-	vec3 yoffset = vec3(ysigns[0] ? bin_offset : 0.0, ysigns[1] ? bin_offset : 0.0,
-						ysigns[2] ? bin_offset : 0.0);
-	vec3 xoffset = vec3(xsigns[0] ? bin_offset : 0.0, xsigns[1] ? bin_offset : 0.0,
-						xsigns[2] ? bin_offset : 0.0);
+	float offset = BIN_SIZE - 0.989;
+	vec3 yoffset = vec3(yneg[0] ? 0.0 : offset, yneg[1] ? 0.0 : offset, yneg[2] ? 0.0 : offset);
+	vec3 xoffset = vec3(xneg[0] ? 0.0 : offset, xneg[1] ? 0.0 : offset, xneg[2] ? 0.0 : offset);
 
 	scan += scan_step * (yoffset + vec3(start.y)) - (xoffset + vec3(start.x));
 	const float inf = 1.0 / 0.0;
-	scan_min =
-		vec3(xsigns[0] ? scan[0] : -inf, xsigns[1] ? scan[1] : -inf, xsigns[2] ? scan[2] : -inf);
-	scan_max =
-		vec3(xsigns[0] ? inf : scan[0], xsigns[1] ? inf : scan[1], xsigns[2] ? inf : scan[2]);
+	scan_min = vec3(xneg[0] ? -inf : scan[0], xneg[1] ? -inf : scan[1], xneg[2] ? -inf : scan[2]);
+	scan_max = vec3(xneg[0] ? scan[0] : inf, xneg[1] ? scan[1] : inf, xneg[2] ? scan[2] : inf);
 	scan_step *= BIN_SIZE;
 }
 

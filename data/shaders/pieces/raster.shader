@@ -53,18 +53,16 @@ struct ScanlineParams {
 
 ScanlineParams loadScanlineParams(uvec4 val0, uvec4 val1, vec2 start) {
 	ScanlineParams params;
-	bool xsign0 = (val1.w & 1) == 1;
-	bool xsign1 = (val1.w & 2) == 2;
-	bool xsign2 = (val1.w & 4) == 4;
 
+	bvec3 xneg = bvec3((val1.w & 1) != 0, (val1.w & 2) != 0, (val1.w & 4) != 0);
 	vec3 scan = uintBitsToFloat(val0.xyz);
 	params.step = uintBitsToFloat(val1.xyz);
 
+	const float inf = 1.0 / 0.0;
 	scan += params.step * start.y - vec3(start.x);
-	params.min = vec3(xsign0 ? -1.0 / 0.0 : scan[0], xsign1 ? -1.0 / 0.0 : scan[1],
-					  xsign2 ? -1.0 / 0.0 : scan[2]);
-	params.max = vec3(xsign0 ? scan[0] : 1.0 / 0.0, xsign1 ? scan[1] : 1.0 / 0.0,
-					  xsign2 ? scan[2] : 1.0 / 0.0);
+	params.min = vec3(xneg[0] ? -inf : scan[0], xneg[1] ? -inf : scan[1], xneg[2] ? -inf : scan[2]);
+	params.max = vec3(xneg[0] ? scan[0] : inf, xneg[1] ? scan[1] : inf, xneg[2] ? scan[2] : inf);
+
 	return params;
 }
 

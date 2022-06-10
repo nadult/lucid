@@ -194,13 +194,8 @@ void generateRowTris(uint tri_idx, int start_hby) {
 
 		uint roffset = atomicAdd(s_hblock_row_tri_counts[hby], 1) +
 					   currentHBlockRow(hby) * MAX_HBLOCK_ROW_TRIS;
-#if BIN_SIZE == 64
 		g_scratch_32[dst_offset_32 + roffset] = tri_idx | (bx_mask << 24);
 		g_scratch_64[dst_offset_64 + roffset] = uvec2(min_bits, max_bits);
-#else
-		g_scratch_32[dst_offset_32 + roffset] = tri_idx;
-		g_scratch_64[dst_offset_64 + roffset] = uvec2(min_bits, max_bits | (bx_mask << 28));
-#endif
 	}
 }
 
@@ -347,17 +342,13 @@ void generateHBlocks(uint start_hbid) {
 	uint src_offset_64 = scratch64HBlockRowTrisOffset(hby);
 
 	{
-		uint bx_bits_shift = (BIN_SIZE == 64 ? 16 : 28) + hbx;
+		uint bx_bits_shift = 24 + hbx;
 		uint thread_bit_mask = ~(0xffffffffu << (LIX & 31));
 		uint block_tri_count = 0;
 
 		if(group_thread < WARP_SIZE) {
 			for(uint i = group_thread; i < tri_count; i += WARP_STEP) {
-#if BIN_SIZE == 64
 				uint bx_bit = (g_scratch_32[src_offset_32 + i] >> bx_bits_shift) & 1;
-#else
-				uint bx_bit = (g_scratch_64[src_offset_64 + i].y >> bx_bits_shift) & 1;
-#endif
 				uint bit_mask = uint(ballotARB(bx_bit != 0));
 				if(bit_mask == 0)
 					continue;
@@ -384,14 +375,9 @@ void generateHBlocks(uint start_hbid) {
 	vec2 block_pos = vec2(hbx << HBLOCK_WIDTH_SHIFT, hby << HBLOCK_HEIGHT_SHIFT) + vec2(s_bin_pos);
 
 	for(uint i = group_thread; i < tri_count; i += group_size) {
-		uint row_idx = s_buffer[buf_offset + i];
-
-		uvec2 tri_info = g_scratch_64[src_offset_64 + row_idx];
-#if BIN_SIZE == 64
-		uint tri_idx = g_scratch_32[src_offset_32 + row_idx] & 0xffffff;
-#else
-		uint tri_idx = g_scratch_32[src_offset_32 + row_idx];
-#endif
+		uint row_tri_idx = s_buffer[buf_offset + i];
+		uint tri_idx = g_scratch_32[src_offset_32 + row_tri_idx] & 0xffffff;
+		uvec2 tri_info = g_scratch_64[src_offset_64 + row_tri_idx];
 
 		const ivec4 bin_shifts = ivec4(0, BIN_SHIFT, BIN_SHIFT * 2, BIN_SHIFT * 3);
 		ivec4 xmin = max(((ivec4(tri_info.x) >> bin_shifts) & BIN_MASK) - startx, 0);

@@ -21,6 +21,9 @@ TODO:
 - poprawienie czerwonych binów
 - max_bin_x / max_bin_y ? tak, żeby nie trzeba bylo rekompilować shaderow przy  zmianie rozdzialki
 - naprawienie raster_medium w trybie 64x64
+- nie używanie persisten threadów przy rasterze? Zamiast tego po prostu odpalić tyle work-grup
+  ile jest binów odpowiedniego typu;
+  Jak wyliczyć w takim systemie pozycję w scratchu ? HGW
 
 Bugi:
 - zwiecha zauważalna na powerplant (widok z prawej strony, powinny się pojawiać pionowe czerwone linie

@@ -31,12 +31,9 @@ void main() {
 			// TODO: On gallery, dragon, san-miguel setting limit to 512 for low increases perf, why?
 			int id = atomicAdd(s_bin_level_counts[BIN_LEVEL_LOW], 1);
 			LOW_LEVEL_BINS(id) = int(i);
-		} else if(num_tris < 128 * 1024) {
+		} else if(true) {
 			int id = atomicAdd(s_bin_level_counts[BIN_LEVEL_MEDIUM], 1);
 			MEDIUM_LEVEL_BINS(id) = int(i);
-		} else if(true) {
-			int id = atomicAdd(s_bin_level_counts[BIN_LEVEL_HIGH], 1);
-			HIGH_LEVEL_BINS(id) = int(i);
 		}
 
 		uint bin_id = i << 16;

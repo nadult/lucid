@@ -10,21 +10,21 @@ layout(std430, binding = 3) coherent restrict buffer buf3_ { uint g_scratch_32[]
 layout(std430, binding = 4) coherent restrict buffer buf4_ { uvec2 g_scratch_64[]; };
 layout(std430, binding = 5) readonly restrict buffer buf5_ { uint g_instance_colors[]; };
 layout(std430, binding = 6) readonly restrict buffer buf6_ { vec4 g_instance_uv_rects[]; };
-layout(std430, binding = 7) readonly restrict buffer buf7_ { uvec2 g_tri_storage[]; };
-layout(std430, binding = 8) readonly restrict buffer buf8_ { uvec4 g_quad_storage[]; };
-layout(std430, binding = 9) readonly restrict buffer buf9_ { uvec4 g_scan_storage[]; };
-layout(std430, binding = 10) readonly restrict buffer buf10_ { uint g_uint_storage[]; };
+layout(std430, binding = 7) readonly restrict buffer buf7_ { uvec4 g_uvec4_storage[]; };
+layout(std430, binding = 8) readonly restrict buffer buf8_ { uint g_uint_storage[]; };
 
 layout(binding = 0) uniform sampler2D opaque_texture;
 layout(binding = 1) uniform sampler2D transparent_texture;
 
 // TODO: names
-#define TRI_SCRATCH(var_idx) g_tri_storage[scratch_tri_idx * 4 + var_idx]
-#define QUAD_SCRATCH(var_idx) g_quad_storage[scratch_quad_idx + var_idx * MAX_VISIBLE_QUADS]
+#define TRI_SCRATCH(var_idx) g_uvec4_storage[scratch_tri_idx * 2 + var_idx]
+#define QUAD_SCRATCH(var_idx)                                                                      \
+	g_uvec4_storage[MAX_VISIBLE_QUADS * 10 + scratch_quad_idx + var_idx * MAX_VISIBLE_QUADS]
 #define QUAD_TEX_SCRATCH(var_idx)                                                                  \
-	g_quad_storage[scratch_quad_idx * 2 + MAX_VISIBLE_QUADS * 2 + var_idx]
-#define SCAN_SCRATCH(var_idx) g_scan_storage[scratch_tri_idx * 2 + var_idx]
-#define DEPTH_SCRATCH() g_scan_storage[MAX_VISIBLE_QUADS * 4 + scratch_tri_idx]
+	g_uvec4_storage[scratch_quad_idx * 2 + MAX_VISIBLE_QUADS * 12 + var_idx]
+#define SCAN_SCRATCH(var_idx)                                                                      \
+	g_uvec4_storage[scratch_tri_idx * 2 + (MAX_VISIBLE_TRIS * 2 + var_idx)]
+#define DEPTH_SCRATCH() g_uvec4_storage[MAX_VISIBLE_TRIS * 4 + scratch_tri_idx]
 #define UINT_SCRATCH() g_uint_storage[scratch_tri_idx]
 
 // TODO: separate opaque and transparent objects, draw opaque objects first to texture
@@ -92,20 +92,15 @@ void computeScanlineParams(vec3 tri0, vec3 tri1, vec3 tri2, vec2 start, out vec3
 void getTriangleParams(uint scratch_tri_idx, out vec3 depth_eq, out vec2 bary_params,
 					   out vec3 edge0, out vec3 edge1, out uint instance_id,
 					   out uint instance_flags) {
-	{
-		uvec4 val0 = DEPTH_SCRATCH();
-		uvec2 val2 = TRI_SCRATCH(0);
-		depth_eq =
-			vec3(uintBitsToFloat(val0[0]), uintBitsToFloat(val0[1]), uintBitsToFloat(val0[2]));
-		bary_params = vec2(uintBitsToFloat(val2[0]), uintBitsToFloat(val2[1]));
-		instance_flags = val0[3] & 0xffff;
-		instance_id = val0[3] >> 16;
-	}
-	{
-		uvec2 val0 = TRI_SCRATCH(1), val1 = TRI_SCRATCH(2), val2 = TRI_SCRATCH(3);
-		edge0 = vec3(uintBitsToFloat(val0[0]), uintBitsToFloat(val0[1]), uintBitsToFloat(val1[0]));
-		edge1 = vec3(uintBitsToFloat(val1[1]), uintBitsToFloat(val2[0]), uintBitsToFloat(val2[1]));
-	}
+	uvec4 val0 = DEPTH_SCRATCH();
+	uvec4 val1 = TRI_SCRATCH(0);
+	uvec4 val2 = TRI_SCRATCH(1);
+	depth_eq = uintBitsToFloat(val0.xyz);
+	bary_params = uintBitsToFloat(uvec2(val1.w, val2.w));
+	instance_flags = val0[3] & 0xffff;
+	instance_id = val0[3] >> 16;
+	edge0 = uintBitsToFloat(val1.xyz);
+	edge1 = uintBitsToFloat(val2.xyz);
 }
 
 void getTriangleVertexColors(uint scratch_tri_idx, out vec4 color0, out vec4 color1,

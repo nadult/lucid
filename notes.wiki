@@ -399,3 +399,18 @@ san-miguel: 8943   2430   176   2097        4127        +57
     sponza: 3561   97     87    3156        69          -198
     teapot: 385    24     30    294         5           -4
  white_oak: 11313  33     169   10978       5           -1347
+ 
+uvec4 storage:
+            total  setup  bins  raster_low  raster_mid
+    #boxes: 1435   19     37    1324        5
+     bunny: 378    56     30    246         4
+conference: 1193   53     70    947         4
+    dragon: 881    302    49    345         150
+   gallery: 2755   570    66    1638        328
+  hairball: 11102  2007   294   299         8287
+powerplant: 9695   2602   282   818         5886
+san-miguel: 8875   2348   178   2125        4081
+ scrubPine: 560    12     52    456         4
+    sponza: 3551   92     97    3140        69
+    teapot: 379    22     30    293         5
+ white_oak: 11325  29     171   10962       5

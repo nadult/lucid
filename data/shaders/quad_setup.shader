@@ -25,18 +25,17 @@ layout(std430, binding = 5) readonly restrict buffer buf5_ { uint g_input_colors
 layout(std430, binding = 6) readonly restrict buffer buf6_ { uint g_input_normals[]; };
 
 layout(std430, binding = 7) writeonly restrict buffer buf7_ { uint g_quad_aabbs[]; };
-layout(std430, binding = 8) writeonly restrict buffer buf8_ { uvec2 g_tri_storage[]; };
-layout(std430, binding = 9) writeonly restrict buffer buf9_ { uvec4 g_quad_storage[]; };
-layout(std430, binding = 10) writeonly restrict buffer buf10_ { uvec4 g_scan_storage[]; };
-layout(std430, binding = 11) writeonly restrict buffer buf11_ { uint g_uint_storage[]; };
+layout(std430, binding = 8) writeonly restrict buffer buf8_ { uvec4 g_uvec4_storage[]; };
+layout(std430, binding = 9) writeonly restrict buffer buf9_ { uint g_uint_storage[]; };
 
-// TODO: Jak zwiększyć szansę trafienia w cache?
-#define TRI_SCRATCH(var_idx) g_tri_storage[scratch_tri_idx * 4 + var_idx]
-#define QUAD_SCRATCH(var_idx) g_quad_storage[scratch_quad_idx + var_idx * MAX_VISIBLE_QUADS]
+#define TRI_SCRATCH(var_idx) g_uvec4_storage[scratch_tri_idx * 2 + var_idx]
+#define QUAD_SCRATCH(var_idx)                                                                      \
+	g_uvec4_storage[MAX_VISIBLE_QUADS * 10 + scratch_quad_idx + var_idx * MAX_VISIBLE_QUADS]
 #define QUAD_TEX_SCRATCH(var_idx)                                                                  \
-	g_quad_storage[scratch_quad_idx * 2 + MAX_VISIBLE_QUADS * 2 + var_idx]
-#define SCAN_SCRATCH(var_idx) g_scan_storage[scratch_tri_idx * 2 + var_idx]
-#define DEPTH_SCRATCH() g_scan_storage[MAX_VISIBLE_QUADS * 4 + scratch_tri_idx]
+	g_uvec4_storage[scratch_quad_idx * 2 + MAX_VISIBLE_QUADS * 12 + var_idx]
+#define SCAN_SCRATCH(var_idx)                                                                      \
+	g_uvec4_storage[scratch_tri_idx * 2 + (MAX_VISIBLE_TRIS * 2 + var_idx)]
+#define DEPTH_SCRATCH() g_uvec4_storage[MAX_VISIBLE_TRIS * 4 + scratch_tri_idx]
 #define UINT_SCRATCH() g_uint_storage[scratch_tri_idx]
 
 shared uint s_instance_id[MAX_PACKET_SIZE];
@@ -323,17 +322,9 @@ void storeTri(uint scratch_tri_idx, uint instance_flags_id, vec3 tri0, vec3 tri1
 	vec3 depth_eq = vec3(dot(pnormal, frustum.ws_dirx), dot(pnormal, frustum.ws_diry),
 						 dot(pnormal, s_ray_dir0));
 
-	// (65%)
 	DEPTH_SCRATCH() = uvec4(floatBitsToUint(depth_eq), instance_flags_id);
-	TRI_SCRATCH(0) = uvec2(floatBitsToUint(param0), floatBitsToUint(param1));
-	TRI_SCRATCH(1) = uvec2(floatBitsToUint(edge0.x), floatBitsToUint(edge0.y));
-	TRI_SCRATCH(2) = uvec2(floatBitsToUint(edge0.z), floatBitsToUint(edge1.x));
-	TRI_SCRATCH(3) = uvec2(floatBitsToUint(edge1.y), floatBitsToUint(edge1.z));
-
-	// TODO: separate storage for unormal; write it under flag, write early
-	// TODO: don't store instance_color, instead keep all instance_colors together
-	// in simple uint array (separate from InstanceData)
-	// TODO: after that tri_scratch will fit in two uvec4
+	TRI_SCRATCH(0) = floatBitsToUint(vec4(edge0, param0));
+	TRI_SCRATCH(1) = floatBitsToUint(vec4(edge1, param1));
 	// TODO: use separate threads to store triangles ? Maybe it will be more efficient ?
 
 	vec3 nrm0 = cross(tri2, tri1 - tri2);

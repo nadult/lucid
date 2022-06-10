@@ -130,6 +130,7 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	// TODO: what should we do when quads won't fit?
 	// TODO: better estimate needed
 	// TODO: properly handle situations when limits were reached
+	// TODO: it should depend on bin size
 	uint max_bin_quads = max_quads * 3 / 2;
 
 	// TODO: LucidRenderer constructed 2x at the beginning
@@ -140,10 +141,9 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	m_quad_aabbs.emplace(BufferType::shader_storage, max_visible_quads * sizeof(u32));
 
 	int max_visible_tris = max_visible_quads * 2;
-	m_tri_storage.emplace(BufferType::shader_storage, max_visible_tris * 4 * sizeof(u64));
-	m_scan_storage.emplace(BufferType::shader_storage, max_visible_tris * 3 * sizeof(int4));
+	int uvec4_storage_size = max_visible_tris * 5 + max_visible_quads * 4;
+	m_uvec4_storage.emplace(BufferType::shader_storage, uvec4_storage_size * sizeof(int4));
 	m_uint_storage.emplace(BufferType::shader_storage, max_visible_tris * sizeof(u32));
-	m_quad_storage.emplace(BufferType::shader_storage, max_visible_quads * 4 * sizeof(int4));
 
 	// TODO: control size of scratch mem
 	m_scratch_32.emplace(BufferType::shader_storage, (64 * 1024) * m_max_dispatches * sizeof(u32));
@@ -174,6 +174,7 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	defs["MAX_QUADS"] = max_quads;
 	defs["MAX_VISIBLE_QUADS"] = max_visible_quads;
 	defs["MAX_VISIBLE_QUADS_SHIFT"] = (int)log2(max_visible_quads);
+	defs["MAX_VISIBLE_TRIS"] = max_visible_quads * 2;
 	defs["MAX_DISPATCHES"] = m_max_dispatches;
 
 	int bin_dispatcher_lsize = m_bin_size == 64 ? 512 : 1024;
@@ -353,10 +354,8 @@ void LucidRenderer::quadSetup(const Context &ctx) {
 		nrm_vb->bindIndexAs(6, BufferType::shader_storage);
 
 	m_quad_aabbs->bindIndex(7);
-	m_tri_storage->bindIndex(8);
-	m_quad_storage->bindIndex(9);
-	m_scan_storage->bindIndex(10);
-	m_uint_storage->bindIndex(11);
+	m_uvec4_storage->bindIndex(8);
+	m_uint_storage->bindIndex(9);
 
 	p_quad_setup["enable_backface_culling"] = ctx.config.backface_culling;
 	p_quad_setup["view_proj_matrix"] = m_view_proj_matrix;
@@ -380,7 +379,7 @@ void LucidRenderer::computeBins(const Context &ctx) {
 	m_quad_aabbs->bindIndex(1);
 	m_bin_quads->bindIndex(2);
 	m_scratch_64->bindIndex(3);
-	m_scan_storage->bindIndex(4);
+	m_uvec4_storage->bindIndex(4);
 
 	PERF_CHILD_SCOPE("dispatcher phase");
 	p_bin_dispatcher.use();
@@ -417,10 +416,8 @@ void LucidRenderer::bindRasterCommon(const Context &ctx) {
 	m_scratch_64->bindIndex(4);
 	m_instance_colors->bindIndex(5);
 	m_instance_uv_rects->bindIndex(6);
-	m_tri_storage->bindIndex(7);
-	m_quad_storage->bindIndex(8);
-	m_scan_storage->bindIndex(9);
-	m_uint_storage->bindIndex(10);
+	m_uvec4_storage->bindIndex(7);
+	m_uint_storage->bindIndex(8);
 }
 
 void LucidRenderer::bindRaster(Program &program, const Context &ctx) {

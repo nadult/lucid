@@ -17,9 +17,10 @@ layout(std430, binding = 1) readonly buffer buf1_ { uint g_quad_aabbs[]; };
 layout(std430, binding = 2) writeonly buffer buf2_ { uint g_bin_quads[]; };
 
 layout(std430, binding = 3) buffer buf3_ { int g_tasks[]; };
-layout(std430, binding = 4) buffer buf4_ { uvec4 g_scan_storage[]; };
+layout(std430, binding = 4) buffer buf4_ { uvec4 g_uvec4_storage[]; };
 
-#define SCAN_SCRATCH(var_idx) g_scan_storage[scratch_tri_idx * 2 + var_idx]
+#define SCAN_SCRATCH(var_idx)                                                                      \
+	g_uvec4_storage[scratch_tri_idx * 2 + (MAX_VISIBLE_TRIS * 2 + var_idx)]
 
 shared int s_bins[BIN_COUNT];
 shared int s_temp[LSIZE];

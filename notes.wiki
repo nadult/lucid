@@ -385,7 +385,6 @@ san-miguel: 9299   2693   179   2116        4153
     teapot: 382    25     30    284         4
  white_oak: 11571  40     159   11205       4
 
-
  Separated instance_color & unormal:
             total  setup  bins  raster_low  raster_mid  vs no-shared-storage
     #boxes: 1447   23     39    1333        4           -74

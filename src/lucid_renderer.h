@@ -63,7 +63,7 @@ class LucidRenderer {
 
 	PBuffer m_instances, m_instance_colors, m_instance_uv_rects;
 	PBuffer m_errors, m_scratch_32, m_scratch_64;
-	PBuffer m_quad_aabbs, m_info, m_bin_quads, m_raster_image;
+	PBuffer m_info, m_bin_quads, m_raster_image;
 	PBuffer m_uint_storage, m_uvec4_storage;
 	array<PBuffer, 3> m_old_info;
 

@@ -138,16 +138,19 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	uint bin_counters_size = LUCID_INFO_SIZE + m_bin_count * 7;
 	m_info.emplace(BufferType::shader_storage, bin_counters_size * sizeof(u32));
 	m_bin_quads.emplace(BufferType::shader_storage, max_bin_quads * sizeof(u32));
-	m_quad_aabbs.emplace(BufferType::shader_storage, max_visible_quads * sizeof(u32));
 
 	int max_visible_tris = max_visible_quads * 2;
 	int uvec4_storage_size = max_visible_tris * 5 + max_visible_quads * 4;
 	m_uvec4_storage.emplace(BufferType::shader_storage, uvec4_storage_size * sizeof(int4));
 	m_uint_storage.emplace(BufferType::shader_storage, max_visible_tris * sizeof(u32));
 
+	uint scratch_32_size = 64 * 1024 * m_max_dispatches * sizeof(u32);
+	uint scratch_64_size = (128 * 1024) * m_max_dispatches * sizeof(u64);
+	scratch_64_size = max<uint>(scratch_64_size, max_visible_quads * sizeof(u32));
+
 	// TODO: control size of scratch mem
-	m_scratch_32.emplace(BufferType::shader_storage, (64 * 1024) * m_max_dispatches * sizeof(u32));
-	m_scratch_64.emplace(BufferType::shader_storage, (128 * 1024) * m_max_dispatches * sizeof(u64));
+	m_scratch_32.emplace(BufferType::shader_storage, scratch_32_size);
+	m_scratch_64.emplace(BufferType::shader_storage, scratch_64_size);
 	m_raster_image.emplace(BufferType::shader_storage,
 						   m_bin_count * square(m_bin_size) * sizeof(u32));
 
@@ -353,7 +356,7 @@ void LucidRenderer::quadSetup(const Context &ctx) {
 	if(auto nrm_vb = vbuffers[3])
 		nrm_vb->bindIndexAs(6, BufferType::shader_storage);
 
-	m_quad_aabbs->bindIndex(7);
+	m_scratch_64->bindIndex(7);
 	m_uvec4_storage->bindIndex(8);
 	m_uint_storage->bindIndex(9);
 
@@ -376,9 +379,9 @@ void LucidRenderer::computeBins(const Context &ctx) {
 
 	m_info->bindIndex(0);
 
-	m_quad_aabbs->bindIndex(1);
+	m_scratch_64->bindIndex(1);
 	m_bin_quads->bindIndex(2);
-	m_scratch_64->bindIndex(3);
+	m_scratch_32->bindIndex(3);
 	m_uvec4_storage->bindIndex(4);
 
 	PERF_CHILD_SCOPE("dispatcher phase");

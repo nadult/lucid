@@ -1,6 +1,13 @@
 // $$include funcs frustum structures
 
-// ~80% of time goes to data loading
+// TODO: detect visible quads overflow
+// TODO: do something about divergence in input data
+// TODO: dynamic geometry support
+// TODO: Z NDC should be (0, 1) instead of (-1, 1) ?
+
+// TODO: muszę poprawnie zrobić clippowanie z Z-near; z innymi płaszczyznami wlasciwie tez powinienem
+// (Z far pewnie mozna olac). OK ale jak już clipnę to powininem miec max 7 trojkątów. Co z nimi zrobić?
+// dodać je na koniec listy trisów? globalnym atomiciem alokowac miejsce ? można tak zrobić
 
 #define LSIZE MAX_INSTANCE_QUADS
 layout(local_size_x = LSIZE) in;
@@ -16,14 +23,12 @@ uniform bool enable_backface_culling;
 uniform int u_num_instances;
 uniform int u_packet_size;
 
-// TODO: check if readonly/restrict makes a difference
 layout(std430, binding = 1) readonly restrict buffer buf1_ { InstanceData g_instances[]; };
 layout(std430, binding = 2) readonly restrict buffer buf2_ { uint g_indices[]; };
 layout(std430, binding = 3) readonly restrict buffer buf3_ { float g_verts[]; };
 layout(std430, binding = 4) readonly restrict buffer buf4_ { vec2 g_tex_coords[]; };
 layout(std430, binding = 5) readonly restrict buffer buf5_ { uint g_colors[]; };
 layout(std430, binding = 6) readonly restrict buffer buf6_ { uint g_normals[]; };
-
 layout(std430, binding = 7) writeonly restrict buffer buf7_ { uint g_quad_aabbs[]; };
 layout(std430, binding = 8) writeonly restrict buffer buf8_ { uvec4 g_uvec4_storage[]; };
 layout(std430, binding = 9) writeonly restrict buffer buf9_ { uint g_uint_storage[]; };
@@ -41,31 +46,9 @@ shared int s_instance_id[MAX_PACKET_SIZE];
 shared int s_num_visible[MAX_PACKET_SIZE * 2];
 shared int s_out_offset[2];
 
-shared vec3 s_ray_dir0;
-
 shared uint s_rejected_quads[REJECTION_TYPE_COUNT];
 
-// TODO: do something about divergence in input data
-// TODO: muszę też mieć możliwość dodawania nowych wierzchołków
-
-// TODO: muszę poprawnie zrobić clippowanie z Z-near; z innymi płaszczyznami wlasciwie tez powinienem
-// (Z far pewnie mozna olac). OK ale jak już clipnę to powininem miec max 7 trojkątów. Co z nimi zrobić?
-// dodać je na koniec listy trisów? globalnym atomiciem alokowac miejsce ? można tak zrobić
-//
-// TODO: problemy z wydajnością pojawiają się jak używam za dużo pamięci GPU
-
-// TODO: Z NDC should be (0, 1) instead of (-1, 1)
-// TODO: if we did this in compute shader we could first filter out invisible tris and then
-// (in another sub-phase) generate data for visible tris; This way we could possibly increase
-// occupancy within warps
-
-// Each quad can be converted to 2 triangles: (v0, v1, v2), (v0, v2, v3)
-//
-// TODO: unikanie wielokrotnej rasteryzacji trójkątów, które spanują wiele bloków:
-//       możemy podzielić tróəkąty na dwie grupy: małe i duże
-//       duże obsługujemy tak jak do tej pory, małe (max 4x4, albo np. 6x6) rasteuzyjemy
-//       nie w ramach bloku ale w ramach jego bboxa; następnie maski małych trójkątów
-//       byłyby przycinane do konkretnych bloków
+shared vec3 s_ray_dir0;
 
 vec3 vertexLoad(uint vindex) {
 	return vec3(g_verts[vindex * 3 + 0], g_verts[vindex * 3 + 1], g_verts[vindex * 3 + 2]);
@@ -409,10 +392,13 @@ void main() {
 			processInputQuad(s_quad_offset[i] + int(LIX), v0, v1, v2, v3, i);
 		}
 		barrier();
-		if(LIX < 2)
-			s_out_offset[LIX] =
-				atomicAdd(g_info.num_visible_quads[LIX], s_num_visible[i * 2 + LIX]);
-		// TODO: properly handle overflow
+		if(LIX < 2) {
+			int num_tris = s_num_visible[i * 2 + LIX];
+			int offset = atomicAdd(g_info.num_visible_quads[LIX], num_tris);
+			if(offset + num_tris > MAX_VISIBLE_TRIS)
+				s_num_visible[i * 2 + LIX] = max(0, MAX_VISIBLE_TRIS - offset);
+			s_out_offset[LIX] = offset;
+		}
 		barrier();
 
 		int num_small = s_num_visible[i * 2 + 0];

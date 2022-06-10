@@ -1,7 +1,5 @@
 // $$include funcs lighting frustum viewport raster
 
-// TODO: fix 64x64 version
-
 #if BIN_SIZE == 64
 #define LSIZE 512
 #define LSHIFT 9
@@ -139,8 +137,8 @@ uint max32(uint value, int width) {
 	return value;
 }
 
-void generateRowTris(uint scratch_tri_idx, int start_hby) {
-	uint scan_offset = STORAGE_TRI_SCAN_OFFSET + scratch_tri_idx * 2;
+void generateRowTris(uint tri_idx, int start_hby) {
+	uint scan_offset = STORAGE_TRI_SCAN_OFFSET + tri_idx * 2;
 	uvec4 val0 = g_uvec4_storage[scan_offset + 0];
 	uvec4 val1 = g_uvec4_storage[scan_offset + 1];
 	int min_hby = clamp(int(val0.w & 0xffff) - s_bin_pos.y, 0, BIN_MASK) >> HBLOCK_HEIGHT_SHIFT;
@@ -197,10 +195,10 @@ void generateRowTris(uint scratch_tri_idx, int start_hby) {
 		uint roffset = atomicAdd(s_hblock_row_tri_counts[hby], 1) +
 					   currentHBlockRow(hby) * MAX_HBLOCK_ROW_TRIS;
 #if BIN_SIZE == 64
-		g_scratch_32[dst_offset_32 + roffset] = scratch_tri_idx | (bx_mask << 24);
+		g_scratch_32[dst_offset_32 + roffset] = tri_idx | (bx_mask << 24);
 		g_scratch_64[dst_offset_64 + roffset] = uvec2(min_bits, max_bits);
 #else
-		g_scratch_32[dst_offset_32 + roffset] = scratch_tri_idx;
+		g_scratch_32[dst_offset_32 + roffset] = tri_idx;
 		g_scratch_64[dst_offset_64 + roffset] = uvec2(min_bits, max_bits | (bx_mask << 28));
 #endif
 	}
@@ -223,17 +221,10 @@ void processQuads(int start_hby) {
 		if(cull_flag == 1)
 			continue;
 
-#ifdef SHADER_DEBUG
-		if(quad_idx >= MAX_VISIBLE_QUADS ||
-		   (quad_idx >= g_info.num_visible_quads[0] &&
-			quad_idx < (MAX_VISIBLE_QUADS - 1 - g_info.num_visible_quads[1])))
-			atomicOr(s_raster_error, ~0);
-#endif
-
 		// TODO: store only if samples were generated
 		// TODO: do triangle storing later
-		uint scratch_tri_idx = quad_idx * 2 + second_tri;
-		generateRowTris(scratch_tri_idx, start_hby);
+		uint tri_idx = quad_idx * 2 + second_tri;
+		generateRowTris(tri_idx, start_hby);
 	}
 	barrier();
 
@@ -397,9 +388,9 @@ void generateHBlocks(uint start_hbid) {
 
 		uvec2 tri_info = g_scratch_64[src_offset_64 + row_idx];
 #if BIN_SIZE == 64
-		uint scratch_tri_idx = g_scratch_32[src_offset_32 + row_idx] & 0xffffff;
+		uint tri_idx = g_scratch_32[src_offset_32 + row_idx] & 0xffffff;
 #else
-		uint scratch_tri_idx = g_scratch_32[src_offset_32 + row_idx];
+		uint tri_idx = g_scratch_32[src_offset_32 + row_idx];
 #endif
 
 		const ivec4 bin_shifts = ivec4(0, BIN_SHIFT, BIN_SHIFT * 2, BIN_SHIFT * 3);
@@ -418,7 +409,7 @@ void generateHBlocks(uint start_hbid) {
 		cpos *= 0.5 / float(num_frags);
 		cpos += block_pos;
 
-		uint depth_offset = STORAGE_TRI_DEPTH_OFFSET + scratch_tri_idx;
+		uint depth_offset = STORAGE_TRI_DEPTH_OFFSET + tri_idx;
 		vec3 depth_eq = uintBitsToFloat(g_uvec4_storage[depth_offset].xyz);
 		float ray_pos = depth_eq.x * cpos.x + (depth_eq.y * cpos.y + depth_eq.z);
 		float depth = 0xffffe * SATURATE(inversesqrt(ray_pos + 1)); // 20 bits
@@ -426,7 +417,7 @@ void generateHBlocks(uint start_hbid) {
 		if(num_frags == 0) // This means that bx_mask is invalid
 			RECORD(0, 0, 0, 0);
 
-		g_scratch_64[dst_offset_64 + i] = uvec2(bits, scratch_tri_idx | (num_frags << 24));
+		g_scratch_64[dst_offset_64 + i] = uvec2(bits, tri_idx | (num_frags << 24));
 		s_buffer[buf_offset + i] = i | (uint(depth) << 12);
 	}
 	barrier();
@@ -525,8 +516,8 @@ void generateHBlocks(uint start_hbid) {
 			s_segments[seg_block_offset + seg_id] = i | seg_offset;
 
 		uvec2 tri_data = g_scratch_64[src_offset_64 + block_tri_idx];
-		uint scratch_tri_idx = tri_data.y & 0xffffff;
-		g_scratch_64[dst_offset_64 + i] = uvec2(scratch_tri_idx | seg_offset, tri_data.x);
+		uint tri_idx = tri_data.y & 0xffffff;
+		g_scratch_64[dst_offset_64 + i] = uvec2(tri_idx | seg_offset, tri_data.x);
 	}
 	barrier();
 }
@@ -568,7 +559,7 @@ void loadSamples(uint hbid, int segment_id) {
 		int tri_offset = int(tri_data.x >> 24);
 		if(i == 0 && tri_offset != 0)
 			tri_offset -= SEGMENT_SIZE;
-		uint scratch_tri_idx = tri_data.x & 0xffffff;
+		uint tri_idx = tri_data.x & 0xffffff;
 
 		int minx = int((tri_data.y >> min_shift) & 7);
 		int countx = int((tri_data.y >> count_shift) & 15);
@@ -586,7 +577,7 @@ void loadSamples(uint hbid, int segment_id) {
 			continue;
 
 		uint pixel_id = (y << 3) | minx;
-		uint value = pixel_id | (scratch_tri_idx << 5);
+		uint value = pixel_id | (tri_idx << 5);
 
 		for(int j = 0; j < countx; j++) {
 			s_buffer[buf_offset + tri_offset] = value;
@@ -635,10 +626,10 @@ void shadeAndReduceSamples(uint hbid, uint sample_count, in out ReductionContext
 		if(sample_id < sample_count) {
 			uint value = s_buffer[buf_offset + sample_id];
 			uint sample_pixel_id = value & 31;
-			uint scratch_tri_idx = value >> 5;
+			uint tri_idx = value >> 5;
 			ivec2 pix_pos = half_block_pos + ivec2(sample_pixel_id & 7, sample_pixel_id >> 3);
 			float sample_depth;
-			uint sample_color = shadeSample(pix_pos, scratch_tri_idx, sample_depth);
+			uint sample_color = shadeSample(pix_pos, tri_idx, sample_depth);
 			sample_s = uvec2(sample_color, floatBitsToUint(sample_depth));
 			atomicOr(s_mini_buffer[mini_offset + sample_pixel_id], reduce_pixel_bit);
 		}

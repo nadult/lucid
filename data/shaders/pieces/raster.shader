@@ -66,11 +66,10 @@ ScanlineParams loadScanlineParams(uvec4 val0, uvec4 val1, vec2 start) {
 	return params;
 }
 
-void getTriangleParams(uint scratch_tri_idx, out vec3 depth_eq, out vec2 bary_params,
-					   out vec3 edge0, out vec3 edge1, out uint instance_id,
-					   out uint instance_flags) {
-	uint bary_offset = STORAGE_TRI_BARY_OFFSET + scratch_tri_idx * 2;
-	uvec4 val0 = g_uvec4_storage[STORAGE_TRI_DEPTH_OFFSET + scratch_tri_idx];
+void getTriangleParams(uint tri_idx, out vec3 depth_eq, out vec2 bary_params, out vec3 edge0,
+					   out vec3 edge1, out uint instance_id, out uint instance_flags) {
+	uint bary_offset = STORAGE_TRI_BARY_OFFSET + tri_idx * 2;
+	uvec4 val0 = g_uvec4_storage[STORAGE_TRI_DEPTH_OFFSET + tri_idx];
 	uvec4 val1 = g_uvec4_storage[bary_offset + 0];
 	uvec4 val2 = g_uvec4_storage[bary_offset + 1];
 	depth_eq = uintBitsToFloat(val0.xyz);
@@ -81,30 +80,28 @@ void getTriangleParams(uint scratch_tri_idx, out vec3 depth_eq, out vec2 bary_pa
 	edge1 = uintBitsToFloat(val2.xyz);
 }
 
-void getTriangleVertexColors(uint scratch_tri_idx, out vec4 color0, out vec4 color1,
-							 out vec4 color2) {
-	uint scratch_quad_idx = scratch_tri_idx >> 1;
-	uint second_tri = scratch_tri_idx & 1;
-	uvec4 colors = g_uvec4_storage[STORAGE_QUAD_COLOR_OFFSET + scratch_quad_idx];
+void getTriangleVertexColors(uint tri_idx, out vec4 color0, out vec4 color1, out vec4 color2) {
+	uint quad_idx = tri_idx >> 1;
+	uint second_tri = tri_idx & 1;
+	uvec4 colors = g_uvec4_storage[STORAGE_QUAD_COLOR_OFFSET + quad_idx];
 	color0 = decodeRGBA8(colors[0]);
 	color1 = decodeRGBA8(colors[1 + second_tri]);
 	color2 = decodeRGBA8(colors[2 + second_tri]);
 }
 
-void getTriangleVertexNormals(uint scratch_tri_idx, out vec3 normal0, out vec3 normal1,
-							  out vec3 normal2) {
-	uint scratch_quad_idx = scratch_tri_idx >> 1;
-	uint second_tri = scratch_tri_idx & 1;
-	uvec4 normals = g_uvec4_storage[STORAGE_QUAD_NORMAL_OFFSET + scratch_quad_idx];
+void getTriangleVertexNormals(uint tri_idx, out vec3 normal0, out vec3 normal1, out vec3 normal2) {
+	uint quad_idx = tri_idx >> 1;
+	uint second_tri = tri_idx & 1;
+	uvec4 normals = g_uvec4_storage[STORAGE_QUAD_NORMAL_OFFSET + quad_idx];
 	normal0 = decodeNormalUint(normals[0]);
 	normal1 = decodeNormalUint(normals[1 + second_tri]);
 	normal2 = decodeNormalUint(normals[2 + second_tri]);
 }
 
-void getTriangleVertexTexCoords(uint scratch_tri_idx, out vec2 tex0, out vec2 tex1, out vec2 tex2) {
-	uint scratch_quad_idx = scratch_tri_idx >> 1;
-	uint second_tri = scratch_tri_idx & 1;
-	uint tex_offset = STORAGE_QUAD_TEXTURE_OFFSET + scratch_quad_idx * 2;
+void getTriangleVertexTexCoords(uint tri_idx, out vec2 tex0, out vec2 tex1, out vec2 tex2) {
+	uint quad_idx = tri_idx >> 1;
+	uint second_tri = tri_idx & 1;
+	uint tex_offset = STORAGE_QUAD_TEXTURE_OFFSET + quad_idx * 2;
 	uvec4 tex_coords0 = g_uvec4_storage[tex_offset + 0];
 	uvec4 tex_coords1 = g_uvec4_storage[tex_offset + 1];
 	tex0 = uintBitsToFloat(tex_coords0.xy);
@@ -112,13 +109,13 @@ void getTriangleVertexTexCoords(uint scratch_tri_idx, out vec2 tex0, out vec2 te
 	tex2 = uintBitsToFloat(second_tri == 0 ? tex_coords1.xy : tex_coords1.zw);
 }
 
-uint shadeSample(ivec2 pixel_pos, uint scratch_tri_idx, out float out_depth) {
+uint shadeSample(ivec2 pixel_pos, uint tri_idx, out float out_depth) {
 	float px = float(pixel_pos.x), py = float(pixel_pos.y);
 
 	vec3 depth_eq, edge0_eq, edge1_eq;
 	uint instance_id, instance_flags;
 	vec2 bary_params;
-	getTriangleParams(scratch_tri_idx, depth_eq, bary_params, edge0_eq, edge1_eq, instance_id,
+	getTriangleParams(tri_idx, depth_eq, bary_params, edge0_eq, edge1_eq, instance_id,
 					  instance_flags);
 
 	float inv_ray_pos = depth_eq.x * px + (depth_eq.y * py + depth_eq.z);
@@ -146,7 +143,7 @@ uint shadeSample(ivec2 pixel_pos, uint scratch_tri_idx, out float out_depth) {
 
 	if((instance_flags & INST_HAS_TEXTURE) != 0) {
 		vec2 tex0, tex1, tex2;
-		getTriangleVertexTexCoords(scratch_tri_idx, tex0, tex1, tex2);
+		getTriangleVertexTexCoords(tri_idx, tex0, tex1, tex2);
 
 		vec2 tex_coord = bary[0] * tex1 + (bary[1] * tex2 + tex0);
 		vec2 tex_dx = bary_dx[0] * tex1 + bary_dx[1] * tex2;
@@ -168,7 +165,7 @@ uint shadeSample(ivec2 pixel_pos, uint scratch_tri_idx, out float out_depth) {
 
 	if((instance_flags & INST_HAS_VERTEX_COLORS) != 0) {
 		vec4 col0, col1, col2;
-		getTriangleVertexColors(scratch_tri_idx, col0, col1, col2);
+		getTriangleVertexColors(tri_idx, col0, col1, col2);
 		color *= (1.0 - bary[0] - bary[1]) * col0 + (bary[0] * col1 + bary[1] * col2);
 	}
 
@@ -178,12 +175,12 @@ uint shadeSample(ivec2 pixel_pos, uint scratch_tri_idx, out float out_depth) {
 	vec3 normal;
 	if((instance_flags & INST_HAS_VERTEX_NORMALS) != 0) {
 		vec3 nrm0, nrm1, nrm2;
-		getTriangleVertexNormals(scratch_tri_idx, nrm0, nrm1, nrm2);
+		getTriangleVertexNormals(tri_idx, nrm0, nrm1, nrm2);
 		nrm1 -= nrm0;
 		nrm2 -= nrm0;
 		normal = bary[0] * nrm1 + (bary[1] * nrm2 + nrm0);
 	} else {
-		normal = decodeNormalUint(g_uint_storage[scratch_tri_idx]);
+		normal = decodeNormalUint(g_uint_storage[tri_idx]);
 	}
 
 	float light_value = max(0.0, dot(-lighting.sun_dir, normal) * 0.7 + 0.3);

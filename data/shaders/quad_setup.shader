@@ -241,32 +241,31 @@ void processInputQuad(uint quad_id, uint v0, uint v1, uint v2, uint v3, uint loc
 	s_quad_indices[out_idx] = uvec4(v0, v1, v2, v3);
 }
 
-void storeQuad(uint scratch_quad_idx, uint instance_flags, uint v0, uint v1, uint v2, uint v3) {
+void storeQuad(uint quad_idx, uint instance_flags, uint v0, uint v1, uint v2, uint v3) {
 	if((instance_flags & INST_HAS_VERTEX_COLORS) != 0) {
 		uvec4 colors = uvec4(g_colors[v0], g_colors[v1], g_colors[v2], g_colors[v3]);
-		g_uvec4_storage[STORAGE_QUAD_COLOR_OFFSET + scratch_quad_idx] = colors;
+		g_uvec4_storage[STORAGE_QUAD_COLOR_OFFSET + quad_idx] = colors;
 	}
 	if((instance_flags & INST_HAS_VERTEX_NORMALS) != 0) {
 		uvec4 normals = uvec4(g_normals[v0], g_normals[v1], g_normals[v2], g_normals[v3]);
-		g_uvec4_storage[STORAGE_QUAD_NORMAL_OFFSET + scratch_quad_idx] = normals;
+		g_uvec4_storage[STORAGE_QUAD_NORMAL_OFFSET + quad_idx] = normals;
 	}
 	if((instance_flags & INST_HAS_TEXTURE) != 0) {
 		vec2 tex0 = g_tex_coords[v0], tex1 = g_tex_coords[v1] - tex0;
 		vec2 tex2 = g_tex_coords[v2] - tex0, tex3 = g_tex_coords[v3] - tex0;
-		uint tex_offset = STORAGE_QUAD_TEXTURE_OFFSET + scratch_quad_idx * 2;
+		uint tex_offset = STORAGE_QUAD_TEXTURE_OFFSET + quad_idx * 2;
 		g_uvec4_storage[tex_offset + 0] = floatBitsToUint(vec4(tex0, tex1));
 		g_uvec4_storage[tex_offset + 1] = floatBitsToUint(vec4(tex2, tex3));
 	}
 }
 
-void storeTri(int scratch_tri_idx, uint instance_flags_id, vec3 tri0, vec3 tri1, vec3 tri2,
-			  uint y_aabb) {
+void storeTri(int tri_idx, uint instance_flags_id, vec3 tri0, vec3 tri1, vec3 tri2, uint y_aabb) {
 	vec3 normal = cross(tri0 - tri2, tri1 - tri0);
 	float multiplier = 1.0 / length(normal);
 	normal *= multiplier;
 
 	if((instance_flags_id & INST_HAS_VERTEX_NORMALS) == 0)
-		g_uint_storage[scratch_tri_idx] = encodeNormalUint(normal);
+		g_uint_storage[tri_idx] = encodeNormalUint(normal);
 
 	vec3 edge0 = (tri0 - tri2) * multiplier;
 	vec3 edge1 = (tri1 - tri0) * multiplier;
@@ -288,9 +287,9 @@ void storeTri(int scratch_tri_idx, uint instance_flags_id, vec3 tri0, vec3 tri1,
 	vec3 depth_eq = vec3(dot(pnormal, frustum.ws_dirx), dot(pnormal, frustum.ws_diry),
 						 dot(pnormal, s_ray_dir0));
 
-	g_uvec4_storage[STORAGE_TRI_DEPTH_OFFSET + scratch_tri_idx] =
+	g_uvec4_storage[STORAGE_TRI_DEPTH_OFFSET + tri_idx] =
 		uvec4(floatBitsToUint(depth_eq), instance_flags_id);
-	uint bary_offset = STORAGE_TRI_BARY_OFFSET + scratch_tri_idx * 2;
+	uint bary_offset = STORAGE_TRI_BARY_OFFSET + tri_idx * 2;
 	g_uvec4_storage[bary_offset + 0] = floatBitsToUint(vec4(edge0, param0));
 	g_uvec4_storage[bary_offset + 1] = floatBitsToUint(vec4(edge1, param1));
 	// TODO: use separate threads to store triangles ? Maybe it will be more efficient ?
@@ -320,7 +319,7 @@ void storeTri(int scratch_tri_idx, uint instance_flags_id, vec3 tri0, vec3 tri1,
 	vec2 start = vec2(-0.5, 0.5);
 	vec3 scan = scan_step * start.y + scan_base - vec3(start.x);
 
-	uint scan_offset = STORAGE_TRI_SCAN_OFFSET + scratch_tri_idx * 2;
+	uint scan_offset = STORAGE_TRI_SCAN_OFFSET + tri_idx * 2;
 	g_uvec4_storage[scan_offset + 0] = uvec4(floatBitsToUint(scan), y_aabb);
 	g_uvec4_storage[scan_offset + 1] = uvec4(floatBitsToUint(scan_step), x_signs | y_signs);
 }

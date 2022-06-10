@@ -13,6 +13,19 @@ Aktualne cele:
 - opisanie algorytmu
 - wrzucenie gdzieś do sieci
 
+TODO:
+- optymalizacja y_aabb ? moze być zshiftowane juz
+- obsługa overflowa (więcej widocznych trisów niż obsługujemy)
+- grupowanie geometrii quadów w małe paczki? (meshlets)
+- fixowanie TODO w kodzie
+- poprawienie czerwonych binów
+- max_bin_x / max_bin_y ? tak, żeby nie trzeba bylo rekompilować shaderow przy  zmianie rozdzialki
+- naprawienie raster_medium w trybie 64x64
+
+Bugi:
+- zwiecha zauważalna na powerplant (widok z prawej strony, powinny się pojawiać pionowe czerwone linie
+  zbyt dużej ilości trisów/rząd? w trybie medium)
+
 -----------------------------------------------------------------------------------------
                                  === Co dalej ===
 -----------------------------------------------------------------------------------------

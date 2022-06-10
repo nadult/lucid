@@ -19,9 +19,6 @@
 #define MAX_BLOCK_TRIS 256
 #define MAX_BLOCK_TRIS_SHIFT 8
 
-#define MAX_SCRATCH_TRIS 1024
-#define MAX_SCRATCH_TRIS_SHIFT 10
-
 #define SEGMENT_SIZE 256
 #define SEGMENT_SHIFT 8
 
@@ -160,17 +157,7 @@ void processQuads() {
 		uint cull_flag = (bin_quad_idx >> (30 + second_tri)) & 1;
 		if(cull_flag == 1)
 			continue;
-
-#ifdef SHADER_DEBUG
-		if(quad_idx >= MAX_VISIBLE_QUADS ||
-		   (quad_idx >= g_info.num_visible_quads[0] &&
-			quad_idx < (MAX_VISIBLE_QUADS - 1 - g_info.num_visible_quads[1])))
-			atomicOr(s_raster_error, ~0);
-#endif
-
-		// TODO: scratch_tri_idx -> storage_
-		uint scratch_tri_idx = quad_idx * 2 + second_tri;
-		generateRowTris(scratch_tri_idx);
+		generateRowTris(quad_idx * 2 + second_tri);
 	}
 }
 
@@ -302,7 +289,7 @@ void generateBlocks(uint bid) {
 
 		uvec2 tri_mins = g_scratch_64[src_offset_64 + row_idx];
 		uvec2 tri_maxs = g_scratch_64[src_offset_64 + row_idx + MAX_BLOCK_ROW_TRIS];
-		uint scratch_tri_idx =
+		uint tri_idx =
 			(tri_maxs.x >> 24) | ((tri_maxs.y >> 16) & 0xff00) | ((tri_mins.y >> 8) & 0xff0000);
 
 		uvec2 bits;
@@ -331,7 +318,7 @@ void generateBlocks(uint bid) {
 		uint num_all_frags = num_frags.x + num_frags.y;
 		cpos = cpos * (0.5 / float(num_all_frags)) + block_pos;
 
-		uint depth_offset = STORAGE_TRI_DEPTH_OFFSET + scratch_tri_idx;
+		uint depth_offset = STORAGE_TRI_DEPTH_OFFSET + tri_idx;
 		vec3 depth_eq = uintBitsToFloat(g_uvec4_storage[depth_offset].xyz);
 		float ray_pos = depth_eq.x * cpos.x + (depth_eq.y * cpos.y + depth_eq.z);
 		float depth = 0xffffe * SATURATE(inversesqrt(ray_pos + 1)); // 20 bits
@@ -341,7 +328,7 @@ void generateBlocks(uint bid) {
 		uint frag_bits = num_frags.x | (num_frags.y << 6);
 		// TODO: change order
 		g_scratch_64[dst_offset_64 + i] = bits;
-		g_scratch_64[dst_offset_64 + i + MAX_BLOCK_TRIS] = uvec2(scratch_tri_idx, frag_bits);
+		g_scratch_64[dst_offset_64 + i + MAX_BLOCK_TRIS] = uvec2(tri_idx, frag_bits);
 
 		// 12 bits for tile-tri index, 20 bits for depth
 		s_buffer[buf_offset + i] = i | (uint(depth) << 12);
@@ -459,11 +446,10 @@ void generateBlocks(uint bid) {
 		if(first_seg1 && tri_value1 > 0)
 			s_segments[seg_block2_offset + seg_id1] = i | seg_offset1;
 
-		uint scratch_tri_idx = g_scratch_64[src_offset_64 + block_tri_idx + MAX_BLOCK_TRIS].x;
+		uint tri_idx = g_scratch_64[src_offset_64 + block_tri_idx + MAX_BLOCK_TRIS].x;
 		uvec2 tri_data = g_scratch_64[src_offset_64 + block_tri_idx];
-		g_scratch_64[dst_offset_64 + i] = uvec2(scratch_tri_idx | seg_offset0, tri_data.x);
-		g_scratch_64[dst_offset_64 + i + MAX_BLOCK_TRIS] =
-			uvec2(scratch_tri_idx | seg_offset1, tri_data.y);
+		g_scratch_64[dst_offset_64 + i] = uvec2(tri_idx | seg_offset0, tri_data.x);
+		g_scratch_64[dst_offset_64 + i + MAX_BLOCK_TRIS] = uvec2(tri_idx | seg_offset1, tri_data.y);
 	}
 }
 
@@ -502,7 +488,7 @@ void loadSamples(uint hbid, int segment_id) {
 		int tri_offset = int(tri_data.x >> 24);
 		if(i == 0 && tri_offset != 0)
 			tri_offset -= SEGMENT_SIZE;
-		uint scratch_tri_idx = tri_data.x & 0xffffff;
+		uint tri_idx = tri_data.x & 0xffffff;
 
 		int minx = int((tri_data.y >> min_shift) & 7);
 		int countx = int((tri_data.y >> count_shift) & 15);
@@ -520,7 +506,7 @@ void loadSamples(uint hbid, int segment_id) {
 			continue;
 
 		uint pixel_id = (y << 3) | minx;
-		uint value = pixel_id | (scratch_tri_idx << 5);
+		uint value = pixel_id | (tri_idx << 5);
 
 		for(int j = 0; j < countx; j++) {
 			s_buffer[buf_offset + tri_offset] = value;
@@ -569,10 +555,10 @@ void shadeAndReduceSamples(uint hbid, uint sample_count, in out ReductionContext
 		if(sample_id < sample_count) {
 			uint value = s_buffer[buf_offset + sample_id];
 			uint sample_pixel_id = value & 31;
-			uint scratch_tri_idx = value >> 5;
+			uint tri_idx = value >> 5;
 			ivec2 pix_pos = half_block_pos + ivec2(sample_pixel_id & 7, sample_pixel_id >> 3);
 			float sample_depth;
-			uint sample_color = shadeSample(pix_pos, scratch_tri_idx, sample_depth);
+			uint sample_color = shadeSample(pix_pos, tri_idx, sample_depth);
 			sample_s = uvec2(sample_color, floatBitsToUint(sample_depth));
 			atomicOr(s_mini_buffer[mini_offset + sample_pixel_id], reduce_pixel_bit);
 		}

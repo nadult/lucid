@@ -17,8 +17,8 @@ uniform int u_num_instances;
 uniform int u_packet_size;
 
 // TODO: check if readonly/restrict makes a difference
-layout(std430, binding = 1) readonly restrict buffer buf1_ { uint g_input_indices[]; };
-layout(std430, binding = 2) readonly restrict buffer buf2_ { InstanceData g_instances[]; };
+layout(std430, binding = 1) readonly restrict buffer buf1_ { InstanceData g_instances[]; };
+layout(std430, binding = 2) readonly restrict buffer buf2_ { uint g_input_indices[]; };
 layout(std430, binding = 3) readonly restrict buffer buf3_ { float g_input_verts[]; };
 layout(std430, binding = 4) readonly restrict buffer buf4_ { vec2 g_input_tex_coords[]; };
 layout(std430, binding = 5) readonly restrict buffer buf5_ { uint g_input_colors[]; };
@@ -28,14 +28,16 @@ layout(std430, binding = 7) writeonly restrict buffer buf7_ { uint g_quad_aabbs[
 layout(std430, binding = 8) writeonly restrict buffer buf8_ { uvec2 g_tri_storage[]; };
 layout(std430, binding = 9) writeonly restrict buffer buf9_ { uvec4 g_quad_storage[]; };
 layout(std430, binding = 10) writeonly restrict buffer buf10_ { uvec4 g_scan_storage[]; };
+layout(std430, binding = 11) writeonly restrict buffer buf11_ { uint g_uint_storage[]; };
 
 // TODO: Jak zwiększyć szansę trafienia w cache?
-#define TRI_SCRATCH(var_idx) g_tri_storage[scratch_tri_idx * 5 + var_idx]
+#define TRI_SCRATCH(var_idx) g_tri_storage[scratch_tri_idx * 4 + var_idx]
 #define QUAD_SCRATCH(var_idx) g_quad_storage[scratch_quad_idx + var_idx * MAX_VISIBLE_QUADS]
 #define QUAD_TEX_SCRATCH(var_idx)                                                                  \
 	g_quad_storage[scratch_quad_idx * 2 + MAX_VISIBLE_QUADS * 2 + var_idx]
 #define SCAN_SCRATCH(var_idx) g_scan_storage[scratch_tri_idx * 2 + var_idx]
 #define DEPTH_SCRATCH() g_scan_storage[MAX_VISIBLE_QUADS * 4 + scratch_tri_idx]
+#define UINT_SCRATCH() g_uint_storage[scratch_tri_idx]
 
 shared uint s_instance_id[MAX_PACKET_SIZE];
 
@@ -45,6 +47,7 @@ shared uint s_quad_aabbs[LSIZE];
 shared uvec2 s_tri_y_aabbs[LSIZE];
 shared uvec4 s_quad_indices[LSIZE];
 
+// TODO: just keep InstanceData here ?
 shared int s_num_quads[MAX_PACKET_SIZE], s_index_offset[MAX_PACKET_SIZE];
 shared int s_quad_offset[MAX_PACKET_SIZE], s_vertex_offset[MAX_PACKET_SIZE];
 
@@ -288,13 +291,17 @@ void storeQuad(uint scratch_quad_idx, uint instance_flags, uint v0, uint v1, uin
 	}
 }
 
-void storeTri(uint scratch_tri_idx, uint instance_id_flags, uint instance_color, vec3 tri0,
-			  vec3 tri1, vec3 tri2, uint y_aabb) {
+void storeTri(uint scratch_tri_idx, uint instance_flags_id, vec3 tri0, vec3 tri1, vec3 tri2,
+			  uint y_aabb) {
 
 	vec3 normal = cross(tri0 - tri2, tri1 - tri0);
 	float multiplier = 1.0 / length(normal);
 	normal *= multiplier;
-	uint unormal = encodeNormalUint(normal);
+
+	if((instance_flags_id & INST_HAS_VERTEX_NORMALS) == 0) {
+		uint unormal = encodeNormalUint(normal);
+		UINT_SCRATCH() = unormal;
+	}
 
 	vec3 edge0 = (tri0 - tri2) * multiplier;
 	vec3 edge1 = (tri1 - tri0) * multiplier;
@@ -317,12 +324,17 @@ void storeTri(uint scratch_tri_idx, uint instance_id_flags, uint instance_color,
 						 dot(pnormal, s_ray_dir0));
 
 	// (65%)
-	DEPTH_SCRATCH() = uvec4(floatBitsToUint(depth_eq), instance_id_flags);
+	DEPTH_SCRATCH() = uvec4(floatBitsToUint(depth_eq), instance_flags_id);
 	TRI_SCRATCH(0) = uvec2(floatBitsToUint(param0), floatBitsToUint(param1));
 	TRI_SCRATCH(1) = uvec2(floatBitsToUint(edge0.x), floatBitsToUint(edge0.y));
 	TRI_SCRATCH(2) = uvec2(floatBitsToUint(edge0.z), floatBitsToUint(edge1.x));
 	TRI_SCRATCH(3) = uvec2(floatBitsToUint(edge1.y), floatBitsToUint(edge1.z));
-	TRI_SCRATCH(4) = uvec2(unormal, instance_color);
+
+	// TODO: separate storage for unormal; write it under flag, write early
+	// TODO: don't store instance_color, instead keep all instance_colors together
+	// in simple uint array (separate from InstanceData)
+	// TODO: after that tri_scratch will fit in two uvec4
+	// TODO: use separate threads to store triangles ? Maybe it will be more efficient ?
 
 	vec3 nrm0 = cross(tri2, tri1 - tri2);
 	vec3 nrm1 = cross(tri0, tri2 - tri0);
@@ -356,29 +368,25 @@ void storeTri(uint scratch_tri_idx, uint instance_id_flags, uint instance_color,
 
 void addVisibleQuad(uint idx, uint local_instance_id) {
 	uint instance_id = s_instance_id[local_instance_id];
+	g_quad_aabbs[idx] = s_quad_aabbs[LIX];
 
 	uint v0 = s_quad_indices[LIX].x;
 	uint v1 = s_quad_indices[LIX].y;
 	uint v2 = s_quad_indices[LIX].z;
 	uint v3 = s_quad_indices[LIX].w;
-	g_quad_aabbs[idx] = s_quad_aabbs[LIX];
 	uint cull_flags = s_quad_aabbs[LIX] >> 30;
-
 	uint instance_flags = g_instances[instance_id].flags;
-	// TODO: better place for instance color & flags?
-	uint instance_color = g_instances[instance_id].color;
-	uint instance_id_flags = instance_flags | (instance_id << 16);
 
 	vec3 tri0 = vertexLoad(v0) - frustum.ws_shared_origin;
 	vec3 tri1 = vertexLoad(v1) - frustum.ws_shared_origin;
 	vec3 tri2 = vertexLoad(v2) - frustum.ws_shared_origin;
 	vec3 tri3 = vertexLoad(v3) - frustum.ws_shared_origin;
+
+	uint instance_flags_id = instance_flags | (instance_id << 16);
 	if((cull_flags & 1) == 0)
-		storeTri(idx * 2 + 0, instance_id_flags, instance_color, tri0, tri1, tri2,
-				 s_tri_y_aabbs[LIX].x);
+		storeTri(idx * 2 + 0, instance_flags_id, tri0, tri1, tri2, s_tri_y_aabbs[LIX].x);
 	if((cull_flags & 2) == 0)
-		storeTri(idx * 2 + 1, instance_id_flags, instance_color, tri0, tri2, tri3,
-				 s_tri_y_aabbs[LIX].y);
+		storeTri(idx * 2 + 1, instance_flags_id, tri0, tri2, tri3, s_tri_y_aabbs[LIX].y);
 	storeQuad(idx, instance_flags, v0, v1, v2, v3);
 }
 
@@ -433,6 +441,7 @@ void main() {
 			int out_offset = -1;
 			if(LIX < num_small)
 				out_offset = s_out_offset[0] + int(LIX);
+			// TODO: properly handle these
 			// TODO: hole in the middle makes it a bit less effective
 			else if(LIX >= LSIZE - num_large) {
 				int idx = s_out_offset[1] + int((LSIZE - 1) - LIX);

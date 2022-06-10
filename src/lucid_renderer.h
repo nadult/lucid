@@ -37,9 +37,7 @@ class LucidRenderer {
 	int tileSize() const { return m_tile_size; }
 
   private:
-	void initCounters(const Context &);
 	void uploadInstances(const Context &);
-
 	void quadSetup(const Context &);
 	void computeBins(const Context &);
 	void bindRasterCommon(const Context &);
@@ -58,14 +56,15 @@ class LucidRenderer {
 
 	Opts m_opts;
 
-	Program p_init_counters, p_quad_setup;
+	Program p_quad_setup;
 	Program p_bin_dispatcher, p_bin_categorizer;
 	Program p_raster_low, p_raster_medium;
 	Program p_compose, p_dummy;
 
-	PBuffer m_errors, m_scratch_32, m_scratch_64, m_instance_data, m_uv_rects;
+	PBuffer m_instances, m_instance_colors, m_instance_uv_rects;
+	PBuffer m_errors, m_scratch_32, m_scratch_64;
 	PBuffer m_quad_aabbs, m_info, m_bin_quads, m_raster_image;
-	PBuffer m_tri_storage, m_quad_storage, m_scan_storage;
+	PBuffer m_tri_storage, m_quad_storage, m_scan_storage, m_uint_storage;
 	array<PBuffer, 3> m_old_info;
 
 	PFramebuffer m_initial_fbo;

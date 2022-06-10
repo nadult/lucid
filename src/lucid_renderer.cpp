@@ -139,10 +139,11 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	m_bin_quads.emplace(BufferType::shader_storage, max_bin_quads * sizeof(u32));
 	m_quad_aabbs.emplace(BufferType::shader_storage, max_visible_quads * sizeof(u32));
 
-	int tri_storage_size = max_visible_quads * 2 * 8; // TODO: control this size
-	m_tri_storage.emplace(BufferType::shader_storage, tri_storage_size * sizeof(u64));
+	int max_visible_tris = max_visible_quads * 2;
+	m_tri_storage.emplace(BufferType::shader_storage, max_visible_tris * 4 * sizeof(u64));
+	m_scan_storage.emplace(BufferType::shader_storage, max_visible_tris * 3 * sizeof(int4));
+	m_uint_storage.emplace(BufferType::shader_storage, max_visible_tris * sizeof(u32));
 	m_quad_storage.emplace(BufferType::shader_storage, max_visible_quads * 4 * sizeof(int4));
-	m_scan_storage.emplace(BufferType::shader_storage, max_visible_quads * 2 * 3 * sizeof(int4));
 
 	// TODO: control size of scratch mem
 	m_scratch_32.emplace(BufferType::shader_storage, (64 * 1024) * m_max_dispatches * sizeof(u32));
@@ -279,9 +280,11 @@ void LucidRenderer::uploadInstances(const Context &ctx) {
 
 	using InstanceData = shader::InstanceData;
 	vector<InstanceData> instances;
-	instances.reserve(32 * 1024);
+	vector<uint> colors;
 	vector<float4> uv_rects;
-	uv_rects.reserve(32 * 1024);
+	colors.reserve(16 * 1024);
+	instances.reserve(16 * 1024);
+	uv_rects.reserve(16 * 1024);
 
 	vector<IColor> mat_colors = transform(
 		ctx.materials, [](auto &mat) { return IColor(FColor(mat.diffuse, mat.opacity)); });
@@ -305,26 +308,27 @@ void LucidRenderer::uploadInstances(const Context &ctx) {
 		out.vertex_offset = 0;
 		out.num_quads = num_quads;
 		out.flags = (uint(opts.bits) & 0xffff);
-		out.color = color;
-		out.temp = 0;
 		float4 uv_rect(dc.uv_rect.x(), dc.uv_rect.y(), dc.uv_rect.width(), dc.uv_rect.height());
 		m_num_quads += dc.num_quads;
 
 		if(num_quads <= max_instance_quads) {
 			instances.emplace_back(out);
 			uv_rects.emplace_back(uv_rect);
+			colors.emplace_back(color);
 		} else {
 			for(int i = 0; i < num_quads; i += max_instance_quads) {
 				out.index_offset = dc.quad_offset * 4 + i * 4;
 				out.num_quads = min(max_instance_quads, num_quads - i);
 				instances.emplace_back(out);
 				uv_rects.emplace_back(uv_rect);
+				colors.emplace_back(color);
 			}
 		}
 	}
 
-	m_instance_data.emplace(BufferType::shader_storage, instances);
-	m_uv_rects.emplace(BufferType::shader_storage, uv_rects);
+	m_instances.emplace(BufferType::shader_storage, instances);
+	m_instance_colors.emplace(BufferType::shader_storage, colors);
+	m_instance_uv_rects.emplace(BufferType::shader_storage, uv_rects);
 	m_num_instances = instances.size();
 }
 
@@ -335,9 +339,9 @@ void LucidRenderer::quadSetup(const Context &ctx) {
 	PERF_GPU_SCOPE();
 
 	m_info->bindIndex(0);
-	ctx.quads_ib->bindIndexAs(1, BufferType::shader_storage);
-	m_instance_data->bindIndex(2);
+	m_instances->bindIndex(1);
 
+	ctx.quads_ib->bindIndexAs(2, BufferType::shader_storage);
 	auto vbuffers = ctx.vao->buffers();
 	DASSERT(vbuffers.size() == 4);
 	vbuffers[0]->bindIndexAs(3, BufferType::shader_storage);
@@ -352,6 +356,7 @@ void LucidRenderer::quadSetup(const Context &ctx) {
 	m_tri_storage->bindIndex(8);
 	m_quad_storage->bindIndex(9);
 	m_scan_storage->bindIndex(10);
+	m_uint_storage->bindIndex(11);
 
 	p_quad_setup["enable_backface_culling"] = ctx.config.backface_culling;
 	p_quad_setup["view_proj_matrix"] = m_view_proj_matrix;
@@ -371,6 +376,7 @@ void LucidRenderer::computeBins(const Context &ctx) {
 	PERF_GPU_SCOPE();
 
 	m_info->bindIndex(0);
+
 	m_quad_aabbs->bindIndex(1);
 	m_bin_quads->bindIndex(2);
 	m_scratch_64->bindIndex(3);
@@ -409,11 +415,12 @@ void LucidRenderer::bindRasterCommon(const Context &ctx) {
 	m_raster_image->bindIndex(2);
 	m_scratch_32->bindIndex(3);
 	m_scratch_64->bindIndex(4);
-	m_instance_data->bindIndex(5);
-	m_uv_rects->bindIndex(6);
+	m_instance_colors->bindIndex(5);
+	m_instance_uv_rects->bindIndex(6);
 	m_tri_storage->bindIndex(7);
 	m_quad_storage->bindIndex(8);
 	m_scan_storage->bindIndex(9);
+	m_uint_storage->bindIndex(10);
 }
 
 void LucidRenderer::bindRaster(Program &program, const Context &ctx) {

@@ -384,3 +384,19 @@ san-miguel: 9299   2693   179   2116        4153
     sponza: 3621   102    88    3187        69
     teapot: 382    25     30    284         4
  white_oak: 11571  40     159   11205       4
+
+
+ Separated instance_color & unormal:
+            total  setup  bins  raster_low  raster_mid  vs no-shared-storage
+    #boxes: 1447   23     39    1333        4           -74
+     bunny: 377    57     29    246         4           +6
+conference: 1200   55     70    955         4           -52
+    dragon: 922    333    50    349         153         -39
+   gallery: 2824   605    68    1656        330         -116
+  hairball: 11389  2302   293   301         8371        -1085
+powerplant: 9787   2651   286   825         5795        -1973
+san-miguel: 8943   2430   176   2097        4127        +57
+ scrubPine: 559    13     50    457         4           -27
+    sponza: 3561   97     87    3156        69          -198
+    teapot: 385    24     30    294         5           -4
+ white_oak: 11313  33     169   10978       5           -1347

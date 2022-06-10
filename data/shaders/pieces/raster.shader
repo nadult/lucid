@@ -8,14 +8,24 @@ layout(std430, binding = 2) writeonly restrict buffer buf2_ { uint g_raster_imag
 
 layout(std430, binding = 3) coherent restrict buffer buf3_ { uint g_scratch_32[]; };
 layout(std430, binding = 4) coherent restrict buffer buf4_ { uvec2 g_scratch_64[]; };
-layout(std430, binding = 5) readonly restrict buffer buf5_ { InstanceData g_instances[]; };
-layout(std430, binding = 6) readonly restrict buffer buf6_ { vec4 g_uv_rects[]; };
+layout(std430, binding = 5) readonly restrict buffer buf5_ { uint g_instance_colors[]; };
+layout(std430, binding = 6) readonly restrict buffer buf6_ { vec4 g_instance_uv_rects[]; };
 layout(std430, binding = 7) readonly restrict buffer buf7_ { uvec2 g_tri_storage[]; };
 layout(std430, binding = 8) readonly restrict buffer buf8_ { uvec4 g_quad_storage[]; };
 layout(std430, binding = 9) readonly restrict buffer buf9_ { uvec4 g_scan_storage[]; };
+layout(std430, binding = 10) readonly restrict buffer buf10_ { uint g_uint_storage[]; };
 
 layout(binding = 0) uniform sampler2D opaque_texture;
 layout(binding = 1) uniform sampler2D transparent_texture;
+
+// TODO: names
+#define TRI_SCRATCH(var_idx) g_tri_storage[scratch_tri_idx * 4 + var_idx]
+#define QUAD_SCRATCH(var_idx) g_quad_storage[scratch_quad_idx + var_idx * MAX_VISIBLE_QUADS]
+#define QUAD_TEX_SCRATCH(var_idx)                                                                  \
+	g_quad_storage[scratch_quad_idx * 2 + MAX_VISIBLE_QUADS * 2 + var_idx]
+#define SCAN_SCRATCH(var_idx) g_scan_storage[scratch_tri_idx * 2 + var_idx]
+#define DEPTH_SCRATCH() g_scan_storage[MAX_VISIBLE_QUADS * 4 + scratch_tri_idx]
+#define UINT_SCRATCH() g_uint_storage[scratch_tri_idx]
 
 // TODO: separate opaque and transparent objects, draw opaque objects first to texture
 // then read it and use depth to optimize drawing

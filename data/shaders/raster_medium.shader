@@ -66,14 +66,6 @@ layout(local_size_x = LSIZE) in;
 #define WORKGROUP_64_SCRATCH_SIZE (128 * 1024)
 #define WORKGROUP_64_SCRATCH_SHIFT 17
 
-// TODO: names
-#define TRI_SCRATCH(var_idx) g_tri_storage[scratch_tri_idx * 5 + var_idx]
-#define QUAD_SCRATCH(var_idx) g_quad_storage[scratch_quad_idx + var_idx * MAX_VISIBLE_QUADS]
-#define QUAD_TEX_SCRATCH(var_idx)                                                                  \
-	g_quad_storage[scratch_quad_idx * 2 + MAX_VISIBLE_QUADS * 2 + var_idx]
-#define SCAN_SCRATCH(var_idx) g_scan_storage[scratch_tri_idx * 2 + var_idx]
-#define DEPTH_SCRATCH() g_scan_storage[MAX_VISIBLE_QUADS * 4 + scratch_tri_idx]
-
 uint currentHBlockRow(uint hby) {
 #if BIN_SIZE == 64
 	return hby & HBLOCK_ROWS_STEP_MASK;
@@ -164,12 +156,6 @@ void getTriangleParams(uint scratch_tri_idx, out vec3 depth_eq, out vec2 bary_pa
 		edge0 = vec3(uintBitsToFloat(val0[0]), uintBitsToFloat(val0[1]), uintBitsToFloat(val1[0]));
 		edge1 = vec3(uintBitsToFloat(val1[1]), uintBitsToFloat(val2[0]), uintBitsToFloat(val2[1]));
 	}
-}
-
-void getTriangleSecondaryParams(uint scratch_tri_idx, out uint unormal, out uint instance_color) {
-	uvec2 val0 = TRI_SCRATCH(4);
-	unormal = val0.x;
-	instance_color = val0.y;
 }
 
 void getTriangleVertexColors(uint scratch_tri_idx, out vec4 color0, out vec4 color1,
@@ -676,6 +662,7 @@ void loadSamples(uint hbid, int segment_id) {
 	}
 }
 
+// TODO: move to shared code
 uint shadeSample(ivec2 pixel_pos, uint scratch_tri_idx, out float out_depth) {
 	float px = float(pixel_pos.x), py = float(pixel_pos.y);
 
@@ -684,8 +671,6 @@ uint shadeSample(ivec2 pixel_pos, uint scratch_tri_idx, out float out_depth) {
 	vec2 bary_params;
 	getTriangleParams(scratch_tri_idx, depth_eq, bary_params, edge0_eq, edge1_eq, instance_id,
 					  instance_flags);
-	uint instance_color, unormal;
-	getTriangleSecondaryParams(scratch_tri_idx, unormal, instance_color);
 
 	float inv_ray_pos = depth_eq.x * px + (depth_eq.y * py + depth_eq.z);
 	out_depth = inv_ray_pos;
@@ -705,7 +690,10 @@ uint shadeSample(ivec2 pixel_pos, uint scratch_tri_idx, out float out_depth) {
 	}
 	bary -= bary_params;
 
-	vec4 color = decodeRGBA8(instance_color);
+	vec4 color = (instance_flags & INST_HAS_COLOR) != 0 ?
+					 decodeRGBA8(g_instance_colors[instance_id]) :
+					   vec4(1.0);
+
 	if((instance_flags & INST_HAS_TEXTURE) != 0) {
 		vec2 tex0, tex1, tex2;
 		getTriangleVertexTexCoords(scratch_tri_idx, tex0, tex1, tex2);
@@ -715,7 +703,7 @@ uint shadeSample(ivec2 pixel_pos, uint scratch_tri_idx, out float out_depth) {
 		vec2 tex_dy = bary_dy[0] * tex1 + bary_dy[1] * tex2;
 
 		if((instance_flags & INST_HAS_UV_RECT) != 0) {
-			vec4 uv_rect = g_uv_rects[instance_id];
+			vec4 uv_rect = g_instance_uv_rects[instance_id];
 			tex_coord = uv_rect.zw * fract(tex_coord) + uv_rect.xy;
 			tex_dx *= uv_rect.zw, tex_dy *= uv_rect.zw;
 		}
@@ -745,7 +733,7 @@ uint shadeSample(ivec2 pixel_pos, uint scratch_tri_idx, out float out_depth) {
 		nrm2 -= nrm0;
 		normal = bary[0] * nrm1 + (bary[1] * nrm2 + nrm0);
 	} else {
-		normal = decodeNormalUint(unormal);
+		normal = decodeNormalUint(UINT_SCRATCH());
 	}
 
 	float light_value = max(0.0, dot(-lighting.sun_dir, normal) * 0.7 + 0.3);

@@ -4,8 +4,7 @@ struct InstanceData {
 	int index_offset;
 	int vertex_offset;
 	int num_quads;
-	uint flags, temp;
-	uint color;
+	uint flags;
 };
 
 #define BIN_LEVEL_EMPTY 0

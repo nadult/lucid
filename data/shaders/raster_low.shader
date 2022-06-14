@@ -514,28 +514,6 @@ void loadSamples(uint hbid, int segment_id) {
 	}
 }
 
-struct ReductionContext {
-#ifdef VISUALIZE_ERRORS
-	vec4 prev_depths;
-#else
-	vec3 prev_depths;
-#endif
-	uvec3 prev_colors;
-	float out_trans;
-	uint out_color;
-};
-
-void initReduceSamples(out ReductionContext ctx) {
-#ifdef VISUALIZE_ERRORS
-	ctx.prev_depths = vec4(999999999.0);
-#else
-	ctx.prev_depths = vec3(999999999.0);
-#endif
-	ctx.prev_colors = uvec3(0);
-	ctx.out_color = 0;
-	ctx.out_trans = 1.0;
-}
-
 void shadeAndReduceSamples(uint hbid, uint sample_count, in out ReductionContext ctx) {
 	uint buf_offset = (LIX >> 5) << SEGMENT_SHIFT;
 	uint bx = (hbid >> 1) & BLOCK_ROWS_MASK;
@@ -561,91 +539,12 @@ void shadeAndReduceSamples(uint hbid, uint sample_count, in out ReductionContext
 			atomicOr(s_mini_buffer[mini_offset + sample_pixel_id], reduce_pixel_bit);
 		}
 
-		uint bitmask = s_mini_buffer[LIX];
-		int j = findLSB(bitmask);
-		while(anyInvocationARB(j != -1)) {
-			uvec2 value = shuffleNV(sample_s, j, 32);
-			uint color = value.x;
-			float depth = uintBitsToFloat(value.y);
-
-			if(j == -1)
-				continue;
-			bitmask &= ~(1 << j);
-			j = findLSB(bitmask);
-
-			if(depth > ctx.prev_depths[0]) {
-				SWAP_UINT(color, ctx.prev_colors[0]);
-				SWAP_FLOAT(depth, ctx.prev_depths[0]);
-				if(ctx.prev_depths[0] > ctx.prev_depths[1]) {
-					SWAP_UINT(ctx.prev_colors[1], ctx.prev_colors[0]);
-					SWAP_FLOAT(ctx.prev_depths[1], ctx.prev_depths[0]);
-					if(ctx.prev_depths[1] > ctx.prev_depths[2]) {
-						SWAP_UINT(ctx.prev_colors[2], ctx.prev_colors[1]);
-						SWAP_FLOAT(ctx.prev_depths[2], ctx.prev_depths[1]);
-
-#ifdef VISUALIZE_ERRORS
-						if(ctx.prev_depths[2] > ctx.prev_depths[3]) {
-							ctx.prev_colors[2] = 0xff0000ff;
-							i = sample_count;
-							break;
-						}
-#endif
-					}
-				}
-			}
-
-#ifdef VISUALIZE_ERRORS
-			ctx.prev_depths[3] = ctx.prev_depths[2];
-#endif
-			ctx.prev_depths[2] = ctx.prev_depths[1];
-			ctx.prev_depths[1] = ctx.prev_depths[0];
-			ctx.prev_depths[0] = depth;
-
-			if(ctx.prev_colors[2] != 0) {
-				vec4 cur_color = decodeRGBA8(ctx.prev_colors[2]);
-#ifdef ADDITIVE_BLENDING
-				out_color += cur_color.rgb * cur_color.a;
-#else
-				out_color += cur_color.rgb * cur_color.a * ctx.out_trans;
-				ctx.out_trans *= 1.0 - cur_color.a;
-
-#ifdef ALPHA_THRESHOLD
-				if(allInvocationsARB(ctx.out_trans < 1.0 / 255.0)) {
-					i = sample_count;
-					break;
-				}
-#endif
-#endif
-			}
-
-			ctx.prev_colors[2] = ctx.prev_colors[1];
-			ctx.prev_colors[1] = ctx.prev_colors[0];
-			ctx.prev_colors[0] = color;
-		}
+		if(reduceSample(ctx, out_color, sample_s, s_mini_buffer[LIX]))
+			break;
 	}
 
 	// TODO: check if encode+decode for out_color is really needed (to save 2 regs)
 	ctx.out_color = encodeRGB10(SATURATE(out_color));
-}
-
-void finishReduceSamples(ivec2 pixel_pos, ReductionContext ctx) {
-	vec3 out_color = decodeRGB10(ctx.out_color);
-
-	for(int i = 2; i >= 0; i--)
-		if(ctx.prev_colors[i] != 0) {
-			vec4 cur_color = decodeRGBA8(ctx.prev_colors[i]);
-			float cur_transparency = 1.0 - cur_color.a;
-#ifdef ADDITIVE_BLENDING
-			out_color += cur_color.rgb * cur_color.a;
-#else
-			out_color += cur_color.rgb * cur_color.a * ctx.out_trans;
-			ctx.out_trans *= 1.0 - cur_color.a;
-#endif
-		}
-
-	out_color += ctx.out_trans * decodeRGB8(background_color);
-	uint enc_color = encodeRGB8(SATURATE(out_color)); // TODO: 10 bit
-	outputPixel(pixel_pos, enc_color);
 }
 
 void initVisualizeSamples() { s_vis_pixels[LIX] = 0; }
@@ -793,7 +692,8 @@ void rasterBin(int bin_id) {
 		uint bx = (hbid >> 1) & BLOCK_ROWS_MASK;
 		uint hby = (hbid & 1) + ((hbid >> (BLOCK_ROWS_SHIFT + 1)) << 1);
 		ivec2 pixel_pos = ivec2((LIX & 7) + (bx << BLOCK_SHIFT), ((LIX >> 3) & 3) + (hby << 2));
-		finishReduceSamples(pixel_pos, context);
+		uint enc_color = finishReduceSamples(context);
+		outputPixel(pixel_pos, enc_color);
 
 		//finishVisualizeSamples(pixel_pos);
 		//visualizeFragmentCounts(hbid, pixel_pos);

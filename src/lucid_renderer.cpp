@@ -521,8 +521,8 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 		return out;
 
 	auto bin_counters = m_old_info.back()->download<u32>();
-	shader::LucidInfo bins;
-	memcpy(&bins, bin_counters.data(), sizeof(bins));
+	shader::LucidInfo info;
+	memcpy(&info, bin_counters.data(), sizeof(info));
 	bin_counters.erase(bin_counters.begin(), bin_counters.begin() + LUCID_INFO_SIZE);
 
 	CSpan<uint> bin_quad_counts = cspan(bin_counters.data() + m_bin_count * 0, m_bin_count);
@@ -569,30 +569,30 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 	// When raster algorithm cannot process some bin because there is too many tris
 	// per block or too many samples, then such bin will be promoted to next level.
 	// This will result in some bins being processed twice
-	int num_promoted_bins = accumulate(bins.bin_level_counts) - m_bin_count;
+	int num_promoted_bins = accumulate(info.bin_level_counts) - m_bin_count;
 
-	int num_visible_total = bins.num_visible_quads[0] + bins.num_visible_quads[1];
+	int num_visible_total = info.num_visible_quads[0] + info.num_visible_quads[1];
 	auto visible_info = stdFormat("%d (%.2f %%)", num_visible_total,
-								  double(num_visible_total) / bins.num_input_quads * 100);
+								  double(num_visible_total) / info.num_input_quads * 100);
 	auto visible_details =
-		stdFormat("%d small; %d big", bins.num_visible_quads[0], bins.num_visible_quads[1]);
+		stdFormat("%d small; %d big", info.num_visible_quads[0], info.num_visible_quads[1]);
 
-	bins.num_rejected_quads[0] +=
-		bins.num_rejected_quads[1] + bins.num_rejected_quads[2] + bins.num_rejected_quads[3];
-	auto rejected_info = stdFormat("%d (%.2f %%)", bins.num_rejected_quads[0],
-								   double(bins.num_rejected_quads[0]) / bins.num_input_quads * 100);
+	info.num_rejected_quads[0] +=
+		info.num_rejected_quads[1] + info.num_rejected_quads[2] + info.num_rejected_quads[3];
+	auto rejected_info = stdFormat("%d (%.2f %%)", info.num_rejected_quads[0],
+								   double(info.num_rejected_quads[0]) / info.num_input_quads * 100);
 	auto rejection_details =
-		format("backface: %\nfrustum: %\nbetween-samples: %", bins.num_rejected_quads[1],
-			   bins.num_rejected_quads[2], bins.num_rejected_quads[3]);
+		format("backface: %\nfrustum: %\nbetween-samples: %", info.num_rejected_quads[1],
+			   info.num_rejected_quads[2], info.num_rejected_quads[3]);
 
-	auto setup_timers = processTimers(bins.setup_timers, {"init & finish", "process input quads",
+	auto setup_timers = processTimers(info.setup_timers, {"init & finish", "process input quads",
 														  "store tri data", "store quad data"});
 	auto bin_dispatcher_timers =
-		processTimers(bins.bin_dispatcher_timers,
+		processTimers(info.bin_dispatcher_timers,
 					  {"estimate small quads", "compute small quad offsets", "dispatch small quads",
 					   "estimate large tris", "compute large tris offsets", "dispatch large tris"});
 	auto raster_timers =
-		processTimers(bins.raster_timers, {"generate rows", "generate blocks", "load samples",
+		processTimers(info.raster_timers, {"generate rows", "generate blocks", "load samples",
 										   "shade and reduce", "finish reduce"});
 
 	auto format_percentage = [](int value, int total) {
@@ -600,26 +600,26 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 	};
 
 	vector<StatsRow> bin_level_rows = {
-		{"empty bins", format_percentage(bins.bin_level_counts[0], m_bin_count)},
+		{"empty bins", format_percentage(info.bin_level_counts[0], m_bin_count)},
 		{"micro level bins",
-		 format_percentage(bins.bin_level_counts[BIN_LEVEL_MICRO], m_bin_count)},
-		{"low level bins", format_percentage(bins.bin_level_counts[BIN_LEVEL_LOW], m_bin_count)},
+		 format_percentage(info.bin_level_counts[BIN_LEVEL_MICRO], m_bin_count)},
+		{"low level bins", format_percentage(info.bin_level_counts[BIN_LEVEL_LOW], m_bin_count)},
 		{"medium level bins",
-		 format_percentage(bins.bin_level_counts[BIN_LEVEL_MEDIUM], m_bin_count)},
-		{"high level bins", format_percentage(bins.bin_level_counts[BIN_LEVEL_HIGH], m_bin_count)},
+		 format_percentage(info.bin_level_counts[BIN_LEVEL_MEDIUM], m_bin_count)},
+		{"high level bins", format_percentage(info.bin_level_counts[BIN_LEVEL_HIGH], m_bin_count)},
 		{"promoted bins", format_percentage(num_promoted_bins, m_bin_count)},
 	};
 
 	// TODO: fix it
-	int num_bin_dispatcher_work_groups = max(bins.a_bin_dispatcher_work_groups);
+	int num_bin_dispatcher_work_groups = max(info.a_bin_dispatcher_work_groups);
 	string bin_dispatcher_info =
-		toString(span(bins.dispatcher_task_counts, num_bin_dispatcher_work_groups));
+		toString(span(info.dispatcher_task_counts, num_bin_dispatcher_work_groups));
 
 	vector<StatsRow> basic_rows = {
 		{"input instances", toString(m_num_instances)},
 		{"bin dispatcher work-groups", toString(num_bin_dispatcher_work_groups),
 		 bin_dispatcher_info},
-		{"input quads", toString(bins.num_input_quads)},
+		{"input quads", toString(info.num_input_quads)},
 		{"visible quads", visible_info, visible_details},
 		{"rejected quads", rejected_info, rejection_details},
 		{"bin quads", toString(num_bin_quads), "Total per-bin quads"},

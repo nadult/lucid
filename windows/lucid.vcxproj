@@ -143,6 +143,7 @@
     <None Include="..\data\shaders\pieces\raster.shader" />
     <None Include="..\data\shaders\pieces\rect.shader" />
     <None Include="..\data\shaders\pieces\structures.shader" />
+    <None Include="..\data\shaders\pieces\timers.shader" />
     <None Include="..\data\shaders\pieces\viewport.shader" />
     <None Include="..\data\shaders\quad_setup.shader" />
     <None Include="..\data\shaders\raster_low.shader" />

@@ -43,15 +43,18 @@ struct LucidInfo {
 
 	// Statistics, timings, etc. (secondary data)
 	uint num_rejected_quads[REJECTION_TYPE_COUNT];
-	uint timers[TIMERS_COUNT];
+
+	uint setup_timers[TIMERS_COUNT];
+	uint raster_timers[TIMERS_COUNT];
+	uint bin_dispatcher_timers[TIMERS_COUNT];
 
 	// TODO:
 	uint num_fragments;
 	uint avg_fragments_per_hblock_tri;
 
 	int dispatcher_task_counts[128];
-	int dispatcher_timers[128];
-	int temp[12 + 64];
+
+	int temp[128 + 60];
 };
 
 #define LUCID_INFO_SIZE 384

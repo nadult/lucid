@@ -22,33 +22,6 @@ layout(binding = 1) uniform sampler2D transparent_texture;
 // then read it and use depth to optimize drawing
 uniform uint background_color;
 
-#ifdef ENABLE_TIMERS
-shared uint s_timers[TIMERS_COUNT];
-#define INIT_CLOCK() uint64_t clock0 = clockARB();
-#define UPDATE_CLOCK(idx)                                                                          \
-	if((LIX & 31) == 0) {                                                                          \
-		uint64_t clock = clockARB();                                                               \
-		atomicAdd(s_timers[idx], uint(clock - clock0) >> 4);                                       \
-		clock0 = clock;                                                                            \
-	}
-
-void initTimers() {
-	if(LIX < TIMERS_COUNT)
-		s_timers[LIX] = 0;
-}
-void commitTimers() {
-	if(LIX < TIMERS_COUNT)
-		atomicAdd(g_info.timers[LIX], s_timers[LIX]);
-}
-
-#else
-#define INIT_CLOCK()
-#define UPDATE_CLOCK(idx)
-
-void initTimers() {}
-void commitTimers() {}
-#endif
-
 struct ScanlineParams {
 	vec3 min, max, step;
 };

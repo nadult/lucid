@@ -46,7 +46,7 @@ class LucidRenderer {
 	void rasterMedium(const Context &);
 	void compose(const Context &);
 
-	void copyInfo();
+	void copyInfo(int num_skip_frames);
 
 	// Does nothing useful; can be used for measuring
 	// performance of simple constructs

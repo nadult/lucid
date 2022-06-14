@@ -182,11 +182,11 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	int bin_dispatcher_lsize = m_bin_size == 64 ? 512 : 1024;
 	defs["BIN_DISPATCHER_LSIZE"] = bin_dispatcher_lsize;
 	defs["BIN_DISPATCHER_LSHIFT"] = (int)log2(bin_dispatcher_lsize);
-	p_quad_setup = EX_PASS(Program::makeCompute("quad_setup", defs));
 	p_bin_categorizer = EX_PASS(Program::makeCompute("bin_categorizer", defs));
 
 	if(m_opts & Opt::timers)
 		defs["ENABLE_TIMERS"] = 1;
+	p_quad_setup = EX_PASS(Program::makeCompute("quad_setup", defs));
 	p_bin_dispatcher = EX_PASS(Program::makeCompute(
 		"bin_dispatcher", defs, mask(m_opts & Opt::debug_bin_dispatcher, ProgramOpt::debug)));
 
@@ -268,7 +268,7 @@ void LucidRenderer::render(const Context &ctx) {
 	bindRasterCommon(ctx);
 	rasterLow(ctx);
 	rasterMedium(ctx);
-	copyInfo();
+	copyInfo(8);
 
 	// TODO: is this needed?
 	glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_SHADER_STORAGE_BARRIER_BIT);
@@ -480,10 +480,10 @@ void LucidRenderer::compose(const Context &ctx) {
 	m_compose_quads_vao->draw(PrimitiveType::triangles, m_bin_counts.x * m_bin_counts.y * 6);
 }
 
-void LucidRenderer::copyInfo() {
-	//static int iter = 0;
-	//if(iter++ % 30 != 0)
-	//	return;
+void LucidRenderer::copyInfo(int num_skip_frames) {
+	static int frame_counter = 0;
+	if(num_skip_frames && frame_counter++ % (num_skip_frames + 1) != 0)
+		return;
 
 	auto last = m_old_info.back();
 	for(int i = m_old_info.size() - 1; i > 0; i--)
@@ -496,6 +496,22 @@ void LucidRenderer::copyInfo() {
 
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 	m_info->copyTo(m_old_info[0], 0, 0, m_old_info[0]->size());
+}
+
+static vector<StatsRow> processTimers(CSpan<uint> timers, CSpan<Str> names) {
+	vector<StatsRow> out;
+	DASSERT(names.size() <= timers.size());
+	u64 total = 0;
+	for(int i : intRange(names))
+		total += timers[i];
+	if(total > 0)
+		for(int i : intRange(names)) {
+			auto value = timers[i];
+			if(value == 0)
+				continue;
+			out.emplace_back(names[i], stdFormat("%.2f %%", double(value) / total * 100));
+		}
+	return out;
 }
 
 vector<StatsGroup> LucidRenderer::getStats() const {
@@ -569,22 +585,15 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 		format("backface: %\nfrustum: %\nbetween-samples: %", bins.num_rejected_quads[1],
 			   bins.num_rejected_quads[2], bins.num_rejected_quads[3]);
 
-	vector<StatsRow> timers;
-	Str timer_names[] = {"generate rows",  "generate blocks",  "load samples", "shade samples",
-						 "reduce samples", "shade and reduce", "finish reduce"};
-	static_assert(arraySize(timer_names) < arraySize(bins.timers));
-
-	u64 total_time = 0;
-	for(int i : intRange(timer_names))
-		total_time += bins.timers[i];
-	if(total_time > 0)
-		for(int i : intRange(timer_names)) {
-			auto value = bins.timers[i];
-			if(value == 0)
-				continue;
-			timers.emplace_back(timer_names[i],
-								stdFormat("%.2f %%", double(value) / total_time * 100));
-		}
+	auto setup_timers = processTimers(bins.setup_timers, {"init & finish", "process input quads",
+														  "store tri data", "store quad data"});
+	auto bin_dispatcher_timers =
+		processTimers(bins.bin_dispatcher_timers,
+					  {"estimate small quads", "compute small quad offsets", "dispatch small quads",
+					   "estimate large tris", "compute large tris offsets", "dispatch large tris"});
+	auto raster_timers =
+		processTimers(bins.raster_timers, {"generate rows", "generate blocks", "load samples",
+										   "shade and reduce", "finish reduce"});
 
 	auto format_percentage = [](int value, int total) {
 		return stdFormat("%d (%.0f %%)", value, value * 100.0 / total);
@@ -602,23 +611,13 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 	};
 
 	// TODO: fix it
+	int num_bin_dispatcher_work_groups = max(bins.a_bin_dispatcher_work_groups);
 	string bin_dispatcher_info =
-		toString(span(bins.dispatcher_task_counts, bins.a_bin_dispatcher_work_groups[1]));
-	if(m_opts & Opt::timers) {
-		auto timers = span(bins.dispatcher_timers, bins.a_bin_dispatcher_work_groups[1]);
-		float sum = accumulate(timers);
-		float average = sum / timers.size();
-
-		float var = 0.0;
-		for(auto value : timers)
-			var += square(value - average);
-		var /= timers.size() * square(average);
-		bin_dispatcher_info += stdFormat("\nComputation variance: %.4f", var);
-	}
+		toString(span(bins.dispatcher_task_counts, num_bin_dispatcher_work_groups));
 
 	vector<StatsRow> basic_rows = {
 		{"input instances", toString(m_num_instances)},
-		{"bin dispatcher work-groups", toString(bins.a_bin_dispatcher_work_groups[1]),
+		{"bin dispatcher work-groups", toString(num_bin_dispatcher_work_groups),
 		 bin_dispatcher_info},
 		{"input quads", toString(bins.num_input_quads)},
 		{"visible quads", visible_info, visible_details},
@@ -631,8 +630,13 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 
 	// TODO: add better stats once rasterizez is working on all levels
 
-	if(timers)
-		out.emplace_back(move(timers), "", 130);
+	if(setup_timers)
+		out.emplace_back(move(setup_timers), "quad_setup timers", 130);
+	if(bin_dispatcher_timers)
+		out.emplace_back(move(bin_dispatcher_timers), "bin_dispatcher timers", 130);
+	if(raster_timers)
+		out.emplace_back(move(raster_timers), "raster_low & raster_medium timers", 130);
+
 	out.emplace_back(move(bin_level_rows), "Bins categorized by quad density levels:", 130);
 	out.emplace_back(move(basic_rows), "", 130);
 	return out;

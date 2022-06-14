@@ -1,4 +1,4 @@
-// $$include funcs frustum structures
+// $$include funcs frustum structures timers
 
 #define LSIZE BIN_DISPATCHER_LSIZE
 #define LSHIFT BIN_DISPATCHER_LSHIFT
@@ -376,6 +376,7 @@ shared int s_num_finished_tasks[2], s_num_all_tasks[2];
 #define LARGE_TASKS_OFFSET MAX_SMALL_TASKS
 
 void processSmallQuads() {
+	START_TIMER();
 	for(uint i = LIX; i < BIN_COUNT; i += LSIZE)
 		s_bins[i] = 0;
 	barrier();
@@ -412,6 +413,7 @@ void processSmallQuads() {
 		barrier();
 	}
 
+	UPDATE_TIMER(0);
 	barrier();
 
 	// Thread groups which didn't do any estimation can quit early:
@@ -450,6 +452,7 @@ void processSmallQuads() {
 		while(g_info.a_bin_dispatcher_phase[0] == 0)
 			;
 	barrier();
+	UPDATE_TIMER(1);
 
 	// Reserving space for quad indices in bins
 	for(uint i = LIX; i < BIN_COUNT; i += LSIZE)
@@ -476,9 +479,11 @@ void processSmallQuads() {
 		}
 	}
 	barrier();
+	UPDATE_TIMER(2);
 }
 
 void processLargeTris() {
+	START_TIMER();
 	// Computing large quads bin coverage
 	int num_quads = s_num_quads[1];
 	while(true) {
@@ -510,6 +515,7 @@ void processLargeTris() {
 	}
 
 	barrier();
+	UPDATE_TIMER(3);
 
 	// Thread groups which didn't do any estimation can quit early:
 	// they won't participate in dispatching either
@@ -530,7 +536,7 @@ void processLargeTris() {
 		s_active_work_group_id = atomicAdd(g_info.a_bin_dispatcher_work_groups[1], 1);
 		s_num_finished_tasks[1] =
 			atomicAdd(g_info.a_bin_dispatcher_items[1], num_tasks) + num_tasks;
-		g_info.dispatcher_task_counts[s_active_work_group_id] = num_tasks;
+		g_info.dispatcher_task_counts[s_active_work_group_id] += num_tasks;
 	}
 	barrier();
 
@@ -549,6 +555,7 @@ void processLargeTris() {
 		while(g_info.a_bin_dispatcher_phase[1] == 0)
 			;
 	barrier();
+	UPDATE_TIMER(4);
 
 	// Reserving space for quad indices in bins
 	for(uint i = LIX; i < BIN_COUNT; i += LSIZE)
@@ -569,12 +576,11 @@ void processLargeTris() {
 		int large_quad_idx = s_quads_offset + int(LIX >> 1);
 		dispatchLargeTriBalanced(large_quad_idx, int(LIX & 1), num_quads);
 	}
+	UPDATE_TIMER(5);
 }
 
 void main() {
-#ifdef ENABLE_TIMERS
-	//uint64_t clock0 = clockARB();
-#endif
+	INIT_TIMERS();
 
 	if(LIX < 2) {
 		int num_quads = g_info.num_visible_quads[LIX];
@@ -603,7 +609,5 @@ void main() {
 		processLargeTris();
 	}
 
-#ifdef ENABLE_TIMERS
-	//g_info.dispatcher_timers[s_active_work_group_id] = int(clockARB() - clock0);
-#endif
+	COMMIT_TIMERS(g_info.bin_dispatcher_timers);
 }

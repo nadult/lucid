@@ -1,4 +1,4 @@
-// $$include funcs lighting frustum viewport raster
+// $$include funcs lighting frustum viewport raster timers
 
 #if BIN_SIZE == 64
 #define LSIZE 512
@@ -817,7 +817,7 @@ void visualizeErrors(uint hbid) {
 }
 
 void rasterBin(int bin_id) {
-	INIT_CLOCK();
+	START_TIMER();
 
 	const int num_blocks = (BIN_SIZE / BLOCK_SIZE) * (BIN_SIZE / BLOCK_SIZE);
 
@@ -841,7 +841,7 @@ void rasterBin(int bin_id) {
 		processQuads(start_hby);
 		groupMemoryBarrier();
 		barrier();
-		UPDATE_CLOCK(0);
+		UPDATE_TIMER(0);
 		s_segments[LIX] = INVALID_SEGMENT;
 		s_segments[LSIZE + LIX] = INVALID_SEGMENT;
 
@@ -864,7 +864,7 @@ void rasterBin(int bin_id) {
 			barrier();
 			continue;
 		}
-		UPDATE_CLOCK(1);
+		UPDATE_TIMER(1);
 
 		//visualizeAllSamples(hbid);
 		ReductionContext context;
@@ -877,10 +877,10 @@ void rasterBin(int bin_id) {
 				break;
 
 			loadSamples(hbid, segment_id);
-			UPDATE_CLOCK(2);
+			UPDATE_TIMER(2);
 
 			shadeAndReduceSamples(hbid, frag_count, context);
-			UPDATE_CLOCK(5);
+			UPDATE_TIMER(3);
 
 #ifdef ALPHA_THRESHOLD
 			if(allInvocationsARB(context.out_trans < 1.0 / 255.0))
@@ -892,7 +892,7 @@ void rasterBin(int bin_id) {
 		finishReduceSamples(pixel_pos, context);
 		//visualizeFragmentCounts(hbid, pixel_pos);
 		//visualizeTriangleCounts(hbid, pixel_pos);
-		UPDATE_CLOCK(6);
+		UPDATE_TIMER(4);
 
 		barrier();
 	}
@@ -909,7 +909,7 @@ int loadNextBin() {
 }
 
 void main() {
-	initTimers();
+	INIT_TIMERS();
 	if(LIX == 0)
 		s_num_bins = g_info.bin_level_counts[BIN_LEVEL_MEDIUM];
 
@@ -919,5 +919,5 @@ void main() {
 		rasterBin(bin_id);
 		bin_id = loadNextBin();
 	}
-	commitTimers();
+	COMMIT_TIMERS(g_info.raster_timers);
 }

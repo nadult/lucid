@@ -157,5 +157,8 @@
     <None Include="..\data\shaders\quad_setup.shader">
       <Filter>shaders</Filter>
     </None>
+    <None Include="..\data\shaders\pieces\timers.shader">
+      <Filter>shaders\pieces</Filter>
+    </None>
   </ItemGroup>
 </Project>

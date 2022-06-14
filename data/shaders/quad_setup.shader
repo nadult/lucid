@@ -1,4 +1,4 @@
-// $$include funcs frustum structures
+// $$include funcs frustum structures timers
 
 // TODO: detect visible quads overflow
 // TODO: do something about divergence in input data
@@ -359,6 +359,9 @@ void addVisibleTri(int quad_idx, int src_idx, uint instance_flags_id, int second
 }
 
 void main() {
+	INIT_TIMERS();
+	START_TIMER();
+
 	// TODO: Could we just use 1?
 	int packet_size = u_packet_size;
 
@@ -380,6 +383,8 @@ void main() {
 	if(LIX == 0)
 		s_ray_dir0 = frustum.ws_dir0 + (frustum.ws_dirx + frustum.ws_diry) * 0.5;
 	barrier();
+	UPDATE_TIMER(0);
+
 	for(int i = 0; i < packet_size; i++) {
 		if(LIX < s_instances[i].num_quads) {
 			int vertex_offset = s_instances[i].vertex_offset;
@@ -391,6 +396,8 @@ void main() {
 			processInputQuad(s_quad_offset[i] + int(LIX), v0, v1, v2, v3, i);
 		}
 		barrier();
+		UPDATE_TIMER(1);
+
 		if(LIX < 2) {
 			int num_tris = s_num_visible[i * 2 + LIX];
 			int offset = atomicAdd(g_info.num_visible_quads[LIX], num_tris);
@@ -407,6 +414,7 @@ void main() {
 		int instance_id = int(s_instance_id[i]);
 		uint instance_flags_id = s_instances[i].flags | (uint(instance_id) << 16);
 
+		// Storing tri infos
 		for(int j = int(LIX); j < num_tris; j += LSIZE) {
 			int local_quad_idx = j >> 1;
 			int second_tri = j & 1;
@@ -423,6 +431,7 @@ void main() {
 
 			addVisibleTri(quad_idx, src_idx, instance_flags_id, second_tri);
 		}
+		UPDATE_TIMER(2);
 
 		{ // Storing quad info
 			int local_quad_idx = int(LIX), quad_idx = -1, src_idx;
@@ -438,6 +447,7 @@ void main() {
 				addVisibleQuad(quad_idx, src_idx, instance_id);
 		}
 		barrier();
+		UPDATE_TIMER(3);
 	}
 	barrier();
 	if(LIX < REJECTION_TYPE_COUNT)
@@ -456,4 +466,7 @@ void main() {
 			g_info.num_binning_dispatches[2] = 1;
 		}
 	}
+	UPDATE_TIMER(0);
+
+	COMMIT_TIMERS(g_info.setup_timers);
 }

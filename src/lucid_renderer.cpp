@@ -131,10 +131,12 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	// TODO: better estimate needed; it should depend on bin size
 	// TODO: properly handle situations when limits are reached
 	uint max_bin_quads = max_quads * 3 / 2;
+	uint max_bin_tris = max_quads;
 
-	uint bin_counters_size = LUCID_INFO_SIZE + m_bin_count * 7;
+	uint bin_counters_size = LUCID_INFO_SIZE + m_bin_count * 10;
 	m_info.emplace(BufferType::shader_storage, bin_counters_size * sizeof(u32));
 	m_bin_quads.emplace(BufferType::shader_storage, max_bin_quads * sizeof(u32));
+	m_bin_tris.emplace(BufferType::shader_storage, max_bin_tris * sizeof(u32));
 
 	int max_visible_tris = max_visible_quads * 2;
 	int uvec4_storage_size = max_visible_tris * 5 + max_visible_quads * 4;
@@ -251,7 +253,7 @@ void LucidRenderer::render(const Context &ctx) {
 	testGlError("LucidRenderer::render init");
 
 	m_info->invalidate();
-	m_info->clear(GlFormat::r32i, 0, 0, (LUCID_INFO_SIZE + m_bin_count) * sizeof(u32));
+	m_info->clear(GlFormat::r32i, 0, 0, (LUCID_INFO_SIZE + m_bin_count * 6) * sizeof(u32));
 
 	glBindBuffer(GL_DISPATCH_INDIRECT_BUFFER, m_info->id());
 	m_view_proj_matrix = ctx.camera.matrix();
@@ -378,8 +380,9 @@ void LucidRenderer::computeBins(const Context &ctx) {
 
 	m_scratch_64->bindIndex(1);
 	m_bin_quads->bindIndex(2);
-	m_scratch_32->bindIndex(3);
-	m_uvec4_storage->bindIndex(4);
+	m_bin_tris->bindIndex(3);
+	m_scratch_32->bindIndex(4);
+	m_uvec4_storage->bindIndex(5);
 
 	PERF_CHILD_SCOPE("dispatcher phase");
 	p_bin_dispatcher.use();
@@ -411,13 +414,16 @@ void LucidRenderer::dummyIterateBins(const Context &ctx) {
 void LucidRenderer::bindRasterCommon(const Context &ctx) {
 	m_info->bindIndex(0);
 	m_bin_quads->bindIndex(1);
-	m_raster_image->bindIndex(2);
+	m_bin_tris->bindIndex(2);
+
 	m_scratch_32->bindIndex(3);
 	m_scratch_64->bindIndex(4);
 	m_instance_colors->bindIndex(5);
 	m_instance_uv_rects->bindIndex(6);
 	m_uvec4_storage->bindIndex(7);
 	m_uint_storage->bindIndex(8);
+
+	m_raster_image->bindIndex(9);
 }
 
 void LucidRenderer::bindRaster(Program &program, const Context &ctx) {
@@ -507,6 +513,10 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 	CSpan<uint> bin_quad_offsets = cspan(bin_counters.data() + m_bin_count * 1, m_bin_count);
 	CSpan<uint> bin_quad_offsets_temp = cspan(bin_counters.data() + m_bin_count * 2, m_bin_count);
 
+	CSpan<uint> bin_tri_counts = cspan(bin_counters.data() + m_bin_count * 3, m_bin_count);
+	CSpan<uint> bin_tri_offsets = cspan(bin_counters.data() + m_bin_count * 4, m_bin_count);
+	CSpan<uint> bin_tri_offsets_temp = cspan(bin_counters.data() + m_bin_count * 5, m_bin_count);
+
 	// Checking bins quad offsets
 	for(uint i = 0; i < m_bin_count; i++) {
 		int cur_value = bin_quad_counts[i];
@@ -518,6 +528,17 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 				  cur_offset + cur_value, cur_offset, cur_value);
 	}
 
+	// Checking bins tris offsets
+	for(uint i = 0; i < m_bin_count; i++) {
+		int cur_value = bin_tri_counts[i];
+		int cur_offset = bin_tri_offsets[i];
+		int cur_offset_temp = bin_tri_offsets_temp[i];
+
+		if(cur_offset_temp != cur_offset + cur_value)
+			print("Invalid bin tri offset [%]: % != % (offset:% + count:%)\n", i, cur_offset_temp,
+				  cur_offset + cur_value, cur_offset, cur_value);
+	}
+
 	int num_pixels = m_size.x * m_size.y;
 	int num_tiles =
 		((m_size.x + m_tile_size - 1) / m_tile_size) * ((m_size.y + m_tile_size - 1) / m_tile_size);
@@ -526,6 +547,7 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 
 	int max_quads_per_bin = max(bin_quad_counts);
 	int num_bin_quads = accumulate(bin_quad_counts);
+	int num_bin_tris = accumulate(bin_tri_counts);
 
 	// When raster algorithm cannot process some bin because there is too many tris
 	// per block or too many samples, then such bin will be promoted to next level.
@@ -578,10 +600,11 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 		{"promoted bins", format_percentage(num_promoted_bins, m_bin_count)},
 	};
 
+	// TODO: fix it
 	string bin_dispatcher_info =
-		toString(span(bins.dispatcher_task_counts, bins.a_bin_dispatcher_work_groups));
+		toString(span(bins.dispatcher_task_counts, bins.a_bin_dispatcher_work_groups[1]));
 	if(m_opts & Opt::timers) {
-		auto timers = span(bins.dispatcher_timers, bins.a_bin_dispatcher_work_groups);
+		auto timers = span(bins.dispatcher_timers, bins.a_bin_dispatcher_work_groups[1]);
 		float sum = accumulate(timers);
 		float average = sum / timers.size();
 
@@ -594,12 +617,13 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 
 	vector<StatsRow> basic_rows = {
 		{"input instances", toString(m_num_instances)},
-		{"bin dispatcher work-groups", toString(bins.a_bin_dispatcher_work_groups),
+		{"bin dispatcher work-groups", toString(bins.a_bin_dispatcher_work_groups[1]),
 		 bin_dispatcher_info},
 		{"input quads", toString(bins.num_input_quads)},
 		{"visible quads", visible_info, visible_details},
 		{"rejected quads", rejected_info, rejection_details},
-		{"bin quads", toString(num_bin_quads), "Per bin quads"},
+		{"bin quads", toString(num_bin_quads), "Total per-bin quads"},
+		{"bin tris", toString(num_bin_tris), "Total per-bin tris"},
 		{"max quads / bin", toString(max_quads_per_bin)},
 	};
 

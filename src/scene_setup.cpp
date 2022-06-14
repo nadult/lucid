@@ -203,6 +203,10 @@ Ex<> LoadedSetup::updateScene() {
 		insertBack(views,
 				   {OrbitingCamera{{-1.35474, 44.001759, -1.40296}, 32.840042, 0.483333, 0.425},
 					default_cam});
+	} else if(name == "hairball") {
+		views.emplace_back(default_cam);
+		views.emplace_back(
+			FppCamera{{0.133944, 0.298333, -0.290384}, {-0.334019, 0.611418}, 0.830695});
 	} else {
 		views.emplace_back(default_cam);
 	}

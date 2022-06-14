@@ -95,6 +95,7 @@ uint scratch64SortedHBlockTrisOffset(uint lhbid) {
 shared int s_num_scratch_tris;
 shared int s_num_bins, s_bin_id, s_bin_raster_offset;
 shared uint s_bin_quad_count, s_bin_quad_offset;
+shared uint s_bin_tri_count, s_bin_tri_offset;
 shared ivec2 s_bin_pos;
 
 shared uint s_hblock_row_tri_counts[HBLOCK_ROWS];
@@ -224,6 +225,8 @@ void processQuads(int start_hby) {
 		uint tri_idx = quad_idx * 2 + second_tri;
 		generateRowTris(tri_idx, start_hby);
 	}
+	for(uint i = LIX; i < s_bin_tri_count; i += LSIZE)
+		generateRowTris(g_bin_tris[s_bin_tri_offset + i], start_hby);
 	barrier();
 
 	// Accumulating per hblock-counts for each hblock-row
@@ -812,6 +815,8 @@ void rasterBin(int bin_id) {
 			s_bin_pos = bin_pos;
 			s_bin_quad_count = BIN_QUAD_COUNTS(bin_id);
 			s_bin_quad_offset = BIN_QUAD_OFFSETS(bin_id);
+			s_bin_tri_count = BIN_TRI_COUNTS(bin_id);
+			s_bin_tri_offset = BIN_TRI_OFFSETS(bin_id);
 			s_raster_error = 0;
 		}
 

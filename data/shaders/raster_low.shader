@@ -61,6 +61,7 @@ uint scratch64HalfBlockTrisOffset(uint hbid) {
 
 shared int s_num_bins, s_bin_id, s_bin_raster_offset;
 shared uint s_bin_quad_count, s_bin_quad_offset;
+shared uint s_bin_tri_count, s_bin_tri_offset;
 shared ivec2 s_bin_pos;
 shared vec3 s_ray_dir0;
 
@@ -137,7 +138,13 @@ void generateRowTris(uint tri_idx) {
 		if(bx_mask == 0)
 			continue;
 
-		uint roffset = atomicAdd(s_block_row_tri_count[by], 1) + by * (MAX_BLOCK_ROW_TRIS * 2);
+		uint row_idx = atomicAdd(s_block_row_tri_count[by], 1);
+		if(row_idx >= MAX_BLOCK_ROW_TRIS) {
+			atomicOr(s_raster_error, 0xffffffff);
+			return;
+		}
+
+		uint roffset = row_idx + by * (MAX_BLOCK_ROW_TRIS * 2);
 		g_scratch_64[dst_offset_64 + roffset] =
 			uvec2(min_bits.x | (bx_mask << 24), min_bits.y | ((tri_idx & 0xff0000) << 8));
 		g_scratch_64[dst_offset_64 + roffset + MAX_BLOCK_ROW_TRIS] =
@@ -159,6 +166,9 @@ void processQuads() {
 			continue;
 		generateRowTris(quad_idx * 2 + second_tri);
 	}
+
+	for(uint i = (LSIZE - 1) - LIX; i < s_bin_tri_count; i += LSIZE)
+		generateRowTris(g_bin_tris[s_bin_tri_offset + i]);
 }
 
 shared uint s_sort_rcount[NUM_WARPS];
@@ -716,6 +726,8 @@ void rasterBin(int bin_id) {
 			s_bin_pos = bin_pos;
 			s_bin_quad_count = BIN_QUAD_COUNTS(bin_id);
 			s_bin_quad_offset = BIN_QUAD_OFFSETS(bin_id);
+			s_bin_tri_count = BIN_TRI_COUNTS(bin_id);
+			s_bin_tri_offset = BIN_TRI_OFFSETS(bin_id);
 			s_raster_error = 0;
 		}
 

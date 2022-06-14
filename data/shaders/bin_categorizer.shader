@@ -21,10 +21,9 @@ void main() {
 
 	for(uint i = LIX; i < BIN_COUNT; i += LSIZE) {
 		int num_quads = BIN_QUAD_COUNTS(i);
+		int num_tris = BIN_TRI_COUNTS(i) + num_quads * 2;
 
 		// TODO: add micro phase (< 64/128?)
-		// TODO: we need accurate count :(
-		int num_tris = num_quads * 2;
 		if(num_tris == 0) {
 			atomicAdd(s_bin_level_counts[0], 1);
 		} else if(num_tris < 1024) {

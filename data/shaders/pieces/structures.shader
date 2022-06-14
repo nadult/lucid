@@ -33,9 +33,9 @@ struct LucidInfo {
 	uint a_small_bins, a_medium_bins;
 	uint a_setup_work_groups;
 	uint a_dummy_counter;
-	int a_bin_dispatcher_work_groups;
-	int a_bin_dispatcher_items;
-	int a_bin_dispatcher_phase;
+	int a_bin_dispatcher_work_groups[2];
+	int a_bin_dispatcher_items[2];
+	int a_bin_dispatcher_phase[2];
 
 	// Counters for indirect dispatch
 	uint num_binning_dispatches[3];
@@ -45,9 +45,13 @@ struct LucidInfo {
 	uint num_rejected_quads[REJECTION_TYPE_COUNT];
 	uint timers[TIMERS_COUNT];
 
+	// TODO:
+	uint num_fragments;
+	uint avg_fragments_per_hblock_tri;
+
 	int dispatcher_task_counts[128];
 	int dispatcher_timers[128];
-	int temp[17 + 64];
+	int temp[12 + 64];
 };
 
 #define LUCID_INFO_SIZE 384

@@ -4,7 +4,7 @@
 #define LID gl_LocalInvocationID
 
 layout(std430, binding = 1) readonly restrict buffer buf1_ { uint g_bin_quads[]; };
-layout(std430, binding = 2) writeonly restrict buffer buf2_ { uint g_raster_image[]; };
+layout(std430, binding = 2) readonly restrict buffer buf2_ { uint g_bin_tris[]; };
 
 layout(std430, binding = 3) coherent restrict buffer buf3_ { uint g_scratch_32[]; };
 layout(std430, binding = 4) coherent restrict buffer buf4_ { uvec2 g_scratch_64[]; };
@@ -12,6 +12,8 @@ layout(std430, binding = 5) readonly restrict buffer buf5_ { uint g_instance_col
 layout(std430, binding = 6) readonly restrict buffer buf6_ { vec4 g_instance_uv_rects[]; };
 layout(std430, binding = 7) readonly restrict buffer buf7_ { uvec4 g_uvec4_storage[]; };
 layout(std430, binding = 8) readonly restrict buffer buf8_ { uint g_uint_storage[]; };
+
+layout(std430, binding = 9) writeonly restrict buffer buf9_ { uint g_raster_image[]; };
 
 layout(binding = 0) uniform sampler2D opaque_texture;
 layout(binding = 1) uniform sampler2D transparent_texture;

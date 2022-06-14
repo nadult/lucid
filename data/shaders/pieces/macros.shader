@@ -22,11 +22,15 @@
 #define BIN_QUAD_OFFSETS(idx)		g_counts[BIN_COUNT * 1 + (idx)]
 #define BIN_QUAD_OFFSETS_TEMP(idx)	g_counts[BIN_COUNT * 2 + (idx)]
 
+#define BIN_TRI_COUNTS(idx)			g_counts[BIN_COUNT * 3 + (idx)]
+#define BIN_TRI_OFFSETS(idx)		g_counts[BIN_COUNT * 4 + (idx)]
+#define BIN_TRI_OFFSETS_TEMP(idx)	g_counts[BIN_COUNT * 5 + (idx)]
+
 // Lists of bins of different quad density levels
-#define MICRO_LEVEL_BINS(idx)		g_counts[BIN_COUNT * 3 + (idx)]
-#define LOW_LEVEL_BINS(idx)			g_counts[BIN_COUNT * 4 + (idx)]
-#define MEDIUM_LEVEL_BINS(idx)		g_counts[BIN_COUNT * 5 + (idx)]
-#define HIGH_LEVEL_BINS(idx)		g_counts[BIN_COUNT * 6 + (idx)]
+#define MICRO_LEVEL_BINS(idx)		g_counts[BIN_COUNT * 6 + (idx)]
+#define LOW_LEVEL_BINS(idx)			g_counts[BIN_COUNT * 7 + (idx)]
+#define MEDIUM_LEVEL_BINS(idx)		g_counts[BIN_COUNT * 8 + (idx)]
+#define HIGH_LEVEL_BINS(idx)		g_counts[BIN_COUNT * 9 + (idx)]
 
 // Macros useful when accessing storage
 #define STORAGE_TRI_BARY_OFFSET		0

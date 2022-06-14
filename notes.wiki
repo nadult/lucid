@@ -301,3 +301,35 @@ san-miguel: 8858   2334   179   2111        4093        -28
     sponza: 3584   90     108   3160        69          -175
     teapot: 386    19     30    295         4           -3
  white_oak: 11452  29     166   10984       4           -1208
+
+Increased tri limit in raster_medium:
+            total  setup  bins  raster_low  raster_mid
+    #boxes: 1436   18     40    1330        4
+     bunny: 372    53     28    245         4
+conference: 1184   51     67    942         4
+    dragon: 867    292    49    347         151
+   gallery: 2740   551    68    1646        323
+  hairball: 12780  1785   295   293         10300
+hairball_2: 36190  521    1833  5           33588
+powerplant: 10397  2567   281   791         6641
+san-miguel: 8861   2321   176   2118        4070
+ scrubPine: 550    11     50    451         4
+    sponza: 3535   89     108   3130        67
+    teapot: 379    19     31    290         5
+ white_oak: 11575  28     171   11046       4
+
+ Dispatching large tris directly (not quads):
+             total  setup  bins  raster_low  raster_mid
+    #boxes: 1442   17     36    1334        5
+     bunny: 371    53     30    247         4
+conference: 1191   51     66    950         5
+    dragon: 871    292    46    348         148
+   gallery: 2764   549    70    1652        332
+  hairball: 12845  1786   294   302         10373
+hairball_2: 30956  523    846   5964        23301
+powerplant: 10594  2571   323   811         6681
+san-miguel: 8954   2320   188   2127        4145
+ scrubPine: 552    11     51    453         5
+    sponza: 3548   90     87    3159        70
+    teapot: 382    19     30    296         4
+ white_oak: 11294  28     155   10978       5

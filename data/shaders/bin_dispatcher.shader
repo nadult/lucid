@@ -11,13 +11,17 @@
 #define SMALL_TASK_SHIFT (LSHIFT + 2)
 #define SMALL_TASK_SIZE (LSIZE * SMALL_TASK_STEPS)
 
+#define LARGE_TASK_SHIFT (LSHIFT - 1)
+#define LARGE_TASK_SIZE (LSIZE / 2)
+
 layout(local_size_x = LSIZE) in;
 
 layout(std430, binding = 1) readonly buffer buf1_ { uint g_quad_aabbs[]; };
 layout(std430, binding = 2) writeonly buffer buf2_ { uint g_bin_quads[]; };
+layout(std430, binding = 3) writeonly buffer buf3_ { uint g_bin_tris[]; };
 
-layout(std430, binding = 3) buffer buf3_ { int g_tasks[]; };
-layout(std430, binding = 4) buffer buf4_ { uvec4 g_uvec4_storage[]; };
+layout(std430, binding = 4) buffer buf4_ { int g_tasks[]; };
+layout(std430, binding = 5) buffer buf5_ { uvec4 g_uvec4_storage[]; };
 
 shared int s_bins[BIN_COUNT];
 shared int s_temp[LSIZE];
@@ -27,20 +31,20 @@ const int xbin_warps = LSIZE / BIN_COUNT_X, ybin_warps = LSIZE / BIN_COUNT_Y;
 const int xbin_step = int(log2(xbin_warps)), ybin_step = int(log2(ybin_warps));
 const int xbin_count = 1 << xbin_step, ybin_count = 1 << ybin_step;
 
-struct QuadScanlineInfo {
-	vec3 scan_min[2];
-	vec3 scan_max[2];
-	vec3 scan_step[2];
-	uint cull_flags;
+struct ScanlineParams {
+	vec3 min, max, step;
 };
 
-void loadScanlineParams(uint scratch_tri_idx, vec2 start, out vec3 scan_min, out vec3 scan_max,
-						out vec3 scan_step) {
-	uint scan_offset = STORAGE_TRI_SCAN_OFFSET + scratch_tri_idx * 2;
+ScanlineParams loadScanlineParams(uint tri_idx, out int min_by, out int max_by) {
+	ScanlineParams params;
+
+	uint scan_offset = STORAGE_TRI_SCAN_OFFSET + tri_idx * 2;
 	uvec4 val0 = g_uvec4_storage[scan_offset + 0];
 	uvec4 val1 = g_uvec4_storage[scan_offset + 1];
 	vec3 scan = uintBitsToFloat(val0.xyz);
-	scan_step = uintBitsToFloat(val1.xyz);
+	params.step = uintBitsToFloat(val1.xyz);
+	min_by = int(val0.w & 0xffff) >> BIN_SHIFT;
+	max_by = int(val0.w >> 16) >> BIN_SHIFT;
 
 	bvec3 xneg = bvec3((val1.w & 1) != 0, (val1.w & 2) != 0, (val1.w & 4) != 0);
 	bvec3 yneg = bvec3((val1.w & 8) != 0, (val1.w & 16) != 0, (val1.w & 32) != 0);
@@ -49,60 +53,25 @@ void loadScanlineParams(uint scratch_tri_idx, vec2 start, out vec3 scan_min, out
 	vec3 yoffset = vec3(yneg[0] ? 0.0 : offset, yneg[1] ? 0.0 : offset, yneg[2] ? 0.0 : offset);
 	vec3 xoffset = vec3(xneg[0] ? 0.0 : offset, xneg[1] ? 0.0 : offset, xneg[2] ? 0.0 : offset);
 
-	scan += scan_step * (yoffset + vec3(start.y)) - (xoffset + vec3(start.x));
+	vec2 start = vec2(0.99, min_by * BIN_SIZE - 0.01);
+	scan += params.step * (yoffset + vec3(start.y)) - (xoffset + vec3(start.x));
 	const float inf = 1.0 / 0.0;
-	scan_min = vec3(xneg[0] ? -inf : scan[0], xneg[1] ? -inf : scan[1], xneg[2] ? -inf : scan[2]);
-	scan_max = vec3(xneg[0] ? scan[0] : inf, xneg[1] ? scan[1] : inf, xneg[2] ? scan[2] : inf);
-	scan_step *= BIN_SIZE;
+	params.min = vec3(xneg[0] ? -inf : scan[0], xneg[1] ? -inf : scan[1], xneg[2] ? -inf : scan[2]);
+	params.max = vec3(xneg[0] ? scan[0] : inf, xneg[1] ? scan[1] : inf, xneg[2] ? scan[2] : inf);
+	params.step *= BIN_SIZE;
+
+	return params;
 }
 
-QuadScanlineInfo quadScanlineInfo(int quad_idx, int bsy, uint cull_flags) {
-	QuadScanlineInfo info;
-	info.cull_flags = cull_flags >> 30;
-	// ASSERT(info.cull_flags == 1 || info.cull_flags == 2);
-
-	vec2 start = vec2(0.99, bsy * BIN_SIZE - 0.01);
-	if((info.cull_flags & 1) == 0)
-		loadScanlineParams(quad_idx * 2 + 0, start, info.scan_min[0], info.scan_max[0],
-						   info.scan_step[0]);
-	if((info.cull_flags & 2) == 0)
-		loadScanlineParams(quad_idx * 2 + 1, start, info.scan_min[1], info.scan_max[1],
-						   info.scan_step[1]);
-
-	// Making sure that if one of the triangles is culled then it's the second one
-	if(info.cull_flags == 1) {
-		info.scan_min[0] = info.scan_min[1];
-		info.scan_max[0] = info.scan_max[1];
-		info.scan_step[0] = info.scan_step[1];
-	}
-
-	return info;
-}
-
-void quadScanStep(in out QuadScanlineInfo info, out int bmin, out int bmax) {
-	float xmin[2] = {
-		max(max(info.scan_min[0][0], info.scan_min[0][1]), max(info.scan_min[0][2], 0.0)),
-		max(max(info.scan_min[1][0], info.scan_min[1][1]), max(info.scan_min[1][2], 0.0))};
-	float xmax[2] = {min(min(info.scan_max[0][0], info.scan_max[0][1]),
-						 min(info.scan_max[0][2], VIEWPORT_SIZE_X)),
-					 min(min(info.scan_max[1][0], info.scan_max[1][1]),
-						 min(info.scan_max[1][2], VIEWPORT_SIZE_X))};
-
-	info.scan_min[0] += info.scan_step[0];
-	info.scan_max[0] += info.scan_step[0];
-
-	info.scan_min[1] += info.scan_step[1];
-	info.scan_max[1] += info.scan_step[1];
+void scanlineStep(in out ScanlineParams params, out int bmin, out int bmax) {
+	float xmin = max(max(params.min[0], params.min[1]), params.min[2]);
+	float xmax = min(min(params.max[0], params.max[1]), params.max[2]);
+	params.min += params.step;
+	params.max += params.step;
 
 	// There can be holes between two tris, should we exploit this? Maybe it's not worth it?
-	bmin = int(xmin[0] + 1.0);
-	bmax = int(xmax[0]);
-	if(info.cull_flags == 0) {
-		bmin = min(bmin, int(xmin[1] + 1.0));
-		bmax = max(bmax, int(xmax[1]));
-	}
-	bmin = bmin >> BIN_SHIFT;
-	bmax = bmax >> BIN_SHIFT;
+	bmin = int(xmin + 1.0) >> BIN_SHIFT;
+	bmax = int(xmax) >> BIN_SHIFT;
 }
 
 int prefixSum32(int accum) {
@@ -134,27 +103,7 @@ void countSmallQuadBins(uint quad_idx) {
 		atomicAdd(s_bins[bmy * BIN_COUNT_X + bmx], 1);*/
 }
 
-void countLargeQuadBins(int quad_idx) {
-	uint enc_aabb = g_quad_aabbs[quad_idx];
-	uint cull_flags = enc_aabb & 0xf0000000;
-	ivec4 aabb = decodeAABB28(enc_aabb);
-	int bsx = aabb[0], bsy = aabb[1], bex = aabb[2], bey = aabb[3];
-	QuadScanlineInfo info = quadScanlineInfo(quad_idx, bsy, cull_flags);
-
-	for(int by = bsy; by <= bey; by++) {
-		int bmin, bmax;
-		quadScanStep(info, bmin, bmax);
-		bmin = max(bmin, bsx), bmax = min(bmax, bex);
-
-		if(bmax >= bmin) {
-			atomicAdd(s_bins[bmin + by * BIN_COUNT_X], 1);
-			if(bmax + 1 < BIN_COUNT_X)
-				atomicAdd(s_bins[bmax + 1 + by * BIN_COUNT_X], -1);
-		}
-	}
-}
-
-void accumulateLargeQuadCounts() {
+void accumulateLargeTriCounts() {
 	// Accumulating large quad counts across rows
 	if(LIX < BIN_COUNT_Y * ybin_count) {
 		uint by = LIX >> ybin_step;
@@ -172,11 +121,9 @@ void accumulateLargeQuadCounts() {
 			accum = shuffleNV(cur, ybin_count - 1, ybin_count);
 		}
 	}
-	barrier();
 }
 
-void computeOffsets() {
-	// TODO: no need for groupMemoryBarrier ?
+void computeQuadOffsets() {
 	// Computing bin quad counts offsets
 	if(LIX < BIN_COUNT_Y * ybin_count) {
 		uint by = LIX >> ybin_step;
@@ -222,6 +169,52 @@ void computeOffsets() {
 	barrier();
 }
 
+void computeTriOffsets() {
+	// Computing bin quad counts offsets
+	if(LIX < BIN_COUNT_Y * ybin_count) {
+		uint by = LIX >> ybin_step;
+		int accum = 0;
+		for(uint bx = 0, subx = LIX & (ybin_count - 1); bx < BIN_COUNT_X; bx += ybin_count) {
+			uint idx = bx + subx + by * BIN_COUNT_X;
+			int cur = bx + subx < BIN_COUNT_X ? BIN_TRI_COUNTS(idx) : 0, temp;
+			for(int i = 1; i < ybin_count; i <<= 1) {
+				temp = shuffleUpNV(cur, i, ybin_count);
+				cur += subx >= i ? temp : 0;
+			}
+			cur += accum;
+			if(bx + subx < BIN_COUNT_X)
+				BIN_TRI_OFFSETS(idx) = cur;
+			accum = shuffleNV(cur, ybin_count - 1, ybin_count);
+		}
+	}
+	barrier();
+	// Storing accumulated bin quad counts for each row
+	if(LIX < BIN_COUNT_Y)
+		s_temp[LIX] = BIN_TRI_OFFSETS((BIN_COUNT_X - 1) + LIX * BIN_COUNT_X);
+	barrier();
+	if(LIX < BIN_COUNT_X * xbin_count) {
+		uint bx = LIX >> xbin_step;
+		int accum = 0;
+		for(uint by = 0, suby = LIX & (xbin_count - 1); by < BIN_COUNT_Y; by += xbin_count) {
+			uint idx = by + suby;
+			int cur = idx < BIN_COUNT_Y && idx > 0 ? s_temp[idx - 1] : 0, temp;
+			for(int i = 1; i < xbin_count; i <<= 1) {
+				temp = shuffleUpNV(cur, i, xbin_count);
+				cur += suby >= i ? temp : 0;
+			}
+			cur += accum;
+			if(idx < BIN_COUNT_Y) {
+				uint bidx = bx + idx * BIN_COUNT_X;
+				int value = BIN_TRI_OFFSETS(bidx) + cur - BIN_TRI_COUNTS(bidx);
+				BIN_TRI_OFFSETS(bidx) = value;
+				BIN_TRI_OFFSETS_TEMP(bidx) = value;
+			}
+			accum = shuffleNV(cur, xbin_count - 1, xbin_count);
+		}
+	}
+	barrier();
+}
+
 void dispatchQuad(int quad_idx) {
 	uint enc_aabb = g_quad_aabbs[quad_idx];
 	uint cull_flags = enc_aabb & 0xf0000000;
@@ -238,62 +231,89 @@ void dispatchQuad(int quad_idx) {
 	}
 }
 
-void dispatchLargeQuadSimple(int large_quad_idx, int num_quads) {
-	if(large_quad_idx >= num_quads)
-		return;
-	int quad_idx = (MAX_VISIBLE_QUADS - 1) - large_quad_idx;
-
+void countLargeTriBins(int quad_idx, int second_tri) {
 	uint enc_aabb = g_quad_aabbs[quad_idx];
-	uint cull_flags = enc_aabb & 0xf0000000;
-	uint bin_quad_idx = uint(quad_idx) | cull_flags;
+	uint cull_flag = (enc_aabb >> (30 + second_tri)) & 1;
+	if(cull_flag == 1)
+		return;
+
+	uint tri_idx = quad_idx * 2 + second_tri;
 	ivec4 aabb = decodeAABB28(enc_aabb);
-	int bsx = aabb[0], bsy = aabb[1], bex = aabb[2], bey = aabb[3];
-	QuadScanlineInfo quad_scan_info = quadScanlineInfo(quad_idx, bsy, cull_flags);
+	int bsx = aabb[0], bex = aabb[2], bsy, bey;
+	ScanlineParams params = loadScanlineParams(tri_idx, bsy, bey);
 
 	for(int by = bsy; by <= bey; by++) {
 		int bmin, bmax;
-		quadScanStep(quad_scan_info, bmin, bmax);
+		scanlineStep(params, bmin, bmax);
 		bmin = max(bmin, bsx), bmax = min(bmax, bex);
 
-		for(int bx = bmin; bx <= bmax; bx++) {
-			uint bin_id = bx + by * BIN_COUNT_X;
-			uint quad_offset = atomicAdd(s_bins[bin_id], 1);
-			g_bin_quads[quad_offset] = bin_quad_idx;
+		if(bmax >= bmin) {
+			atomicAdd(s_bins[bmin + by * BIN_COUNT_X], 1);
+			if(bmax + 1 < BIN_COUNT_X)
+				atomicAdd(s_bins[bmax + 1 + by * BIN_COUNT_X], -1);
 		}
 	}
 }
 
-// This is an optimization of dispatchLargeQuadSimple which is more work efficient.
-// This is especially useful if there is a large variation in quad sizes and for
-// large quads in general.
+void dispatchLargeTriSimple(int large_quad_idx, int second_tri, int num_quads) {
+	if(large_quad_idx >= num_quads)
+		return;
+	int quad_idx = (MAX_VISIBLE_QUADS - 1) - large_quad_idx;
+	int tri_idx = quad_idx * 2 + second_tri;
+
+	uint enc_aabb = g_quad_aabbs[quad_idx];
+	uint cull_flag = (enc_aabb >> (30 + second_tri)) & 1;
+	if(cull_flag == 1)
+		return;
+
+	ivec4 aabb = decodeAABB28(enc_aabb);
+	int bsx = aabb[0], bex = aabb[2], bsy, bey;
+	ScanlineParams params = loadScanlineParams(tri_idx, bsy, bey);
+
+	for(int by = bsy; by <= bey; by++) {
+		int bmin, bmax;
+		scanlineStep(params, bmin, bmax);
+		bmin = max(bmin, bsx), bmax = min(bmax, bex);
+
+		for(int bx = bmin; bx <= bmax; bx++) {
+			uint bin_id = bx + by * BIN_COUNT_X;
+			g_bin_tris[atomicAdd(s_bins[bin_id], 1)] = tri_idx;
+		}
+	}
+}
+
+// This is an optimized tri dispatcher which is more work efficient. It is especially
+// useful if there is a large variation in quad sizes and for large tris in general.
 //
 // Work balancing happens at each bin row. First we find out how many bins do we have
 // to write to and then we divide this work equally across all threads within a warp.
 // We do this by dividing those items into 32 segments and then assigning 1 segment
 // to each thread.
-void dispatchLargeQuadBalanced(int large_quad_idx, int num_quads) {
+void dispatchLargeTriBalanced(int large_quad_idx, int second_tri, int num_quads) {
 	bool is_valid = large_quad_idx < num_quads;
 	if(allInvocationsARB(!is_valid))
 		return;
 
-	QuadScanlineInfo quad_scan_info;
-	uint bin_quad_idx;
-	int bsx, bsy = 0, bex, bey = -1;
+	ScanlineParams params;
+	uint tri_idx;
+	int bsy = 0, bey = -1, bsx, bex;
 
 	if(is_valid) {
 		int quad_idx = (MAX_VISIBLE_QUADS - 1) - large_quad_idx;
 		uint enc_aabb = g_quad_aabbs[quad_idx];
-		uint cull_flags = enc_aabb & 0xf0000000;
-		bin_quad_idx = uint(quad_idx) | cull_flags;
+		uint cull_flag = (enc_aabb >> (30 + second_tri)) & 1;
 		ivec4 aabb = decodeAABB28(enc_aabb);
-		bsx = aabb[0], bsy = aabb[1], bex = aabb[2], bey = aabb[3];
-		quad_scan_info = quadScanlineInfo(quad_idx, bsy, cull_flags);
+		bsx = aabb[0], bex = aabb[2];
+		if(cull_flag == 0) {
+			tri_idx = quad_idx * 2 + second_tri;
+			params = loadScanlineParams(tri_idx, bsy, bey);
+		}
 	}
 
 	for(int by = bsy; anyInvocationARB(by <= bey); by++) {
 		int bmin = 0, bmax = -1;
 		if(by <= bey) {
-			quadScanStep(quad_scan_info, bmin, bmax);
+			scanlineStep(params, bmin, bmax);
 			bmin = max(bmin, bsx), bmax = min(bmax, bex);
 		}
 
@@ -324,7 +344,7 @@ void dispatchLargeQuadBalanced(int large_quad_idx, int num_quads) {
 
 		int i = 0;
 		while(anyInvocationARB(i < cur_num_samples)) {
-			uint cur_bin_quad_idx = shuffleNV(bin_quad_idx, cur_src_thread_id, 32);
+			uint cur_tri_idx = shuffleNV(tri_idx, cur_src_thread_id, 32);
 			int cur_bin_id = shuffleNV(base_bin_id, cur_src_thread_id, 32);
 			int cur_width = shuffleNV(num_samples, cur_src_thread_id, 32);
 
@@ -333,8 +353,8 @@ void dispatchLargeQuadBalanced(int large_quad_idx, int num_quads) {
 				continue;
 			}
 			if(i < cur_num_samples) {
-				uint quad_offset = atomicAdd(s_bins[cur_bin_id + cur_offset], 1);
-				g_bin_quads[quad_offset] = cur_bin_quad_idx;
+				uint tri_offset = atomicAdd(s_bins[cur_bin_id + cur_offset], 1);
+				g_bin_tris[tri_offset] = cur_tri_idx;
 				cur_offset++;
 				if(cur_offset == cur_width)
 					cur_offset = 0, cur_src_thread_id++;
@@ -348,72 +368,21 @@ shared int s_num_quads[2];
 shared int s_quads_offset, s_active_work_group_id;
 
 shared int s_first_task[2], s_last_task[2], s_num_tasks[2];
-shared int s_num_finished_tasks, s_num_all_tasks;
+shared int s_num_finished_tasks[2], s_num_all_tasks[2];
 
 #define MAX_SMALL_TASKS (MAX_VISIBLE_QUADS / SMALL_TASK_SIZE + 256)
-#define MAX_LARGE_TASKS (MAX_VISIBLE_QUADS / LSIZE + 256)
+#define MAX_LARGE_TASKS (MAX_VISIBLE_QUADS / LARGE_TASK_SIZE + 256)
 
 #define LARGE_TASKS_OFFSET MAX_SMALL_TASKS
 
-void main() {
-#ifdef ENABLE_TIMERS
-	uint64_t clock0 = clockARB();
-#endif
-
-	if(LIX < 2) {
-		s_num_quads[LIX] = g_info.num_visible_quads[LIX];
-		s_first_task[LIX] = -1;
-		s_last_task[LIX] = -1;
-		s_num_tasks[LIX] = 0;
-		// TODO: we can probably improve perf by dividing work more evenly
-		// Two types of quads make it a bit tricky
-		if(LIX == 0) {
-			int num_small_tasks = (s_num_quads[0] + SMALL_TASK_SIZE - 1) / SMALL_TASK_SIZE;
-			int num_large_tasks = (s_num_quads[1] + LSIZE - 1) / LSIZE;
-			s_num_all_tasks = num_small_tasks + num_large_tasks;
-		}
-	}
-
+void processSmallQuads() {
 	for(uint i = LIX; i < BIN_COUNT; i += LSIZE)
 		s_bins[i] = 0;
 	barrier();
 
-	// Computing large quads bin coverage
-	int num_quads = s_num_quads[1];
-	while(num_quads > 0) {
-		if(LIX == 0) {
-			int quads_offset = atomicAdd(g_info.num_estimated_quads[1], LSIZE);
-			if(quads_offset < num_quads) {
-				int task = quads_offset >> LSHIFT;
-				int last_task = s_last_task[1];
-				if(last_task == -1)
-					s_first_task[1] = task;
-				else
-					g_tasks[LARGE_TASKS_OFFSET + last_task] = task;
-				s_last_task[1] = task;
-				s_num_tasks[1]++;
-			}
-			s_quads_offset = quads_offset;
-		}
-		barrier();
-
-		int large_quads_offset = s_quads_offset;
-		if(large_quads_offset >= num_quads)
-			break;
-
-		int large_quad_idx = large_quads_offset + int(LIX);
-		if(large_quad_idx < num_quads)
-			countLargeQuadBins((MAX_VISIBLE_QUADS - 1) - large_quad_idx);
-
-		barrier();
-	}
-
-	barrier();
-	accumulateLargeQuadCounts();
-
 	// Computing small quads bin coverage
-	num_quads = s_num_quads[0];
-	while(num_quads > 0) {
+	int num_quads = s_num_quads[0];
+	while(true) {
 		if(LIX == 0) {
 			int quads_offset = atomicAdd(g_info.num_estimated_quads[0], SMALL_TASK_SIZE);
 			if(quads_offset < num_quads) {
@@ -447,7 +416,7 @@ void main() {
 
 	// Thread groups which didn't do any estimation can quit early:
 	// they won't participate in dispatching either
-	if(s_num_tasks[0] + s_num_tasks[1] == 0)
+	if(s_num_tasks[0] == 0)
 		return;
 
 	// Copying bin counters to global memory buffer
@@ -458,26 +427,27 @@ void main() {
 
 	// Finishing estimation phase
 	if(LIX == 0) {
-		s_active_work_group_id = atomicAdd(g_info.a_bin_dispatcher_work_groups, 1);
-		int num_tasks = s_num_tasks[0] + s_num_tasks[1];
-		s_num_finished_tasks = atomicAdd(g_info.a_bin_dispatcher_items, num_tasks) + num_tasks;
+		int num_tasks = s_num_tasks[0];
+		s_active_work_group_id = atomicAdd(g_info.a_bin_dispatcher_work_groups[0], 1);
+		s_num_finished_tasks[0] =
+			atomicAdd(g_info.a_bin_dispatcher_items[0], num_tasks) + num_tasks;
 		g_info.dispatcher_task_counts[s_active_work_group_id] = num_tasks;
 	}
 	barrier();
 
 	// Last group is responsible for computing bin offsets
-	if(s_num_finished_tasks == s_num_all_tasks) {
+	if(s_num_finished_tasks[0] == s_num_all_tasks[0]) {
 		groupMemoryBarrier();
-		computeOffsets();
+		computeQuadOffsets();
 		if(LIX == 0)
-			atomicExchange(g_info.a_bin_dispatcher_phase, 1);
+			atomicExchange(g_info.a_bin_dispatcher_phase[0], 1);
 	}
 
 	// Waiting until all bin offsets are computed
 	// TODO: can we do something useful while waiting?
 	// We could run bin categorizer here ! All it needs is bin quad counts
 	if(LIX == 0)
-		while(g_info.a_bin_dispatcher_phase == 0)
+		while(g_info.a_bin_dispatcher_phase[0] == 0)
 			;
 	barrier();
 
@@ -505,24 +475,135 @@ void main() {
 			dispatchQuad(quad_idx);
 		}
 	}
+	barrier();
+}
+
+void processLargeTris() {
+	// Computing large quads bin coverage
+	int num_quads = s_num_quads[1];
+	while(true) {
+		if(LIX == 0) {
+			int quads_offset = atomicAdd(g_info.num_estimated_quads[1], LARGE_TASK_SIZE);
+			if(quads_offset < num_quads) {
+				int task = quads_offset >> LARGE_TASK_SHIFT;
+				int last_task = s_last_task[1];
+				if(last_task == -1)
+					s_first_task[1] = task;
+				else
+					g_tasks[LARGE_TASKS_OFFSET + last_task] = task;
+				s_last_task[1] = task;
+				s_num_tasks[1]++;
+			}
+			s_quads_offset = quads_offset;
+		}
+		barrier();
+
+		int large_quads_offset = s_quads_offset;
+		if(large_quads_offset >= num_quads)
+			break;
+
+		int large_quad_idx = large_quads_offset + int(LIX >> 1);
+		if(large_quad_idx < num_quads)
+			countLargeTriBins((MAX_VISIBLE_QUADS - 1) - large_quad_idx, int(LIX & 1));
+
+		barrier();
+	}
+
+	barrier();
+
+	// Thread groups which didn't do any estimation can quit early:
+	// they won't participate in dispatching either
+	if(s_num_tasks[1] == 0)
+		return;
+	accumulateLargeTriCounts();
+	barrier();
+
+	// Copying bin counters to global memory buffer
+	for(uint i = LIX; i < BIN_COUNT; i += LSIZE)
+		if(s_bins[i] > 0)
+			atomicAdd(BIN_TRI_COUNTS(i), s_bins[i]);
+	barrier();
+
+	// Finishing estimation phase
+	if(LIX == 0) {
+		int num_tasks = s_num_tasks[1];
+		s_active_work_group_id = atomicAdd(g_info.a_bin_dispatcher_work_groups[1], 1);
+		s_num_finished_tasks[1] =
+			atomicAdd(g_info.a_bin_dispatcher_items[1], num_tasks) + num_tasks;
+		g_info.dispatcher_task_counts[s_active_work_group_id] = num_tasks;
+	}
+	barrier();
+
+	// Last group is responsible for computing bin offsets
+	if(s_num_finished_tasks[1] == s_num_all_tasks[1]) {
+		groupMemoryBarrier();
+		computeTriOffsets();
+		if(LIX == 0)
+			atomicExchange(g_info.a_bin_dispatcher_phase[1], 1);
+	}
+
+	// Waiting until all bin offsets are computed
+	// TODO: can we do something useful while waiting?
+	// We could run bin categorizer here ! All it needs is bin quad counts
+	if(LIX == 0)
+		while(g_info.a_bin_dispatcher_phase[1] == 0)
+			;
+	barrier();
+
+	// Reserving space for quad indices in bins
+	for(uint i = LIX; i < BIN_COUNT; i += LSIZE)
+		if(s_bins[i] > 0)
+			s_bins[i] = atomicAdd(BIN_TRI_OFFSETS_TEMP(i), s_bins[i]);
+	barrier();
 
 	// Dispatching large quads
-	num_quads = s_num_quads[1];
 	while(s_num_tasks[1] > 0) {
 		barrier();
 		if(LIX == 0) {
 			int task = s_first_task[1];
 			s_first_task[1] = g_tasks[LARGE_TASKS_OFFSET + task];
 			s_num_tasks[1]--;
-			s_quads_offset = task << LSHIFT;
+			s_quads_offset = task << LARGE_TASK_SHIFT;
 		}
 		barrier();
-		int large_quad_idx = s_quads_offset + int(LIX);
-		dispatchLargeQuadBalanced(large_quad_idx, num_quads);
+		int large_quad_idx = s_quads_offset + int(LIX >> 1);
+		dispatchLargeTriBalanced(large_quad_idx, int(LIX & 1), num_quads);
+	}
+}
+
+void main() {
+#ifdef ENABLE_TIMERS
+	//uint64_t clock0 = clockARB();
+#endif
+
+	if(LIX < 2) {
+		int num_quads = g_info.num_visible_quads[LIX];
+		s_num_quads[LIX] = num_quads;
+		int task_size = LIX == 0 ? SMALL_TASK_SIZE : LARGE_TASK_SIZE;
+		int task_shift = LIX == 0 ? SMALL_TASK_SHIFT : LARGE_TASK_SHIFT;
+		s_num_all_tasks[LIX] = (num_quads + (task_size - 1)) >> task_shift;
+		s_first_task[LIX] = -1;
+		s_last_task[LIX] = -1;
+		s_num_tasks[LIX] = 0;
 	}
 	barrier();
 
+	if(s_num_all_tasks[0] > 0) {
+		for(uint i = LIX; i < BIN_COUNT; i += LSIZE)
+			s_bins[i] = 0;
+		barrier();
+		processSmallQuads();
+	}
+
+	if(s_num_all_tasks[1] > 0) {
+		barrier();
+		for(uint i = LIX; i < BIN_COUNT; i += LSIZE)
+			s_bins[i] = 0;
+		barrier();
+		processLargeTris();
+	}
+
 #ifdef ENABLE_TIMERS
-	g_info.dispatcher_timers[s_active_work_group_id] = int(clockARB() - clock0);
+	//g_info.dispatcher_timers[s_active_work_group_id] = int(clockARB() - clock0);
 #endif
 }

@@ -1,4 +1,4 @@
-// $$include funcs lighting frustum viewport raster scanline timers
+// $$include funcs lighting frustum viewport shading scanline timers
 
 #define LSIZE 256
 #define LSHIFT 8

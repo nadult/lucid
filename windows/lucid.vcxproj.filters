@@ -142,7 +142,7 @@
     <None Include="..\data\shaders\pieces\viewport.shader">
       <Filter>shaders\pieces</Filter>
     </None>
-    <None Include="..\data\shaders\pieces\raster.shader">
+    <None Include="..\data\shaders\pieces\shading.shader">
       <Filter>shaders\pieces</Filter>
     </None>
     <None Include="..\data\shaders\raster_low.shader">

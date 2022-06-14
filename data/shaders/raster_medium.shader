@@ -1,4 +1,4 @@
-// $$include funcs lighting frustum viewport raster scanline timers
+// $$include funcs lighting frustum viewport shading scanline timers
 
 #if BIN_SIZE == 64
 #define LSIZE 512

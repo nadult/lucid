@@ -22,25 +22,6 @@ layout(binding = 1) uniform sampler2D transparent_texture;
 // then read it and use depth to optimize drawing
 uniform uint background_color;
 
-struct ScanlineParams {
-	vec3 min, max, step;
-};
-
-ScanlineParams loadScanlineParams(uvec4 val0, uvec4 val1, vec2 start) {
-	ScanlineParams params;
-
-	bvec3 xneg = bvec3((val1.w & 1) != 0, (val1.w & 2) != 0, (val1.w & 4) != 0);
-	vec3 scan = uintBitsToFloat(val0.xyz);
-	params.step = uintBitsToFloat(val1.xyz);
-
-	const float inf = 1.0 / 0.0;
-	scan += params.step * start.y - vec3(start.x);
-	params.min = vec3(xneg[0] ? -inf : scan[0], xneg[1] ? -inf : scan[1], xneg[2] ? -inf : scan[2]);
-	params.max = vec3(xneg[0] ? scan[0] : inf, xneg[1] ? scan[1] : inf, xneg[2] ? scan[2] : inf);
-
-	return params;
-}
-
 void getTriangleParams(uint tri_idx, out vec3 depth_eq, out vec2 bary_params, out vec3 edge0,
 					   out vec3 edge1, out uint instance_id, out uint instance_flags) {
 	uint bary_offset = STORAGE_TRI_BARY_OFFSET + tri_idx * 2;

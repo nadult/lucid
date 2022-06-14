@@ -1,4 +1,4 @@
-// $$include funcs frustum structures timers
+// $$include funcs frustum structures scanline timers
 
 #define LSIZE BIN_DISPATCHER_LSIZE
 #define LSHIFT BIN_DISPATCHER_LSHIFT
@@ -30,38 +30,6 @@ shared int s_temp[LSIZE];
 const int xbin_warps = LSIZE / BIN_COUNT_X, ybin_warps = LSIZE / BIN_COUNT_Y;
 const int xbin_step = int(log2(xbin_warps)), ybin_step = int(log2(ybin_warps));
 const int xbin_count = 1 << xbin_step, ybin_count = 1 << ybin_step;
-
-struct ScanlineParams {
-	vec3 min, max, step;
-};
-
-ScanlineParams loadScanlineParams(uint tri_idx, out int min_by, out int max_by) {
-	ScanlineParams params;
-
-	uint scan_offset = STORAGE_TRI_SCAN_OFFSET + tri_idx * 2;
-	uvec4 val0 = g_uvec4_storage[scan_offset + 0];
-	uvec4 val1 = g_uvec4_storage[scan_offset + 1];
-	vec3 scan = uintBitsToFloat(val0.xyz);
-	params.step = uintBitsToFloat(val1.xyz);
-	min_by = int(val0.w & 0xffff) >> BIN_SHIFT;
-	max_by = int(val0.w >> 16) >> BIN_SHIFT;
-
-	bvec3 xneg = bvec3((val1.w & 1) != 0, (val1.w & 2) != 0, (val1.w & 4) != 0);
-	bvec3 yneg = bvec3((val1.w & 8) != 0, (val1.w & 16) != 0, (val1.w & 32) != 0);
-
-	float offset = BIN_SIZE - 0.989;
-	vec3 yoffset = vec3(yneg[0] ? 0.0 : offset, yneg[1] ? 0.0 : offset, yneg[2] ? 0.0 : offset);
-	vec3 xoffset = vec3(xneg[0] ? 0.0 : offset, xneg[1] ? 0.0 : offset, xneg[2] ? 0.0 : offset);
-
-	vec2 start = vec2(0.99, min_by * BIN_SIZE - 0.01);
-	scan += params.step * (yoffset + vec3(start.y)) - (xoffset + vec3(start.x));
-	const float inf = 1.0 / 0.0;
-	params.min = vec3(xneg[0] ? -inf : scan[0], xneg[1] ? -inf : scan[1], xneg[2] ? -inf : scan[2]);
-	params.max = vec3(xneg[0] ? scan[0] : inf, xneg[1] ? scan[1] : inf, xneg[2] ? scan[2] : inf);
-	params.step *= BIN_SIZE;
-
-	return params;
-}
 
 void scanlineStep(in out ScanlineParams params, out int bmin, out int bmax) {
 	float xmin = max(max(params.min[0], params.min[1]), params.min[2]);
@@ -231,6 +199,13 @@ void dispatchQuad(int quad_idx) {
 	}
 }
 
+ScanlineParams loadScanlineParamsBin(uint tri_idx, out int bsy, out int bey) {
+	uint scan_offset = STORAGE_TRI_SCAN_OFFSET + tri_idx * 2;
+	uvec4 val0 = g_uvec4_storage[scan_offset + 0];
+	uvec4 val1 = g_uvec4_storage[scan_offset + 1];
+	return loadScanlineParamsBin(val0, val1, bsy, bey);
+}
+
 void countLargeTriBins(int quad_idx, int second_tri) {
 	uint enc_aabb = g_quad_aabbs[quad_idx];
 	uint cull_flag = (enc_aabb >> (30 + second_tri)) & 1;
@@ -240,7 +215,7 @@ void countLargeTriBins(int quad_idx, int second_tri) {
 	uint tri_idx = quad_idx * 2 + second_tri;
 	ivec4 aabb = decodeAABB28(enc_aabb);
 	int bsx = aabb[0], bex = aabb[2], bsy, bey;
-	ScanlineParams params = loadScanlineParams(tri_idx, bsy, bey);
+	ScanlineParams params = loadScanlineParamsBin(tri_idx, bsy, bey);
 
 	for(int by = bsy; by <= bey; by++) {
 		int bmin, bmax;
@@ -268,7 +243,7 @@ void dispatchLargeTriSimple(int large_quad_idx, int second_tri, int num_quads) {
 
 	ivec4 aabb = decodeAABB28(enc_aabb);
 	int bsx = aabb[0], bex = aabb[2], bsy, bey;
-	ScanlineParams params = loadScanlineParams(tri_idx, bsy, bey);
+	ScanlineParams params = loadScanlineParamsBin(tri_idx, bsy, bey);
 
 	for(int by = bsy; by <= bey; by++) {
 		int bmin, bmax;
@@ -306,7 +281,7 @@ void dispatchLargeTriBalanced(int large_quad_idx, int second_tri, int num_quads)
 		bsx = aabb[0], bex = aabb[2];
 		if(cull_flag == 0) {
 			tri_idx = quad_idx * 2 + second_tri;
-			params = loadScanlineParams(tri_idx, bsy, bey);
+			params = loadScanlineParamsBin(tri_idx, bsy, bey);
 		}
 	}
 

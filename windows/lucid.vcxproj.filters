@@ -160,5 +160,8 @@
     <None Include="..\data\shaders\pieces\timers.shader">
       <Filter>shaders\pieces</Filter>
     </None>
+    <None Include="..\data\shaders\pieces\scanline.shader">
+      <Filter>shaders\pieces</Filter>
+    </None>
   </ItemGroup>
 </Project>

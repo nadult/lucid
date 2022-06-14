@@ -1,4 +1,4 @@
-// $$include funcs lighting frustum viewport raster timers
+// $$include funcs lighting frustum viewport raster scanline timers
 
 #define LSIZE 256
 #define LSHIFT 8
@@ -94,7 +94,7 @@ void generateRowTris(uint tri_idx) {
 	int max_by = clamp(int(val0.w >> 16) - s_bin_pos.y, 0, BIN_MASK) >> BLOCK_SHIFT;
 
 	vec2 start = vec2(s_bin_pos.x, s_bin_pos.y + min_by * 8);
-	ScanlineParams scan = loadScanlineParams(val0, val1, start);
+	ScanlineParams scan = loadScanlineParamsRow(val0, val1, start);
 
 	// TODO: is it worth it to make this loop more work-efficient?
 	for(int by = min_by; by <= max_by; by++) {

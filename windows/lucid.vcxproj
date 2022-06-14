@@ -142,6 +142,7 @@
     <None Include="..\data\shaders\pieces\macros.shader" />
     <None Include="..\data\shaders\pieces\raster.shader" />
     <None Include="..\data\shaders\pieces\rect.shader" />
+    <None Include="..\data\shaders\pieces\scanline.shader" />
     <None Include="..\data\shaders\pieces\structures.shader" />
     <None Include="..\data\shaders\pieces\timers.shader" />
     <None Include="..\data\shaders\pieces\viewport.shader" />

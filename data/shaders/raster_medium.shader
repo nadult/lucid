@@ -1,4 +1,4 @@
-// $$include funcs lighting frustum viewport raster timers
+// $$include funcs lighting frustum viewport raster scanline timers
 
 #if BIN_SIZE == 64
 #define LSIZE 512
@@ -145,7 +145,7 @@ void generateRowTris(uint tri_idx, int start_hby) {
 	int max_hby = clamp(int(val0.w >> 16) - s_bin_pos.y, 0, BIN_MASK) >> HBLOCK_HEIGHT_SHIFT;
 
 	vec2 start = vec2(s_bin_pos.x, s_bin_pos.y + min_hby * 4);
-	ScanlineParams scan = loadScanlineParams(val0, val1, start);
+	ScanlineParams scan = loadScanlineParamsRow(val0, val1, start);
 
 #if HBLOCK_ROWS_STEP < HBLOCK_ROWS
 	min_hby = max(start_hby, min_hby);

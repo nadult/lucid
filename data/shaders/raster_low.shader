@@ -486,13 +486,11 @@ void loadSamples(uint hbid, int segment_id) {
 	uint segment_data = s_segments[seg_group_offset + segment_id];
 	uint tri_count = segment_data >> 16, first_tri = segment_data & 0xffff;
 	uint src_offset_64 = scratch64HalfBlockTrisOffset(hbid & (NUM_WARPS * 2 - 1)) + first_tri;
-
-	int y = int(LIX & 3);
-	uint count_shift = 16 + (y << 2), min_shift = (y << 1) + y;
-	int mask1 = y >= 1 ? ~0 : 0, mask2 = y >= 2 ? ~0 : 0;
 	uint buf_offset = (LIX >> 5) << SEGMENT_SHIFT;
 
-	// TODO: group differently for better memory accesses (and measure)
+	int y = int(LIX & 3), count_shift = 16 + (y << 2), min_shift = (y << 1) + y;
+	int mask1 = y >= 1 ? ~0 : 0, mask2 = y >= 2 ? ~0 : 0;
+
 	for(uint i = (LIX & WARP_MASK) >> 2; i < tri_count; i += WARP_STEP / 4) {
 		uvec2 tri_data = g_scratch_64[src_offset_64 + i];
 		int tri_offset = int(tri_data.x >> 24);
@@ -505,24 +503,14 @@ void loadSamples(uint hbid, int segment_id) {
 		int prevx = countx + (shuffleUpNV(countx, 1, 4) & mask1);
 		prevx += (shuffleUpNV(prevx, 2, 4) & mask2);
 		tri_offset += prevx - countx;
-
 		countx = min(countx, SEGMENT_SIZE - tri_offset);
-		if(tri_offset < 0) {
-			countx += tri_offset;
-			minx -= tri_offset;
-			tri_offset = 0;
-		}
-		if(countx <= 0)
-			continue;
+		if(tri_offset < 0)
+			countx += tri_offset, minx -= tri_offset, tri_offset = 0;
 
 		uint pixel_id = (y << 3) | minx;
 		uint value = pixel_id | (tri_idx << 5);
-
-		for(int j = 0; j < countx; j++) {
-			s_buffer[buf_offset + tri_offset] = value;
-			tri_offset++;
-			value++;
-		}
+		for(int j = 0; j < countx; j++)
+			s_buffer[buf_offset + tri_offset++] = value++;
 	}
 }
 

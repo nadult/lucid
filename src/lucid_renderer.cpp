@@ -546,6 +546,7 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 					 ((m_size.y + m_block_size - 1) / m_block_size);
 
 	int max_quads_per_bin = max(bin_quad_counts);
+	int max_tris_per_bin = max(bin_tri_counts);
 	int num_bin_quads = accumulate(bin_quad_counts);
 	int num_bin_tris = accumulate(bin_tri_counts);
 
@@ -625,6 +626,7 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 		{"bin quads", toString(num_bin_quads), "Total per-bin quads"},
 		{"bin tris", toString(num_bin_tris), "Total per-bin tris"},
 		{"max quads / bin", toString(max_quads_per_bin)},
+		{"max tris / bin", toString(max_tris_per_bin)},
 	};
 
 	// TODO: add better stats once rasterizez is working on all levels

@@ -333,3 +333,12 @@ san-miguel: 8954   2320   188   2127        4145
     sponza: 3548   90     87    3159        70
     teapot: 382    19     30    296         4
  white_oak: 11294  28     155   10978       5
+
+ Optimized loadSamples in raster_medium:
+             total  setup  bins  raster_low  raster_mid CHANGE
+    dragon: 864    292    46    344         143         -7
+   gallery: 2749   552    70    1648        325         -15
+  hairball: 12443  1785   295   305         9969        -402
+hairball_2: 30090  518    826   5852        22761       -866? (probably not)
+powerplant: 10414  2579   331   818         6576        -180
+san-miguel: 8786   2320   190   2151        3998        -168

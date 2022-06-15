@@ -148,7 +148,7 @@
     <None Include="..\data\shaders\pieces\viewport.shader" />
     <None Include="..\data\shaders\quad_setup.shader" />
     <None Include="..\data\shaders\raster_low.shader" />
-    <None Include="..\data\shaders\raster_medium.shader" />
+    <None Include="..\data\shaders\raster_high.shader" />
     <None Include="..\data\shaders\simple.shader" />
     <None Include="..\notes.wiki" />
   </ItemGroup>

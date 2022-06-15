@@ -28,8 +28,8 @@ void main() {
 			int id = atomicAdd(s_bin_level_counts[BIN_LEVEL_LOW], 1);
 			LOW_LEVEL_BINS(id) = int(i);
 		} else if(true) {
-			int id = atomicAdd(s_bin_level_counts[BIN_LEVEL_MEDIUM], 1);
-			MEDIUM_LEVEL_BINS(id) = int(i);
+			int id = atomicAdd(s_bin_level_counts[BIN_LEVEL_HIGH], 1);
+			HIGH_LEVEL_BINS(id) = int(i);
 		}
 
 		uint bin_id = i << 16;
@@ -43,7 +43,7 @@ void main() {
 	barrier();
 	if(LIX < BIN_LEVELS_COUNT) {
 		g_info.bin_level_counts[LIX] = s_bin_level_counts[LIX];
-		int max_dispatches = MAX_DISPATCHES >> (LIX == BIN_LEVEL_MEDIUM ? 1 : 0);
+		int max_dispatches = MAX_DISPATCHES >> (LIX == BIN_LEVEL_HIGH ? 1 : 0);
 		g_info.bin_level_dispatches[LIX][0] = min(s_bin_level_counts[LIX], max_dispatches);
 		g_info.bin_level_dispatches[LIX][1] = 1;
 		g_info.bin_level_dispatches[LIX][2] = 1;

@@ -151,7 +151,7 @@
     <None Include="..\data\shaders\pieces\structures.shader">
       <Filter>shaders\pieces</Filter>
     </None>
-    <None Include="..\data\shaders\raster_medium.shader">
+    <None Include="..\data\shaders\raster_high.shader">
       <Filter>shaders</Filter>
     </None>
     <None Include="..\data\shaders\quad_setup.shader">

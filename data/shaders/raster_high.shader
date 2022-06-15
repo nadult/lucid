@@ -790,8 +790,8 @@ void rasterBin(int bin_id) {
 
 int loadNextBin() {
 	if(LIX == 0) {
-		uint bin_idx = atomicAdd(g_info.a_medium_bins, 1);
-		s_bin_id = bin_idx < s_num_bins ? MEDIUM_LEVEL_BINS(bin_idx) : -1;
+		uint bin_idx = atomicAdd(g_info.a_high_bins, 1);
+		s_bin_id = bin_idx < s_num_bins ? HIGH_LEVEL_BINS(bin_idx) : -1;
 		s_bin_raster_offset = s_bin_id << (BIN_SHIFT * 2);
 	}
 	barrier();
@@ -801,7 +801,7 @@ int loadNextBin() {
 void main() {
 	INIT_TIMERS();
 	if(LIX == 0)
-		s_num_bins = g_info.bin_level_counts[BIN_LEVEL_MEDIUM];
+		s_num_bins = g_info.bin_level_counts[BIN_LEVEL_HIGH];
 	initStats();
 
 	int bin_id = loadNextBin();

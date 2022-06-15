@@ -185,7 +185,7 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 
 	auto raster_opts = mask(m_opts & Opt::debug_raster, ProgramOpt::debug);
 	p_raster_low = EX_PASS(Program::makeCompute("raster_low", defs, raster_opts));
-	p_raster_medium = EX_PASS(Program::makeCompute("raster_medium", defs, raster_opts));
+	p_raster_high = EX_PASS(Program::makeCompute("raster_high", defs, raster_opts));
 
 	mkdirRecursive("temp").ignore();
 	if(auto disas = p_quad_setup.getDisassembly())
@@ -194,8 +194,8 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 		saveFile("temp/bin_dispatcher.asm", *disas).ignore();
 	if(auto disas = p_raster_low.getDisassembly())
 		saveFile("temp/raster_low.asm", *disas).ignore();
-	if(auto disas = p_raster_medium.getDisassembly())
-		saveFile("temp/raster_medium.asm", *disas).ignore();
+	if(auto disas = p_raster_high.getDisassembly())
+		saveFile("temp/raster_high.asm", *disas).ignore();
 
 	ShaderDefs compose_defs;
 	compose_defs["BIN_SIZE"] = m_bin_size;
@@ -253,7 +253,7 @@ void LucidRenderer::render(const Context &ctx) {
 
 	bindRasterCommon(ctx);
 	rasterLow(ctx);
-	rasterMedium(ctx);
+	rasterHigh(ctx);
 	copyInfo(8);
 
 	// TODO: is this needed?
@@ -437,14 +437,14 @@ void LucidRenderer::rasterLow(const Context &ctx) {
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_COMMAND_BARRIER_BIT);
 }
 
-void LucidRenderer::rasterMedium(const Context &ctx) {
+void LucidRenderer::rasterHigh(const Context &ctx) {
 	PERF_GPU_SCOPE();
-	bindRaster(p_raster_medium, ctx);
+	bindRaster(p_raster_high, ctx);
 	if(m_opts & Opt::debug_raster)
 		shaderDebugUseBuffer(m_errors);
-	dispatchIndirect(LUCID_INFO_MEMBER_OFFSET(bin_level_dispatches[BIN_LEVEL_MEDIUM]));
+	dispatchIndirect(LUCID_INFO_MEMBER_OFFSET(bin_level_dispatches[BIN_LEVEL_HIGH]));
 	if(m_opts & Opt::debug_raster)
-		debugProgram(p_raster_medium, "raster_medium");
+		debugProgram(p_raster_high, "raster_high");
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 }
 
@@ -610,8 +610,7 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 		{"micro level bins",
 		 format_percentage(info.bin_level_counts[BIN_LEVEL_MICRO], m_bin_count)},
 		{"low level bins", format_percentage(info.bin_level_counts[BIN_LEVEL_LOW], m_bin_count)},
-		{"medium level bins",
-		 format_percentage(info.bin_level_counts[BIN_LEVEL_MEDIUM], m_bin_count)},
+		{"high level bins", format_percentage(info.bin_level_counts[BIN_LEVEL_HIGH], m_bin_count)},
 		{"high level bins", format_percentage(info.bin_level_counts[BIN_LEVEL_HIGH], m_bin_count)},
 		{"promoted bins", format_percentage(num_promoted_bins, m_bin_count)},
 	};
@@ -647,7 +646,7 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 	if(bin_dispatcher_timers)
 		out.emplace_back(move(bin_dispatcher_timers), "bin_dispatcher timers", 130);
 	if(raster_timers)
-		out.emplace_back(move(raster_timers), "raster_low & raster_medium timers", 130);
+		out.emplace_back(move(raster_timers), "raster_low & raster_high timers", 130);
 
 	out.emplace_back(move(bin_level_rows), "Bins categorized by quad density levels:", 130);
 	out.emplace_back(move(basic_rows), "", 130);

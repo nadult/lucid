@@ -40,7 +40,7 @@ class LucidRenderer {
 	void bindRasterCommon(const Context &);
 	void bindRaster(Program &, const Context &);
 	void rasterLow(const Context &);
-	void rasterMedium(const Context &);
+	void rasterHigh(const Context &);
 	void compose(const Context &);
 
 	void copyInfo(int num_skip_frames);
@@ -55,7 +55,7 @@ class LucidRenderer {
 
 	Program p_quad_setup;
 	Program p_bin_dispatcher, p_bin_categorizer;
-	Program p_raster_low, p_raster_medium;
+	Program p_raster_low, p_raster_high;
 	Program p_compose, p_dummy;
 
 	PBuffer m_instances, m_instance_colors, m_instance_uv_rects;

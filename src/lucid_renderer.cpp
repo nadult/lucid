@@ -514,6 +514,25 @@ static vector<StatsRow> processTimers(CSpan<uint> timers, CSpan<Str> names) {
 	return out;
 }
 
+string formatLarge(i64 value) {
+	int v0 = value / 1e9;
+	value -= i64(v0) * 1e9;
+	int v1 = value / 1e6;
+	value -= v1 * 1e6;
+	int v2 = value / 1e3;
+	value -= v2 * 1e3;
+	TextFormatter fmt;
+	if(v0)
+		fmt.stdFormat("%d,%03d,%03d,%03d", v0, v1, v2, int(value));
+	else if(v1)
+		fmt.stdFormat("%d,%03d,%03d", v1, v2, int(value));
+	else if(v2)
+		fmt.stdFormat("%d,%03d", v2, int(value));
+	else
+		fmt << value;
+	return fmt.text();
+};
+
 vector<StatsGroup> LucidRenderer::getStats() const {
 	vector<StatsGroup> out;
 
@@ -572,18 +591,21 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 	int num_promoted_bins = accumulate(info.bin_level_counts) - m_bin_count;
 
 	int num_visible_total = info.num_visible_quads[0] + info.num_visible_quads[1];
-	auto visible_info = stdFormat("%d (%.2f %%)", num_visible_total,
-								  double(num_visible_total) / info.num_input_quads * 100);
-	auto visible_details =
-		stdFormat("%d small; %d big", info.num_visible_quads[0], info.num_visible_quads[1]);
+	auto visible_info =
+		formatLarge(num_visible_total) +
+		stdFormat(" (%.2f %%)", double(num_visible_total) / info.num_input_quads * 100);
+
+	auto visible_details = format("% small; % large", formatLarge(info.num_visible_quads[0]),
+								  formatLarge(info.num_visible_quads[1]));
 
 	info.num_rejected_quads[0] +=
 		info.num_rejected_quads[1] + info.num_rejected_quads[2] + info.num_rejected_quads[3];
-	auto rejected_info = stdFormat("%d (%.2f %%)", info.num_rejected_quads[0],
-								   double(info.num_rejected_quads[0]) / info.num_input_quads * 100);
-	auto rejection_details =
-		format("backface: %\nfrustum: %\nbetween-samples: %", info.num_rejected_quads[1],
-			   info.num_rejected_quads[2], info.num_rejected_quads[3]);
+	auto rejected_info =
+		formatLarge(info.num_rejected_quads[0]) +
+		stdFormat(" (%.2f %%)", double(info.num_rejected_quads[0]) / info.num_input_quads * 100);
+	auto rejection_details = format(
+		"backface: %\nfrustum: %\nbetween-samples: %", formatLarge(info.num_rejected_quads[1]),
+		formatLarge(info.num_rejected_quads[2]), formatLarge(info.num_rejected_quads[3]));
 
 	auto setup_timers = processTimers(info.setup_timers, {"init & finish", "process input quads",
 														  "store tri data", "store quad data"});
@@ -616,16 +638,16 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 		toString(span(info.dispatcher_task_counts, num_bin_dispatcher_work_groups));
 
 	vector<StatsRow> basic_rows = {
-		{"input instances", toString(m_num_instances)},
+		{"input instances", formatLarge(m_num_instances)},
 		{"bin dispatcher work-groups", toString(num_bin_dispatcher_work_groups),
 		 bin_dispatcher_info},
-		{"input quads", toString(info.num_input_quads)},
+		{"input quads", formatLarge(info.num_input_quads)},
 		{"visible quads", visible_info, visible_details},
 		{"rejected quads", rejected_info, rejection_details},
-		{"bin quads", toString(num_bin_quads), "Total per-bin quads"},
-		{"bin tris", toString(num_bin_tris), "Total per-bin tris"},
-		{"max quads / bin", toString(max_quads_per_bin)},
-		{"max tris / bin", toString(max_tris_per_bin)},
+		{"bin quads", formatLarge(num_bin_quads), "Total per-bin quads"},
+		{"bin tris", formatLarge(num_bin_tris), "Total per-bin tris"},
+		{"max quads / bin", formatLarge(max_quads_per_bin)},
+		{"max tris / bin", formatLarge(max_tris_per_bin)},
 	};
 
 	// TODO: add better stats once rasterizez is working on all levels

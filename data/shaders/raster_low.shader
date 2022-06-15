@@ -605,8 +605,6 @@ void visualizeErrors(uint bid) {
 void rasterBin(int bin_id) {
 	START_TIMER();
 
-	const int num_blocks = (BIN_SIZE / BLOCK_SIZE) * (BIN_SIZE / BLOCK_SIZE);
-
 	if(LIX < BLOCK_ROWS) {
 		if(LIX == 0) {
 			// TODO: optimize
@@ -627,13 +625,7 @@ void rasterBin(int bin_id) {
 	barrier();
 	UPDATE_TIMER(0);
 
-#ifdef SHADER_DEBUG
-	if(s_raster_error != 0) {
-		for(uint bid = LIX >> 6; bid < num_blocks; bid += NUM_WARPS / 2)
-			visualizeErrors(bid);
-		return;
-	}
-#endif
+	const int num_blocks = (BIN_SIZE / BLOCK_SIZE) * (BIN_SIZE / BLOCK_SIZE);
 
 	//  bid: block (8x8) id; We have 8 x 8 = 64 blocks
 	// hbid: half block (8x4) id; We have 8 x 16 = 128 half blocks
@@ -651,6 +643,7 @@ void rasterBin(int bin_id) {
 			barrier();
 			groupMemoryBarrier();
 
+			// raster_low errors are not visualized, but propagated to medium
 			if(s_raster_error != 0) {
 				if(LIX == 0) {
 					int id = atomicAdd(g_info.bin_level_counts[BIN_LEVEL_MEDIUM], 1);

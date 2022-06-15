@@ -1,5 +1,6 @@
 // $$include funcs lighting frustum viewport shading scanline timers
 
+// TODO: increase LSIZE to 1024 for 64x64
 #if BIN_SIZE == 64
 #define LSIZE 512
 #define LSHIFT 9
@@ -10,8 +11,10 @@
 
 #define NUM_WARPS (LSIZE / 32)
 
-#define WARP_STEP 32
+#define WARP_SIZE 32
+#define WARP_STEP 32 // TODO: remove it
 #define WARP_MASK 31
+#define WARP_SHIFT 5
 
 #define BUFFER_SIZE (LSIZE * 8)
 
@@ -26,8 +29,13 @@
 
 #define MAX_GROUP_SIZE 8
 
+#if BIN_SIZE == 64
+#define MAX_HBLOCK_ROW_TRIS 16384
+#define MAX_HBLOCK_ROW_TRIS_SHIFT 14
+#else
 #define MAX_HBLOCK_ROW_TRIS 8192
 #define MAX_HBLOCK_ROW_TRIS_SHIFT 13
+#endif
 
 #define SEGMENT_SIZE 256
 #define SEGMENT_SHIFT 8
@@ -64,13 +72,7 @@ layout(local_size_x = LSIZE) in;
 #define WORKGROUP_64_SCRATCH_SIZE (128 * 1024)
 #define WORKGROUP_64_SCRATCH_SHIFT 17
 
-uint currentHBlockRow(uint hby) {
-#if BIN_SIZE == 64
-	return hby & HBLOCK_ROWS_STEP_MASK;
-#else
-	return hby;
-#endif
-}
+uint currentHBlockRow(uint hby) { return BIN_SIZE == 64 ? hby & HBLOCK_ROWS_STEP_MASK : hby; }
 
 uint scratch32HBlockRowTrisOffset(uint hby) {
 	return (gl_WorkGroupID.x << WORKGROUP_32_SCRATCH_SHIFT) +
@@ -83,13 +85,14 @@ uint scratch64HBlockRowTrisOffset(uint hby) {
 }
 
 uint scratch64HBlockTrisOffset(uint lhbid) {
-	return (gl_WorkGroupID.x << WORKGROUP_64_SCRATCH_SHIFT) + 64 * 1024 + lhbid * MAX_HBLOCK_TRIS;
+	uint offset = (BIN_SIZE == 64 ? 32 : 64) * 1024;
+	return (gl_WorkGroupID.x << WORKGROUP_64_SCRATCH_SHIFT) + offset + lhbid * MAX_HBLOCK_TRIS;
 }
 
-// Once we've generated HBlock-tris we no longer need current HBlock-row-tris, so sorted HBlocks
-// can overlap hblock-row-tris memory. TODO: make it work for 64x64
 uint scratch64SortedHBlockTrisOffset(uint lhbid) {
-	return (gl_WorkGroupID.x << WORKGROUP_64_SCRATCH_SHIFT) + lhbid * MAX_HBLOCK_TRIS;
+	// In 32x32 mode we overlap sorted hblocks with hblock-rows.
+	uint offset = BIN_SIZE == 64 ? 64 * 1024 : 0;
+	return (gl_WorkGroupID.x << WORKGROUP_64_SCRATCH_SHIFT) + offset + lhbid * MAX_HBLOCK_TRIS;
 }
 
 shared int s_num_scratch_tris;
@@ -145,15 +148,15 @@ void generateRowTris(uint tri_idx, int start_hby) {
 	int min_hby = clamp(int(val0.w & 0xffff) - s_bin_pos.y, 0, BIN_MASK) >> HBLOCK_HEIGHT_SHIFT;
 	int max_hby = clamp(int(val0.w >> 16) - s_bin_pos.y, 0, BIN_MASK) >> HBLOCK_HEIGHT_SHIFT;
 
-	vec2 start = vec2(s_bin_pos.x, s_bin_pos.y + min_hby * 4);
-	ScanlineParams scan = loadScanlineParamsRow(val0, val1, start);
-
 #if HBLOCK_ROWS_STEP < HBLOCK_ROWS
 	min_hby = max(start_hby, min_hby);
 	max_hby = min(start_hby + HBLOCK_ROWS_STEP_MASK, max_hby);
 	if(max_hby < min_hby)
 		return;
 #endif
+
+	vec2 start = vec2(s_bin_pos.x, s_bin_pos.y + min_hby * HBLOCK_HEIGHT);
+	ScanlineParams scan = loadScanlineParamsRow(val0, val1, start);
 
 	uint dst_offset_32 = scratch32HBlockRowTrisOffset(0);
 	uint dst_offset_64 = scratch64HBlockRowTrisOffset(0);
@@ -258,7 +261,7 @@ void processQuads(int start_hby) {
 																	 4;
 			uint group_size = 1 << group_shift;
 			s_hblock_group_shift = group_shift;
-			s_hblock_group_size = 1 << group_shift;
+			s_hblock_group_size = group_size;
 			if(group_size > MAX_GROUP_SIZE)
 				s_raster_error = 0xffffffff; // TODO: better reporting
 		}
@@ -333,13 +336,13 @@ void sortTris(uint lhbid, uint count, uint buf_offset, uint group_size, uint lid
 // TODO: maybe process smaller amount of blocks at the same time?
 // smaller chance that it will leave cache
 void generateHBlocks(uint start_hbid) {
-	uint group_size = s_hblock_group_size * 32;
+	uint group_size = s_hblock_group_size * WARP_SIZE;
 	uint group_shift = s_hblock_group_shift;
 	uint group_mask = group_size - 1;
 	uint group_thread = LIX & group_mask;
 
 	// TODO: better names for indices
-	uint group_hbid = LIX >> (5 + group_shift);
+	uint group_hbid = LIX >> (WARP_SHIFT + group_shift);
 	uint hbid = start_hbid + group_hbid;
 	uint hby = hbid >> HBLOCK_COLS_SHIFT, hbx = hbid & HBLOCK_COLS_MASK;
 	uint lhbid = hbid & (NUM_WARPS - 1);
@@ -351,7 +354,7 @@ void generateHBlocks(uint start_hbid) {
 
 	{
 		uint bx_bits_shift = 24 + hbx;
-		uint thread_bit_mask = ~(0xffffffffu << (LIX & 31));
+		uint thread_bit_mask = ~(0xffffffffu << (LIX & WARP_MASK));
 		uint block_tri_count = 0;
 
 		if(group_thread < WARP_SIZE) {
@@ -448,24 +451,24 @@ void generateHBlocks(uint start_hbid) {
 	// Computing prefix sum across whole half-blocks
 	// wgsize in this context is 2x smaller than in general, because here,
 	// we're processing 2 elements at a time.
-	// Can handle at most wgsize * 32 elements (from 256 to 2048)
+	// Can handle at most wgsize * 64 elements (from 256 to 2048)
 	if(LIX < 4 * NUM_WARPS) {
 		uint wgsize = 4 << group_shift, wgmask = wgsize - 1;
 		uint group_hbid = LIX >> (2 + group_shift), group_sub_idx = LIX & wgmask;
 		uint buf_offset = group_hbid << (MAX_HBLOCK_TRIS0_SHIFT + group_shift);
 		uint lhbid = (start_hbid + group_hbid) & (NUM_WARPS - 1);
 		uint tri_count = s_hblock_tri_counts[lhbid];
-		uint warp_offset = group_sub_idx << 6;
+		uint warp_offset = group_sub_idx << (WARP_SHIFT + 1);
 
 		uint value0 = 0;
 		if(warp_offset < tri_count) {
-			uint hblock_tri_idx = min(warp_offset + 31, tri_count - 1);
+			uint hblock_tri_idx = min(warp_offset + WARP_MASK, tri_count - 1);
 			value0 = s_buffer[buf_offset + hblock_tri_idx] & 0xffff;
 		}
 		uint value1 = 0;
-		warp_offset += 32;
+		warp_offset += WARP_SIZE;
 		if(warp_offset < tri_count) {
-			uint hblock_tri_idx = min(warp_offset + 31, tri_count - 1);
+			uint hblock_tri_idx = min(warp_offset + WARP_MASK, tri_count - 1);
 			value1 = s_buffer[buf_offset + hblock_tri_idx] & 0xffff;
 		}
 
@@ -480,7 +483,6 @@ void generateHBlocks(uint start_hbid) {
 		if(wgsize >= 32)
 			temp = shuffleUpNV(sum, 16, wgsize), sum += group_sub_idx >= 16 ? temp : 0;
 
-		// TODO: report error if frags can't fit into segments
 		if(group_sub_idx == wgmask) {
 			updateStats(int(sum), int(tri_count));
 			s_hblock_frag_counts[lhbid] = sum;
@@ -720,9 +722,6 @@ void visualizeErrors(uint hbid) {
 
 void rasterBin(int bin_id) {
 	START_TIMER();
-
-	const int num_blocks = (BIN_SIZE / BLOCK_SIZE) * (BIN_SIZE / BLOCK_SIZE);
-
 	if(LIX < HBLOCK_ROWS) {
 		if(LIX == 0) {
 			// TODO: optimize

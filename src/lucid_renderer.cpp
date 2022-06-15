@@ -104,8 +104,8 @@ LucidRenderer::LucidRenderer() = default;
 FWK_MOVABLE_CLASS_IMPL(LucidRenderer)
 
 Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
-	m_bin_size = opts & Opt::bin_size_32 ? 32 : 64;
-	m_tile_size = opts & Opt::bin_size_32 ? 8 : 16;
+	m_bin_size = opts & Opt::bin_size_64 ? 64 : 32;
+	m_tile_size = opts & Opt::bin_size_64 ? 8 : 16;
 	m_block_size = 4;
 
 	m_blocks_per_bin = square(m_bin_size / m_block_size);

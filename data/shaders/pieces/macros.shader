@@ -1,5 +1,13 @@
 // clang-format off
 
+#define LIX		gl_LocalInvocationIndex
+#define LID		gl_LocalInvocationID
+#define WGID	gl_WorkGroupID
+
+#define WARP_SIZE	32
+#define WARP_MASK	31
+#define WARP_SHIFT	5
+
 // Thhese map directly to DrawCallOpts (lucid_base.h)
 #define INST_HAS_VERTEX_COLORS		0x01
 #define INST_HAS_VERTEX_TEX_COORDS	0x02

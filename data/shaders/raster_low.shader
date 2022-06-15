@@ -10,9 +10,6 @@
 
 #define NUM_WARPS (LSIZE / 32)
 
-#define WARP_STEP 32
-#define WARP_MASK 31
-
 #define BUFFER_SIZE (LSIZE * 8)
 
 #define MAX_BLOCK_ROW_TRIS 1024 // TODO: detect overflow
@@ -24,8 +21,8 @@
 
 #define INVALID_SEGMENT 0xffff
 
-#define MAX_SEGMENTS_SHIFT 5
-#define MAX_SEGMENTS WARP_STEP
+#define MAX_SEGMENTS_SHIFT WARP_SHIFT
+#define MAX_SEGMENTS WARP_SIZE
 
 #undef BLOCK_SIZE
 #undef BLOCK_SHIFT
@@ -192,11 +189,11 @@ uint xorBits(uint value, int bit0, int bit1) { return ((value >> bit0) ^ (value 
 void sortTris(uint lbid, uint count, uint buf_offset) {
 	uint lid = LIX & WARP_MASK;
 	uint rcount = s_sort_rcount[lbid];
-	for(uint i = lid + count; i < rcount; i += WARP_STEP)
+	for(uint i = lid + count; i < rcount; i += WARP_SIZE)
 		s_buffer[buf_offset + i] = 0xffffffff;
 
 #ifdef VENDOR_NVIDIA
-	for(uint i = lid; i < rcount; i += WARP_STEP) {
+	for(uint i = lid; i < rcount; i += WARP_SIZE) {
 		uint value = s_buffer[buf_offset + i];
 		// TODO: register sort could be faster
 		value = swap(value, 0x01, xorBits(lid, 1, 0)); // K = 2
@@ -217,8 +214,8 @@ void sortTris(uint lbid, uint count, uint buf_offset) {
 #endif
 	for(uint k = start_k; k <= rcount; k = 2 * k) {
 		for(uint j = k >> 1; j >= end_j; j = j >> 1) {
-			for(uint i = lid; i < rcount; i += WARP_STEP * 2) {
-				uint idx = (i & j) != 0 ? i + WARP_STEP - j : i;
+			for(uint i = lid; i < rcount; i += WARP_SIZE * 2) {
+				uint idx = (i & j) != 0 ? i + WARP_SIZE - j : i;
 				uint lvalue = s_buffer[buf_offset + idx];
 				uint rvalue = s_buffer[buf_offset + idx + j];
 				if(((idx & k) != 0) == (lvalue.x < rvalue.x)) {
@@ -228,7 +225,7 @@ void sortTris(uint lbid, uint count, uint buf_offset) {
 			}
 		}
 #ifdef VENDOR_NVIDIA
-		for(uint i = lid; i < rcount; i += WARP_STEP) {
+		for(uint i = lid; i < rcount; i += WARP_SIZE) {
 			uint bit = (i & k) == 0 ? 0 : 1;
 			uint value = s_buffer[buf_offset + i];
 			value = swap(value, 0x10, bit ^ bitExtract(lid, 4));
@@ -261,7 +258,7 @@ void generateBlocks(uint bid) {
 		uint block_tri_count = 0;
 		uint thread_bit_mask = ~(0xffffffffu << (LIX & 31));
 
-		for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_STEP) {
+		for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_SIZE) {
 			uint bx_bit = (g_scratch_64[src_offset_64 + i].x >> bx_bits_shift) & 1;
 			uint bit_mask = uint(ballotARB(bx_bit != 0));
 			if(bit_mask == 0)
@@ -293,7 +290,7 @@ void generateBlocks(uint bid) {
 	int startx = int(bx << 3);
 	vec2 block_pos = vec2(s_bin_pos + ivec2(bx << 3, by << 3));
 
-	for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_STEP) {
+	for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_SIZE) {
 		uint row_idx = s_buffer[buf_offset + i];
 
 		uvec2 tri_mins = g_scratch_64[src_offset_64 + row_idx];
@@ -354,7 +351,7 @@ void generateBlocks(uint bid) {
 #ifdef SHADER_DEBUG
 	// Making sure that tris are properly ordered
 	if(tri_count > 3)
-		for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_STEP) {
+		for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_SIZE) {
 			uint value = s_buffer[buf_offset + i];
 			uint prev_value = i == 0 ? 0 : s_buffer[buf_offset + i - 1];
 			if(value <= prev_value)
@@ -369,7 +366,7 @@ void generateBlocks(uint bid) {
 			value += temp;                                                                         \
 	}
 
-	for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_STEP) {
+	for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_SIZE) {
 		uint idx = s_buffer[buf_offset + i] & 0xff;
 		uint counts = g_scratch_64[dst_offset_64 + idx + MAX_BLOCK_TRIS].y;
 		uint num_frags1 = counts & 63, num_frags2 = (counts >> 6) & 63;
@@ -422,7 +419,7 @@ void generateBlocks(uint bid) {
 
 	uint seg_block1_offset = lbid << (MAX_SEGMENTS_SHIFT + 1);
 	uint seg_block2_offset = seg_block1_offset + MAX_SEGMENTS;
-	for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_STEP) {
+	for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_SIZE) {
 		uint tri_offset = 0;
 		if(i > 0) {
 			uint prev = i - 1;
@@ -492,7 +489,7 @@ void loadSamples(uint hbid, int segment_id) {
 	int y = int(LIX & 3), count_shift = 16 + (y << 2), min_shift = (y << 1) + y;
 	int mask1 = y >= 1 ? ~0 : 0, mask2 = y >= 2 ? ~0 : 0;
 
-	for(uint i = (LIX & WARP_MASK) >> 2; i < tri_count; i += WARP_STEP / 4) {
+	for(uint i = (LIX & WARP_MASK) >> 2; i < tri_count; i += WARP_SIZE / 4) {
 		uvec2 tri_data = g_scratch_64[src_offset_64 + i];
 		int tri_offset = int(tri_data.x >> 24);
 		if(i == 0 && tri_offset != 0)
@@ -524,7 +521,7 @@ void shadeAndReduceSamples(uint hbid, uint sample_count, in out ReductionContext
 	ivec2 half_block_pos = ivec2(bx << 3, hby << 2) + s_bin_pos;
 	vec3 out_color = decodeRGB10(ctx.out_color);
 
-	for(uint i = 0; i < sample_count; i += WARP_STEP) {
+	for(uint i = 0; i < sample_count; i += WARP_SIZE) {
 		// TODO: we don't need s_mini_buffer here, we can use s_buffer, thus decreasing mini_buffer size
 		s_mini_buffer[LIX] = 0;
 		uvec2 sample_s;

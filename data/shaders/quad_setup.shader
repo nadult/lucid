@@ -12,10 +12,6 @@
 #define LSIZE MAX_INSTANCE_QUADS
 layout(local_size_x = LSIZE) in;
 
-#define LID gl_LocalInvocationID
-#define LIX gl_LocalInvocationIndex
-#define WGID gl_WorkGroupID
-
 #define MAX_PACKET_SIZE 4
 
 uniform mat4 view_proj_matrix;

@@ -12,8 +12,6 @@
 // 1024 threads:   27 us  30 us   32 us   39 us    51 us
 // 1536 threads:   53 us  56 us   62 us   75 us   100 us
 
-#define LIX gl_LocalInvocationIndex
-#define LID gl_LocalInvocationID
 #define LSIZE 256
 
 layout(local_size_x = LSIZE) in;

@@ -1,8 +1,5 @@
 // $$include funcs structures
 
-#define LIX gl_LocalInvocationIndex
-#define LID gl_LocalInvocationID
-
 #if BIN_SIZE == 64
 #define LSIZE 128
 #else

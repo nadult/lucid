@@ -10,12 +10,6 @@
 #endif
 
 #define NUM_WARPS (LSIZE / 32)
-
-#define WARP_SIZE 32
-#define WARP_STEP 32 // TODO: remove it
-#define WARP_MASK 31
-#define WARP_SHIFT 5
-
 #define BUFFER_SIZE (LSIZE * 8)
 
 // Basic maximum value of tris per hblock
@@ -358,7 +352,7 @@ void generateHBlocks(uint start_hbid) {
 		uint block_tri_count = 0;
 
 		if(group_thread < WARP_SIZE) {
-			for(uint i = group_thread; i < tri_count; i += WARP_STEP) {
+			for(uint i = group_thread; i < tri_count; i += WARP_SIZE) {
 				uint bx_bit = (g_scratch_32[src_offset_32 + i] >> bx_bits_shift) & 1;
 				uint bit_mask = uint(ballotARB(bx_bit != 0));
 				if(bit_mask == 0)
@@ -425,7 +419,7 @@ void generateHBlocks(uint start_hbid) {
 	groupMemoryBarrier();
 
 #ifdef SHADER_DEBUG
-	for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_STEP) {
+	for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_SIZE) {
 		uint value = s_buffer[buf_offset + i];
 		uint prev_value = i == 0 ? 0 : s_buffer[buf_offset + i - 1];
 		if(value <= prev_value)
@@ -559,7 +553,7 @@ void loadSamples(uint hbid, int segment_id) {
 	uint buf_offset = (LIX >> 5) << SEGMENT_SHIFT;
 
 	if(tri_count >= 32) {
-		for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_STEP) {
+		for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_SIZE) {
 			uvec2 tri_data = g_scratch_64[src_offset_64 + i];
 			int tri_offset = int(tri_data.x >> 24);
 			if(i == 0 && tri_offset != 0)
@@ -586,7 +580,7 @@ void loadSamples(uint hbid, int segment_id) {
 		int y = int(LIX & 3), count_shift = 16 + (y << 2), min_shift = (y << 1) + y;
 		int mask1 = y >= 1 ? ~0 : 0, mask2 = y >= 2 ? ~0 : 0;
 
-		for(uint i = (LIX & WARP_MASK) >> 2; i < tri_count; i += WARP_STEP / 4) {
+		for(uint i = (LIX & WARP_MASK) >> 2; i < tri_count; i += WARP_SIZE / 4) {
 			uvec2 tri_data = g_scratch_64[src_offset_64 + i];
 			int tri_offset = int(tri_data.x >> 24);
 			if(i == 0 && tri_offset != 0)
@@ -619,7 +613,7 @@ void shadeAndReduceSamples(uint hbid, uint sample_count, in out ReductionContext
 	ivec2 half_block_pos = ivec2(hbx << HBLOCK_WIDTH_SHIFT, hby << HBLOCK_HEIGHT_SHIFT) + s_bin_pos;
 	vec3 out_color = decodeRGB10(ctx.out_color);
 
-	for(uint i = 0; i < sample_count; i += WARP_STEP) {
+	for(uint i = 0; i < sample_count; i += WARP_SIZE) {
 		// TODO: we don't need s_mini_buffer here, we can use s_buffer, thus decreasing mini_buffer size
 		s_mini_buffer[LIX] = 0;
 		uvec2 sample_s;
@@ -653,7 +647,7 @@ void initVisualizeSamples() { s_vis_pixels[LIX] = 0; }
 
 void visualizeSamples(uint sample_count) {
 	uint buf_offset = (LIX >> 5) << SEGMENT_SHIFT;
-	for(uint i = LIX & 31; i < sample_count; i += WARP_STEP) {
+	for(uint i = LIX & 31; i < sample_count; i += WARP_SIZE) {
 		uint pixel_id = s_buffer[buf_offset + i] & 31;
 		atomicAdd(s_vis_pixels[(LIX & ~WARP_MASK) + pixel_id], 1);
 	}
@@ -677,7 +671,7 @@ void visualizeAllSamples(uint hbid) {
 
 	s_vis_pixels[LIX] = 0;
 
-	for(uint i = (LIX & WARP_MASK) >> 2; i < tri_count; i += WARP_STEP / 4) {
+	for(uint i = (LIX & WARP_MASK) >> 2; i < tri_count; i += WARP_SIZE / 4) {
 		uvec2 tri_data = g_scratch_64[src_offset_64 + i];
 		int minx = int((tri_data.y >> min_shift) & 7);
 		int countx = int((tri_data.y >> count_shift) & 15);

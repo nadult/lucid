@@ -3,10 +3,6 @@
 #define LSIZE BIN_DISPATCHER_LSIZE
 #define LSHIFT BIN_DISPATCHER_LSHIFT
 
-#define LID gl_LocalInvocationID
-#define LIX gl_LocalInvocationIndex
-#define WGID gl_WorkGroupID
-
 #define SMALL_TASK_STEPS 4
 #define SMALL_TASK_SHIFT (LSHIFT + 2)
 #define SMALL_TASK_SIZE (LSIZE * SMALL_TASK_STEPS)

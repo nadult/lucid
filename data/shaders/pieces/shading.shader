@@ -1,8 +1,5 @@
 // $$include structures
 
-#define LIX gl_LocalInvocationIndex
-#define LID gl_LocalInvocationID
-
 layout(std430, binding = 1) readonly restrict buffer buf1_ { uint g_bin_quads[]; };
 layout(std430, binding = 2) readonly restrict buffer buf2_ { uint g_bin_tris[]; };
 

@@ -105,16 +105,10 @@ FWK_MOVABLE_CLASS_IMPL(LucidRenderer)
 
 Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	m_bin_size = opts & Opt::bin_size_64 ? 64 : 32;
-	m_tile_size = opts & Opt::bin_size_64 ? 8 : 16;
-	m_block_size = 4;
-
-	m_blocks_per_bin = square(m_bin_size / m_block_size);
-	m_blocks_per_tile = square(m_tile_size / m_block_size);
-	m_tiles_per_bin = square(m_bin_size / m_tile_size);
+	m_block_size = 8;
 
 	m_bin_counts = (view_size + int2(m_bin_size - 1)) / m_bin_size;
 	m_bin_count = m_bin_counts.x * m_bin_counts.y;
-	m_tile_count = m_bin_count * m_tiles_per_bin;
 
 	// TODO: Why adding more on intel causes problems?
 	// TODO: properly get number of compute units (use opencl?)
@@ -163,15 +157,7 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	defs["BIN_COUNT_X"] = m_bin_counts.x;
 	defs["BIN_COUNT_Y"] = m_bin_counts.y;
 	defs["BIN_SIZE"] = m_bin_size;
-	defs["TILE_SIZE"] = m_tile_size;
-	defs["BLOCK_SIZE"] = m_block_size;
 	defs["BIN_SHIFT"] = log2(m_bin_size);
-	defs["TILE_SHIFT"] = log2(m_tile_size);
-	defs["BLOCK_SHIFT"] = log2(m_block_size);
-	defs["XTILES_PER_BIN"] = m_bin_size / m_tile_size;
-	defs["TILES_PER_BIN"] = m_tiles_per_bin;
-	defs["BLOCKS_PER_TILE"] = m_blocks_per_tile;
-	defs["BLOCKS_PER_BIN"] = m_blocks_per_bin;
 	defs["MAX_INSTANCE_QUADS"] = max_instance_quads;
 	defs["MAX_QUADS"] = max_quads;
 	defs["MAX_VISIBLE_QUADS"] = max_visible_quads;
@@ -514,7 +500,7 @@ static vector<StatsRow> processTimers(CSpan<uint> timers, CSpan<Str> names) {
 	return out;
 }
 
-string formatLarge(i64 value) {
+static string formatLarge(i64 value) {
 	int v0 = value / 1e9;
 	value -= i64(v0) * 1e9;
 	int v1 = value / 1e6;
@@ -575,8 +561,6 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 	}
 
 	int num_pixels = m_size.x * m_size.y;
-	int num_tiles =
-		((m_size.x + m_tile_size - 1) / m_tile_size) * ((m_size.y + m_tile_size - 1) / m_tile_size);
 	int num_blocks = ((m_size.x + m_block_size - 1) / m_block_size) *
 					 ((m_size.y + m_block_size - 1) / m_block_size);
 
@@ -668,183 +652,4 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 	out.emplace_back(move(bin_level_rows), "Bins categorized by quad density levels:", 130);
 	out.emplace_back(move(basic_rows), "", 130);
 	return out;
-}
-
-vector<int> generateRangeHistogram(CSpan<float2> ranges, int res) {
-	vector<int> counts(res, 0);
-	for(auto &range : ranges) {
-		int begin = int(range[0] * res), end = int(range[1] * res) + 1;
-		if(counts.inRange(begin))
-			counts[begin]++;
-		if(counts.inRange(end))
-			counts[end]--;
-	}
-	int counter = 0;
-	for(auto &val : counts) {
-		int next = counter + val;
-		val = counter + val;
-		counter = next;
-	}
-	return counts;
-}
-
-vector<int> generateMinHistogram(CSpan<float2> ranges, int res) {
-	vector<int> counts(res, 0);
-	for(auto &range : ranges) {
-		int begin = int(range[0] * res);
-		if(counts.inRange(begin))
-			counts[begin]++;
-	}
-	return counts;
-}
-
-void LucidRenderer::printTriangleSizeHistogram() const {
-	HashMap<int, int> tri_height_histogram;
-
-	/*auto quad_aabbs = m_quad_aabbs->download<u32>(m_num_quads);
-	auto tri_aabbs = m_tri_aabbs->download<int4>(m_num_quads);
-	for(int i : intRange(quad_aabbs)) {
-		if(quad_aabbs[i] == ~0u)
-			continue;
-		auto enc = tri_aabbs[i];
-		int2 min0(u32(enc[0]) & 0xffff, u32(enc[0]) >> 16);
-		int2 max0(u32(enc[1]) & 0xffff, u32(enc[1]) >> 16);
-		int2 min1(u32(enc[2]) & 0xffff, u32(enc[2]) >> 16);
-		int2 max1(u32(enc[3]) & 0xffff, u32(enc[3]) >> 16);
-		int2 sizes[2] = {max0 - min0 + int2(1, 1), max1 - min1 + int2(1, 1)};
-		for(auto &size : sizes)
-			if(size.y > 0)
-				tri_height_histogram[size.y]++;
-	}
-
-	vector<Pair<int>> pairs;
-	int total = 0;
-	for(auto &pair : tri_height_histogram) {
-		pairs.emplace_back(pair.value, pair.key);
-		total += pair.value;
-	}
-	std::sort(begin(pairs), end(pairs), std::greater<Pair<int>>());
-
-	printf("Triangle pixel-height histogram:\n");
-	for(auto &pair : pairs) {
-		printf("%4d: %.2f%% (%d)\n", pair.second, float(pair.first) * 100.0 / total, pair.first);
-	}*/
-}
-
-void LucidRenderer::printHistograms() const {
-	vector<IRect> quads;
-	/*{
-		auto quad_aabbs = m_quad_aabbs->download<u32>(m_num_quads);
-		auto tri_aabbs = m_tri_aabbs->download<int4>(m_num_quads);
-		quads.resize(m_num_quads);
-		for(int i : intRange(quads)) {
-			if(quad_aabbs[i] == ~0u)
-				continue;
-			auto enc = tri_aabbs[i];
-			int2 min0(u32(enc[0]) & 0xffff, u32(enc[0]) >> 16);
-			int2 max0(u32(enc[1]) & 0xffff, u32(enc[1]) >> 16);
-			int2 min1(u32(enc[2]) & 0xffff, u32(enc[2]) >> 16);
-			int2 max1(u32(enc[3]) & 0xffff, u32(enc[3]) >> 16);
-
-			max0 = vmax(max0, min0);
-			max1 = vmax(max1, min1);
-			quads[i] = {vmin(min0, min1), vmax(max0, max1)};
-		}
-	}*/
-
-	constexpr int max_dim = 16;
-	auto get_quad = [&](IRect &out, int idx, int shift) {
-		auto &quad = quads[idx];
-		if(quad.max() == quad.min())
-			return false;
-		int gsx = quad.x() >> shift, gsy = quad.y() >> shift;
-		int gex = quad.ex() >> shift, gey = quad.ey() >> shift;
-		out = {gsx, gsy, gex, gey};
-		return true;
-	};
-
-	int num_active_quads = 0;
-	for(int i = 0; i < m_num_quads; i++) {
-		IRect rect;
-		if(get_quad(rect, i, 0))
-			num_active_quads++;
-	}
-
-	print("Active quads: %\nAll quads: % (% rejected)\n", num_active_quads, m_num_quads,
-		  m_num_quads - num_active_quads);
-	print("Quad size distribution:\n");
-	for(int gsize = 128; gsize >= 4; gsize /= 2) {
-		int counts[max_dim * max_dim] = {
-			0,
-		};
-		int shift = log2(gsize);
-
-		for(int i = 0; i < m_num_quads; i++) {
-			IRect rect;
-			if(!get_quad(rect, i, shift))
-				continue;
-			int gw = min(rect.width(), max_dim - 1);
-			int gh = min(rect.height(), max_dim - 1);
-			counts[gw + gh * max_dim]++;
-		}
-
-		int max_x = 0, max_y = 0;
-		for(int y = 0; y < max_dim; y++)
-			for(int x = 0; x < max_dim; x++)
-				if(counts[x + y * max_dim]) {
-					max_x = max(max_x, x);
-					max_y = max(max_y, y);
-				}
-
-		printf("[%4d]: ", gsize);
-		for(int x = 0; x <= max_x; x++)
-			printf("   X=%02d ", x + 1);
-		printf("\n");
-		for(int y = 0; y <= max_y; y++) {
-			printf("  Y=%02d  ", y + 1);
-			for(int x = 0; x <= max_x; x++)
-				printf("%7d ", counts[x + y * max_dim]);
-			printf("\n");
-		}
-		printf("\n");
-	}
-
-	print("Avg / Max quads per tile (empty tiles are ignored):\n");
-	print("Single: 1x1 (fitting into group)\nMulti: > 1x1 (not fitting into group)\n");
-
-	for(int gsize = 128; gsize >= 4; gsize /= 2) {
-		int2 num_groups = (m_size + int2(gsize - 1)) / gsize;
-		int shift = log2(gsize);
-
-		vector<int> multi_counts(num_groups.x * num_groups.y, 0);
-		vector<int> single_counts(multi_counts.size(), 0);
-
-		for(int i = 0; i < m_num_quads; i++) {
-			IRect rect;
-			if(!get_quad(rect, i, shift))
-				continue;
-			auto &dst = rect.width() == 0 && rect.height() == 0 ? single_counts : multi_counts;
-			for(int y = rect.y(); y <= rect.ey(); y++)
-				for(int x = rect.x(); x <= rect.ex(); x++)
-					dst[x + y * num_groups.x]++;
-		}
-
-		int num_not_empty = 0;
-		for(int i : intRange(multi_counts))
-			if(multi_counts[i] || single_counts[i])
-				num_not_empty++;
-
-		int smax = 0, ssum = 0, mmax = 0, msum = 0;
-		for(auto &gval : multi_counts) {
-			mmax = max(mmax, gval);
-			msum += gval;
-		}
-		for(auto &gval : single_counts) {
-			smax = max(smax, gval);
-			ssum += gval;
-		}
-		printf("[%4d]:\n  max: single:%d multi:%d\n", gsize, smax, mmax);
-		printf("  avg: single:%d multi:%d \n", int(double(ssum) / num_not_empty),
-			   int(double(msum) / num_not_empty));
-	}
 }

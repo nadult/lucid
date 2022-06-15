@@ -27,14 +27,11 @@ class LucidRenderer {
 
 	void render(const Context &);
 
-	auto opts() const { return m_opts; }
-
-	void printTriangleSizeHistogram() const;
-	void printHistograms() const;
 	vector<StatsGroup> getStats() const;
 
+	auto opts() const { return m_opts; }
 	int binSize() const { return m_bin_size; }
-	int tileSize() const { return m_tile_size; }
+	int blockSize() const { return m_block_size; }
 
   private:
 	void uploadInstances(const Context &);
@@ -69,12 +66,11 @@ class LucidRenderer {
 
 	PFramebuffer m_initial_fbo;
 
-	int m_bin_size, m_tile_size, m_block_size;
-	int m_blocks_per_bin, m_blocks_per_tile, m_tiles_per_bin;
+	int m_bin_size, m_block_size;
 	int m_max_dispatches;
 
 	int2 m_bin_counts;
-	int m_bin_count, m_tile_count;
+	int m_bin_count;
 
 	int2 m_size;
 	int m_num_instances = 0, m_num_quads = 0;

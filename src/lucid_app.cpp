@@ -335,12 +335,6 @@ void LucidApp::doMenu() {
 				print("OrbitingCamera{%, %, %, %}\n", orbit_cam->center, orbit_cam->distance,
 					  orbit_cam->rot_horiz, orbit_cam->rot_vert);
 		}
-		if(ImGui::Button("Print size histograms")) {
-			m_lucid_renderer->printHistograms();
-		}
-		if(ImGui::Button("Print triangle size histogram")) {
-			m_lucid_renderer->printTriangleSizeHistogram();
-		}
 		ImGui::InputFloat("Square weight", &m_square_weight);
 		if(setup.scene && ImGui::Button("Generate meshlets")) {
 			m_test_meshlets = true;
@@ -572,13 +566,13 @@ void LucidApp::draw2D() {
 	Renderer2D renderer_2d(m_viewport, Orient2D::y_up);
 	if(m_selected_block && m_lucid_renderer) {
 		int bin_size = m_lucid_renderer->binSize();
-		int tile_size = m_lucid_renderer->tileSize();
+		int block_size = m_lucid_renderer->blockSize();
 
 		int2 offset = *m_selected_block;
-		IRect tile_rect = IRect(0, 0, tile_size + 1, tile_size + 1) + offset;
+		IRect block_rect = IRect(0, 0, block_size + 1, block_size + 1) + offset;
 		IRect bin_rect = IRect(0, 0, bin_size + 1, bin_size + 1) + offset;
 		renderer_2d.addRect(bin_rect, ColorId::brown);
-		renderer_2d.addRect(tile_rect, ColorId::purple);
+		renderer_2d.addRect(block_rect, ColorId::purple);
 	}
 	renderer_2d.render();
 }

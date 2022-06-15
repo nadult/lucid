@@ -1,13 +1,7 @@
 // $$include funcs lighting frustum viewport shading scanline timers
 
-// TODO: increase LSIZE to 1024 for 64x64
-#if BIN_SIZE == 64
-#define LSIZE 512
-#define LSHIFT 9
-#else
 #define LSIZE 1024
 #define LSHIFT 10
-#endif
 
 #define NUM_WARPS (LSIZE / 32)
 #define BUFFER_SIZE (LSIZE * 8)
@@ -74,7 +68,7 @@ uint scratch64HBlockRowTrisOffset(uint hby) {
 }
 
 uint scratch64HBlockTrisOffset(uint lhbid) {
-	uint offset = (BIN_SIZE == 64 ? 64 : 128) * 1024;
+	uint offset = 128 * 1024;
 	return (gl_WorkGroupID.x << WORKGROUP_64_SCRATCH_SHIFT) + offset + lhbid * MAX_HBLOCK_TRIS;
 }
 

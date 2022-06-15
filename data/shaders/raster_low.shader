@@ -63,7 +63,6 @@ shared int s_num_bins, s_bin_id, s_bin_raster_offset;
 shared uint s_bin_quad_count, s_bin_quad_offset;
 shared uint s_bin_tri_count, s_bin_tri_offset;
 shared ivec2 s_bin_pos;
-shared vec3 s_ray_dir0;
 
 shared uint s_block_row_tri_count[BLOCK_ROWS];
 shared uint s_block_tri_count[NUM_WARPS];
@@ -404,8 +403,10 @@ void generateBlocks(uint bid) {
 		temp = shuffleUpNV(sum, 4, 8), sum += warp_idx >= 4 ? temp : 0;
 
 		if(warp_idx == 7) {
-			s_hblock_counts[lbid * 2 + 0] = ((sum & 0xffff) << 16) | tri_count;
-			s_hblock_counts[lbid * 2 + 1] = (sum & 0xffff0000) | tri_count;
+			uint v0 = sum & 0xffff, v1 = sum >> 16;
+			updateStats(int(v0 + v1), int(tri_count * 2));
+			s_hblock_counts[lbid * 2 + 0] = (v0 << 16) | tri_count;
+			s_hblock_counts[lbid * 2 + 1] = (v1 << 16) | tri_count;
 		}
 
 		s_mini_buffer[LIX] = sum - value;
@@ -718,8 +719,8 @@ void main() {
 	if(LIX == 0) {
 		s_num_bins = g_info.bin_level_counts[BIN_LEVEL_LOW];
 		s_medium_bin_count = 0;
-		s_ray_dir0 = frustum.ws_dir0 + (frustum.ws_dirx + frustum.ws_diry) * 0.5;
 	}
+	initStats();
 
 	int bin_id = loadNextBin();
 	while(bin_id != -1) {
@@ -734,4 +735,5 @@ void main() {
 		atomicMax(g_info.bin_level_dispatches[BIN_LEVEL_MEDIUM][0], num_dispatches);
 	}
 	COMMIT_TIMERS(g_info.raster_timers);
+	commitStats();
 }

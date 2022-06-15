@@ -48,9 +48,8 @@ struct LucidInfo {
 	uint raster_timers[TIMERS_COUNT];
 	uint bin_dispatcher_timers[TIMERS_COUNT];
 
-	// TODO:
 	uint num_fragments;
-	uint avg_fragments_per_hblock_tri;
+	uint num_half_blocks;
 
 	int dispatcher_task_counts[128];
 

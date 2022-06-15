@@ -113,6 +113,7 @@ shared uint s_max_sort_rcount;
 shared uint s_buffer[BUFFER_SIZE + 1];
 shared uint s_mini_buffer[LSIZE];
 shared uint s_segments[LSIZE * 2];
+
 shared int s_raster_error;
 
 // Only used when debugging
@@ -480,8 +481,10 @@ void generateHBlocks(uint start_hbid) {
 			temp = shuffleUpNV(sum, 16, wgsize), sum += group_sub_idx >= 16 ? temp : 0;
 
 		// TODO: report error if frags can't fit into segments
-		if(group_sub_idx == wgmask)
+		if(group_sub_idx == wgmask) {
+			updateStats(int(sum), int(tri_count));
 			s_hblock_frag_counts[lhbid] = sum;
+		}
 		s_mini_buffer[LIX * 2 + 0] = sum - value;
 		s_mini_buffer[LIX * 2 + 1] = sum - value1;
 	}
@@ -813,6 +816,7 @@ void main() {
 	INIT_TIMERS();
 	if(LIX == 0)
 		s_num_bins = g_info.bin_level_counts[BIN_LEVEL_MEDIUM];
+	initStats();
 
 	int bin_id = loadNextBin();
 	while(bin_id != -1) {
@@ -820,5 +824,7 @@ void main() {
 		rasterBin(bin_id);
 		bin_id = loadNextBin();
 	}
+
 	COMMIT_TIMERS(g_info.raster_timers);
+	commitStats();
 }

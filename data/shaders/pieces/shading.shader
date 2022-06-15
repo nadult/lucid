@@ -249,3 +249,27 @@ uint finishReduceSamples(ReductionContext ctx) {
 	out_color += ctx.out_trans * decodeRGB8(background_color);
 	return encodeRGB8(SATURATE(out_color)); // TODO: 10 bit
 }
+
+// Basic rasterization statistics
+
+shared int s_stat_fragments;
+shared int s_stat_hblocks;
+
+void updateStats(int num_fragments, int num_hblocks) {
+	atomicAdd(s_stat_fragments, num_fragments);
+	atomicAdd(s_stat_hblocks, num_hblocks);
+}
+
+void initStats() {
+	if(LIX == 0) {
+		s_stat_fragments = 0;
+		s_stat_hblocks = 0;
+	}
+}
+
+void commitStats() {
+	if(LIX == 0) {
+		atomicAdd(g_info.num_fragments, s_stat_fragments);
+		atomicAdd(g_info.num_half_blocks, s_stat_hblocks);
+	}
+}

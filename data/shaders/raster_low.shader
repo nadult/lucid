@@ -721,7 +721,7 @@ void main() {
 
 	// If some of the bins are promoted to the next level, we have to adjust number of dispatches
 	if(LIX == 0 && s_medium_bin_count > 0) {
-		uint num_dispatches = min(s_medium_bin_count, MAX_DISPATCHES);
+		uint num_dispatches = min(s_medium_bin_count, MAX_DISPATCHES / 2);
 		atomicMax(g_info.bin_level_dispatches[BIN_LEVEL_MEDIUM][0], num_dispatches);
 	}
 	COMMIT_TIMERS(g_info.raster_timers);

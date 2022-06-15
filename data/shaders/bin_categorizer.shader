@@ -43,7 +43,8 @@ void main() {
 	barrier();
 	if(LIX < BIN_LEVELS_COUNT) {
 		g_info.bin_level_counts[LIX] = s_bin_level_counts[LIX];
-		g_info.bin_level_dispatches[LIX][0] = min(s_bin_level_counts[LIX], MAX_DISPATCHES);
+		int max_dispatches = MAX_DISPATCHES >> (LIX == BIN_LEVEL_MEDIUM ? 1 : 0);
+		g_info.bin_level_dispatches[LIX][0] = min(s_bin_level_counts[LIX], max_dispatches);
 		g_info.bin_level_dispatches[LIX][1] = 1;
 		g_info.bin_level_dispatches[LIX][2] = 1;
 	}

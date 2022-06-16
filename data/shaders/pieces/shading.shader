@@ -19,6 +19,8 @@ layout(binding = 1) uniform sampler2D transparent_texture;
 // then read it and use depth to optimize drawing
 uniform uint background_color;
 
+const float alpha_threshold = 1.0 / 128.0;
+
 void getTriangleParams(uint tri_idx, out vec3 depth_eq, out vec2 bary_params, out vec3 edge0,
 					   out vec3 edge1, out uint instance_id, out uint instance_flags) {
 	uint bary_offset = STORAGE_TRI_BARY_OFFSET + tri_idx * 2;
@@ -189,9 +191,9 @@ bool reduceSample(inout ReductionContext ctx, inout vec3 out_color, uvec2 sample
 
 #ifdef VISUALIZE_ERRORS
 					if(ctx.prev_depths[2] > ctx.prev_depths[3]) {
-						ctx.prev_colors[2] = 0xff0000ff;
-						i = sample_count;
-						break;
+						out_color = vec3(1.0, 0.0, 0.0);
+						ctx.out_trans = 0.0;
+						continue;
 					}
 #endif
 				}
@@ -205,6 +207,7 @@ bool reduceSample(inout ReductionContext ctx, inout vec3 out_color, uvec2 sample
 		ctx.prev_depths[1] = ctx.prev_depths[0];
 		ctx.prev_depths[0] = depth;
 
+		bool finish = false;
 		if(ctx.prev_colors[2] != 0) {
 			vec4 cur_color = decodeRGBA8(ctx.prev_colors[2]);
 #ifdef ADDITIVE_BLENDING
@@ -214,8 +217,8 @@ bool reduceSample(inout ReductionContext ctx, inout vec3 out_color, uvec2 sample
 			ctx.out_trans *= 1.0 - cur_color.a;
 
 #ifdef ALPHA_THRESHOLD
-			if(allInvocationsARB(ctx.out_trans < 1.0 / 255.0))
-				return true;
+			if(allInvocationsARB(ctx.out_trans < alpha_threshold))
+				finish = true;
 #endif
 #endif
 		}
@@ -223,6 +226,8 @@ bool reduceSample(inout ReductionContext ctx, inout vec3 out_color, uvec2 sample
 		ctx.prev_colors[2] = ctx.prev_colors[1];
 		ctx.prev_colors[1] = ctx.prev_colors[0];
 		ctx.prev_colors[0] = color;
+		if(finish)
+			return true;
 	}
 
 	return false;

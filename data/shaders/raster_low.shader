@@ -70,7 +70,7 @@ shared uint s_mini_buffer[LSIZE];
 shared uint s_segments[LSIZE * 2];
 
 shared int s_raster_error;
-shared int s_medium_bin_count;
+shared int s_promoted_bin_count;
 
 // Only used when debugging
 shared uint s_vis_pixels[LSIZE];
@@ -640,12 +640,12 @@ void rasterBin(int bin_id) {
 			barrier();
 			groupMemoryBarrier();
 
-			// raster_low errors are not visualized, but propagated to medium
+			// raster_low errors are not visualized, but propagated to high
 			if(s_raster_error != 0) {
 				if(LIX == 0) {
-					int id = atomicAdd(g_info.bin_level_counts[BIN_LEVEL_MEDIUM], 1);
-					MEDIUM_LEVEL_BINS(id) = int(bin_id);
-					s_medium_bin_count = max(s_medium_bin_count, id + 1);
+					int id = atomicAdd(g_info.bin_level_counts[BIN_LEVEL_HIGH], 1);
+					HIGH_LEVEL_BINS(id) = int(bin_id);
+					s_promoted_bin_count = max(s_promoted_bin_count, id + 1);
 					return;
 				}
 				/*visualizeErrors(bid);
@@ -708,7 +708,7 @@ void main() {
 	INIT_TIMERS();
 	if(LIX == 0) {
 		s_num_bins = g_info.bin_level_counts[BIN_LEVEL_LOW];
-		s_medium_bin_count = 0;
+		s_promoted_bin_count = 0;
 	}
 	initStats();
 
@@ -720,9 +720,9 @@ void main() {
 	}
 
 	// If some of the bins are promoted to the next level, we have to adjust number of dispatches
-	if(LIX == 0 && s_medium_bin_count > 0) {
-		uint num_dispatches = min(s_medium_bin_count, MAX_DISPATCHES / 2);
-		atomicMax(g_info.bin_level_dispatches[BIN_LEVEL_MEDIUM][0], num_dispatches);
+	if(LIX == 0 && s_promoted_bin_count > 0) {
+		uint num_dispatches = min(s_promoted_bin_count, MAX_DISPATCHES / 2);
+		atomicMax(g_info.bin_level_dispatches[BIN_LEVEL_HIGH][0], num_dispatches);
 	}
 	COMMIT_TIMERS(g_info.raster_timers);
 	commitStats();

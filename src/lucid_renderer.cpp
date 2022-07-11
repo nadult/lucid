@@ -133,7 +133,7 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	m_bin_tris.emplace(BufferType::shader_storage, max_bin_tris * sizeof(u32));
 
 	int max_visible_tris = max_visible_quads * 2;
-	int uvec4_storage_size = max_visible_tris * 5 + max_visible_quads * 4;
+	int uvec4_storage_size = max_visible_tris * 5 + max_visible_quads * 4; // 480MB ...
 	m_uvec4_storage.emplace(BufferType::shader_storage, uvec4_storage_size * sizeof(int4));
 	m_uint_storage.emplace(BufferType::shader_storage, max_visible_tris * sizeof(u32));
 

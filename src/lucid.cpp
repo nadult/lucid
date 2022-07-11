@@ -7,26 +7,32 @@
 #include <fwk/perf/manager.h>
 #include <fwk/perf/thread_context.h>
 
+#include <fwk/vulkan/vulkan_buffer.h>
+#include <fwk/vulkan/vulkan_device.h>
+#include <fwk/vulkan/vulkan_framebuffer.h>
+#include <fwk/vulkan/vulkan_image.h>
+#include <fwk/vulkan/vulkan_instance.h>
+#include <fwk/vulkan/vulkan_memory_manager.h>
+#include <fwk/vulkan/vulkan_pipeline.h>
+#include <fwk/vulkan/vulkan_render_graph.h>
+#include <fwk/vulkan/vulkan_shader.h>
+#include <fwk/vulkan/vulkan_swap_chain.h>
+#include <fwk/vulkan/vulkan_window.h>
+
 void initShaderCombiner();
 Ex<void> loadShaderPieces();
 
-#ifdef FWK_PLATFORM_WINDOWS
-// Select more powerful GPU if more than 1 available
-extern "C" {
-_declspec(dllexport) uint NvOptimusEnablement = 1;
-_declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
-}
-#endif
-
-int main(int argc, char **argv) {
-	double time = getTime();
+Ex<int> exMain(int argc, char **argv) {
 	IRect window_rect(int2(1200, 700));
 
 	// TODO: xml loading is still messy
 	Maybe<AnyConfig> config = LucidApp::loadConfig();
-	GlDeviceConfig gl_config;
-	gl_config.flags = GlDeviceOpt::resizable | GlDeviceOpt::allow_hidpi | GlDeviceOpt::centered;
-	gl_config.version = 4.4;
+	VulkanInstanceSetup setup;
+	setup.debug_levels = VDebugLevel::warning | VDebugLevel::error;
+	setup.debug_types = all<VDebugType>;
+	// TODO: cleanup in flags
+	auto window_flags = VWindowFlag::resizable | VWindowFlag::centered | VWindowFlag::allow_hidpi;
+	uint multisampling = 1;
 
 	for(int n = 1; n < argc; n++) {
 		string argument = argv[n];
@@ -35,58 +41,72 @@ int main(int argc, char **argv) {
 			convertScenes(argv[n + 1]);
 			return 0;
 		} else if(argument == "--vsync") {
-			gl_config.flags |= GlDeviceOpt::vsync;
+			window_flags |= VWindowFlag::vsync;
 		} else if(argument == "--msaa") {
 			ASSERT(n + 1 < argc && "Invalid nr of arguments");
-			gl_config.multisampling = clamp(atoi(argv[n + 1]), 1, 16);
+			multisampling = clamp(atoi(argv[n + 1]), 1, 16);
 			n++;
 		} else {
 			FATAL("Unsupported argument: %s", argument.c_str());
 		}
 	}
 
-	GlDevice gl_device;
-	if(config) {
-		auto display_rects = gl_device.displayRects();
+	auto instance = EX_PASS(VulkanInstance::create(setup));
+
+	// TODO: handle config
+	/*if(config) {
+		auto display_rects = VulkanWindow::displayRects();
 		if(auto *rect = config->get<IRect>("window_rect")) {
 			window_rect = GlDevice::sanitizeWindowRect(display_rects, *rect);
 			gl_config.flags &= ~GlDeviceOpt::centered;
 		}
 		if(config->get<bool>("window_maximized", false))
 			gl_config.flags |= GlDeviceOpt::maximized;
-	}
+	}*/
 
-	gl_device.createWindow("Lucid rasterizer", window_rect, gl_config);
+	auto window = EX_PASS(VulkanWindow::create(instance, "Lucid rasterizer", IRect(0, 0, 1280, 720),
+											   VulkanWindowConfig{window_flags}));
 
-	print("OpenGL info:\n%\n", gl_info->toString());
-	if(gl_info->vendor == GlVendor::nvidia) {
-		// TODO: add it to libfwk, find similar for intel and amd ?
-		GLint warp_size, warps_per_sm, sm_count;
-		glGetIntegerv(GL_WARP_SIZE_NV, &warp_size);
-		glGetIntegerv(GL_WARPS_PER_SM_NV, &warps_per_sm);
-		glGetIntegerv(GL_SM_COUNT_NV, &sm_count);
-		print("NVIDIA OpenGL info:\n warp size:    %\n warps per SM: %\n SM count:     %\n",
-			  warp_size, warps_per_sm, sm_count);
-	}
+	VulkanDeviceSetup dev_setup;
+	auto pref_device = instance->preferredDevice(window->surfaceHandle(), &dev_setup.queues);
+	if(!pref_device)
+		return ERROR("Couldn't find a suitable Vulkan device");
+	auto device = EX_PASS(instance->createDevice(*pref_device, dev_setup));
+	auto phys_info = instance->info(device->physId());
+	print("Selected Vulkan physical device: %\nDriver version: %\n",
+		  phys_info.properties.deviceName, phys_info.properties.driverVersion);
 
-	initShaderCombiner();
-	loadShaderPieces().get();
+	auto swap_chain = EX_PASS(VulkanSwapChain::create(
+		device, window, {.preferred_present_mode = VPresentMode::immediate}));
+	EXPECT(device->createRenderGraph(swap_chain));
+
+	//initShaderCombiner();
+	//loadShaderPieces().get();
 
 	Dynamic<perf::Manager> perf_manager;
 	Dynamic<perf::ThreadContext> perf_ctx;
-	if(true) {
+	if(false) { // TODO: fixme
 		perf_manager.emplace();
 		perf_ctx.emplace(1024);
 	}
 
-	LucidApp app;
+	LucidApp app(device);
 	if(config)
 		app.setConfig(*config);
 	app.updateViewport();
 	app.updateRenderer();
-
-	gl_device.runMainLoop(LucidApp::mainLoop, &app);
+	window->runMainLoop(LucidApp::mainLoop, &app);
 	app.printPerfStats();
 
 	return 0;
+}
+
+int main(int argc, char **argv) {
+	auto result = exMain(argc, argv);
+
+	if(!result) {
+		result.error().print();
+		return 1;
+	}
+	return *result;
 }

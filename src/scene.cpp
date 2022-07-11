@@ -219,6 +219,8 @@ void Scene::updatePrimitiveOffsets() {
 }
 
 void Scene::updateRenderingData() {
+	return; // TODO: fixme
+
 	updatePrimitiveOffsets();
 	freeRenderingData();
 

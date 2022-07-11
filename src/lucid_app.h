@@ -7,6 +7,9 @@
 #include <fwk/gui/gui.h>
 #include <fwk/perf_base.h>
 
+#include <fwk/vulkan/vulkan_storage.h> // TODO: shouldnt be needed
+#include <fwk/vulkan_base.h>
+
 class LucidRenderer;
 class SimpleRenderer;
 class SceneSetup;
@@ -16,7 +19,7 @@ DEFINE_ENUM(RenderingMode, simple, lucid, mixed);
 
 class LucidApp {
   public:
-	LucidApp();
+	LucidApp(VDeviceRef);
 	~LucidApp();
 
 	void setConfig(const AnyConfig &);
@@ -32,14 +35,14 @@ class LucidApp {
 	void updateRenderer();
 
 	void doMenu();
-	bool handleInput(vector<InputEvent> events, float time_diff);
-	bool tick(float time_diff);
+	bool handleInput(VulkanWindow &, vector<InputEvent> events, float time_diff);
+	bool tick(VulkanWindow &, float time_diff);
 
 	void drawScene();
 	void draw2D();
 
-	bool mainLoop(GlDevice &device);
-	static bool mainLoop(GlDevice &device, void *this_ptr);
+	bool mainLoop(VulkanWindow &window);
+	static bool mainLoop(VulkanWindow &window, void *this_ptr);
 
 	void printPerfStats();
 
@@ -48,7 +51,8 @@ class LucidApp {
 	void showSceneStats(const Scene &);
 	void showRasterStats(const Scene &);
 
-	Gui m_gui;
+	VDeviceRef m_device;
+	//Gui m_gui;
 	Maybe<float2> m_mouse_pos;
 	Dynamic<perf::Analyzer> m_perf_analyzer;
 	PTexture m_depth_buffer;

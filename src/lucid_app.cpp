@@ -30,6 +30,11 @@
 #include <fwk/perf/manager.h>
 #include <fwk/sys/input.h>
 
+#include <fwk/vulkan/vulkan_device.h>
+#include <fwk/vulkan/vulkan_pipeline.h>
+#include <fwk/vulkan/vulkan_render_graph.h>
+#include <fwk/vulkan/vulkan_window.h>
+
 #include <fwk/gfx/investigator3.h>
 #include <fwk/gfx/visualizer3.h>
 
@@ -41,8 +46,10 @@ FilePath mainPath() {
 
 string dataPath(string file_name) { return mainPath() / "data" / file_name; }
 
-LucidApp::LucidApp()
-	: m_gui(GlDevice::instance(), {GuiStyleMode::mini}),
+LucidApp::LucidApp(VDeviceRef device)
+	// TODO: fixme
+	: m_device(device),
+	  //m_gui(GlDevice::instance(), {GuiStyleMode::mini}),
 	  m_cam_control(Plane3F(float3(0, 1, 0), 0.0f)), m_lighting(SceneLighting::makeDefault()) {
 	m_filtering_params.magnification = TextureFilterOpt::linear;
 	m_filtering_params.minification = TextureFilterOpt::linear;
@@ -79,8 +86,9 @@ void LucidApp::setConfig(const AnyConfig &config) {
 	if(m_perf_analyzer)
 		if(auto *sub = config.subConfig("perf_analyzer"))
 			m_perf_analyzer->setConfig(*sub);
-	if(auto *sub = config.subConfig("gui"))
-		m_gui.setConfig(*sub);
+	// TODO: fixme
+	//if(auto *sub = config.subConfig("gui"))
+	//	m_gui.setConfig(*sub);
 	m_cam_control.load(config);
 }
 
@@ -102,12 +110,13 @@ void LucidApp::saveConfig() const {
 		out = AnyConfig::load(doc.child("config"), true).get();
 	}
 
-	auto &gl_device = GlDevice::instance();
+	// TODO: fixme
+	//auto &gl_device = GlDevice::instance();
 	out.set("rendering_mode", m_rendering_mode);
 	out.set("trans_opts", m_lucid_opts);
 	out.set("wireframe", m_wireframe_mode);
-	out.set("window_rect", gl_device.restoredWindowRect());
-	out.set("window_maximized", gl_device.isWindowMaximized());
+	//out.set("window_rect", gl_device.restoredWindowRect());
+	//out.set("window_maximized", gl_device.isWindowMaximized());
 	out.set("show_stats", m_show_stats);
 	out.set("selected_stats_tab", m_selected_stats_tab);
 
@@ -115,7 +124,8 @@ void LucidApp::saveConfig() const {
 		out.set("scene", m_setups[m_setup_idx]->name);
 	if(m_perf_analyzer)
 		out.set("perf_analyzer", m_perf_analyzer->config());
-	out.set("gui", m_gui.config());
+	// TODO: fixme
+	//out.set("gui", m_gui.config());
 	m_cam_control.save(out);
 
 	XmlDocument doc;
@@ -161,16 +171,19 @@ void LucidApp::switchView() {
 }
 
 bool LucidApp::updateViewport() {
-	auto viewport = IRect(GlDevice::instance().windowSize());
+	// TODO: fixme
+	/*auto viewport = IRect(GlDevice::instance().windowSize());
 	bool changed = m_viewport != viewport;
 	m_viewport = viewport;
 	if(changed)
 		m_cam_control.o_config.params.viewport = m_viewport;
-	return changed;
+	return changed;*/
+	return false;
 }
 
 void LucidApp::updateRenderer() {
-	bool do_update = !m_lucid_renderer || m_lucid_renderer->opts() != m_lucid_opts;
+	// TODO: fixme
+	/*bool do_update = !m_lucid_renderer || m_lucid_renderer->opts() != m_lucid_opts;
 	if(updateViewport())
 		do_update = true;
 
@@ -196,7 +209,7 @@ void LucidApp::updateRenderer() {
 		m_simple_renderer.reset();
 		m_simple_renderer = move(construct<SimpleRenderer>(m_viewport).get());
 		m_lucid_renderer = move(construct<LucidRenderer>(m_lucid_opts, m_viewport.size()).get());
-	}
+	}*/
 }
 
 static void showStatsRows(CSpan<StatsRow> rows, ZStr title, int label_width) {
@@ -247,11 +260,13 @@ void LucidApp::showSceneStats(const Scene &scene) {
 		{"bbox max", stdFormat("(%.2f, %.2f, %.2f)", bbox.max().x, bbox.max().y, bbox.max().z),
 		 ""}};
 
-	showStatsRows(rows, "scene_stats", 90 * m_gui.dpiScale());
+	// TODO: fixme
+	//showStatsRows(rows, "scene_stats", 90 * m_gui.dpiScale());
 }
 
 void LucidApp::showRasterStats(const Scene &scene) {
-	auto groups = m_lucid_renderer->getStats();
+	// TODO: fixme
+	/*auto groups = m_lucid_renderer->getStats();
 	for(int i : intRange(groups)) {
 		auto &group = groups[i];
 		if(!group.title.empty())
@@ -261,7 +276,7 @@ void LucidApp::showRasterStats(const Scene &scene) {
 			ImGui::Separator();
 			ImGui::Separator();
 		}
-	}
+	}*/
 }
 
 void LucidApp::showStatsMenu(const Scene &scene) {
@@ -288,7 +303,8 @@ void LucidApp::showStatsMenu(const Scene &scene) {
 }
 
 void LucidApp::doMenu() {
-	ImGui::SetNextWindowSize({240 * m_gui.dpiScale(), 0});
+	// TODO: fixme
+	/*ImGui::SetNextWindowSize({240 * m_gui.dpiScale(), 0});
 	ImGui::Begin("Lucid rasterizer tools", nullptr, ImGuiWindowFlags_NoResize);
 
 	auto setup_idx = m_setup_idx;
@@ -405,10 +421,10 @@ void LucidApp::doMenu() {
 
 	if(m_show_stats && scene)
 		showStatsMenu(*scene);
-	//ImGui::ShowDemoWindow();
+	//ImGui::ShowDemoWindow();*/
 }
 
-bool LucidApp::handleInput(vector<InputEvent> events, float time_diff) {
+bool LucidApp::handleInput(VulkanWindow &window, vector<InputEvent> events, float time_diff) {
 	m_mouse_pos = none;
 
 	events = m_cam_control.handleInput(move(events));
@@ -417,11 +433,8 @@ bool LucidApp::handleInput(vector<InputEvent> events, float time_diff) {
 			return false;
 		}
 		if(event.keyDown(InputKey::f11)) {
-			auto &gl_device = GlDevice::instance();
-
-			auto flags =
-				gl_device.isWindowFullscreen() ? GlDeviceFlags() : GlDeviceOpt::fullscreen_desktop;
-			gl_device.setWindowFullscreen(flags);
+			auto flags = window.isFullscreen() ? VWindowFlags() : VWindowFlag::fullscreen_desktop;
+			window.setFullscreen(flags);
 		}
 
 		if(event.keyDown(InputKey::space))
@@ -468,19 +481,18 @@ bool LucidApp::handleInput(vector<InputEvent> events, float time_diff) {
 	return true;
 }
 
-bool LucidApp::tick(float time_diff) {
+bool LucidApp::tick(VulkanWindow &window, float time_diff) {
 	PERF_SCOPE();
 	m_cam_control.tick(time_diff, false);
 
-	auto &device = GlDevice::instance();
 	vector<InputEvent> events;
-	events = device.inputEvents();
+	events = window.inputEvents();
 
 	TextFormatter title;
-	title("Lucid rasterizer res:%", device.windowSize());
-	if(auto dpi_scale = device.windowDpiScale(); dpi_scale > 1.0f)
+	title("Lucid rasterizer res:%", window.extent());
+	if(auto dpi_scale = window.dpiScale(); dpi_scale > 1.0f)
 		title(" dpi_scale:%", dpi_scale);
-	device.setWindowTitle(title.text());
+	window.setTitle(title.text());
 
 	if(m_test_meshlets) {
 		if(m_setup_idx != -1) {
@@ -492,15 +504,15 @@ bool LucidApp::tick(float time_diff) {
 	}
 
 	// TODO: handleMenus  function ?
-	m_gui.beginFrame(device);
+	/*m_gui.beginFrame(device);
 	if(m_perf_analyzer) {
 		bool show = true;
 		m_perf_analyzer->doMenu(show);
 		if(!show)
 			m_perf_analyzer.reset();
 	}
-	events = m_gui.finishFrame(device);
-	auto result = handleInput(events, time_diff);
+	events = m_gui.finishFrame(device);*/
+	auto result = handleInput(window, events, time_diff);
 	updatePerfStats();
 
 	return result;
@@ -514,21 +526,24 @@ void LucidApp::drawScene() {
 	auto view_mat = cam.viewMatrix();
 	auto &setup = *m_setups[m_setup_idx];
 
-	{
-		PERF_GPU_SCOPE("Clear buffers");
-		clearColor(setup.render_config.background_color);
-		clearDepth(1.0);
+	auto &render_graph = m_device->renderGraph();
+	auto sc_format = render_graph.swapChainFormat();
 
-		m_clear_fbo->bind();
-		glClearDepth(1.0f);
-		glClearStencil(0);
-		glStencilMask(0xff);
-		glClear(GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
-		GlFramebuffer::unbind();
-	}
+	m_device->beginFrame().check();
+
+	// TODO: device mo¿e zbieraæ b³êdy wewn¹trz i w przypadku b³êdu zwróciæ niepoprawny (pusty)
+	// render pass? Ale to by powodowa³o sta³y overhead w przypadku ka¿dej funkcji, bo trzeba by
+	// sprawdzaæ czy wszystkie obiekty s¹ niepuste...
+	auto render_pass =
+		m_device->getRenderPass({{sc_format, 1, VColorSyncStd::clear_present}}).get();
+	auto fb = render_graph.defaultFramebuffer();
+
+	// TODO: dodac pseudo instrukcjê bind input/pipe layout
+	render_graph << CmdBeginRenderPass{
+		fb, render_pass, none, {{VkClearColorValue{0.0, 0.2, 0.0, 1.0}}}};
 
 	auto frustum = cam.frustum();
-	auto draws = setup.scene->draws(frustum);
+	/*auto draws = setup.scene->draws(frustum);
 	auto tex_pair = setup.scene->textureAtlasPair();
 	for(auto &tex : {tex_pair.first, tex_pair.second}) {
 		if(tex)
@@ -559,11 +574,15 @@ void LucidApp::drawScene() {
 	if(m_rendering_mode != RenderingMode::lucid)
 		m_simple_renderer->render(ctx, m_wireframe_mode);
 	if(m_rendering_mode != RenderingMode::simple)
-		m_lucid_renderer->render(ctx);
+		m_lucid_renderer->render(ctx);*/
+
+	render_graph << CmdEndRenderPass{};
+	m_device->finishFrame().check();
 }
 
 void LucidApp::draw2D() {
-	Renderer2D renderer_2d(m_viewport, Orient2D::y_up);
+	// TODO: fixme
+	/*Renderer2D renderer_2d(m_viewport, Orient2D::y_up);
 	if(m_selected_block && m_lucid_renderer) {
 		int bin_size = m_lucid_renderer->binSize();
 		int block_size = m_lucid_renderer->blockSize();
@@ -574,10 +593,10 @@ void LucidApp::draw2D() {
 		renderer_2d.addRect(bin_rect, ColorId::brown);
 		renderer_2d.addRect(block_rect, ColorId::purple);
 	}
-	renderer_2d.render();
+	renderer_2d.render();*/
 }
 
-bool LucidApp::mainLoop(GlDevice &device) {
+bool LucidApp::mainLoop(VulkanWindow &window) {
 	perf::nextFrame();
 	perf::Manager::instance()->getNewFrames();
 
@@ -586,15 +605,14 @@ bool LucidApp::mainLoop(GlDevice &device) {
 	m_last_time = cur_time;
 
 	updateRenderer();
-	auto result = tick(time_diff);
+	auto result = tick(window, time_diff);
 	drawScene();
 	draw2D();
 	doMenu();
 	{
 		PERF_GPU_SCOPE("ImGuiWrapper::drawFrame");
-		m_gui.drawFrame(device);
+		//m_gui.drawFrame(device);
 	}
-	glFlush();
 
 	if(m_selected_block && m_lucid_renderer && m_rendering_mode != RenderingMode::simple &&
 	   m_setup_idx != -1) {
@@ -771,6 +789,6 @@ void LucidApp::printPerfStats() {
 	}
 }
 
-bool LucidApp::mainLoop(GlDevice &device, void *this_ptr) {
-	return ((LucidApp *)this_ptr)->mainLoop(device);
+bool LucidApp::mainLoop(VulkanWindow &window, void *this_ptr) {
+	return ((LucidApp *)this_ptr)->mainLoop(window);
 }

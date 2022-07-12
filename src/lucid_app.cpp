@@ -605,7 +605,7 @@ bool LucidApp::mainLoop(VulkanWindow &window) {
 	updateRenderer();
 	auto result = tick(window, time_diff);
 
-	m_device->beginFrame().check();
+	m_device->beginFrame();
 
 	drawScene();
 	draw2D();
@@ -621,7 +621,7 @@ bool LucidApp::mainLoop(VulkanWindow &window) {
 		render_graph << CmdEndRenderPass{};
 	}
 
-	m_device->finishFrame().check();
+	m_device->finishFrame();
 
 	if(m_selected_block && m_lucid_renderer && m_rendering_mode != RenderingMode::simple &&
 	   m_setup_idx != -1) {

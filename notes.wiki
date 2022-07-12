@@ -14,16 +14,28 @@ Aktualne cele:
 - wrzucenie gdzieś do sieci
 
 TODO:
+- drobne glitche widoczne na san miguel jak się włączy alpha_threshold...
+- optimize additive blending ?
+- ogarnąć max_dispatches
+- funkcja do obliczenia użytej pamięci gpu
+- lots of different kind of limits, handle all of them to prevent buffer overflows
 - optymalizacja y_aabb ? moze być zshiftowane juz
 - obsługa overflowa (więcej widocznych trisów niż obsługujemy)
 - grupowanie geometrii quadów w małe paczki? (meshlets)
 - fixowanie TODO w kodzie
-- poprawienie czerwonych binów
 - max_bin_x / max_bin_y ? tak, żeby nie trzeba bylo rekompilować shaderow przy  zmianie rozdzialki
-- naprawienie raster_medium w trybie 64x64
 - nie używanie persisten threadów przy rasterze? Zamiast tego po prostu odpalić tyle work-grup
   ile jest binów odpowiedniego typu;
   Jak wyliczyć w takim systemie pozycję w scratchu ? HGW
+
+- trivial accept test wyliczany w bin_dispatcherze i dołączany do info bin_quad_idx
+  ale najpierw chyba trzeba rozbić quady na trójkąty...
+
+Jak dobrze zrobić trivial accept ?
+- na razie po prostu zróbmy, żeby działało, a potem się zastanowimy jak rozdzielić pracę ?
+  chyba musiałbym grupować trókąty po tym, czy są pełne czy nie ?
+  ale gdzie to zrobić?
+  czy to wogóle ma sens ? mam może max kilka takich trisów/bin ...
 
 Bugi:
 - zwiecha zauważalna na powerplant (widok z prawej strony, powinny się pojawiać pionowe czerwone linie

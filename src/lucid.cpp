@@ -51,6 +51,7 @@ Ex<int> exMain(int argc, char **argv) {
 		}
 	}
 
+	// TODO: create instance on a thread, in the meantime load resources?
 	auto instance = EX_PASS(VulkanInstance::create(setup));
 
 	// TODO: handle config
@@ -90,7 +91,7 @@ Ex<int> exMain(int argc, char **argv) {
 		perf_ctx.emplace(1024);
 	}
 
-	LucidApp app(device);
+	LucidApp app(window, device);
 	if(config)
 		app.setConfig(*config);
 	app.updateViewport();

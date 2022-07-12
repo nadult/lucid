@@ -19,7 +19,7 @@ DEFINE_ENUM(RenderingMode, simple, lucid, mixed);
 
 class LucidApp {
   public:
-	LucidApp(VDeviceRef);
+	LucidApp(VWindowRef, VDeviceRef);
 	~LucidApp();
 
 	void setConfig(const AnyConfig &);
@@ -52,7 +52,9 @@ class LucidApp {
 	void showRasterStats(const Scene &);
 
 	VDeviceRef m_device;
-	//Gui m_gui;
+	PVRenderPass m_gui_render_pass;
+	Gui m_gui;
+
 	Maybe<float2> m_mouse_pos;
 	Dynamic<perf::Analyzer> m_perf_analyzer;
 	PTexture m_depth_buffer;

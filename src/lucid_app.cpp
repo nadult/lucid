@@ -46,10 +46,14 @@ FilePath mainPath() {
 
 string dataPath(string file_name) { return mainPath() / "data" / file_name; }
 
-LucidApp::LucidApp(VDeviceRef device)
-	// TODO: fixme
-	: m_device(device),
-	  //m_gui(GlDevice::instance(), {GuiStyleMode::mini}),
+PVRenderPass guiRenderPass(VDeviceRef device) {
+	auto sc_format = device->renderGraph().swapChainFormat();
+	return device->getRenderPass({{sc_format, 1, VColorSyncStd::clear_present}}).get();
+}
+
+LucidApp::LucidApp(VWindowRef window, VDeviceRef device)
+	: m_device(device), m_gui_render_pass(guiRenderPass(device)),
+	  m_gui(device, window, m_gui_render_pass, {GuiStyleMode::mini}),
 	  m_cam_control(Plane3F(float3(0, 1, 0), 0.0f)), m_lighting(SceneLighting::makeDefault()) {
 	m_filtering_params.magnification = TextureFilterOpt::linear;
 	m_filtering_params.minification = TextureFilterOpt::linear;
@@ -86,9 +90,8 @@ void LucidApp::setConfig(const AnyConfig &config) {
 	if(m_perf_analyzer)
 		if(auto *sub = config.subConfig("perf_analyzer"))
 			m_perf_analyzer->setConfig(*sub);
-	// TODO: fixme
-	//if(auto *sub = config.subConfig("gui"))
-	//	m_gui.setConfig(*sub);
+	if(auto *sub = config.subConfig("gui"))
+		m_gui.setConfig(*sub);
 	m_cam_control.load(config);
 }
 
@@ -124,8 +127,7 @@ void LucidApp::saveConfig() const {
 		out.set("scene", m_setups[m_setup_idx]->name);
 	if(m_perf_analyzer)
 		out.set("perf_analyzer", m_perf_analyzer->config());
-	// TODO: fixme
-	//out.set("gui", m_gui.config());
+	out.set("gui", m_gui.config());
 	m_cam_control.save(out);
 
 	XmlDocument doc;
@@ -260,13 +262,13 @@ void LucidApp::showSceneStats(const Scene &scene) {
 		{"bbox max", stdFormat("(%.2f, %.2f, %.2f)", bbox.max().x, bbox.max().y, bbox.max().z),
 		 ""}};
 
-	// TODO: fixme
-	//showStatsRows(rows, "scene_stats", 90 * m_gui.dpiScale());
+	showStatsRows(rows, "scene_stats", 90 * m_gui.dpiScale());
 }
 
 void LucidApp::showRasterStats(const Scene &scene) {
-	// TODO: fixme
-	/*auto groups = m_lucid_renderer->getStats();
+	return; // TODO: fixme
+
+	auto groups = m_lucid_renderer->getStats();
 	for(int i : intRange(groups)) {
 		auto &group = groups[i];
 		if(!group.title.empty())
@@ -276,7 +278,7 @@ void LucidApp::showRasterStats(const Scene &scene) {
 			ImGui::Separator();
 			ImGui::Separator();
 		}
-	}*/
+	}
 }
 
 void LucidApp::showStatsMenu(const Scene &scene) {
@@ -303,8 +305,7 @@ void LucidApp::showStatsMenu(const Scene &scene) {
 }
 
 void LucidApp::doMenu() {
-	// TODO: fixme
-	/*ImGui::SetNextWindowSize({240 * m_gui.dpiScale(), 0});
+	ImGui::SetNextWindowSize({240 * m_gui.dpiScale(), 0});
 	ImGui::Begin("Lucid rasterizer tools", nullptr, ImGuiWindowFlags_NoResize);
 
 	auto setup_idx = m_setup_idx;
@@ -421,7 +422,7 @@ void LucidApp::doMenu() {
 
 	if(m_show_stats && scene)
 		showStatsMenu(*scene);
-	//ImGui::ShowDemoWindow();*/
+	//ImGui::ShowDemoWindow();
 }
 
 bool LucidApp::handleInput(VulkanWindow &window, vector<InputEvent> events, float time_diff) {
@@ -504,14 +505,14 @@ bool LucidApp::tick(VulkanWindow &window, float time_diff) {
 	}
 
 	// TODO: handleMenus  function ?
-	/*m_gui.beginFrame(device);
+	m_gui.beginFrame(window);
 	if(m_perf_analyzer) {
 		bool show = true;
 		m_perf_analyzer->doMenu(show);
 		if(!show)
 			m_perf_analyzer.reset();
 	}
-	events = m_gui.finishFrame(device);*/
+	events = m_gui.finishFrame(window);
 	auto result = handleInput(window, events, time_diff);
 	updatePerfStats();
 
@@ -528,8 +529,6 @@ void LucidApp::drawScene() {
 
 	auto &render_graph = m_device->renderGraph();
 	auto sc_format = render_graph.swapChainFormat();
-
-	m_device->beginFrame().check();
 
 	// TODO: device mo¿e zbieraæ b³êdy wewn¹trz i w przypadku b³êdu zwróciæ niepoprawny (pusty)
 	// render pass? Ale to by powodowa³o sta³y overhead w przypadku ka¿dej funkcji, bo trzeba by
@@ -577,7 +576,6 @@ void LucidApp::drawScene() {
 		m_lucid_renderer->render(ctx);*/
 
 	render_graph << CmdEndRenderPass{};
-	m_device->finishFrame().check();
 }
 
 void LucidApp::draw2D() {
@@ -606,13 +604,24 @@ bool LucidApp::mainLoop(VulkanWindow &window) {
 
 	updateRenderer();
 	auto result = tick(window, time_diff);
+
+	m_device->beginFrame().check();
+
 	drawScene();
 	draw2D();
 	doMenu();
 	{
 		PERF_GPU_SCOPE("ImGuiWrapper::drawFrame");
-		//m_gui.drawFrame(device);
+		auto &render_graph = m_device->renderGraph();
+		auto fb = render_graph.defaultFramebuffer();
+		render_graph << CmdBeginRenderPass{
+			fb, m_gui_render_pass, none, {{VkClearColorValue{0.0, 0.2, 0.2, 1.0}}}};
+		render_graph.flushCommands();
+		m_gui.drawFrame(window, m_device->renderGraph().currentCommandBuffer());
+		render_graph << CmdEndRenderPass{};
 	}
+
+	m_device->finishFrame().check();
 
 	if(m_selected_block && m_lucid_renderer && m_rendering_mode != RenderingMode::simple &&
 	   m_setup_idx != -1) {

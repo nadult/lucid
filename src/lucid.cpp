@@ -34,6 +34,8 @@ Ex<int> exMain(int argc, char **argv) {
 						VWindowFlag::sleep_when_minimized;
 	uint multisampling = 1;
 	VSwapChainSetup swap_chain_setup;
+	// TODO: UI is configure for Unorm, shouldn't we use SRGB by default?
+	swap_chain_setup.preferred_formats = {{VK_FORMAT_B8G8R8A8_UNORM}};
 	swap_chain_setup.preferred_present_mode = VPresentMode::immediate;
 
 	for(int n = 1; n < argc; n++) {
@@ -56,16 +58,16 @@ Ex<int> exMain(int argc, char **argv) {
 	// TODO: create instance on a thread, in the meantime load resources?
 	auto instance = EX_PASS(VulkanInstance::create(setup));
 
-	// TODO: handle config
-	/*if(config) {
+	if(config) {
+		// TODO: first initialize SDL?
 		auto display_rects = VulkanWindow::displayRects();
 		if(auto *rect = config->get<IRect>("window_rect")) {
 			window_rect = GlDevice::sanitizeWindowRect(display_rects, *rect);
-			gl_config.flags &= ~GlDeviceOpt::centered;
+			window_flags &= ~VWindowFlag::centered;
 		}
 		if(config->get<bool>("window_maximized", false))
-			gl_config.flags |= GlDeviceOpt::maximized;
-	}*/
+			window_flags |= VWindowFlag::maximized;
+	}
 
 	auto window = EX_PASS(
 		VulkanWindow::create(instance, "Lucid rasterizer", IRect(0, 0, 1280, 720), window_flags));

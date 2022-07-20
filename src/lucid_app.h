@@ -35,14 +35,14 @@ class LucidApp {
 	void updateRenderer();
 
 	void doMenu();
-	bool handleInput(VulkanWindow &, vector<InputEvent> events, float time_diff);
-	bool tick(VulkanWindow &, float time_diff);
+	bool handleInput(vector<InputEvent> events, float time_diff);
+	bool tick(float time_diff);
 
 	void drawScene();
 	void draw2D();
 
-	bool mainLoop(VulkanWindow &window);
-	static bool mainLoop(VulkanWindow &window, void *this_ptr);
+	bool mainLoop();
+	static bool mainLoop(VulkanWindow &, void *this_ptr);
 
 	void printPerfStats();
 
@@ -51,6 +51,7 @@ class LucidApp {
 	void showSceneStats(const Scene &);
 	void showRasterStats(const Scene &);
 
+	VWindowRef m_window;
 	VDeviceRef m_device;
 	PVRenderPass m_gui_render_pass;
 	Gui m_gui;

@@ -53,7 +53,7 @@ PVRenderPass guiRenderPass(VDeviceRef device) {
 }
 
 LucidApp::LucidApp(VWindowRef window, VDeviceRef device)
-	: m_device(device), m_gui_render_pass(guiRenderPass(device)),
+	: m_window(window), m_device(device), m_gui_render_pass(guiRenderPass(device)),
 	  m_gui(device, window, m_gui_render_pass, {GuiStyleMode::mini}),
 	  m_cam_control(Plane3F(float3(0, 1, 0), 0.0f)), m_lighting(SceneLighting::makeDefault()) {
 	m_filtering_params.magnification = TextureFilterOpt::linear;
@@ -174,23 +174,20 @@ void LucidApp::switchView() {
 }
 
 bool LucidApp::updateViewport() {
-	// TODO: fixme
-	/*auto viewport = IRect(GlDevice::instance().windowSize());
+	auto viewport = IRect(m_window->extent());
 	bool changed = m_viewport != viewport;
 	m_viewport = viewport;
 	if(changed)
 		m_cam_control.o_config.params.viewport = m_viewport;
-	return changed;*/
-	return false;
+	return changed;
 }
 
 void LucidApp::updateRenderer() {
-	// TODO: fixme
-	/*bool do_update = !m_lucid_renderer || m_lucid_renderer->opts() != m_lucid_opts;
+	bool do_update = !m_lucid_renderer || m_lucid_renderer->opts() != m_lucid_opts;
 	if(updateViewport())
 		do_update = true;
 
-	auto opts = FindFileOpt::regular_file | FindFileOpt::recursive;
+	/*auto opts = FindFileOpt::regular_file | FindFileOpt::recursive;
 	for(auto entry : findFiles(dataPath("shaders"), opts)) {
 		if(entry.path.fileExtension() == "shader") {
 			auto time = lastModificationTime(entry.path);
@@ -426,7 +423,7 @@ void LucidApp::doMenu() {
 	//ImGui::ShowDemoWindow();
 }
 
-bool LucidApp::handleInput(VulkanWindow &window, vector<InputEvent> events, float time_diff) {
+bool LucidApp::handleInput(vector<InputEvent> events, float time_diff) {
 	m_mouse_pos = none;
 
 	events = m_cam_control.handleInput(move(events));
@@ -435,8 +432,9 @@ bool LucidApp::handleInput(VulkanWindow &window, vector<InputEvent> events, floa
 			return false;
 		}
 		if(event.keyDown(InputKey::f11)) {
-			auto flags = window.isFullscreen() ? VWindowFlags() : VWindowFlag::fullscreen_desktop;
-			window.setFullscreen(flags);
+			auto flags =
+				m_window->isFullscreen() ? VWindowFlags() : VWindowFlag::fullscreen_desktop;
+			m_window->setFullscreen(flags);
 		}
 
 		if(event.keyDown(InputKey::space))
@@ -483,18 +481,18 @@ bool LucidApp::handleInput(VulkanWindow &window, vector<InputEvent> events, floa
 	return true;
 }
 
-bool LucidApp::tick(VulkanWindow &window, float time_diff) {
+bool LucidApp::tick(float time_diff) {
 	PERF_SCOPE();
 	m_cam_control.tick(time_diff, false);
 
 	vector<InputEvent> events;
-	events = window.inputEvents();
+	events = m_window->inputEvents();
 
 	TextFormatter title;
-	title("Lucid rasterizer res:%", window.extent());
-	if(auto dpi_scale = window.dpiScale(); dpi_scale > 1.0f)
+	title("Lucid rasterizer res:%", m_window->extent());
+	if(auto dpi_scale = m_window->dpiScale(); dpi_scale > 1.0f)
 		title(" dpi_scale:%", dpi_scale);
-	window.setTitle(title.text());
+	m_window->setTitle(title.text());
 
 	if(m_test_meshlets) {
 		if(m_setup_idx != -1) {
@@ -506,15 +504,16 @@ bool LucidApp::tick(VulkanWindow &window, float time_diff) {
 	}
 
 	// TODO: handleMenus  function ?
-	m_gui.beginFrame(window);
+	m_gui.beginFrame(*m_window);
+	doMenu();
 	if(m_perf_analyzer) {
 		bool show = true;
 		m_perf_analyzer->doMenu(show);
 		if(!show)
 			m_perf_analyzer.reset();
 	}
-	events = m_gui.finishFrame(window);
-	auto result = handleInput(window, events, time_diff);
+	events = m_gui.finishFrame(*m_window);
+	auto result = handleInput(events, time_diff);
 	updatePerfStats();
 
 	return result;
@@ -590,7 +589,7 @@ void LucidApp::draw2D() {
 	renderer_2d.render();*/
 }
 
-bool LucidApp::mainLoop(VulkanWindow &window) {
+bool LucidApp::mainLoop() {
 	perf::nextFrame();
 	perf::Manager::instance()->getNewFrames();
 
@@ -598,29 +597,26 @@ bool LucidApp::mainLoop(VulkanWindow &window) {
 	float time_diff = m_last_time < 0.0 ? 1.0f / 60.0f : (cur_time - m_last_time);
 	m_last_time = cur_time;
 
+	if(!tick(time_diff))
+		return false;
+
 	updateRenderer();
-	auto result = tick(window, time_diff);
+	m_device->beginFrame().check();
+	auto swap_chain = m_device->swapChain();
+	if(swap_chain->status() == VSwapChainStatus::image_acquired) {
+		drawScene();
+		draw2D();
 
-	m_device->beginFrame();
-
-	// TODO: check if swap chain acquired image
-
-	drawScene();
-	draw2D();
-
-	// TODO: this should happen before rendering
-	doMenu();
-	{
 		auto &cmds = m_device->cmdQueue();
 		PERF_GPU_SCOPE(cmds, "ImGuiWrapper::drawFrame");
 		auto fb = m_device->getFramebuffer({m_device->swapChain()->acquiredImage()});
 		cmds.beginRenderPass(fb, m_gui_render_pass, none,
 							 {{VkClearColorValue{0.0, 0.2, 0.2, 1.0}}});
-		m_gui.drawFrame(window, cmds.bufferHandle());
+		m_gui.drawFrame(*m_window, cmds.bufferHandle());
 		cmds.endRenderPass();
 	}
-
-	m_device->finishFrame();
+	m_device->finishFrame().check();
+	m_gui.endFrame();
 
 	if(m_selected_block && m_lucid_renderer && m_rendering_mode != RenderingMode::simple &&
 	   m_setup_idx != -1) {
@@ -636,7 +632,7 @@ bool LucidApp::mainLoop(VulkanWindow &window) {
 		m_selection_info = none;
 	}
 
-	return result;
+	return true;
 }
 
 vector<LucidApp::StatPoint> LucidApp::selectPerfPoints() const {
@@ -798,5 +794,7 @@ void LucidApp::printPerfStats() {
 }
 
 bool LucidApp::mainLoop(VulkanWindow &window, void *this_ptr) {
-	return ((LucidApp *)this_ptr)->mainLoop(window);
+	auto *lucid_app = ((LucidApp *)this_ptr);
+	DASSERT(&*lucid_app->m_window == &window);
+	return lucid_app->mainLoop();
 }

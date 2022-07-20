@@ -20,6 +20,7 @@
 #include <fwk/hash_set.h>
 #include <fwk/io/file_system.h>
 #include <fwk/math/ray.h>
+#include <fwk/vulkan/vulkan_device.h>
 
 // TODO: opisać różnego rodzaju definicje/nazwy używane w kodzie
 
@@ -235,7 +236,8 @@ static void dispatchIndirect(int bin_counters_offset) {
 }
 
 void LucidRenderer::render(const Context &ctx) {
-	PERF_GPU_SCOPE();
+	auto &cmds = ctx.device.cmdQueue();
+	PERF_GPU_SCOPE(cmds);
 	testGlError("LucidRenderer::render init");
 
 	m_info->invalidate();
@@ -265,7 +267,8 @@ void LucidRenderer::render(const Context &ctx) {
 }
 
 void LucidRenderer::uploadInstances(const Context &ctx) {
-	PERF_GPU_SCOPE();
+	auto &cmds = ctx.device.cmdQueue();
+	PERF_GPU_SCOPE(cmds);
 
 	using InstanceData = shader::InstanceData;
 	vector<InstanceData> instances;
@@ -325,7 +328,8 @@ void LucidRenderer::quadSetup(const Context &ctx) {
 	// TODO: co robić z trójkątami, które są na tyle małe, że wogóle ich nie widać nawet w pełnej rozdziałce?
 	// TODO: backface-culling ?
 
-	PERF_GPU_SCOPE();
+	auto &cmds = ctx.device.cmdQueue();
+	PERF_GPU_SCOPE(cmds);
 
 	m_info->bindIndex(0);
 	m_instances->bindIndex(1);
@@ -360,7 +364,8 @@ void LucidRenderer::quadSetup(const Context &ctx) {
 }
 
 void LucidRenderer::computeBins(const Context &ctx) {
-	PERF_GPU_SCOPE();
+	auto &cmds = ctx.device.cmdQueue();
+	PERF_GPU_SCOPE(cmds);
 
 	m_info->bindIndex(0);
 
@@ -389,7 +394,8 @@ void LucidRenderer::computeBins(const Context &ctx) {
 }
 
 void LucidRenderer::dummyIterateBins(const Context &ctx) {
-	PERF_GPU_SCOPE();
+	auto &cmds = ctx.device.cmdQueue();
+	PERF_GPU_SCOPE(cmds);
 
 	m_info->bindIndex(0);
 	p_dummy.use();
@@ -427,7 +433,9 @@ void LucidRenderer::bindRaster(Program &program, const Context &ctx) {
 }
 
 void LucidRenderer::rasterLow(const Context &ctx) {
-	PERF_GPU_SCOPE();
+	auto &cmds = ctx.device.cmdQueue();
+	PERF_GPU_SCOPE(cmds);
+
 	bindRaster(p_raster_low, ctx);
 	if(m_opts & Opt::debug_raster)
 		shaderDebugUseBuffer(m_errors);
@@ -438,7 +446,9 @@ void LucidRenderer::rasterLow(const Context &ctx) {
 }
 
 void LucidRenderer::rasterHigh(const Context &ctx) {
-	PERF_GPU_SCOPE();
+	auto &cmds = ctx.device.cmdQueue();
+	PERF_GPU_SCOPE(cmds);
+
 	bindRaster(p_raster_high, ctx);
 	if(m_opts & Opt::debug_raster)
 		shaderDebugUseBuffer(m_errors);
@@ -449,7 +459,8 @@ void LucidRenderer::rasterHigh(const Context &ctx) {
 }
 
 void LucidRenderer::compose(const Context &ctx) {
-	PERF_GPU_SCOPE();
+	auto &cmds = ctx.device.cmdQueue();
+	PERF_GPU_SCOPE(cmds);
 
 	DASSERT(!ctx.out_fbo || ctx.out_fbo->size() == m_size);
 	glDrawBuffer(GL_BACK);

@@ -30,9 +30,10 @@
 #include <fwk/perf/manager.h>
 #include <fwk/sys/input.h>
 
+#include <fwk/vulkan/vulkan_command_queue.h>
 #include <fwk/vulkan/vulkan_device.h>
 #include <fwk/vulkan/vulkan_pipeline.h>
-#include <fwk/vulkan/vulkan_render_graph.h>
+#include <fwk/vulkan/vulkan_swap_chain.h>
 #include <fwk/vulkan/vulkan_window.h>
 
 #include <fwk/gfx/investigator3.h>
@@ -47,8 +48,8 @@ FilePath mainPath() {
 string dataPath(string file_name) { return mainPath() / "data" / file_name; }
 
 PVRenderPass guiRenderPass(VDeviceRef device) {
-	auto sc_format = device->renderGraph().swapChainFormat();
-	return device->getRenderPass({{sc_format, 1, VColorSyncStd::clear_present}}).get();
+	auto sc_format = device->swapChain()->format();
+	return device->getRenderPass({{sc_format, 1, VColorSyncStd::clear_present}});
 }
 
 LucidApp::LucidApp(VWindowRef window, VDeviceRef device)
@@ -520,27 +521,22 @@ bool LucidApp::tick(VulkanWindow &window, float time_diff) {
 }
 
 void LucidApp::drawScene() {
-	PERF_GPU_SCOPE();
+	auto &cmds = m_device->cmdQueue();
+	PERF_GPU_SCOPE(cmds);
 	auto cam = m_cam_control.currentCamera();
 
 	auto proj_mat = cam.projectionMatrix();
 	auto view_mat = cam.viewMatrix();
 	auto &setup = *m_setups[m_setup_idx];
-
-	auto &render_graph = m_device->renderGraph();
-	auto sc_format = render_graph.swapChainFormat();
+	auto swap_chain = m_device->swapChain();
+	auto sc_format = swap_chain->format();
 
 	// TODO: device mo¿e zbieraæ b³êdy wewn¹trz i w przypadku b³êdu zwróciæ niepoprawny (pusty)
 	// render pass? Ale to by powodowa³o sta³y overhead w przypadku ka¿dej funkcji, bo trzeba by
 	// sprawdzaæ czy wszystkie obiekty s¹ niepuste...
-	auto render_pass =
-		m_device->getRenderPass({{sc_format, 1, VColorSyncStd::clear_present}}).get();
-	auto fb = render_graph.defaultFramebuffer();
-
-	// TODO: dodac pseudo instrukcjê bind input/pipe layout
-	render_graph << CmdBeginRenderPass{
-		fb, render_pass, none, {{VkClearColorValue{0.0, 0.2, 0.0, 1.0}}}};
-
+	auto render_pass = m_device->getRenderPass({{sc_format, 1, VColorSyncStd::clear_present}});
+	auto fb = m_device->getFramebuffer({swap_chain->acquiredImage()});
+	cmds.beginRenderPass(fb, render_pass, none, {{VkClearColorValue{0.0, 0.2, 0.0, 1.0}}});
 	auto frustum = cam.frustum();
 	/*auto draws = setup.scene->draws(frustum);
 	auto tex_pair = setup.scene->textureAtlasPair();
@@ -575,7 +571,7 @@ void LucidApp::drawScene() {
 	if(m_rendering_mode != RenderingMode::simple)
 		m_lucid_renderer->render(ctx);*/
 
-	render_graph << CmdEndRenderPass{};
+	cmds.endRenderPass();
 }
 
 void LucidApp::draw2D() {
@@ -607,18 +603,21 @@ bool LucidApp::mainLoop(VulkanWindow &window) {
 
 	m_device->beginFrame();
 
+	// TODO: check if swap chain acquired image
+
 	drawScene();
 	draw2D();
+
+	// TODO: this should happen before rendering
 	doMenu();
 	{
-		PERF_GPU_SCOPE("ImGuiWrapper::drawFrame");
-		auto &render_graph = m_device->renderGraph();
-		auto fb = render_graph.defaultFramebuffer();
-		render_graph << CmdBeginRenderPass{
-			fb, m_gui_render_pass, none, {{VkClearColorValue{0.0, 0.2, 0.2, 1.0}}}};
-		render_graph.flushCommands();
-		m_gui.drawFrame(window, m_device->renderGraph().currentCommandBuffer());
-		render_graph << CmdEndRenderPass{};
+		auto &cmds = m_device->cmdQueue();
+		PERF_GPU_SCOPE(cmds, "ImGuiWrapper::drawFrame");
+		auto fb = m_device->getFramebuffer({m_device->swapChain()->acquiredImage()});
+		cmds.beginRenderPass(fb, m_gui_render_pass, none,
+							 {{VkClearColorValue{0.0, 0.2, 0.2, 1.0}}});
+		m_gui.drawFrame(window, cmds.bufferHandle());
+		cmds.endRenderPass();
 	}
 
 	m_device->finishFrame();

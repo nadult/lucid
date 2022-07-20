@@ -57,6 +57,7 @@ struct SceneDrawCall;
 struct SceneLighting;
 
 struct RenderContext {
+	VulkanDevice &device;
 	RenderConfig config;
 	PVertexArray vao;
 	PBuffer quads_ib;

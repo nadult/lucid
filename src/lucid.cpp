@@ -8,13 +8,13 @@
 #include <fwk/perf/thread_context.h>
 
 #include <fwk/vulkan/vulkan_buffer.h>
+#include <fwk/vulkan/vulkan_command_queue.h>
 #include <fwk/vulkan/vulkan_device.h>
 #include <fwk/vulkan/vulkan_framebuffer.h>
 #include <fwk/vulkan/vulkan_image.h>
 #include <fwk/vulkan/vulkan_instance.h>
 #include <fwk/vulkan/vulkan_memory_manager.h>
 #include <fwk/vulkan/vulkan_pipeline.h>
-#include <fwk/vulkan/vulkan_render_graph.h>
 #include <fwk/vulkan/vulkan_shader.h>
 #include <fwk/vulkan/vulkan_swap_chain.h>
 #include <fwk/vulkan/vulkan_window.h>
@@ -30,9 +30,11 @@ Ex<int> exMain(int argc, char **argv) {
 	VulkanInstanceSetup setup;
 	setup.debug_levels = VDebugLevel::warning | VDebugLevel::error;
 	setup.debug_types = all<VDebugType>;
-	// TODO: cleanup in flags
-	auto window_flags = VWindowFlag::resizable | VWindowFlag::centered | VWindowFlag::allow_hidpi;
+	auto window_flags = VWindowFlag::resizable | VWindowFlag::centered | VWindowFlag::allow_hidpi |
+						VWindowFlag::sleep_when_minimized;
 	uint multisampling = 1;
+	VSwapChainSetup swap_chain_setup;
+	swap_chain_setup.preferred_present_mode = VPresentMode::immediate;
 
 	for(int n = 1; n < argc; n++) {
 		string argument = argv[n];
@@ -41,7 +43,7 @@ Ex<int> exMain(int argc, char **argv) {
 			convertScenes(argv[n + 1]);
 			return 0;
 		} else if(argument == "--vsync") {
-			window_flags |= VWindowFlag::vsync;
+			swap_chain_setup.preferred_present_mode = VPresentMode::fifo;
 		} else if(argument == "--msaa") {
 			ASSERT(n + 1 < argc && "Invalid nr of arguments");
 			multisampling = clamp(atoi(argv[n + 1]), 1, 16);
@@ -65,10 +67,10 @@ Ex<int> exMain(int argc, char **argv) {
 			gl_config.flags |= GlDeviceOpt::maximized;
 	}*/
 
-	auto window = EX_PASS(VulkanWindow::create(instance, "Lucid rasterizer", IRect(0, 0, 1280, 720),
-											   VulkanWindowConfig{window_flags}));
+	auto window = EX_PASS(
+		VulkanWindow::create(instance, "Lucid rasterizer", IRect(0, 0, 1280, 720), window_flags));
 
-	VulkanDeviceSetup dev_setup;
+	VDeviceSetup dev_setup;
 	auto pref_device = instance->preferredDevice(window->surfaceHandle(), &dev_setup.queues);
 	if(!pref_device)
 		return ERROR("Couldn't find a suitable Vulkan device");
@@ -76,17 +78,14 @@ Ex<int> exMain(int argc, char **argv) {
 	auto phys_info = instance->info(device->physId());
 	print("Selected Vulkan physical device: %\nDriver version: %\n",
 		  phys_info.properties.deviceName, phys_info.properties.driverVersion);
-
-	auto swap_chain = EX_PASS(VulkanSwapChain::create(
-		device, window, {.preferred_present_mode = VPresentMode::immediate}));
-	EXPECT(device->createRenderGraph(swap_chain));
+	device->addSwapChain(EX_PASS(VulkanSwapChain::create(device, window, swap_chain_setup)));
 
 	//initShaderCombiner();
 	//loadShaderPieces().get();
 
 	Dynamic<perf::Manager> perf_manager;
 	Dynamic<perf::ThreadContext> perf_ctx;
-	if(false) { // TODO: fixme
+	if(true) {
 		perf_manager.emplace();
 		perf_ctx.emplace(1024);
 	}

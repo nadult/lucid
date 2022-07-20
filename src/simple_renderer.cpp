@@ -14,6 +14,7 @@
 #include <fwk/gfx/opengl.h>
 #include <fwk/gfx/shader_defs.h>
 #include <fwk/hash_map.h>
+#include <fwk/vulkan/vulkan_device.h>
 
 SimpleRenderer::SimpleRenderer() = default;
 FWK_MOVABLE_CLASS_IMPL(SimpleRenderer);
@@ -32,7 +33,8 @@ Matrix3 normalMatrix(const Matrix4 &affine) {
 }
 
 void SimpleRenderer::renderPhase(const RenderContext &ctx, bool opaque) {
-	PERF_GPU_SCOPE();
+	auto &cmds = ctx.device.cmdQueue();
+	PERF_GPU_SCOPE(cmds);
 
 	if(opaque) {
 		glDisable(GL_BLEND);
@@ -78,7 +80,8 @@ void SimpleRenderer::renderPhase(const RenderContext &ctx, bool opaque) {
 }
 
 void SimpleRenderer::render(const RenderContext &ctx, bool wireframe) {
-	PERF_GPU_SCOPE();
+	auto &cmds = ctx.device.cmdQueue();
+	PERF_GPU_SCOPE(cmds);
 	glViewport(m_viewport.x(), m_viewport.y(), m_viewport.width(), m_viewport.height());
 
 	if(wireframe)

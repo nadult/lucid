@@ -3,16 +3,15 @@
 #include "quad_generator.h"
 #include "shading.h"
 #include <fwk/gfx/compressed_image.h>
-#include <fwk/gfx/gl_buffer.h>
 #include <fwk/gfx/gl_format.h>
-#include <fwk/gfx/gl_program.h>
-#include <fwk/gfx/gl_texture.h>
-#include <fwk/gfx/gl_vertex_array.h>
 #include <fwk/gfx/image.h>
 #include <fwk/gfx/opengl.h>
 #include <fwk/io/file_stream.h>
 #include <fwk/math/ray.h>
 #include <fwk/math/segment.h>
+#include <fwk/vulkan/vulkan_buffer.h>
+#include <fwk/vulkan/vulkan_device.h>
+#include <fwk/vulkan/vulkan_pipeline.h>
 
 Ex<void> SceneMesh::load(Stream &stream) {
 	stream >> material_id >> colors_opaque >> tris >> quads >> num_degenerate_quads >> bounding_box;
@@ -54,8 +53,8 @@ bool SceneMaterial::isOpaque() const {
 }
 
 void SceneMaterial::freeTextures() {
-	diffuse_tex.gl_handle = {};
-	normal_tex.gl_handle = {};
+	diffuse_tex.vk_image = {};
+	normal_tex.vk_image = {};
 }
 
 SceneTexture::SceneTexture() = default;
@@ -218,52 +217,40 @@ void Scene::updatePrimitiveOffsets() {
 	}
 }
 
-void Scene::updateRenderingData() {
-	return; // TODO: fixme
-
+Ex<void> Scene::updateRenderingData(VDeviceRef device) {
 	updatePrimitiveOffsets();
 	freeRenderingData();
 
-	auto usage = BufferUsage::static_draw;
+	auto &cmds = device->cmdQueue();
+	auto vb_usage = VBufferUsage::vertex_buffer | VBufferUsage::transfer_dst;
+	auto ib_usage = VBufferUsage::index_buffer | VBufferUsage::transfer_dst;
 
-	PBuffer pos_vb = GlBuffer::make(BufferType::array, numVerts() * sizeof(float3), usage);
-	copy(pos_vb->map<float3>(AccessMode::write_only), positions);
-	pos_vb->unmap();
+	verts.pos = EX_PASS(VulkanBuffer::create<float3>(device, numVerts(), vb_usage));
+	EXPECT(cmds.upload(verts.pos, positions));
 
-	PBuffer tex_vb, col_vb, nrm_vb;
 	if(hasColors()) {
-		col_vb = GlBuffer::make(BufferType::array, numVerts() * sizeof(IColor), usage);
-		copy(col_vb->map<IColor>(AccessMode::write_only), colors);
-		col_vb->unmap();
+		verts.col = EX_PASS(VulkanBuffer::create<IColor>(device, numVerts(), vb_usage));
+		EXPECT(cmds.upload(verts.col, colors));
 	}
 	if(hasTexCoords()) {
-		tex_vb = GlBuffer::make(BufferType::array, numVerts() * sizeof(float2), usage);
-		copy(tex_vb->map<float2>(AccessMode::write_only), tex_coords);
-		tex_vb->unmap();
+		verts.tex = EX_PASS(VulkanBuffer::create<float2>(device, numVerts(), vb_usage));
+		EXPECT(cmds.upload(verts.tex, tex_coords));
 	}
 	if(hasQuantizedNormals()) {
-		nrm_vb = GlBuffer::make(BufferType::array, numVerts() * sizeof(u32), usage);
-		copy(nrm_vb->map<u32>(AccessMode::write_only), quantized_normals);
-		nrm_vb->unmap();
+		verts.nrm = EX_PASS(VulkanBuffer::create<u32>(device, numVerts(), vb_usage));
+		EXPECT(cmds.upload(verts.nrm, quantized_normals));
 	}
 
-	tris_ib = GlBuffer::make(BufferType::element_array, numTris() * 3 * sizeof(u32), usage);
-	quads_ib = GlBuffer::make(BufferType::element_array, numQuads() * 4 * sizeof(u32), usage);
-	auto tris_data = tris_ib->map<u32>(AccessMode::write_only);
-	auto quads_data = quads_ib->map<u32>(AccessMode::write_only);
-	int tri_offset = 0, quad_offset = 0;
+	tris_ib = EX_PASS(VulkanBuffer::create<u32>(device, numTris() * 3, ib_usage));
+	quads_ib = EX_PASS(VulkanBuffer::create<u32>(device, numQuads() * 4, ib_usage));
+	// TODO: merging shouldn't be needed; Add upload version which returns Span<> ?
+	vector<u32> merged_tris, merged_quads;
 	for(auto &mesh : meshes) {
-		copy(tris_data.subSpan(tri_offset), cspan(mesh.tris).reinterpret<u32>());
-		copy(quads_data.subSpan(quad_offset), cspan(mesh.quads).reinterpret<u32>());
-		tri_offset += mesh.tris.size() * 3;
-		quad_offset += mesh.quads.size() * 4;
+		insertBack(merged_tris, cspan(mesh.tris).reinterpret<u32>());
+		insertBack(merged_quads, cspan(mesh.quads).reinterpret<u32>());
 	}
-	tris_ib->unmap();
-	quads_ib->unmap();
-
-	auto vert_attribs = defaultVertexAttribs<float3, IColor, float2, u32>();
-	mesh_vao = GlVertexArray::make();
-	mesh_vao->set({pos_vb, col_vb, tex_vb, nrm_vb}, vert_attribs, tris_ib, IndexType::uint32);
+	EXPECT(cmds.upload(tris_ib, merged_tris));
+	EXPECT(cmds.upload(quads_ib, merged_quads));
 
 	auto loadTex = [&](SceneMaterial::UsedTexture &used_tex) {
 		if(used_tex.id == -1)
@@ -271,7 +258,9 @@ void Scene::updateRenderingData() {
 		auto &tex = textures[used_tex.id];
 		// TODO: makes no sense to keep both in main & gpu memory, especially because ogl is caching it too
 		// TODO: mipmaps for plain textures
-		if(!tex.gl_texture) {
+		if(!tex.vk_image) {
+			// TODO: loading of compressed images
+			/*
 			DASSERT(tex.block_mips || tex.plain_mips);
 			if(tex.block_mips) {
 				tex.gl_texture.emplace(tex.block_mips);
@@ -283,9 +272,9 @@ void Scene::updateRenderingData() {
 
 			tex.gl_texture->setFiltering(TextureFilterOpt::linear);
 			auto wrap_opt = tex.is_clamped ? TextureWrapOpt::clamp_to_edge : TextureWrapOpt::repeat;
-			tex.gl_texture->setWrapping(wrap_opt);
+			tex.gl_texture->setWrapping(wrap_opt);*/
 		}
-		used_tex.gl_handle = tex.gl_texture;
+		used_tex.vk_image = tex.vk_image;
 		used_tex.is_opaque = tex.is_opaque;
 	};
 
@@ -293,7 +282,8 @@ void Scene::updateRenderingData() {
 		loadTex(material.diffuse_tex);
 		loadTex(material.normal_tex);
 	}
-	testGlError("updateRenderingData");
+
+	return {};
 }
 
 u32 encodeNormalUint(const float3 &n) {
@@ -311,9 +301,9 @@ void Scene::quantizeNormals() {
 }
 
 void Scene::freeRenderingData() {
-	mesh_vao = {};
 	tris_ib = {};
 	quads_ib = {};
+	verts = {};
 }
 
 int Scene::numTris() const {
@@ -357,15 +347,15 @@ vector<SceneDrawCall> Scene::draws(const Frustum &frustum) const {
 	return out;
 }
 
-Pair<PTexture> Scene::textureAtlasPair() const {
-	Pair<PTexture> out;
+Pair<PVImage> Scene::textureAtlasPair() const {
+	Pair<PVImage> out;
 	for(auto &tex : textures) {
-		if(!tex.gl_texture)
+		if(!tex.vk_image)
 			continue;
 		if(tex.is_opaque && !out.first)
-			out.first = tex.gl_texture;
+			out.first = tex.vk_image;
 		if(!tex.is_opaque && !out.second)
-			out.second = tex.gl_texture;
+			out.second = tex.vk_image;
 	}
 	return out;
 }

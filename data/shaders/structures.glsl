@@ -24,19 +24,20 @@ struct Frustum {
 };
 
 struct SimpleDrawCall {
-	vec3 world_camera_pos;
 	mat4 proj_view_matrix;
-
-	uint draw_call_opts;
 	vec4 material_color;
-
 	vec2 uv_rect_pos;
 	vec2 uv_rect_size;
+	vec3 world_camera_pos;
+	uint draw_call_opts;
 };
 
 struct Rect {
 	vec2 pos, size;
 	vec2 min_uv, max_uv;
 };
+
+#define LIGHTING_STRUCT_SIZE 15
+#define SIMPLE_DRAW_CALL_STRUCT_SIZE 28
 
 #endif

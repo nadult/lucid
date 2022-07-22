@@ -1,6 +1,7 @@
 #include "simple_renderer.h"
 
 #include "scene.h"
+#include "shader_structs.h"
 #include "shading.h"
 #include <fwk/gfx/camera.h>
 #include <fwk/gfx/colored_triangle.h>
@@ -27,13 +28,24 @@ void SimpleRenderer::addShaderDefs(ShaderCompiler &compiler) {
 }
 
 Ex<void> SimpleRenderer::exConstruct(VDeviceRef device, ShaderCompiler &compiler,
-									 const IRect &viewport, VColorAttachment color_att,
-									 VDepthAttachment depth_att) {
-	vector<string> geom_locations{"in_pos", "in_color", "in_tex_coord", "in_normal"};
+									 const IRect &viewport, VColorAttachment color_att) {
+	auto depth_format = device->bestSupportedFormat(VDepthStencilFormat::d32f);
+	auto depth_buffer =
+		EX_PASS(VulkanImage::create(device, VImageSetup(depth_format, viewport.size(), 1)));
+	m_depth_buffer = VulkanImageView::create(device, depth_buffer);
+	// TODO: :we need to transition depth_buffer format too
+
+	VDepthAttachment depth_att(depth_format, 1, defaultLayout(depth_format));
+	color_att.sync = VColorSyncStd::draw;
+	m_draw_rpass = device->getRenderPass({color_att}, depth_att);
+
+	color_att.sync = VColorSyncStd::clear;
+	depth_att.sync = VDepthSync(VLoadOp::clear, VStoreOp::store, VImageLayout::undefined,
+								defaultLayout(depth_format));
+	m_clear_rpass = device->getRenderPass({color_att}, depth_att);
+
 	ShaderDefs defs;
 	m_viewport = viewport;
-	//m_program = EX_PASS(Program::make("simple", defs + "SIMPLE_DRAW_CALL", geom_locations));
-
 	auto fsh_bytecode = compiler.getSpirv("simple_frag");
 	auto vsh_bytecode = compiler.getSpirv("simple_vert");
 
@@ -41,15 +53,13 @@ Ex<void> SimpleRenderer::exConstruct(VDeviceRef device, ShaderCompiler &compiler
 	auto vsh_module = EX_PASS(VulkanShaderModule::create(device, vsh_bytecode));
 
 	VPipelineSetup setup;
-	setup.render_pass = device->getRenderPass({color_att}, depth_att);
-	setup.vertex_bindings = {{vertexBinding<float3>(0), vertexBinding<IColor>(1),
-							  vertexBinding<float2>(2), vertexBinding<u32>(3)}};
-	setup.vertex_attribs = {{vertexAttrib<float3>(0, 0), vertexAttrib<IColor>(1, 1),
-							 vertexAttrib<float2>(2, 2), vertexAttrib<u32>(3, 3)}};
+	setup.render_pass = m_draw_rpass;
 	setup.shader_modules = {{vsh_module, fsh_module}};
 	setup.depth = VDepthSetup(VDepthFlag::test | VDepthFlag::write);
+	VertexArray::getDefs(setup);
 
 	// TODO: culling
+	// TODO: Construct pipeline on demand, use pipeline cache
 
 	m_pipelines.resize(6);
 
@@ -80,67 +90,100 @@ Matrix3 normalMatrix(const Matrix4 &affine) {
 	return transpose(inverse(out));
 }
 
-void SimpleRenderer::renderPhase(const RenderContext &ctx, bool opaque, bool wireframe) {
+// TODO: add typed VSpan type
+void SimpleRenderer::renderPhase(const RenderContext &ctx, PVBuffer simple_dc_buf, bool opaque,
+								 bool wireframe) {
+	// TODO: don't run if we don't have any drawcalls of given type
+
 	auto &cmds = ctx.device.cmdQueue();
 	PERF_GPU_SCOPE(cmds);
 
 	auto pipeline = m_pipelines[pipelineId(opaque, wireframe, ctx.config.additive_blending)];
-
 	auto swap_chain = ctx.device.swapChain();
-	VColorAttachment color_att(swap_chain->format(), 1, VColorSyncStd::clear);
-	VDepthAttachment depth_att(*ctx.depth_buffer->depthStencilFormat());
-	auto render_pass = ctx.device.getRenderPass({{color_att}}, depth_att);
-	//auto fb = ctx.device.getFramebuffer({swap_chain->acquiredImage()}, ctx.depth_buffer);
-
-	/*
-	ctx.lighting.setUniforms(m_program.glProgram());
-	m_program.use();
-	m_program["world_camera_pos"] = ctx.camera.pos();
-	m_program["proj_view_matrix"] = ctx.camera.matrix();
-
-	// TODO: what about ordering objects by material ?
-	// TODO: add option to order objects in different ways ?
-	// TODO: optional alpha test first for blended objects
+	auto framebuffer = ctx.device.getFramebuffer({swap_chain->acquiredImage()}, m_depth_buffer);
+	cmds.bind(pipeline);
+	cmds.beginRenderPass(framebuffer, opaque ? m_clear_rpass : m_draw_rpass, none,
+						 {FColor(0.5, 0.2, 0.0), VClearDepthStencil(1.0)});
 
 	int prev_mat_id = -1;
-	for(const auto &draw_call : ctx.dcs) {
+	for(int dc : intRange(ctx.dcs)) {
+		auto &draw_call = ctx.dcs[dc];
 		auto &material = ctx.materials[draw_call.material_id];
 		if(bool(draw_call.opts & DrawCallOpt::is_opaque) != opaque)
 			continue;
 		if(prev_mat_id != draw_call.material_id) {
-			m_program["material_color"] = float4(material.diffuse, material.opacity);
-			if(material.diffuse_tex)
-				material.diffuse_tex.gl_handle->bind(0);
+			cmds.bindDS(1)(0, span<shader::SimpleDrawCall>(simple_dc_buf, dc, 1),
+						   VDescriptorType::uniform_buffer);
 			prev_mat_id = draw_call.material_id;
 		}
 
-		m_program["draw_call_opts"] = uint(draw_call.opts.bits);
-		if(draw_call.opts & DrawCallOpt::has_uv_rect) {
-			m_program["uv_rect_pos"] = draw_call.uv_rect.min();
-			m_program["uv_rect_size"] = draw_call.uv_rect.size();
-		}
-		ctx.vao->draw(PrimitiveType::triangles, draw_call.num_tris * 3, draw_call.tri_offset * 3);
-	}*/
+		cmds.drawIndexed(draw_call.num_tris * 3, 1, draw_call.tri_offset * 3);
+	}
+
+	cmds.endRenderPass();
+
+	// TODO: what about ordering objects by material ?
+	// TODO: add option to order objects in different ways ?
+	// TODO: optional alpha test first for blended objects
 }
 
-void SimpleRenderer::render(const RenderContext &ctx, bool wireframe) {
+Ex<void> SimpleRenderer::render(const RenderContext &ctx, bool wireframe) {
 	auto &cmds = ctx.device.cmdQueue();
 	PERF_GPU_SCOPE(cmds);
-	/*glViewport(m_viewport.x(), m_viewport.y(), m_viewport.width(), m_viewport.height());
 
-	if(wireframe)
-		glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+	auto lighting_buf = EX_PASS(VulkanBuffer::create<shader::Lighting>(
+		ctx.device.ref(), 1, VBufferUsage::uniform_buffer | VBufferUsage::transfer_dst,
+		VMemoryUsage::frame));
+	auto simple_dc_buf = EX_PASS(VulkanBuffer::create<shader::SimpleDrawCall>(
+		ctx.device.ref(), ctx.dcs.size(), VBufferUsage::uniform_buffer | VBufferUsage::transfer_dst,
+		VMemoryUsage::frame));
 
-	if(ctx.config.backface_culling)
-		glEnable(GL_CULL_FACE);
-	else
-		glDisable(GL_CULL_FACE);
+	shader::Lighting lighting;
+	lighting.ambient_color = ctx.lighting.ambient.color;
+	lighting.ambient_power = ctx.lighting.ambient.power;
+	lighting.scene_color = ctx.lighting.scene.color;
+	lighting.scene_power = ctx.lighting.scene.power;
+	lighting.sun_color = ctx.lighting.sun.color;
+	lighting.sun_power = ctx.lighting.sun.power;
+	lighting.sun_dir = ctx.lighting.sun.dir;
+	EXPECT(cmds.upload(lighting_buf, cspan(&lighting, 1)));
 
-	renderPhase(ctx, true);
-	renderPhase(ctx, false);
+	// TODO: minimize it (do it only for different materials)
+	vector<shader::SimpleDrawCall> simple_dcs;
+	simple_dcs.reserve(ctx.dcs.size());
+	for(const auto &draw_call : ctx.dcs) {
+		auto &material = ctx.materials[draw_call.material_id];
+		auto &simple_dc = simple_dcs.emplace_back();
+		simple_dc.world_camera_pos = ctx.camera.pos();
+		simple_dc.proj_view_matrix = ctx.camera.matrix();
+		simple_dc.material_color = float4(material.diffuse, material.opacity);
+		simple_dc.draw_call_opts = uint(draw_call.opts.bits);
+		if(draw_call.opts & DrawCallOpt::has_uv_rect) {
+			simple_dc.uv_rect_pos = draw_call.uv_rect.min();
+			simple_dc.uv_rect_size = draw_call.uv_rect.size();
+		}
+		if(material.diffuse_tex)
+			; // TODO
+	}
+	EXPECT(cmds.upload(simple_dc_buf, simple_dcs));
+	cmds.bind(m_pipelines[0]->layout());
+	cmds.bindDS(0)(0, lighting_buf, VDescriptorType::uniform_buffer);
+	cmds.setViewport(m_viewport);
+	cmds.setScissor(none);
 
-	if(wireframe)
-		glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+	auto verts = ctx.verts;
+	// TODO: fix this properly
+	if(!verts.col)
+		verts.col = verts.pos;
+	if(!verts.tex)
+		verts.tex = verts.pos;
+	if(!verts.nrm)
+		verts.nrm = verts.pos;
+	cmds.bindVertices({verts.pos, verts.col, verts.tex, verts.nrm});
+	cmds.bindIndices(ctx.tris_ib);
 
-	GlTexture::unbind();*/
+	renderPhase(ctx, simple_dc_buf, true, wireframe);
+	renderPhase(ctx, simple_dc_buf, false, wireframe);
+
+	return {};
 }

@@ -49,9 +49,17 @@ FilePath mainPath() {
 
 string dataPath(string file_name) { return mainPath() / "data" / file_name; }
 
+// TODO: move it somewhere else...
+void VertexArray::getDefs(VPipelineSetup &setup) {
+	setup.vertex_attribs = {{vertexAttrib<float3>(0, 0), vertexAttrib<IColor>(1, 1),
+							 vertexAttrib<float2>(2, 2), vertexAttrib<u32>(3, 3)}};
+	setup.vertex_bindings = {{vertexBinding<float3>(0), vertexBinding<IColor>(1),
+							  vertexBinding<float2>(2), vertexBinding<u32>(3)}};
+}
+
 PVRenderPass guiRenderPass(VDeviceRef device) {
 	auto sc_format = device->swapChain()->format();
-	return device->getRenderPass({{sc_format, 1, VColorSyncStd::clear_present}});
+	return device->getRenderPass({{sc_format, 1, VColorSyncStd::present}});
 }
 
 LucidApp::LucidApp(VWindowRef window, VDeviceRef device)
@@ -161,7 +169,7 @@ void LucidApp::selectSetup(int idx) {
 	if(m_setup_idx != -1)
 		m_setups[m_setup_idx]->camera = m_cam_control.current();
 	auto &setup = *m_setups[idx];
-	if(auto result = setup.updateScene(); !result) {
+	if(auto result = setup.updateScene(m_device); !result) {
 		result.error().print();
 		return;
 	}
@@ -200,18 +208,12 @@ Ex<void> LucidApp::updateRenderer() {
 		do_update = true;
 
 	if(do_update) {
-		auto depth_format = m_device->bestSupportedFormat(VDepthStencilFormat::d32f);
-		m_depth_buffer =
-			EX_PASS(VulkanImage::create(m_device, VImageSetup(depth_format, m_viewport.size(), 1)));
-		VDepthAttachment depth_att(depth_format, 1, defaultLayout(depth_format));
-		// TODO: :we need to transition depth_buffer format too
-
 		auto swap_chain = m_device->swapChain();
 		m_lucid_renderer.reset();
 		m_simple_renderer.reset();
 
 		m_simple_renderer = move(EX_PASS(construct<SimpleRenderer>(
-			m_device, *m_shader_compiler, m_viewport, swap_chain->format(), depth_att)));
+			m_device, *m_shader_compiler, m_viewport, swap_chain->format())));
 		//m_lucid_renderer = move(construct<LucidRenderer>(m_lucid_opts, m_viewport.size()).get());
 	}
 
@@ -317,7 +319,7 @@ void LucidApp::doMenu() {
 	if(m_gui.selectIndex("Scene:", setup_idx, names))
 		selectSetup(setup_idx);
 	auto &setup = *m_setups[m_setup_idx];
-	setup.doMenu();
+	setup.doMenu(m_device);
 
 	auto *scene = setup.scene ? setup.scene.get() : nullptr;
 
@@ -529,31 +531,22 @@ void LucidApp::drawScene() {
 	auto &cmds = m_device->cmdQueue();
 	PERF_GPU_SCOPE(cmds);
 	auto cam = m_cam_control.currentCamera();
-
-	auto proj_mat = cam.projectionMatrix();
-	auto view_mat = cam.viewMatrix();
 	auto &setup = *m_setups[m_setup_idx];
 	auto swap_chain = m_device->swapChain();
-	auto sc_format = swap_chain->format();
 
-	// TODO: device mo¿e zbieraæ b³êdy wewn¹trz i w przypadku b³êdu zwróciæ niepoprawny (pusty)
-	// render pass? Ale to by powodowa³o sta³y overhead w przypadku ka¿dej funkcji, bo trzeba by
-	// sprawdzaæ czy wszystkie obiekty s¹ niepuste...
-	auto render_pass = m_device->getRenderPass({{sc_format, 1, VColorSyncStd::clear_present}});
-	auto fb = m_device->getFramebuffer({swap_chain->acquiredImage()});
-	cmds.beginRenderPass(fb, render_pass, none, {{VkClearColorValue{0.0, 0.2, 0.0, 1.0}}});
 	auto frustum = cam.frustum();
-
-	/*auto draws = setup.scene->draws(frustum);
+	auto draws = setup.scene->draws(frustum);
 	auto tex_pair = setup.scene->textureAtlasPair();
-	for(auto &tex : {tex_pair.first, tex_pair.second}) {
+	// TODO: filtering params
+	/*for(auto &tex : {tex_pair.first, tex_pair.second}) {
 		if(tex)
 			tex->setFiltering(m_filtering_params);
-	}
+	}*/
 
 	RenderContext ctx{*m_device,
 					  setup.render_config,
-					  setup.scene->mesh_vao,
+					  setup.scene->verts,
+					  setup.scene->tris_ib,
 					  setup.scene->quads_ib,
 					  draws,
 					  setup.scene->materials,
@@ -561,10 +554,8 @@ void LucidApp::drawScene() {
 					  tex_pair.second,
 					  m_lighting,
 					  frustum,
-					  cam,
-					  {},
-					  m_depth_buffer,
-					  {}};
+					  cam};
+
 	for(auto &material : ctx.materials) {
 		material.opacity *= setup.render_config.scene_opacity;
 		material.diffuse *= setup.render_config.scene_color;
@@ -574,11 +565,9 @@ void LucidApp::drawScene() {
 			dc.opts &= ~DrawCallOpt::is_opaque;
 
 	if(true || m_rendering_mode != RenderingMode::lucid)
-		m_simple_renderer->render(ctx, m_wireframe_mode);
+		m_simple_renderer->render(ctx, m_wireframe_mode).check();
 	//if(m_rendering_mode != RenderingMode::simple)
-	//	m_lucid_renderer->render(ctx);*/
-
-	cmds.endRenderPass();
+	//	m_lucid_renderer->render(ctx);
 }
 
 void LucidApp::draw2D() {
@@ -618,8 +607,7 @@ bool LucidApp::mainLoop() {
 		auto &cmds = m_device->cmdQueue();
 		PERF_GPU_SCOPE(cmds, "ImGuiWrapper::drawFrame");
 		auto fb = m_device->getFramebuffer({m_device->swapChain()->acquiredImage()});
-		cmds.beginRenderPass(fb, m_gui_render_pass, none,
-							 {{VkClearColorValue{0.0, 0.2, 0.2, 1.0}}});
+		cmds.beginRenderPass(fb, m_gui_render_pass, none);
 		m_gui.drawFrame(*m_window, cmds.bufferHandle());
 		cmds.endRenderPass();
 	}

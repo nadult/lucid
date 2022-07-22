@@ -58,7 +58,6 @@ class LucidApp {
 
 	Maybe<float2> m_mouse_pos;
 	Dynamic<perf::Analyzer> m_perf_analyzer;
-	PVImage m_depth_buffer;
 	SceneLighting m_lighting;
 	Maybe<float3> m_picked_pos;
 

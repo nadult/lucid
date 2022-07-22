@@ -13,10 +13,9 @@ class SimpleRenderer {
 
 	static void addShaderDefs(ShaderCompiler &);
 
-	Ex<void> exConstruct(VDeviceRef, ShaderCompiler &, const IRect &viewport, VColorAttachment,
-						 VDepthAttachment);
+	Ex<void> exConstruct(VDeviceRef, ShaderCompiler &, const IRect &viewport, VColorAttachment);
 
-	void render(const RenderContext &, bool wireframe);
+	Ex<void> render(const RenderContext &, bool wireframe);
 
 	const IRect &viewport() const { return m_viewport; }
 
@@ -26,9 +25,10 @@ class SimpleRenderer {
 
   private:
 	const SceneMaterial &bindMaterial(const RenderContext &, int mat_id);
-	void renderPhase(const RenderContext &, bool opaque, bool wireframe);
+	void renderPhase(const RenderContext &, PVBuffer, bool opaque, bool wireframe);
 
 	vector<PVPipeline> m_pipelines;
-	Program m_program;
+	PVImageView m_depth_buffer;
+	PVRenderPass m_clear_rpass, m_draw_rpass;
 	IRect m_viewport;
 };

@@ -7,8 +7,8 @@ class SceneSetup {
   public:
 	SceneSetup(string name);
 	virtual ~SceneSetup();
-	virtual void doMenu(){};
-	virtual Ex<> updateScene() = 0;
+	virtual void doMenu(VDeviceRef){};
+	virtual Ex<> updateScene(VDeviceRef) = 0;
 
 	string name;
 	Maybe<Scene> scene;
@@ -22,8 +22,8 @@ class SceneSetup {
 class BoxesSetup final : public SceneSetup {
   public:
 	BoxesSetup();
-	void doMenu() override;
-	Ex<> updateScene() override;
+	void doMenu(VDeviceRef) override;
+	Ex<> updateScene(VDeviceRef) override;
 
   private:
 	int3 m_current_dims;
@@ -35,7 +35,7 @@ class BoxesSetup final : public SceneSetup {
 class LoadedSetup final : public SceneSetup {
   public:
 	LoadedSetup(string name);
-	Ex<> updateScene() override;
+	Ex<> updateScene(VDeviceRef) override;
 
 	static vector<string> findAll();
 };

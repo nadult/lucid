@@ -2,6 +2,7 @@
 
 #include "lucid_base.h"
 #include <fwk/gfx/color.h>
+#include <fwk/vulkan_base.h>
 
 struct WavefrontObject;
 
@@ -14,7 +15,7 @@ struct SceneTexture {
 	Ex<void> save(Stream &) const;
 
 	string name;
-	PTexture gl_texture;
+	PVImage vk_image;
 	vector<Image> plain_mips;
 	vector<CompressedImage> block_mips;
 	bool is_opaque = true;
@@ -26,7 +27,7 @@ struct SceneMaterial {
 	struct UsedTexture {
 		explicit operator bool() const { return id != -1; }
 
-		PTexture gl_handle;
+		PVImage vk_image;
 		FRect uv_rect = FRect(0, 0, 1, 1);
 		bool is_opaque = false;
 		bool is_clamped = true;
@@ -104,15 +105,15 @@ struct Scene {
 	// ------ Rendering data --------------------------------------------------
 
 	void updatePrimitiveOffsets();
-	void updateRenderingData();
+	Ex<void> updateRenderingData(VDeviceRef);
 	void freeRenderingData();
 	void quantizeNormals();
 
 	vector<SceneDrawCall> draws(const Frustum &) const;
-	Pair<PTexture> textureAtlasPair() const;
+	Pair<PVImage> textureAtlasPair() const;
 
-	PVertexArray mesh_vao;
-	PBuffer tris_ib, quads_ib;
+	VertexArray verts;
+	PVBuffer tris_ib, quads_ib;
 
 	vector<Pair<int>> mesh_primitive_offsets;
 };

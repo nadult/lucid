@@ -331,7 +331,7 @@ void LucidRenderer::quadSetup(const Context &ctx) {
 	auto &cmds = ctx.device.cmdQueue();
 	PERF_GPU_SCOPE(cmds);
 
-	m_info->bindIndex(0);
+	/*m_info->bindIndex(0);
 	m_instances->bindIndex(1);
 
 	ctx.quads_ib->bindIndexAs(2, BufferType::shader_storage);
@@ -360,7 +360,7 @@ void LucidRenderer::quadSetup(const Context &ctx) {
 	p_quad_setup["u_num_instances"] = m_num_instances;
 	p_quad_setup["u_packet_size"] = packet_size;
 	glDispatchCompute((m_num_instances + packet_size - 1) / packet_size, 1, 1);
-	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_COMMAND_BARRIER_BIT);
+	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_COMMAND_BARRIER_BIT);*/
 }
 
 void LucidRenderer::computeBins(const Context &ctx) {
@@ -421,15 +421,14 @@ void LucidRenderer::bindRasterCommon(const Context &ctx) {
 void LucidRenderer::bindRaster(Program &program, const Context &ctx) {
 	program.use();
 
-	GlTexture::bind({ctx.opaque_tex, ctx.trans_tex});
+	/*GlTexture::bind({ctx.opaque_tex, ctx.trans_tex});
 	//GlTexture::bind({ctx.depth_buffer, ctx.shadows.map});
 
 	ctx.lighting.setUniforms(program.glProgram());
 	program.setFrustum(ctx.camera);
 	program.setViewport(ctx.camera, m_size);
-	program.setShadows(ctx.shadows.matrix, ctx.shadows.enable);
 	program["background_color"] = u32(ctx.config.background_color);
-	ctx.lighting.setUniforms(program.glProgram());
+	ctx.lighting.setUniforms(program.glProgram());*/
 }
 
 void LucidRenderer::rasterLow(const Context &ctx) {
@@ -462,7 +461,7 @@ void LucidRenderer::compose(const Context &ctx) {
 	auto &cmds = ctx.device.cmdQueue();
 	PERF_GPU_SCOPE(cmds);
 
-	DASSERT(!ctx.out_fbo || ctx.out_fbo->size() == m_size);
+	/*DASSERT(!ctx.out_fbo || ctx.out_fbo->size() == m_size);
 	glDrawBuffer(GL_BACK);
 	setupView(IRect(m_size), ctx.out_fbo);
 	glDisable(GL_BLEND);
@@ -474,7 +473,7 @@ void LucidRenderer::compose(const Context &ctx) {
 	p_compose["bin_counts"] = m_bin_counts;
 	p_compose["screen_scale"] = float2(1.0) / float2(m_size);
 	m_raster_image->bindIndex(0);
-	m_compose_quads_vao->draw(PrimitiveType::triangles, m_bin_counts.x * m_bin_counts.y * 6);
+	m_compose_quads_vao->draw(PrimitiveType::triangles, m_bin_counts.x * m_bin_counts.y * 6);*/
 }
 
 void LucidRenderer::copyInfo(int num_skip_frames) {

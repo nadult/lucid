@@ -21,12 +21,6 @@ struct RenderConfig {
 	bool additive_blending = false;
 };
 
-struct ShadowContext {
-	PTexture map;
-	Matrix4 matrix;
-	bool enable = false;
-};
-
 DEFINE_ENUM(DrawCallOpt, has_vertex_colors, has_vertex_tex_coords, has_vertex_normals, is_opaque,
 			tex_opaque, has_uv_rect, has_texture, has_inst_color);
 using DrawCallOpts = EnumFlags<DrawCallOpt>;
@@ -56,21 +50,22 @@ struct SceneMaterial;
 struct SceneDrawCall;
 struct SceneLighting;
 
+struct VertexArray {
+	static void getDefs(VPipelineSetup &);
+	PVBuffer pos, col, tex, nrm;
+};
+
 struct RenderContext {
 	VulkanDevice &device;
 	RenderConfig config;
-	PVertexArray vao;
-	PBuffer quads_ib;
+	VertexArray verts;
+	PVBuffer tris_ib, quads_ib;
 	vector<SceneDrawCall> dcs;
 	vector<SceneMaterial> materials;
-	PTexture opaque_tex, trans_tex;
+	PVImage opaque_tex, trans_tex;
 	const SceneLighting &lighting;
 	const Frustum &frustum;
 	const Camera &camera;
-
-	PFramebuffer out_fbo;
-	PVImage depth_buffer;
-	ShadowContext shadows;
 };
 
 struct StatsRow {

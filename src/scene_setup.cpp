@@ -96,7 +96,7 @@ SceneSetup::~SceneSetup() = default;
 
 BoxesSetup::BoxesSetup() : SceneSetup("#boxes") {}
 
-void BoxesSetup::doMenu() {
+void BoxesSetup::doMenu(VDeviceRef device) {
 	auto scene_dims = m_dims;
 	auto &gui = Gui::instance();
 	gui.text("Dimensions:");
@@ -106,7 +106,7 @@ void BoxesSetup::doMenu() {
 		if(scene_dims != m_dims) {
 			m_dims = scene_dims;
 			if(scene)
-				updateScene().check();
+				updateScene(device).check();
 		}
 	}
 }
@@ -123,7 +123,7 @@ static void addBox(Scene &scene, SceneMesh &out, IColor color, float size, float
 	scene.colors.resize(scene.colors.size() + 8, color);
 }
 
-Ex<> BoxesSetup::updateScene() {
+Ex<> BoxesSetup::updateScene(VDeviceRef device) {
 	if(m_current_dims == m_dims && scene)
 		return {};
 	float3 offset = -float3(m_dims) * (m_box_size + m_box_dist) * 0.5f;
@@ -152,13 +152,12 @@ Ex<> BoxesSetup::updateScene() {
 	views = {OrbitingCamera({}, 10.0f, 0.5f, 0.8f)};
 	if(!camera)
 		camera = views.front();
-	scene->updateRenderingData();
-	return {};
+	return scene->updateRenderingData(device);
 }
 
 LoadedSetup::LoadedSetup(string name) : SceneSetup(move(name)) {}
 
-Ex<> LoadedSetup::updateScene() {
+Ex<> LoadedSetup::updateScene(VDeviceRef device) {
 	if(scene)
 		return {};
 	auto path = format("%/scenes/%.scene", mainPath(), name);
@@ -166,7 +165,7 @@ Ex<> LoadedSetup::updateScene() {
 
 	if(isOneOf(name, "bunny", "hairball", "teapot"))
 		render_config.scene_opacity = 0.5;
-	scene->updateRenderingData();
+	EXPECT(scene->updateRenderingData(device));
 
 	auto box = scene->bounding_box;
 	auto max_size = max(box.width(), box.height(), box.depth());

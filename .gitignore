@@ -12,4 +12,5 @@ build/*
 /*.wasm
 /windows/.vs
 /windows/build
+/data/spirv
 *.vcxproj.user

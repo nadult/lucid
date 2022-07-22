@@ -62,6 +62,7 @@
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpplatest</LanguageStandard>
+      <AdditionalOptions>/wd4800 /wd4244 /wd4521 -Woverloaded-virtual -Wnon-virtual-dtor -Wno-reorder -Wuninitialized -Wno-unused-function -Werror=switch -Werror=delete-incomplete -Wno-unused-variable -Wno-unused-parameter -Wparentheses -Wno-overloaded-virtual -Wconstant-conversion -Werror=return-type -Werror=init-self -Werror=uninitialized -Wno-undefined-inline %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -81,6 +82,7 @@
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpplatest</LanguageStandard>
+      <AdditionalOptions>/wd4800 /wd4244 /wd4521 -Woverloaded-virtual -Wnon-virtual-dtor -Wno-reorder -Wuninitialized -Wno-unused-function -Werror=switch -Werror=delete-incomplete -Wno-unused-variable -Wno-unused-parameter -Wparentheses -Wno-overloaded-virtual -Wconstant-conversion -Werror=return-type -Werror=init-self -Werror=uninitialized -Wno-undefined-inline %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>

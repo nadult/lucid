@@ -212,8 +212,8 @@ Ex<void> LucidApp::updateRenderer() {
 		m_lucid_renderer.reset();
 		m_simple_renderer.reset();
 
-		m_simple_renderer = move(EX_PASS(construct<SimpleRenderer>(
-			m_device, *m_shader_compiler, m_viewport, swap_chain->format())));
+		m_simple_renderer = EX_PASS(construct<SimpleRenderer>(m_device, *m_shader_compiler,
+															  m_viewport, swap_chain->format()));
 		//m_lucid_renderer = move(construct<LucidRenderer>(m_lucid_opts, m_viewport.size()).get());
 	}
 

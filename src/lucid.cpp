@@ -82,9 +82,6 @@ Ex<int> exMain(int argc, char **argv) {
 		  phys_info.properties.deviceName, phys_info.properties.driverVersion);
 	device->addSwapChain(EX_PASS(VulkanSwapChain::create(device, window, swap_chain_setup)));
 
-	//initShaderCombiner();
-	//loadShaderPieces().get();
-
 	Dynamic<perf::Manager> perf_manager;
 	Dynamic<perf::ThreadContext> perf_ctx;
 	if(true) {

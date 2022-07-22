@@ -49,40 +49,34 @@ Ex<void> SimpleRenderer::exConstruct(VDeviceRef device, ShaderCompiler &compiler
 	auto fsh_bytecode = compiler.getSpirv("simple_frag");
 	auto vsh_bytecode = compiler.getSpirv("simple_vert");
 
-	auto fsh_module = EX_PASS(VulkanShaderModule::create(device, fsh_bytecode));
-	auto vsh_module = EX_PASS(VulkanShaderModule::create(device, vsh_bytecode));
+	m_frag_module = EX_PASS(VulkanShaderModule::create(device, fsh_bytecode));
+	m_vert_module = EX_PASS(VulkanShaderModule::create(device, vsh_bytecode));
+	m_pipeline_layout = device->getPipelineLayout({m_frag_module, m_vert_module});
 
+	return {};
+}
+
+Ex<PVPipeline> SimpleRenderer::getPipeline(const RenderContext &ctx, bool opaque,
+										   bool wireframe) const {
 	VPipelineSetup setup;
+	setup.pipeline_layout = m_pipeline_layout;
 	setup.render_pass = m_draw_rpass;
-	setup.shader_modules = {{vsh_module, fsh_module}};
+	setup.shader_modules = {{m_vert_module, m_frag_module}};
 	setup.depth = VDepthSetup(VDepthFlag::test | VDepthFlag::write);
 	VertexArray::getDefs(setup);
 
-	// TODO: culling
-	// TODO: Construct pipeline on demand, use pipeline cache
-
-	m_pipelines.resize(6);
-
-	VBlendingMode additive_blend(VBlendFactor::one, VBlendFactor::one);
-	VBlendingMode normal_blend(VBlendFactor::src_alpha, VBlendFactor::one_minus_src_alpha);
-	for(int wireframe = 0; wireframe <= 1; wireframe++) {
-		setup.raster = VRasterSetup(VPrimitiveTopology::triangle_list,
-									wireframe ? VPolygonMode::line : VPolygonMode::fill);
-
-		setup.blending.attachments = {};
-		m_pipelines[pipelineId(true, wireframe, false)] =
-			EX_PASS(VulkanPipeline::create(device, setup));
-
-		setup.blending.attachments = {{normal_blend}};
-		m_pipelines[pipelineId(false, wireframe, false)] =
-			EX_PASS(VulkanPipeline::create(device, setup));
-
-		setup.blending.attachments = {{additive_blend}};
-		m_pipelines[pipelineId(false, wireframe, true)] =
-			EX_PASS(VulkanPipeline::create(device, setup));
+	setup.raster = VRasterSetup(VPrimitiveTopology::triangle_list,
+								wireframe ? VPolygonMode::line : VPolygonMode::fill,
+								mask(ctx.config.backface_culling, VCull::back));
+	if(!opaque) {
+		VBlendingMode additive_blend(VBlendFactor::one, VBlendFactor::one);
+		VBlendingMode normal_blend(VBlendFactor::src_alpha, VBlendFactor::one_minus_src_alpha);
+		setup.blending.attachments = {
+			{ctx.config.additive_blending ? additive_blend : normal_blend}};
 	}
 
-	return {};
+	// TODO: remove refs
+	return VulkanPipeline::create(ctx.device.ref(), setup);
 }
 
 Matrix3 normalMatrix(const Matrix4 &affine) {
@@ -91,17 +85,19 @@ Matrix3 normalMatrix(const Matrix4 &affine) {
 }
 
 // TODO: add typed VSpan type
-void SimpleRenderer::renderPhase(const RenderContext &ctx, PVBuffer simple_dc_buf, bool opaque,
+Ex<> SimpleRenderer::renderPhase(const RenderContext &ctx, PVBuffer simple_dc_buf, bool opaque,
 								 bool wireframe) {
 	// TODO: don't run if we don't have any drawcalls of given type
 
 	auto &cmds = ctx.device.cmdQueue();
 	PERF_GPU_SCOPE(cmds);
 
-	auto pipeline = m_pipelines[pipelineId(opaque, wireframe, ctx.config.additive_blending)];
+	auto pipeline = EX_PASS(getPipeline(ctx, opaque, wireframe));
 	auto swap_chain = ctx.device.swapChain();
 	auto framebuffer = ctx.device.getFramebuffer({swap_chain->acquiredImage()}, m_depth_buffer);
 	cmds.bind(pipeline);
+
+	// TODO: single render pass is enough
 	cmds.beginRenderPass(framebuffer, opaque ? m_clear_rpass : m_draw_rpass, none,
 						 {FColor(0.5, 0.2, 0.0), VClearDepthStencil(1.0)});
 
@@ -125,9 +121,11 @@ void SimpleRenderer::renderPhase(const RenderContext &ctx, PVBuffer simple_dc_bu
 	// TODO: what about ordering objects by material ?
 	// TODO: add option to order objects in different ways ?
 	// TODO: optional alpha test first for blended objects
+
+	return {};
 }
 
-Ex<void> SimpleRenderer::render(const RenderContext &ctx, bool wireframe) {
+Ex<> SimpleRenderer::render(const RenderContext &ctx, bool wireframe) {
 	auto &cmds = ctx.device.cmdQueue();
 	PERF_GPU_SCOPE(cmds);
 
@@ -166,7 +164,7 @@ Ex<void> SimpleRenderer::render(const RenderContext &ctx, bool wireframe) {
 			; // TODO
 	}
 	EXPECT(cmds.upload(simple_dc_buf, simple_dcs));
-	cmds.bind(m_pipelines[0]->layout());
+	cmds.bind(m_pipeline_layout);
 	cmds.bindDS(0)(0, lighting_buf, VDescriptorType::uniform_buffer);
 	cmds.setViewport(m_viewport);
 	cmds.setScissor(none);
@@ -182,8 +180,8 @@ Ex<void> SimpleRenderer::render(const RenderContext &ctx, bool wireframe) {
 	cmds.bindVertices({verts.pos, verts.col, verts.tex, verts.nrm});
 	cmds.bindIndices(ctx.tris_ib);
 
-	renderPhase(ctx, simple_dc_buf, true, wireframe);
-	renderPhase(ctx, simple_dc_buf, false, wireframe);
+	EXPECT(renderPhase(ctx, simple_dc_buf, true, wireframe));
+	EXPECT(renderPhase(ctx, simple_dc_buf, false, wireframe));
 
 	return {};
 }

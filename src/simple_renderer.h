@@ -15,19 +15,18 @@ class SimpleRenderer {
 
 	Ex<void> exConstruct(VDeviceRef, ShaderCompiler &, const IRect &viewport, VColorAttachment);
 
-	Ex<void> render(const RenderContext &, bool wireframe);
+	// TODO: wireframe to config
+	Ex<> render(const RenderContext &, bool wireframe);
 
 	const IRect &viewport() const { return m_viewport; }
 
-	static uint pipelineId(bool opaque, bool wireframe, bool additive) {
-		return (opaque ? 0 : additive ? 2 : 1) + (wireframe ? 3 : 0);
-	}
-
   private:
+	Ex<PVPipeline> getPipeline(const RenderContext &, bool opaque, bool wireframe) const;
 	const SceneMaterial &bindMaterial(const RenderContext &, int mat_id);
-	void renderPhase(const RenderContext &, PVBuffer, bool opaque, bool wireframe);
+	Ex<> renderPhase(const RenderContext &, PVBuffer, bool opaque, bool wireframe);
 
-	vector<PVPipeline> m_pipelines;
+	PVShaderModule m_frag_module, m_vert_module;
+	PVPipelineLayout m_pipeline_layout;
 	PVImageView m_depth_buffer;
 	PVRenderPass m_clear_rpass, m_draw_rpass;
 	IRect m_viewport;

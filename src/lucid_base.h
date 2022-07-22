@@ -69,7 +69,7 @@ struct RenderContext {
 	const Camera &camera;
 
 	PFramebuffer out_fbo;
-	PTexture depth_buffer;
+	PVImage depth_buffer;
 	ShadowContext shadows;
 };
 

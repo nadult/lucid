@@ -121,24 +121,6 @@
     <None Include="..\data\shaders\dummy.shader">
       <Filter>shaders</Filter>
     </None>
-    <None Include="..\data\shaders\simple.shader">
-      <Filter>shaders</Filter>
-    </None>
-    <None Include="..\data\shaders\pieces\frustum.shader">
-      <Filter>shaders\pieces</Filter>
-    </None>
-    <None Include="..\data\shaders\pieces\funcs.shader">
-      <Filter>shaders\pieces</Filter>
-    </None>
-    <None Include="..\data\shaders\pieces\lighting.shader">
-      <Filter>shaders\pieces</Filter>
-    </None>
-    <None Include="..\data\shaders\pieces\macros.shader">
-      <Filter>shaders\pieces</Filter>
-    </None>
-    <None Include="..\data\shaders\pieces\rect.shader">
-      <Filter>shaders\pieces</Filter>
-    </None>
     <None Include="..\data\shaders\pieces\viewport.shader">
       <Filter>shaders\pieces</Filter>
     </None>
@@ -162,6 +144,18 @@
     </None>
     <None Include="..\data\shaders\pieces\scanline.shader">
       <Filter>shaders\pieces</Filter>
+    </None>
+    <None Include="..\data\shaders\simple.glsl">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="..\data\shaders\funcs.glsl">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="..\data\shaders\macros.glsl">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="..\data\shaders\structures.glsl">
+      <Filter>shaders</Filter>
     </None>
   </ItemGroup>
 </Project>

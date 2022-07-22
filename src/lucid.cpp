@@ -96,7 +96,7 @@ Ex<int> exMain(int argc, char **argv) {
 	if(config)
 		app.setConfig(*config);
 	app.updateViewport();
-	app.updateRenderer();
+	EXPECT(app.updateRenderer());
 	window->runMainLoop(LucidApp::mainLoop, &app);
 	app.printPerfStats();
 

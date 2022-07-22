@@ -1,3 +1,6 @@
+#ifndef _MACROS_GLSL_
+#define _MACROS_GLSL_
+
 // clang-format off
 
 #define LIX		gl_LocalInvocationIndex
@@ -48,4 +51,4 @@
 #define STORAGE_QUAD_NORMAL_OFFSET	(MAX_VISIBLE_QUADS * 11)
 #define STORAGE_QUAD_TEXTURE_OFFSET	(MAX_VISIBLE_QUADS * 12)
 
-
+#endif

@@ -18,6 +18,7 @@
 #include <fwk/gfx/mesh.h>
 #include <fwk/gfx/opengl.h>
 #include <fwk/gfx/renderer2d.h>
+#include <fwk/gfx/shader_compiler.h>
 #include <fwk/gui/imgui.h>
 #include <fwk/gui/widgets.h>
 #include <fwk/io/file_system.h>
@@ -32,6 +33,7 @@
 
 #include <fwk/vulkan/vulkan_command_queue.h>
 #include <fwk/vulkan/vulkan_device.h>
+#include <fwk/vulkan/vulkan_image.h>
 #include <fwk/vulkan/vulkan_pipeline.h>
 #include <fwk/vulkan/vulkan_swap_chain.h>
 #include <fwk/vulkan/vulkan_window.h>
@@ -56,6 +58,14 @@ LucidApp::LucidApp(VWindowRef window, VDeviceRef device)
 	: m_window(window), m_device(device), m_gui_render_pass(guiRenderPass(device)),
 	  m_gui(device, window, m_gui_render_pass, {GuiStyleMode::mini}),
 	  m_cam_control(Plane3F(float3(0, 1, 0), 0.0f)), m_lighting(SceneLighting::makeDefault()) {
+
+	ShaderCompilerOptions sc_options;
+	sc_options.version = device->version();
+	sc_options.source_dirs.emplace_back(dataPath("shaders"));
+	sc_options.spirv_cache_dir = dataPath("spirv");
+	m_shader_compiler.emplace(sc_options);
+	SimpleRenderer::addShaderDefs(*m_shader_compiler);
+
 	m_filtering_params.magnification = TextureFilterOpt::linear;
 	m_filtering_params.minification = TextureFilterOpt::linear;
 	m_filtering_params.mipmap = TextureFilterOpt::linear;
@@ -182,34 +192,30 @@ bool LucidApp::updateViewport() {
 	return changed;
 }
 
-void LucidApp::updateRenderer() {
-	bool do_update = !m_lucid_renderer || m_lucid_renderer->opts() != m_lucid_opts;
+Ex<void> LucidApp::updateRenderer() {
+	// TODO: !m_lucid_renderer || m_lucid_renderer->opts() != m_lucid_opts;
+	bool do_update = !m_simple_renderer;
+
 	if(updateViewport())
 		do_update = true;
 
-	/*auto opts = FindFileOpt::regular_file | FindFileOpt::recursive;
-	for(auto entry : findFiles(dataPath("shaders"), opts)) {
-		if(entry.path.fileExtension() == "shader") {
-			auto time = lastModificationTime(entry.path);
-			auto &ref = m_shader_times[entry.path];
-			if(time && ref < *time) {
-				loadShaderPieces().get();
-				do_update = true;
-				ref = *time;
-			}
-		}
-	}
-
 	if(do_update) {
-		m_depth_buffer.emplace(GlFormat::depth32, m_viewport.size(), 1);
-		m_depth_buffer->setWrapping(TextureWrapOpt::clamp_to_edge);
-		m_clear_fbo.emplace(none, m_depth_buffer);
+		auto depth_format = m_device->bestSupportedFormat(VDepthStencilFormat::d32f);
+		m_depth_buffer =
+			EX_PASS(VulkanImage::create(m_device, VImageSetup(depth_format, m_viewport.size(), 1)));
+		VDepthAttachment depth_att(depth_format, 1, defaultLayout(depth_format));
+		// TODO: :we need to transition depth_buffer format too
 
+		auto swap_chain = m_device->swapChain();
 		m_lucid_renderer.reset();
 		m_simple_renderer.reset();
-		m_simple_renderer = move(construct<SimpleRenderer>(m_viewport).get());
-		m_lucid_renderer = move(construct<LucidRenderer>(m_lucid_opts, m_viewport.size()).get());
-	}*/
+
+		m_simple_renderer = move(EX_PASS(construct<SimpleRenderer>(
+			m_device, *m_shader_compiler, m_viewport, swap_chain->format(), depth_att)));
+		//m_lucid_renderer = move(construct<LucidRenderer>(m_lucid_opts, m_viewport.size()).get());
+	}
+
+	return {};
 }
 
 static void showStatsRows(CSpan<StatsRow> rows, ZStr title, int label_width) {
@@ -537,6 +543,7 @@ void LucidApp::drawScene() {
 	auto fb = m_device->getFramebuffer({swap_chain->acquiredImage()});
 	cmds.beginRenderPass(fb, render_pass, none, {{VkClearColorValue{0.0, 0.2, 0.0, 1.0}}});
 	auto frustum = cam.frustum();
+
 	/*auto draws = setup.scene->draws(frustum);
 	auto tex_pair = setup.scene->textureAtlasPair();
 	for(auto &tex : {tex_pair.first, tex_pair.second}) {
@@ -544,7 +551,8 @@ void LucidApp::drawScene() {
 			tex->setFiltering(m_filtering_params);
 	}
 
-	RenderContext ctx{setup.render_config,
+	RenderContext ctx{*m_device,
+					  setup.render_config,
 					  setup.scene->mesh_vao,
 					  setup.scene->quads_ib,
 					  draws,
@@ -565,10 +573,10 @@ void LucidApp::drawScene() {
 		for(auto &dc : ctx.dcs)
 			dc.opts &= ~DrawCallOpt::is_opaque;
 
-	if(m_rendering_mode != RenderingMode::lucid)
+	if(true || m_rendering_mode != RenderingMode::lucid)
 		m_simple_renderer->render(ctx, m_wireframe_mode);
-	if(m_rendering_mode != RenderingMode::simple)
-		m_lucid_renderer->render(ctx);*/
+	//if(m_rendering_mode != RenderingMode::simple)
+	//	m_lucid_renderer->render(ctx);*/
 
 	cmds.endRenderPass();
 }
@@ -600,7 +608,7 @@ bool LucidApp::mainLoop() {
 	if(!tick(time_diff))
 		return false;
 
-	updateRenderer();
+	updateRenderer().check();
 	m_device->beginFrame().check();
 	auto swap_chain = m_device->swapChain();
 	if(swap_chain->status() == VSwapChainStatus::image_acquired) {

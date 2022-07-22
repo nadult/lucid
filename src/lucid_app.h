@@ -32,7 +32,7 @@ class LucidApp {
 	void switchView();
 
 	bool updateViewport();
-	void updateRenderer();
+	Ex<void> updateRenderer();
 
 	void doMenu();
 	bool handleInput(vector<InputEvent> events, float time_diff);
@@ -58,14 +58,13 @@ class LucidApp {
 
 	Maybe<float2> m_mouse_pos;
 	Dynamic<perf::Analyzer> m_perf_analyzer;
-	PTexture m_depth_buffer;
-	PFramebuffer m_clear_fbo;
+	PVImage m_depth_buffer;
 	SceneLighting m_lighting;
 	Maybe<float3> m_picked_pos;
 
+	Dynamic<ShaderCompiler> m_shader_compiler;
 	Dynamic<LucidRenderer> m_lucid_renderer;
 	Dynamic<SimpleRenderer> m_simple_renderer;
-	HashMap<FilePath, double> m_shader_times;
 	LucidRenderOpts m_lucid_opts = none;
 	bool m_wireframe_mode = false;
 	bool m_test_meshlets = false;

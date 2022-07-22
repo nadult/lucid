@@ -1,3 +1,8 @@
+#ifndef _FUNCS_GLSL_
+#define _FUNCS_GLSL_
+
+#include "structures.glsl"
+
 #if MSAA_SAMPLES > 1
 #define ID_BUFFER_SAMPLER usampler2DMS
 #define DEPTH_BUFFER_SAMPLER sampler2DMS
@@ -7,10 +12,6 @@
 #define DEPTH_BUFFER_SAMPLER sampler2D
 #define COLOR_BUFFER_SAMPLER sampler2D
 #endif
-
-#define TEXTURE_BIT 0x40000000
-#define COLORS_BIT 0x80000000
-#define FLAGS_BITS 0xc0000000
 
 #define PI 3.14159265359
 
@@ -43,25 +44,25 @@ uvec2 encodeAABB64(uvec4 aabb) {
 }
 
 uvec4 decodeAABB64(uvec2 aabb) {
-	return uvec4(aabb[0] & 0xffff, aabb[0] >> 16, aabb[1] & 0xffff, aabb[1] >> 16);
+	return uvec4(aabb[0] & 0xffffu, aabb[0] >> 16, aabb[1] & 0xffffu, aabb[1] >> 16);
 }
 
 uint encodeAABB32(uvec4 aabb) {
-	return ((aabb[0] & 0xff) << 0) | ((aabb[1] & 0xff) << 8) | ((aabb[2] & 0xff) << 16) |
-		   ((aabb[3] & 0xff) << 24);
+	return ((aabb[0] & 0xffu) << 0) | ((aabb[1] & 0xffu) << 8) | ((aabb[2] & 0xffu) << 16) |
+		   ((aabb[3] & 0xffu) << 24);
 }
 
 ivec4 decodeAABB32(uint aabb) {
-	return ivec4(aabb & 0xff, (aabb >> 8) & 0xff, (aabb >> 16) & 0xff, aabb >> 24);
+	return ivec4(aabb & 0xffu, (aabb >> 8) & 0xffu, (aabb >> 16) & 0xffu, aabb >> 24);
 }
 
 uint encodeAABB28(uvec4 aabb) {
-	return ((aabb[0] & 0x7f) << 0) | ((aabb[1] & 0x7f) << 7) | ((aabb[2] & 0x7f) << 14) |
-		   ((aabb[3] & 0x7f) << 21);
+	return ((aabb[0] & 0x7fu) << 0) | ((aabb[1] & 0x7fu) << 7) | ((aabb[2] & 0x7fu) << 14) |
+		   ((aabb[3] & 0x7fu) << 21);
 }
 
 ivec4 decodeAABB28(uint aabb) {
-	return ivec4(aabb & 0x7f, (aabb >> 7) & 0x7f, (aabb >> 14) & 0x7f, (aabb >> 21) & 0x7f);
+	return ivec4(aabb & 0x7fu, (aabb >> 7) & 0x7fu, (aabb >> 14) & 0x7fu, (aabb >> 21) & 0x7fu);
 }
 
 vec3 decodeNormalUint(uint n) {
@@ -162,9 +163,10 @@ uvec2 encodeCD(vec4 color, float depth) {
 }
 
 vec4 decodeCDColor(uvec2 enc) {
-	return vec4(
-		float((enc[0]) & 0x7ff) * (1.0 / 2047.0), float((enc[0] >> 11) & 0x7ff) * (1.0 / 2047.0),
-		float((enc[0] >> 22) & 0x3ff) * (1.0 / 1023.0), float(enc[1] & 0xff) * (1.0 / 255.0));
+	return vec4(float((enc[0] >> 0) & 0x7ffu) * (1.0 / 2047.0),
+				float((enc[0] >> 11) & 0x7ffu) * (1.0 / 2047.0),
+				float((enc[0] >> 22) & 0x3ffu) * (1.0 / 1023.0),
+				float(enc[1] & 0xffu) * (1.0 / 255.0));
 }
 
 vec3 linearToSRGB(vec3 color) {
@@ -183,15 +185,15 @@ vec3 SRGBToLinear(vec3 color) {
 uint encodeNormalHemiOct(vec3 n) {
 	vec2 p = n.xy * (1.0 / (abs(n.x) + abs(n.y) + abs(n.z)));
 	return uint((p.x + p.y) * 32767.0 + 32768.0) | (uint((p.x - p.y) * 16383.0 + 16384.0) << 16) |
-		   (n.z < 0.0 ? 0x80000000 : 0);
+		   (n.z < 0.0 ? 0x80000000u : 0u);
 }
 
 vec3 decodeNormalHemiOct(uint n) {
-	vec2 e = vec2((float(n & 0xffff) - 32768.0) * (0.5 / 32767.0),
-				  (float((n >> 16) & 0x7fff) - 16384.0) * (0.5 / 16383.0));
+	vec2 e = vec2((float(n & 0xffffu) - 32768.0) * (0.5 / 32767.0),
+				  (float((n >> 16) & 0x7fffu) - 16384.0) * (0.5 / 16383.0));
 	vec2 temp = vec2(e.x + e.y, e.x - e.y);
 	vec3 v = vec3(temp, 1.0 - abs(temp.x) - abs(temp.y));
-	if((n & 0x80000000) != 0)
+	if((n & 0x80000000u) != 0u)
 		v.z = -v.z;
 	return normalize(v);
 }
@@ -220,21 +222,47 @@ uint encodeNormalOct(vec3 n) {
 }
 
 vec3 decodeNormalOct(uint ei) {
-	vec2 e = vec2(ei & 0xffff, ei >> 16) * (1.0 / 65535.0);
+	vec2 e = vec2(ei & 0xffffu, ei >> 16) * (1.0 / 65535.0);
 	return oct_to_float32x3(e);
 }
 
 float invLerp(float a, float b, float v) { return (v - a) / (b - a); }
 
-#define SWAP_UINT(v1, v2)                                                                          \
-	{                                                                                              \
-		uint temp = v1;                                                                            \
-		v1 = v2;                                                                                   \
-		v2 = temp;                                                                                 \
-	}
-#define SWAP_FLOAT(v1, v2)                                                                         \
-	{                                                                                              \
-		float temp = v1;                                                                           \
-		v1 = v2;                                                                                   \
-		v2 = temp;                                                                                 \
-	}
+void swap(inout float a, inout float b) {
+	float temp = a;
+	a = b;
+	b = temp;
+}
+
+void swap(inout uint a, inout uint b) {
+	uint temp = a;
+	a = b;
+	b = temp;
+}
+
+vec4 rectPos(Rect rect, vec3 pos) { return vec4(rect.pos + rect.size * pos.xy, 0.0, 1.0); }
+vec2 rectTexCoord(Rect rect, vec3 pos) {
+	return (rect.pos + rect.size * pos.xy + vec2(1.0, 1.0)) * 0.5;
+}
+
+// --------------------- Lighting functions -----------------------------------
+
+vec3 skyColor(float vertical_pos) {
+	vec3 sky = vec3(5.0, 234.0, 250.0) / 255.0;
+	vec3 horizon = vec3(247.0, 214.0, 255.0) / 255.0;
+	return mix(sky, horizon, 1.0 - vertical_pos);
+}
+
+vec3 finalShading(Lighting lighting, vec3 diffuse, float light_value) {
+	// TODO: is this correct? read more about HDR?
+	diffuse = SRGBToLinear(mix(diffuse, lighting.scene_color, lighting.scene_power));
+	vec3 amb_light = lighting.ambient_color * lighting.ambient_power;
+	vec3 dif_light = lighting.sun_color * lighting.sun_power * light_value;
+
+	//return lighting.scene_color;
+	//return diffuse;
+
+	return linearToSRGB(diffuse * (amb_light + dif_light));
+}
+
+#endif

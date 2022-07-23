@@ -36,13 +36,10 @@ Ex<void> SimpleRenderer::exConstruct(VDeviceRef device, ShaderCompiler &compiler
 	// TODO: :we need to transition depth_buffer format too
 
 	VDepthAttachment depth_att(depth_format, 1, defaultLayout(depth_format));
-	color_att.sync = VColorSyncStd::draw;
-	m_draw_rpass = device->getRenderPass({color_att}, depth_att);
-
 	color_att.sync = VColorSyncStd::clear;
 	depth_att.sync = VDepthSync(VLoadOp::clear, VStoreOp::store, VImageLayout::undefined,
 								defaultLayout(depth_format));
-	m_clear_rpass = device->getRenderPass({color_att}, depth_att);
+	m_render_pass = device->getRenderPass({color_att}, depth_att);
 
 	ShaderDefs defs;
 	m_viewport = viewport;
@@ -62,7 +59,7 @@ Ex<PVPipeline> SimpleRenderer::getPipeline(const RenderContext &ctx, bool opaque
 
 	VPipelineSetup setup;
 	setup.pipeline_layout = m_pipeline_layout;
-	setup.render_pass = m_draw_rpass;
+	setup.render_pass = m_render_pass;
 	setup.shader_modules = {{m_vert_module, m_frag_module}};
 	setup.depth = VDepthSetup(VDepthFlag::test | VDepthFlag::write);
 	VertexArray::getDefs(setup);
@@ -95,13 +92,7 @@ Ex<> SimpleRenderer::renderPhase(const RenderContext &ctx, PVBuffer simple_dc_bu
 	PERF_GPU_SCOPE(cmds);
 
 	auto pipeline = EX_PASS(getPipeline(ctx, opaque, wireframe));
-	auto swap_chain = ctx.device.swapChain();
-	auto framebuffer = ctx.device.getFramebuffer({swap_chain->acquiredImage()}, m_depth_buffer);
 	cmds.bind(pipeline);
-
-	// TODO: single render pass is enough
-	cmds.beginRenderPass(framebuffer, opaque ? m_clear_rpass : m_draw_rpass, none,
-						 {FColor(0.5, 0.2, 0.0), VClearDepthStencil(1.0)});
 
 	int prev_mat_id = -1;
 	for(int dc : intRange(ctx.dcs)) {
@@ -117,8 +108,6 @@ Ex<> SimpleRenderer::renderPhase(const RenderContext &ctx, PVBuffer simple_dc_bu
 
 		cmds.drawIndexed(draw_call.num_tris * 3, 1, draw_call.tri_offset * 3);
 	}
-
-	cmds.endRenderPass();
 
 	// TODO: what about ordering objects by material ?
 	// TODO: add option to order objects in different ways ?
@@ -148,12 +137,16 @@ Ex<> SimpleRenderer::render(const RenderContext &ctx, bool wireframe) {
 	lighting.sun_dir = ctx.lighting.sun.dir;
 	EXPECT(cmds.upload(lighting_buf, cspan(&lighting, 1)));
 
+	int num_opaque = 0;
+
 	// TODO: minimize it (do it only for different materials)
 	vector<shader::SimpleDrawCall> simple_dcs;
 	simple_dcs.reserve(ctx.dcs.size());
 	for(const auto &draw_call : ctx.dcs) {
 		auto &material = ctx.materials[draw_call.material_id];
 		auto &simple_dc = simple_dcs.emplace_back();
+		if(draw_call.opts & DrawCallOpt::is_opaque)
+			num_opaque++;
 		simple_dc.world_camera_pos = ctx.camera.pos();
 		simple_dc.proj_view_matrix = ctx.camera.matrix();
 		simple_dc.material_color = float4(material.diffuse, material.opacity);
@@ -182,8 +175,17 @@ Ex<> SimpleRenderer::render(const RenderContext &ctx, bool wireframe) {
 	cmds.bindVertices({verts.pos, verts.col, verts.tex, verts.nrm});
 	cmds.bindIndices(ctx.tris_ib);
 
-	EXPECT(renderPhase(ctx, simple_dc_buf, true, wireframe));
-	EXPECT(renderPhase(ctx, simple_dc_buf, false, wireframe));
+	auto swap_chain = ctx.device.swapChain();
+	auto framebuffer = ctx.device.getFramebuffer({swap_chain->acquiredImage()}, m_depth_buffer);
+	cmds.beginRenderPass(framebuffer, m_render_pass, none,
+						 {FColor(0.0, 0.2, 0.0), VClearDepthStencil(1.0)});
+
+	if(num_opaque > 0)
+		EXPECT(renderPhase(ctx, simple_dc_buf, true, wireframe));
+	if(num_opaque != ctx.dcs.size())
+		EXPECT(renderPhase(ctx, simple_dc_buf, false, wireframe));
+
+	cmds.endRenderPass();
 
 	return {};
 }

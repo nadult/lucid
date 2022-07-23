@@ -28,6 +28,6 @@ class SimpleRenderer {
 	PVShaderModule m_frag_module, m_vert_module;
 	PVPipelineLayout m_pipeline_layout;
 	PVImageView m_depth_buffer;
-	PVRenderPass m_clear_rpass, m_draw_rpass;
+	PVRenderPass m_render_pass;
 	IRect m_viewport;
 };

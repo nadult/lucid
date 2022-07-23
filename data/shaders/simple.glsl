@@ -2,7 +2,6 @@
 #include "macros.glsl"
 
 layout(set = 0, binding = 0) uniform ubo00 { Lighting lighting; };
-
 layout(set = 1, binding = 0) uniform ubo10 { SimpleDrawCall simple_dc; };
 //layout(set = 1, binding = 1) uniform sampler2D color_tex;
 
@@ -64,11 +63,9 @@ void main() {
 		//color *= textureGrad(color_tex, tex_coord, tex_dx, tex_dy);
 	}
 
-	f_color = color;
-	// TODO: lighting data is broken
-	//float light_value = max(0.0, dot(-lighting.sun_dir, normalWS) * 0.7 + 0.3);
-	//f_color.rgb = finalShading(lighting, color.rgb, light_value);
-	//f_color.a = color.a;
+	float light_value = max(0.0, dot(-lighting.sun_dir.xyz, normalWS) * 0.7 + 0.3);
+	f_color.rgb = finalShading(lighting, color.rgb, light_value);
+	f_color.a = color.a;
 }
 
 #endif

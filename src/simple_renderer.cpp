@@ -58,6 +58,8 @@ Ex<void> SimpleRenderer::exConstruct(VDeviceRef device, ShaderCompiler &compiler
 
 Ex<PVPipeline> SimpleRenderer::getPipeline(const RenderContext &ctx, bool opaque,
 										   bool wireframe) const {
+	PERF_SCOPE();
+
 	VPipelineSetup setup;
 	setup.pipeline_layout = m_pipeline_layout;
 	setup.render_pass = m_draw_rpass;

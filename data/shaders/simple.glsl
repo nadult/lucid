@@ -3,7 +3,7 @@
 
 layout(set = 0, binding = 0) uniform ubo00 { Lighting lighting; };
 layout(set = 1, binding = 0) uniform ubo10 { SimpleDrawCall simple_dc; };
-//layout(set = 1, binding = 1) uniform sampler2D color_tex;
+layout(set = 1, binding = 1) uniform sampler2D color_tex;
 
 bool flagSet(uint flag) { return (simple_dc.draw_call_opts & flag) != 0; }
 
@@ -60,7 +60,7 @@ void main() {
 			tex_dy *= simple_dc.uv_rect_size;
 			tex_coord = simple_dc.uv_rect_pos + simple_dc.uv_rect_size * fract(tex_coord);
 		}
-		//color *= textureGrad(color_tex, tex_coord, tex_dx, tex_dy);
+		color *= textureGrad(color_tex, tex_coord, tex_dx, tex_dy);
 	}
 
 	float light_value = max(0.0, dot(-lighting.sun_dir.xyz, normalWS) * 0.7 + 0.3);

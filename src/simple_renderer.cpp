@@ -31,7 +31,7 @@ Ex<void> SimpleRenderer::exConstruct(VDeviceRef device, ShaderCompiler &compiler
 									 const IRect &viewport, VColorAttachment color_att) {
 	auto depth_format = device->bestSupportedFormat(VDepthStencilFormat::d32f);
 	auto depth_buffer =
-		EX_PASS(VulkanImage::create(device, VImageSetup(depth_format, viewport.size(), 1)));
+		EX_PASS(VulkanImage::create(device, VImageSetup(depth_format, viewport.size())));
 	m_depth_buffer = VulkanImageView::create(device, depth_buffer);
 	// TODO: :we need to transition depth_buffer format too
 
@@ -94,6 +94,9 @@ Ex<> SimpleRenderer::renderPhase(const RenderContext &ctx, PVBuffer simple_dc_bu
 	auto pipeline = EX_PASS(getPipeline(ctx, opaque, wireframe));
 	cmds.bind(pipeline);
 
+	VSamplerSetup sam_setup;
+	auto sampler = ctx.device.createSampler(sam_setup);
+
 	int prev_mat_id = -1;
 	for(int dc : intRange(ctx.dcs)) {
 		auto &draw_call = ctx.dcs[dc];
@@ -102,7 +105,8 @@ Ex<> SimpleRenderer::renderPhase(const RenderContext &ctx, PVBuffer simple_dc_bu
 			continue;
 		if(prev_mat_id != draw_call.material_id) {
 			cmds.bindDS(1)(0, span<shader::SimpleDrawCall>(simple_dc_buf, dc, 1),
-						   VDescriptorType::uniform_buffer);
+						   VDescriptorType::uniform_buffer)(1, sampler,
+															material.diffuse_tex.vk_image);
 			prev_mat_id = draw_call.material_id;
 		}
 

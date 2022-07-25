@@ -11,6 +11,7 @@
 #include <fwk/math/segment.h>
 #include <fwk/vulkan/vulkan_buffer.h>
 #include <fwk/vulkan/vulkan_device.h>
+#include <fwk/vulkan/vulkan_image.h>
 #include <fwk/vulkan/vulkan_pipeline.h>
 
 Ex<void> SceneMesh::load(Stream &stream) {
@@ -69,7 +70,7 @@ Ex<void> SceneTexture::load(Stream &sr) {
 	for(int i = 0; i < num_levels; i++)
 		if(is_compressed) {
 			int2 size;
-			GlFormat format;
+			VBlockFormat format;
 			sr.unpack(size, format);
 			// TODO: turn this to function
 			int data_size = imageSize(format, size.x, size.y);
@@ -252,35 +253,41 @@ Ex<void> Scene::updateRenderingData(VDeviceRef device) {
 	EXPECT(cmds.upload(tris_ib, merged_tris));
 	EXPECT(cmds.upload(quads_ib, merged_quads));
 
-	auto loadTex = [&](SceneMaterial::UsedTexture &used_tex) {
+	auto loadTex = [&](SceneMaterial::UsedTexture &used_tex) -> Ex<> {
 		if(used_tex.id == -1)
-			return;
+			return {};
 		auto &tex = textures[used_tex.id];
 		// TODO: makes no sense to keep both in main & gpu memory, especially because ogl is caching it too
 		// TODO: mipmaps for plain textures
 		if(!tex.vk_image) {
-			// TODO: loading of compressed images
-			/*
 			DASSERT(tex.block_mips || tex.plain_mips);
 			if(tex.block_mips) {
-				tex.gl_texture.emplace(tex.block_mips);
+				auto &first = tex.block_mips[0];
+				VImageSetup setup(first.format(), {first.size(), uint(tex.block_mips.size())});
+				tex.vk_image = EX_PASS(VulkanImage::create(device, setup));
+				EXPECT(tex.vk_image->upload(tex.block_mips));
 			} else {
-				print("Loading plain texture (%)\n", tex.plain_mips[0].size());
-				auto format = tex.is_opaque ? GlFormat::srgb8 : GlFormat::srgba8;
-				tex.gl_texture.emplace(tex.plain_mips, format);
+				auto &first = tex.plain_mips[0];
+				print("Loading plain texture (%)\n", first.size());
+				auto format = tex.is_opaque ? VK_FORMAT_B8G8R8_SRGB : VK_FORMAT_B8G8R8A8_SRGB;
+				VImageSetup setup(format, {first.size(), uint(tex.plain_mips.size())});
+				tex.vk_image = EX_PASS(VulkanImage::create(device, setup));
+				EXPECT(tex.vk_image->upload(tex.plain_mips));
 			}
 
-			tex.gl_texture->setFiltering(TextureFilterOpt::linear);
-			auto wrap_opt = tex.is_clamped ? TextureWrapOpt::clamp_to_edge : TextureWrapOpt::repeat;
-			tex.gl_texture->setWrapping(wrap_opt);*/
+			// TODO: samplers
+			//tex.gl_texture->setFiltering(TextureFilterOpt::linear);
+			//auto wrap_opt = tex.is_clamped ? TextureWrapOpt::clamp_to_edge : TextureWrapOpt::repeat;
+			//tex.gl_texture->setWrapping(wrap_opt);
 		}
-		used_tex.vk_image = tex.vk_image;
+		used_tex.vk_image = VulkanImageView::create(device, tex.vk_image);
 		used_tex.is_opaque = tex.is_opaque;
+		return {};
 	};
 
 	for(auto &material : materials) {
-		loadTex(material.diffuse_tex);
-		loadTex(material.normal_tex);
+		EXPECT(loadTex(material.diffuse_tex));
+		EXPECT(loadTex(material.normal_tex));
 	}
 
 	return {};

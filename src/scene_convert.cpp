@@ -256,7 +256,7 @@ Scene convertScene(WavefrontObject obj, bool flip_yz, Str scene_name, float squa
 	for(auto &texture : out.textures) {
 		print("- Processing texture: %\n", texture.plain_mips[0].size());
 		auto &plain_tex = texture.plain_mips[0];
-		auto format = texture.is_opaque ? GlFormat::srgb_bc1 : GlFormat::srgba_bc3;
+		auto format = texture.is_opaque ? VBlockFormat::srgb_bc1 : VBlockFormat::srgba_bc3;
 		texture.block_mips.emplace_back(plain_tex, format);
 		auto size = plain_tex.size();
 

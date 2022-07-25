@@ -27,7 +27,7 @@ struct SceneMaterial {
 	struct UsedTexture {
 		explicit operator bool() const { return id != -1; }
 
-		PVImage vk_image;
+		PVImageView vk_image;
 		FRect uv_rect = FRect(0, 0, 1, 1);
 		bool is_opaque = false;
 		bool is_clamped = true;

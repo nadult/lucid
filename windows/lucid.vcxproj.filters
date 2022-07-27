@@ -12,7 +12,7 @@
     <Filter Include="shaders">
       <UniqueIdentifier>{5409dbe8-9c51-4628-9e3d-9cea4979021e}</UniqueIdentifier>
     </Filter>
-    <Filter Include="shaders\pieces">
+    <Filter Include="shaders\shared">
       <UniqueIdentifier>{a0b5a478-b8ac-400e-89a0-57971fec1087}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
@@ -109,52 +109,43 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="..\notes.wiki" />
-    <None Include="..\data\shaders\bin_categorizer.shader">
+    <None Include="..\data\shaders\shared\funcs.glsl">
+      <Filter>shaders\shared</Filter>
+    </None>
+    <None Include="..\data\shaders\shared\definitions.glsl">
+      <Filter>shaders\shared</Filter>
+    </None>
+    <None Include="..\data\shaders\shared\scanline.glsl">
+      <Filter>shaders\shared</Filter>
+    </None>
+    <None Include="..\data\shaders\shared\shading.glsl">
+      <Filter>shaders\shared</Filter>
+    </None>
+    <None Include="..\data\shaders\shared\structures.glsl">
+      <Filter>shaders\shared</Filter>
+    </None>
+    <None Include="..\data\shaders\shared\timers.glsl">
+      <Filter>shaders\shared</Filter>
+    </None>
+    <None Include="..\data\shaders\bin_categorizer.glsl">
       <Filter>shaders</Filter>
     </None>
-    <None Include="..\data\shaders\bin_dispatcher.shader">
+    <None Include="..\data\shaders\bin_dispatcher.glsl">
       <Filter>shaders</Filter>
     </None>
-    <None Include="..\data\shaders\compose.shader">
+    <None Include="..\data\shaders\compose.glsl">
       <Filter>shaders</Filter>
     </None>
-    <None Include="..\data\shaders\dummy.shader">
+    <None Include="..\data\shaders\quad_setup.glsl">
       <Filter>shaders</Filter>
     </None>
-    <None Include="..\data\shaders\pieces\viewport.shader">
-      <Filter>shaders\pieces</Filter>
-    </None>
-    <None Include="..\data\shaders\pieces\shading.shader">
-      <Filter>shaders\pieces</Filter>
-    </None>
-    <None Include="..\data\shaders\raster_low.shader">
+    <None Include="..\data\shaders\raster_high.glsl">
       <Filter>shaders</Filter>
     </None>
-    <None Include="..\data\shaders\pieces\structures.shader">
-      <Filter>shaders\pieces</Filter>
-    </None>
-    <None Include="..\data\shaders\raster_high.shader">
+    <None Include="..\data\shaders\raster_low.glsl">
       <Filter>shaders</Filter>
-    </None>
-    <None Include="..\data\shaders\quad_setup.shader">
-      <Filter>shaders</Filter>
-    </None>
-    <None Include="..\data\shaders\pieces\timers.shader">
-      <Filter>shaders\pieces</Filter>
-    </None>
-    <None Include="..\data\shaders\pieces\scanline.shader">
-      <Filter>shaders\pieces</Filter>
     </None>
     <None Include="..\data\shaders\simple.glsl">
-      <Filter>shaders</Filter>
-    </None>
-    <None Include="..\data\shaders\funcs.glsl">
-      <Filter>shaders</Filter>
-    </None>
-    <None Include="..\data\shaders\macros.glsl">
-      <Filter>shaders</Filter>
-    </None>
-    <None Include="..\data\shaders\structures.glsl">
       <Filter>shaders</Filter>
     </None>
   </ItemGroup>

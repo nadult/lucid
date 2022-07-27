@@ -1,5 +1,5 @@
-#include "funcs.glsl"
-#include "macros.glsl"
+#include "shared/definitions.glsl"
+#include "shared/funcs.glsl"
 
 layout(set = 0, binding = 0) uniform ubo00 { Lighting lighting; };
 layout(set = 1, binding = 0) uniform ubo10 { SimpleDrawCall simple_dc; };

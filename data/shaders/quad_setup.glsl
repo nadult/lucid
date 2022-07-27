@@ -1,4 +1,7 @@
-// $$include funcs frustum structures timers
+#include "shared/funcs.glsl"
+#include "shared/scanline.glsl"
+#include "shared/structures.glsl"
+#include "shared/timers.glsl"
 
 // TODO: detect visible quads overflow
 // TODO: do something about divergence in input data
@@ -9,25 +12,27 @@
 // (Z far pewnie mozna olac). OK ale jak już clipnę to powininem miec max 7 trojkątów. Co z nimi zrobić?
 // dodać je na koniec listy trisów? globalnym atomiciem alokowac miejsce ? można tak zrobić
 
+#define MAX_INSTANCE_QUADS 1024 // TODO
 #define LSIZE MAX_INSTANCE_QUADS
 layout(local_size_x = LSIZE) in;
 
 #define MAX_PACKET_SIZE 4
 
-uniform mat4 view_proj_matrix;
-uniform bool enable_backface_culling;
-uniform int u_num_instances;
-uniform int u_packet_size;
+coherent layout(std430, binding = 0) buffer lucid_info_ {
+	LucidInfo g_info;
+	int g_counts[];
+};
+layout(binding = 1) uniform lucid_config_ { LucidConfig u_config; };
 
-layout(std430, binding = 1) readonly restrict buffer buf1_ { InstanceData g_instances[]; };
-layout(std430, binding = 2) readonly restrict buffer buf2_ { uint g_indices[]; };
-layout(std430, binding = 3) readonly restrict buffer buf3_ { float g_verts[]; };
-layout(std430, binding = 4) readonly restrict buffer buf4_ { vec2 g_tex_coords[]; };
-layout(std430, binding = 5) readonly restrict buffer buf5_ { uint g_colors[]; };
-layout(std430, binding = 6) readonly restrict buffer buf6_ { uint g_normals[]; };
-layout(std430, binding = 7) writeonly restrict buffer buf7_ { uint g_quad_aabbs[]; };
-layout(std430, binding = 8) writeonly restrict buffer buf8_ { uvec4 g_uvec4_storage[]; };
-layout(std430, binding = 9) writeonly restrict buffer buf9_ { uint g_uint_storage[]; };
+layout(std430, binding = 2) readonly restrict buffer buf1_ { InstanceData g_instances[]; };
+layout(std430, binding = 3) readonly restrict buffer buf2_ { uint g_indices[]; };
+layout(std430, binding = 4) readonly restrict buffer buf3_ { float g_verts[]; };
+layout(std430, binding = 5) readonly restrict buffer buf4_ { vec2 g_tex_coords[]; };
+layout(std430, binding = 6) readonly restrict buffer buf5_ { uint g_colors[]; };
+layout(std430, binding = 7) readonly restrict buffer buf6_ { uint g_normals[]; };
+layout(std430, binding = 8) writeonly restrict buffer buf7_ { uint g_quad_aabbs[]; };
+layout(std430, binding = 9) writeonly restrict buffer buf8_ { uvec4 g_uvec4_storage[]; };
+layout(std430, binding = 10) writeonly restrict buffer buf9_ { uint g_uint_storage[]; };
 
 shared uint s_quad_aabbs[LSIZE];
 shared uvec2 s_tri_y_aabbs[LSIZE];
@@ -135,11 +140,12 @@ void processInputQuad(uint quad_id, uint v0, uint v1, uint v2, uint v3, uint loc
 
 	vec3 vws[4] = {vertexLoad(v0), vertexLoad(v1), vertexLoad(v2), vertexLoad(v3)};
 
-	if(enable_backface_culling) {
-		vec3 p0 = vws[0] - frustum.ws_origin[0];
-		vec3 p1 = vws[1] - frustum.ws_origin[0];
-		vec3 p2 = vws[2] - frustum.ws_origin[0];
-		vec3 p3 = vws[3] - frustum.ws_origin[0];
+	if(u_config.enable_backface_culling != 0) {
+		vec3 frustum_origin = u_config.frustum.ws_origin[0].xyz;
+		vec3 p0 = vws[0] - frustum_origin;
+		vec3 p1 = vws[1] - frustum_origin;
+		vec3 p2 = vws[2] - frustum_origin;
+		vec3 p3 = vws[3] - frustum_origin;
 		vec3 nrm0 = cross(p2, p1 - p2);
 		vec3 nrm1 = cross(p3, p2 - p3);
 		float volume0 = dot(p0, nrm0);
@@ -156,10 +162,10 @@ void processInputQuad(uint quad_id, uint v0, uint v1, uint v2, uint v3, uint loc
 	int cull_flags = (cull0 ? 1 : 0) | (cull1 ? 2 : 0);
 
 	vec4 vndc[4] = {
-		view_proj_matrix * vec4(vws[0], 1.0),
-		view_proj_matrix * vec4(vws[1], 1.0),
-		view_proj_matrix * vec4(vws[2], 1.0),
-		view_proj_matrix * vec4(vws[3], 1.0),
+		u_config.view_proj_matrix * vec4(vws[0], 1.0),
+		u_config.view_proj_matrix * vec4(vws[1], 1.0),
+		u_config.view_proj_matrix * vec4(vws[2], 1.0),
+		u_config.view_proj_matrix * vec4(vws[3], 1.0),
 	};
 
 	uint clipmask = vertexClipMask(vndc[0]) | (vertexClipMask(vndc[1]) << 8) |
@@ -276,12 +282,15 @@ void storeTri(int tri_idx, uint instance_flags_id, vec3 tri0, vec3 tri1, vec3 tr
 	edge0 = cross(normal, edge0);
 	edge1 = cross(normal, edge1);
 
-	edge0 = vec3(dot(edge0, frustum.ws_dirx), dot(edge0, frustum.ws_diry), dot(edge0, s_ray_dir0));
-	edge1 = vec3(dot(edge1, frustum.ws_dirx), dot(edge1, frustum.ws_diry), dot(edge1, s_ray_dir0));
+	vec3 frustum_dirx = u_config.frustum.ws_dirx.xyz;
+	vec3 frustum_diry = u_config.frustum.ws_diry.xyz;
+	vec3 frustum_dir0 = u_config.frustum.ws_dir0.xyz;
+	edge0 = vec3(dot(edge0, frustum_dirx), dot(edge0, frustum_diry), dot(edge0, s_ray_dir0));
+	edge1 = vec3(dot(edge1, frustum_dirx), dot(edge1, frustum_diry), dot(edge1, s_ray_dir0));
 
 	vec3 pnormal = normal * (1.0 / plane_dist);
-	vec3 depth_eq = vec3(dot(pnormal, frustum.ws_dirx), dot(pnormal, frustum.ws_diry),
-						 dot(pnormal, s_ray_dir0));
+	vec3 depth_eq =
+		vec3(dot(pnormal, frustum_dirx), dot(pnormal, frustum_diry), dot(pnormal, s_ray_dir0));
 
 	g_uvec4_storage[STORAGE_TRI_DEPTH_OFFSET + tri_idx] =
 		uvec4(floatBitsToUint(depth_eq), instance_flags_id);
@@ -298,9 +307,9 @@ void storeTri(int tri_idx, uint instance_flags_id, vec3 tri0, vec3 tri1, vec3 tr
 		nrm0 = -nrm0, nrm1 = -nrm1, nrm2 = -nrm2;
 
 	vec3 edges[3] = {
-		vec3(dot(nrm0, frustum.ws_dirx), dot(nrm0, frustum.ws_diry), dot(nrm0, frustum.ws_dir0)),
-		vec3(dot(nrm1, frustum.ws_dirx), dot(nrm1, frustum.ws_diry), dot(nrm1, frustum.ws_dir0)),
-		vec3(dot(nrm2, frustum.ws_dirx), dot(nrm2, frustum.ws_diry), dot(nrm2, frustum.ws_dir0)),
+		vec3(dot(nrm0, frustum_dirx), dot(nrm0, frustum_diry), dot(nrm0, frustum_dir0)),
+		vec3(dot(nrm1, frustum_dirx), dot(nrm1, frustum_diry), dot(nrm1, frustum_dir0)),
+		vec3(dot(nrm2, frustum_dirx), dot(nrm2, frustum_diry), dot(nrm2, frustum_dir0)),
 	};
 
 	float inv_ex[3] = {1.0 / edges[0].x, 1.0 / edges[1].x, 1.0 / edges[2].x};
@@ -330,10 +339,11 @@ void addVisibleQuad(int quad_idx, int src_idx, int instance_id) {
 	uint cull_flags = s_quad_aabbs[src_idx] >> 30;
 	uint instance_flags = g_instances[instance_id].flags;
 
-	vec3 tri0 = vertexLoad(v0) - frustum.ws_shared_origin;
-	vec3 tri1 = vertexLoad(v1) - frustum.ws_shared_origin;
-	vec3 tri2 = vertexLoad(v2) - frustum.ws_shared_origin;
-	vec3 tri3 = vertexLoad(v3) - frustum.ws_shared_origin;
+	vec3 shared_origin = u_config.frustum.ws_shared_origin.xyz;
+	vec3 tri0 = vertexLoad(v0) - shared_origin;
+	vec3 tri1 = vertexLoad(v1) - shared_origin;
+	vec3 tri2 = vertexLoad(v2) - shared_origin;
+	vec3 tri3 = vertexLoad(v3) - shared_origin;
 	storeQuad(quad_idx, instance_flags, v0, v1, v2, v3);
 }
 
@@ -346,9 +356,10 @@ void addVisibleTri(int quad_idx, int src_idx, uint instance_flags_id, int second
 	uint v1 = s_quad_indices[src_idx][1 + second_tri];
 	uint v2 = s_quad_indices[src_idx][2 + second_tri];
 
-	vec3 tri0 = vertexLoad(v0) - frustum.ws_shared_origin;
-	vec3 tri1 = vertexLoad(v1) - frustum.ws_shared_origin;
-	vec3 tri2 = vertexLoad(v2) - frustum.ws_shared_origin;
+	vec3 shared_origin = u_config.frustum.ws_shared_origin.xyz;
+	vec3 tri0 = vertexLoad(v0) - shared_origin;
+	vec3 tri1 = vertexLoad(v1) - shared_origin;
+	vec3 tri2 = vertexLoad(v2) - shared_origin;
 
 	uint y_aabb = s_tri_y_aabbs[src_idx][second_tri];
 	storeTri(quad_idx * 2 + second_tri, instance_flags_id, tri0, tri1, tri2, y_aabb);
@@ -359,11 +370,11 @@ void main() {
 	START_TIMER();
 
 	// TODO: Could we just use 1?
-	int packet_size = u_packet_size;
+	int packet_size = u_config.instance_packet_size;
 
 	if(LIX < packet_size) {
 		int instance_id = int(WGID.x * packet_size + LIX);
-		if(instance_id < u_num_instances) {
+		if(instance_id < u_config.num_instances) {
 			InstanceData instance = g_instances[instance_id];
 			s_instances[LIX] = instance;
 			s_quad_offset[LIX] = atomicAdd(g_info.num_input_quads, instance.num_quads);
@@ -377,7 +388,8 @@ void main() {
 	if(LIX < REJECTION_TYPE_COUNT)
 		s_rejected_quads[LIX] = 0;
 	if(LIX == 0)
-		s_ray_dir0 = frustum.ws_dir0 + (frustum.ws_dirx + frustum.ws_diry) * 0.5;
+		s_ray_dir0 = u_config.frustum.ws_dir0.xyz +
+					 (u_config.frustum.ws_dirx + u_config.frustum.ws_diry).xyz * 0.5;
 	barrier();
 	UPDATE_TIMER(0);
 

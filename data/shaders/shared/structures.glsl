@@ -1,4 +1,7 @@
-// $$include macros
+#ifndef _STRUCTURES_GLSL_
+#define _STRUCTURES_GLSL_
+
+#include "definitions.glsl"
 
 struct InstanceData {
 	int index_offset;
@@ -7,16 +10,48 @@ struct InstanceData {
 	uint flags;
 };
 
-#define BIN_LEVEL_EMPTY 0
-#define BIN_LEVEL_MICRO 1
-#define BIN_LEVEL_LOW 2
-#define BIN_LEVEL_MEDIUM 3
-#define BIN_LEVEL_HIGH 4
+struct Lighting {
+	vec4 ambient_color;
+	vec4 scene_color;
+	vec4 sun_color;
+	vec4 sun_dir;
+	float scene_power, sun_power, ambient_power;
+};
 
-#define BIN_LEVELS_COUNT 5
-#define REJECTION_TYPE_COUNT 4
+struct Frustum {
+	// World space rays;
+	// Ray indices are compatible with rect vertex indices
+	vec4 ws_origin[4];
+	vec4 ws_dir[4];
 
-#define TIMERS_COUNT 8
+	vec4 ws_dir0, ws_dirx, ws_diry;
+	vec4 ws_shared_origin;
+
+	// For computation from screen_pos
+	vec2 vs_pos, vs_diff;
+	vec4 ws_pos, ws_diff;
+};
+
+struct SimpleDrawCall {
+	mat4 proj_view_matrix;
+	vec4 material_color;
+	vec2 uv_rect_pos;
+	vec2 uv_rect_size;
+	uint draw_call_opts;
+	vec4 world_camera_pos;
+};
+
+struct Rect {
+	vec2 pos, size;
+	vec2 min_uv, max_uv;
+};
+
+struct Viewport {
+	mat4 proj_matrix;
+	vec2 size, inv_size;
+	float near_plane, far_plane;
+	float inv_far_plane;
+};
 
 // This structure contains all the necessary counters, atomics, etc.
 // In shader code it's available as g_info; In the same SSBO just after
@@ -58,13 +93,16 @@ struct LucidInfo {
 
 #define LUCID_INFO_SIZE 384
 
-#ifndef __cplusplus
+// This structure keeps uniform data passed to Lucid shaders
+struct LucidConfig {
+	Frustum frustum;
+	mat4 view_proj_matrix;
+	Lighting lighting;
+	vec4 background_color;
 
-// LucidInfo is always bound at index 0 for consistency
-// TODO: we don't need coherent everywhere
-coherent layout(std430, binding = 0) buffer buf0_ {
-	LucidInfo g_info;
-	int g_counts[];
+	uint enable_backface_culling;
+	int num_instances;
+	int instance_packet_size;
 };
 
 #endif

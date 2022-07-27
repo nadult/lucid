@@ -1,4 +1,7 @@
-// $$include structures
+#ifndef _TIMERS_GLSL_
+#define _TIMERS_GLSL_
+
+#include "structures.glsl"
 
 #ifdef ENABLE_TIMERS
 
@@ -32,5 +35,7 @@ shared uint s_timers[TIMERS_COUNT];
 	{}
 #define COMMIT_TIMERS(out_timers)                                                                  \
 	{}
+
+#endif
 
 #endif

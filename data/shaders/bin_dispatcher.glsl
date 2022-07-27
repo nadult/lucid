@@ -1,4 +1,13 @@
-// $$include funcs frustum structures scanline timers
+#include "shared/funcs.glsl"
+#include "shared/scanline.glsl"
+#include "shared/structures.glsl"
+#include "shared/timers.glsl"
+
+// TODO: use gl_SubgroupSize, gl_SubgroupId
+
+#extension GL_KHR_shader_subgroup_shuffle : require
+#extension GL_KHR_shader_subgroup_shuffle_relative : require
+#extension GL_ARB_shader_group_vote : require
 
 #define LSIZE BIN_DISPATCHER_LSIZE
 #define LSHIFT BIN_DISPATCHER_LSHIFT
@@ -10,21 +19,28 @@
 #define LARGE_TASK_SHIFT (LSHIFT - 1)
 #define LARGE_TASK_SIZE (LSIZE / 2)
 
-layout(local_size_x = LSIZE) in;
+layout(local_size_x = 512, local_size_x_id = 12) in;
 
-layout(std430, binding = 1) readonly buffer buf1_ { uint g_quad_aabbs[]; };
-layout(std430, binding = 2) writeonly buffer buf2_ { uint g_bin_quads[]; };
-layout(std430, binding = 3) writeonly buffer buf3_ { uint g_bin_tris[]; };
+coherent layout(std430, binding = 0) buffer lucid_info_ {
+	LucidInfo g_info;
+	int g_counts[];
+};
+layout(binding = 1) uniform lucid_config_ { LucidConfig u_config; };
 
-layout(std430, binding = 4) buffer buf4_ { int g_tasks[]; };
-layout(std430, binding = 5) buffer buf5_ { uvec4 g_uvec4_storage[]; };
+layout(std430, binding = 2) readonly buffer buf1_ { uint g_quad_aabbs[]; };
+layout(std430, binding = 3) writeonly buffer buf2_ { uint g_bin_quads[]; };
+layout(std430, binding = 4) writeonly buffer buf3_ { uint g_bin_tris[]; };
+
+layout(std430, binding = 5) buffer buf4_ { int g_tasks[]; };
+layout(std430, binding = 6) buffer buf5_ { uvec4 g_uvec4_storage[]; };
 
 shared int s_bins[BIN_COUNT];
 shared int s_temp[LSIZE];
 
 // Constants useful for efficient processing of bin counts
-const int xbin_warps = LSIZE / BIN_COUNT_X, ybin_warps = LSIZE / BIN_COUNT_Y;
-const int xbin_step = int(log2(xbin_warps)), ybin_step = int(log2(ybin_warps));
+// TODO: make sure that it's <= 32
+//const int xbin_step = int(log2(LSIZE / BIN_COUNT_X)), ybin_step = int(log2(LSIZE / BIN_COUNT_Y));
+const int xbin_step = BIN_DISPATCHER_XBIN_STEP, ybin_step = BIN_DISPATCHER_YBIN_STEP;
 const int xbin_count = 1 << xbin_step, ybin_count = 1 << ybin_step;
 
 void scanlineStep(in out ScanlineParams params, out int bmin, out int bmax) {
@@ -41,11 +57,11 @@ void scanlineStep(in out ScanlineParams params, out int bmin, out int bmax) {
 int prefixSum32(int accum) {
 	int temp;
 	uint thread_id = LIX & 31;
-	temp = shuffleUpNV(accum, 1, 32), accum += thread_id >= 1 ? temp : 0;
-	temp = shuffleUpNV(accum, 2, 32), accum += thread_id >= 2 ? temp : 0;
-	temp = shuffleUpNV(accum, 4, 32), accum += thread_id >= 4 ? temp : 0;
-	temp = shuffleUpNV(accum, 8, 32), accum += thread_id >= 8 ? temp : 0;
-	temp = shuffleUpNV(accum, 16, 32), accum += thread_id >= 16 ? temp : 0;
+	temp = subgroupShuffleUp(accum, 1), accum += thread_id >= 1 ? temp : 0;
+	temp = subgroupShuffleUp(accum, 2), accum += thread_id >= 2 ? temp : 0;
+	temp = subgroupShuffleUp(accum, 4), accum += thread_id >= 4 ? temp : 0;
+	temp = subgroupShuffleUp(accum, 8), accum += thread_id >= 8 ? temp : 0;
+	temp = subgroupShuffleUp(accum, 16), accum += thread_id >= 16 ? temp : 0;
 	return accum;
 }
 
@@ -68,8 +84,9 @@ void countSmallQuadBins(uint quad_idx) {
 }
 
 void accumulateLargeTriCounts() {
+	// TODO: fixme
 	// Accumulating large quad counts across rows
-	if(LIX < BIN_COUNT_Y * ybin_count) {
+	/*if(LIX < BIN_COUNT_Y * ybin_count) {
 		uint by = LIX >> ybin_step;
 		int accum = 0;
 		for(uint bx = 0, subx = LIX & (ybin_count - 1); bx < BIN_COUNT_X; bx += ybin_count) {
@@ -84,12 +101,13 @@ void accumulateLargeTriCounts() {
 				s_bins[idx] = cur;
 			accum = shuffleNV(cur, ybin_count - 1, ybin_count);
 		}
-	}
+	}*/
 }
 
 void computeQuadOffsets() {
+	// TODO: fixme
 	// Computing bin quad counts offsets
-	if(LIX < BIN_COUNT_Y * ybin_count) {
+	/*if(LIX < BIN_COUNT_Y * ybin_count) {
 		uint by = LIX >> ybin_step;
 		int accum = 0;
 		for(uint bx = 0, subx = LIX & (ybin_count - 1); bx < BIN_COUNT_X; bx += ybin_count) {
@@ -130,12 +148,13 @@ void computeQuadOffsets() {
 			accum = shuffleNV(cur, xbin_count - 1, xbin_count);
 		}
 	}
-	barrier();
+	barrier();*/
 }
 
 void computeTriOffsets() {
+	// TODO: fixme
 	// Computing bin quad counts offsets
-	if(LIX < BIN_COUNT_Y * ybin_count) {
+	/*if(LIX < BIN_COUNT_Y * ybin_count) {
 		uint by = LIX >> ybin_step;
 		int accum = 0;
 		for(uint bx = 0, subx = LIX & (ybin_count - 1); bx < BIN_COUNT_X; bx += ybin_count) {
@@ -176,7 +195,7 @@ void computeTriOffsets() {
 			accum = shuffleNV(cur, xbin_count - 1, xbin_count);
 		}
 	}
-	barrier();
+	barrier();*/
 }
 
 void dispatchQuad(int quad_idx) {
@@ -293,7 +312,7 @@ void dispatchLargeTriBalanced(int large_quad_idx, int second_tri, int num_quads)
 			continue;
 
 		int sample_offset = prefixSum32(num_samples);
-		int warp_num_samples = shuffleNV(sample_offset, 31, 32);
+		int warp_num_samples = subgroupShuffle(sample_offset, 31);
 		sample_offset -= num_samples;
 
 		int warp_offset = int(LIX & ~31), thread_id = int(LIX & 31);
@@ -307,17 +326,17 @@ void dispatchLargeTriBalanced(int large_quad_idx, int second_tri, int num_quads)
 				s_temp[warp_offset + segment_id + k] = thread_id;
 		}
 
-		int cur_src_thread_id = s_temp[LIX];
+		uint cur_src_thread_id = s_temp[LIX];
 		int cur_sample_id = thread_id * segment_size;
-		int cur_offset = cur_sample_id - shuffleNV(sample_offset, cur_src_thread_id, 32);
+		int cur_offset = cur_sample_id - subgroupShuffle(sample_offset, cur_src_thread_id);
 		int cur_num_samples = min(warp_num_samples - cur_sample_id, segment_size);
 		int base_bin_id = by * BIN_COUNT_X + bmin;
 
 		int i = 0;
 		while(anyInvocationARB(i < cur_num_samples)) {
-			uint cur_tri_idx = shuffleNV(tri_idx, cur_src_thread_id, 32);
-			int cur_bin_id = shuffleNV(base_bin_id, cur_src_thread_id, 32);
-			int cur_width = shuffleNV(num_samples, cur_src_thread_id, 32);
+			uint cur_tri_idx = subgroupShuffle(tri_idx, cur_src_thread_id);
+			int cur_bin_id = subgroupShuffle(base_bin_id, cur_src_thread_id);
+			int cur_width = subgroupShuffle(num_samples, cur_src_thread_id);
 
 			if(cur_width == 0) {
 				cur_src_thread_id++;

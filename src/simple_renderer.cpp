@@ -41,13 +41,9 @@ Ex<void> SimpleRenderer::exConstruct(VDeviceRef device, ShaderCompiler &compiler
 								defaultLayout(depth_format));
 	m_render_pass = device->getRenderPass({color_att}, depth_att);
 
-	ShaderDefs defs;
 	m_viewport = viewport;
-	auto fsh_bytecode = compiler.getSpirv("simple_frag");
-	auto vsh_bytecode = compiler.getSpirv("simple_vert");
-
-	m_frag_module = EX_PASS(VulkanShaderModule::create(device, fsh_bytecode));
-	m_vert_module = EX_PASS(VulkanShaderModule::create(device, vsh_bytecode));
+	m_frag_module = EX_PASS(compiler.createShaderModule(device, "simple_frag"));
+	m_vert_module = EX_PASS(compiler.createShaderModule(device, "simple_vert"));
 	m_pipeline_layout = device->getPipelineLayout({m_frag_module, m_vert_module});
 
 	return {};

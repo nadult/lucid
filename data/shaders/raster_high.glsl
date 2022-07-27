@@ -1,4 +1,6 @@
-// $$include funcs lighting frustum viewport shading scanline timers
+#include "shared/scanline.glsl"
+#include "shared/shading.glsl"
+#include "shared/timers.glsl"
 
 #define LSIZE 1024
 #define LSHIFT 10

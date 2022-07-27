@@ -15,12 +15,15 @@
 #include <fwk/gfx/image.h>
 #include <fwk/gfx/opengl.h>
 #include <fwk/gfx/render_list.h>
+#include <fwk/gfx/shader_compiler.h>
 #include <fwk/gfx/shader_debug.h>
 #include <fwk/gfx/shader_defs.h>
 #include <fwk/hash_set.h>
 #include <fwk/io/file_system.h>
 #include <fwk/math/ray.h>
+#include <fwk/vulkan/vulkan_buffer.h>
 #include <fwk/vulkan/vulkan_device.h>
+#include <fwk/vulkan/vulkan_pipeline.h>
 
 // TODO: opisać różnego rodzaju definicje/nazwy używane w kodzie
 
@@ -104,7 +107,31 @@ void setupView(const IRect &viewport, PFramebuffer fbo) {
 LucidRenderer::LucidRenderer() = default;
 FWK_MOVABLE_CLASS_IMPL(LucidRenderer)
 
-Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
+void LucidRenderer::addShaderDefs(ShaderCompiler &compiler) {
+	vector<Pair<string>> vsh_macros = {{"VERTEX_SHADER", "1"}};
+	vector<Pair<string>> fsh_macros = {{"FRAGMENT_SHADER", "1"}};
+
+	compiler.add({"compose_vert", VShaderStage::vertex, "compose.glsl", vsh_macros});
+	compiler.add({"compose_frag", VShaderStage::fragment, "compose.glsl", fsh_macros});
+
+	compiler.add({"quad_setup", VShaderStage::compute, "quad_setup.glsl"});
+	compiler.add({"bin_dispatcher", VShaderStage::compute, "bin_dispatcher.glsl"});
+	compiler.add({"bin_categorizer", VShaderStage::compute, "bin_categorizer.glsl"});
+	compiler.add({"raster_low", VShaderStage::compute, "raster_low.glsl"});
+	compiler.add({"raster_high", VShaderStage::compute, "raster_high.glsl"});
+}
+
+static Ex<PVPipeline> makeComputePipeline(VDeviceRef device, ShaderCompiler &compiler,
+										  const shader::SpecializationConstants &consts,
+										  ZStr def_name) {
+	VComputePipelineSetup setup;
+	setup.compute_module = EX_PASS(compiler.createShaderModule(device, def_name));
+	setup.spec_constants.emplace_back(consts, 0u);
+	return VulkanPipeline::create(device, setup);
+}
+
+Ex<void> LucidRenderer::exConstruct(VDeviceRef device, ShaderCompiler &compiler,
+									VColorAttachment color_att, Opts opts, int2 view_size) {
 	m_bin_size = opts & Opt::bin_size_64 ? 64 : 32;
 	m_block_size = 8;
 
@@ -120,36 +147,6 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 
 	m_opts = opts;
 	m_size = view_size;
-
-	// TODO: this takes a lot of memory
-	// TODO: what should we do when quads won't fit?
-	// TODO: better estimate needed; it should depend on bin size
-	// TODO: properly handle situations when limits are reached
-	uint max_bin_quads = max_quads * 3 / 2;
-	uint max_bin_tris = max_quads;
-
-	uint bin_counters_size = LUCID_INFO_SIZE + m_bin_count * 10;
-	m_info.emplace(BufferType::shader_storage, bin_counters_size * sizeof(u32));
-	m_bin_quads.emplace(BufferType::shader_storage, max_bin_quads * sizeof(u32));
-	m_bin_tris.emplace(BufferType::shader_storage, max_bin_tris * sizeof(u32));
-
-	int max_visible_tris = max_visible_quads * 2;
-	int uvec4_storage_size = max_visible_tris * 5 + max_visible_quads * 4; // 480MB ...
-	m_uvec4_storage.emplace(BufferType::shader_storage, uvec4_storage_size * sizeof(int4));
-	m_uint_storage.emplace(BufferType::shader_storage, max_visible_tris * sizeof(u32));
-
-	uint scratch_32_size = 64 * 1024 * m_max_dispatches * sizeof(u32);
-	uint scratch_64_size = (128 * 1024) * m_max_dispatches * sizeof(u64);
-	scratch_64_size = max<uint>(scratch_64_size, max_visible_quads * sizeof(u32));
-
-	// TODO: control size of scratch mem
-	m_scratch_32.emplace(BufferType::shader_storage, scratch_32_size);
-	m_scratch_64.emplace(BufferType::shader_storage, scratch_64_size);
-	m_raster_image.emplace(BufferType::shader_storage,
-						   m_bin_count * square(m_bin_size) * sizeof(u32));
-
-	if(m_opts & (Opt::debug_bin_dispatcher | Opt::debug_raster))
-		m_errors.emplace(BufferType::shader_storage, 1024 * 1024 * 4, BufferUsage::dynamic_read);
 
 	ShaderDefs defs;
 	defs["VIEWPORT_SIZE_X"] = view_size.x;
@@ -169,13 +166,68 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	int bin_dispatcher_lsize = m_bin_size == 64 ? 512 : 1024;
 	defs["BIN_DISPATCHER_LSIZE"] = bin_dispatcher_lsize;
 	defs["BIN_DISPATCHER_LSHIFT"] = (int)log2(bin_dispatcher_lsize);
-	p_bin_categorizer = EX_PASS(Program::makeCompute("bin_categorizer", defs));
+
+	shader::SpecializationConstants consts;
+	consts.VIEWPORT_SIZE_X = view_size.x;
+	consts.VIEWPORT_SIZE_Y = view_size.y;
+	consts.BIN_COUNT = m_bin_count;
+	consts.BIN_COUNT_X = m_bin_counts.x;
+	consts.BIN_COUNT_Y = m_bin_counts.y;
+	consts.BIN_SIZE = m_bin_size;
+	consts.BIN_SHIFT = log2(m_bin_size);
+	consts.MAX_QUADS = max_quads;
+	consts.MAX_VISIBLE_QUADS = max_visible_quads;
+	consts.MAX_VISIBLE_QUADS_SHIFT = log2(max_visible_quads);
+	consts.MAX_VISIBLE_TRIS = max_visible_quads * 2;
+	consts.MAX_DISPATCHES = m_max_dispatches;
+	consts.BIN_DISPATCHER_LSIZE = bin_dispatcher_lsize;
+	consts.BIN_DISPATCHER_LSHIFT = log2(bin_dispatcher_lsize);
+	consts.BIN_DISPATCHER_XBIN_STEP = log2(bin_dispatcher_lsize / m_bin_counts.x);
+	consts.BIN_DISPATCHER_YBIN_STEP = log2(bin_dispatcher_lsize / m_bin_counts.y);
+
+	consts.ENABLE_TIMERS = 0;
+	consts.ADDITIVE_BLENDING = m_opts & Opt::additive_blending ? 1 : 0;
+	consts.VISUALIZE_ERRORS = m_opts & Opt::visualize_errors ? 1 : 0;
+	consts.ALPHA_THRESHOLD = m_opts & Opt::alpha_threshold ? 1 : 0;
+
+	// TODO: this takes a lot of memory
+	// TODO: what should we do when quads won't fit?
+	// TODO: better estimate needed; it should depend on bin size
+	// TODO: properly handle situations when limits are reached
+	uint max_bin_quads = max_quads * 3 / 2;
+	uint max_bin_tris = max_quads;
+
+	uint bin_counters_size = LUCID_INFO_SIZE + m_bin_count * 10;
+	auto usage = VBufferUsage::storage_buffer;
+	auto usage_downloadable = VBufferUsage::storage_buffer | VBufferUsage::transfer_src;
+	m_info = EX_PASS(VulkanBuffer::create<u32>(device, bin_counters_size, usage));
+	m_bin_quads = EX_PASS(VulkanBuffer::create<u32>(device, max_bin_quads, usage));
+	m_bin_tris = EX_PASS(VulkanBuffer::create<u32>(device, max_bin_tris, usage));
+
+	int max_visible_tris = max_visible_quads * 2;
+	int uvec4_storage_size = max_visible_tris * 5 + max_visible_quads * 4; // 480MB ...
+	m_uvec4_storage = EX_PASS(VulkanBuffer::create<int4>(device, uvec4_storage_size, usage));
+	m_uint_storage = EX_PASS(VulkanBuffer::create<u32>(device, max_visible_tris, usage));
+
+	uint scratch_32_size = 64 * 1024 * m_max_dispatches * sizeof(u32);
+	uint scratch_64_size = (128 * 1024) * m_max_dispatches * sizeof(u64);
+	scratch_64_size = max<uint>(scratch_64_size, max_visible_quads * sizeof(u32));
+
+	// TODO: control size of scratch mem
+	m_scratch_32 = EX_PASS(VulkanBuffer::create(device, scratch_32_size, usage));
+	m_scratch_64 = EX_PASS(VulkanBuffer::create(device, scratch_64_size, usage));
+	m_raster_image =
+		EX_PASS(VulkanBuffer::create<u32>(device, m_bin_count * square(m_bin_size), usage));
+
+	if(m_opts & (Opt::debug_bin_dispatcher | Opt::debug_raster))
+		m_errors = EX_PASS(VulkanBuffer::create<u32>(device, 1024 * 1024, usage_downloadable));
+
+	p_bin_categorizer = EX_PASS(makeComputePipeline(device, compiler, consts, "bin_categorizer"));
 
 	if(m_opts & Opt::timers)
 		defs["ENABLE_TIMERS"] = 1;
-	p_quad_setup = EX_PASS(Program::makeCompute("quad_setup", defs));
-	p_bin_dispatcher = EX_PASS(Program::makeCompute(
-		"bin_dispatcher", defs, mask(m_opts & Opt::debug_bin_dispatcher, ProgramOpt::debug)));
+	p_quad_setup = EX_PASS(makeComputePipeline(device, compiler, consts, "quad_setup"));
+	p_bin_dispatcher = EX_PASS(makeComputePipeline(device, compiler, consts, "bin_dispatcher"));
 
 	if(m_opts & Opt::additive_blending)
 		defs["ADDITIVE_BLENDING"] = 1;
@@ -185,10 +237,11 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 		defs["ALPHA_THRESHOLD"] = 1;
 
 	auto raster_opts = mask(m_opts & Opt::debug_raster, ProgramOpt::debug);
-	p_raster_low = EX_PASS(Program::makeCompute("raster_low", defs, raster_opts));
-	p_raster_high = EX_PASS(Program::makeCompute("raster_high", defs, raster_opts));
+	p_raster_low = EX_PASS(makeComputePipeline(device, compiler, consts, "raster_low"));
+	//p_raster_high = EX_PASS(makeComputePipeline(device, compiler, consts, "raster_high"));
 
-	mkdirRecursive("temp").ignore();
+	// TODO: disassemble spirv
+	/*mkdirRecursive("temp").ignore();
 	if(auto disas = p_quad_setup.getDisassembly())
 		saveFile("temp/quad_setup.asm", *disas).ignore();
 	if(auto disas = p_bin_dispatcher.getDisassembly())
@@ -196,13 +249,19 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 	if(auto disas = p_raster_low.getDisassembly())
 		saveFile("temp/raster_low.asm", *disas).ignore();
 	if(auto disas = p_raster_high.getDisassembly())
-		saveFile("temp/raster_high.asm", *disas).ignore();
+		saveFile("temp/raster_high.asm", *disas).ignore();*/
 
 	ShaderDefs compose_defs;
 	compose_defs["BIN_SIZE"] = m_bin_size;
 	compose_defs["BIN_SHIFT"] = log2(m_bin_size);
-	p_compose = EX_PASS(Program::make("compose", compose_defs, {"in_pos"}));
-	//p_dummy = EX_PASS(Program::makeCompute("dummy", defs));
+	VPipelineSetup compose_setup;
+	compose_setup.shader_modules = {{EX_PASS(compiler.createShaderModule(device, "compose_vert")),
+									 EX_PASS(compiler.createShaderModule(device, "compose_frag"))}};
+	compose_setup.render_pass = device->getRenderPass(color_att);
+	compose_setup.vertex_attribs = {vertexAttrib<uint>(0, 0)};
+	compose_setup.vertex_bindings = {vertexBinding<uint>(0)};
+	compose_setup.spec_constants.emplace_back(consts, 0u);
+	p_compose = EX_PASS(VulkanPipeline::create(device, compose_setup));
 
 	vector<u16> indices(m_bin_count * 6);
 	DASSERT(m_bin_count * 4 * 4 <= 64 * 1024);
@@ -213,22 +272,23 @@ Ex<void> LucidRenderer::exConstruct(Opts opts, int2 view_size) {
 			indices[i * 6 + j] = offsets[j] + i * 4;
 		}
 	}
-	auto ibuffer = GlBuffer::make(BufferType::element_array, indices);
+	/*auto ibuffer = GlBuffer::make(BufferType::element_array, indices);
 	m_compose_quads =
 		GlBuffer::make(BufferType::array, m_bin_count * 4 * sizeof(uint), ImmBufferFlags());
 
 	m_compose_quads_vao = GlVertexArray::make();
 	m_compose_quads_vao->set({m_compose_quads}, defaultVertexAttribs<uint>(), ibuffer,
-							 IndexType::uint16);
+							 IndexType::uint16);*/
 
 	return {};
 }
 
 void LucidRenderer::debugProgram(Program &program, ZStr name) {
-	auto source_ranges = program.sourceRanges();
+	// TODO
+	/*auto source_ranges = program.sourceRanges();
 	ShaderDebugInfo records(m_errors, 1024, source_ranges);
 	if(records)
-		print("% debug records: %\n", name, records);
+		print("% debug records: %\n", name, records);*/
 }
 
 static void dispatchIndirect(int bin_counters_offset) {
@@ -238,8 +298,10 @@ static void dispatchIndirect(int bin_counters_offset) {
 void LucidRenderer::render(const Context &ctx) {
 	auto &cmds = ctx.device.cmdQueue();
 	PERF_GPU_SCOPE(cmds);
-	testGlError("LucidRenderer::render init");
 
+	return; // TODO
+
+	/*
 	m_info->invalidate();
 	m_info->clear(GlFormat::r32i, 0, 0, (LUCID_INFO_SIZE + m_bin_count * 6) * sizeof(u32));
 
@@ -250,8 +312,6 @@ void LucidRenderer::render(const Context &ctx) {
 	uploadInstances(ctx);
 	quadSetup(ctx);
 	computeBins(ctx);
-	if(false)
-		dummyIterateBins(ctx);
 
 	bindRasterCommon(ctx);
 	rasterLow(ctx);
@@ -263,11 +323,11 @@ void LucidRenderer::render(const Context &ctx) {
 	glBindBuffer(GL_DISPATCH_INDIRECT_BUFFER, 0);
 
 	compose(ctx);
-	testGlError("LucidRenderer::render finish");
+	testGlError("LucidRenderer::render finish");*/
 }
 
 void LucidRenderer::uploadInstances(const Context &ctx) {
-	auto &cmds = ctx.device.cmdQueue();
+	/*auto &cmds = ctx.device.cmdQueue();
 	PERF_GPU_SCOPE(cmds);
 
 	using InstanceData = shader::InstanceData;
@@ -321,7 +381,7 @@ void LucidRenderer::uploadInstances(const Context &ctx) {
 	m_instances.emplace(BufferType::shader_storage, instances);
 	m_instance_colors.emplace(BufferType::shader_storage, colors);
 	m_instance_uv_rects.emplace(BufferType::shader_storage, uv_rects);
-	m_num_instances = instances.size();
+	m_num_instances = instances.size();*/
 }
 
 void LucidRenderer::quadSetup(const Context &ctx) {
@@ -367,7 +427,7 @@ void LucidRenderer::computeBins(const Context &ctx) {
 	auto &cmds = ctx.device.cmdQueue();
 	PERF_GPU_SCOPE(cmds);
 
-	m_info->bindIndex(0);
+	/*m_info->bindIndex(0);
 
 	m_scratch_64->bindIndex(1);
 	m_bin_quads->bindIndex(2);
@@ -390,21 +450,11 @@ void LucidRenderer::computeBins(const Context &ctx) {
 	p_bin_categorizer.use();
 	m_compose_quads->bindIndexAs(1, BufferType::shader_storage);
 	glDispatchCompute(1, 1, 1);
-	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_COMMAND_BARRIER_BIT);
-}
-
-void LucidRenderer::dummyIterateBins(const Context &ctx) {
-	auto &cmds = ctx.device.cmdQueue();
-	PERF_GPU_SCOPE(cmds);
-
-	m_info->bindIndex(0);
-	p_dummy.use();
-	glDispatchCompute(512, 1, 1);
-	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_COMMAND_BARRIER_BIT);*/
 }
 
 void LucidRenderer::bindRasterCommon(const Context &ctx) {
-	m_info->bindIndex(0);
+	/*m_info->bindIndex(0);
 	m_bin_quads->bindIndex(1);
 	m_bin_tris->bindIndex(2);
 
@@ -415,7 +465,7 @@ void LucidRenderer::bindRasterCommon(const Context &ctx) {
 	m_uvec4_storage->bindIndex(7);
 	m_uint_storage->bindIndex(8);
 
-	m_raster_image->bindIndex(9);
+	m_raster_image->bindIndex(9);*/
 }
 
 void LucidRenderer::bindRaster(Program &program, const Context &ctx) {
@@ -430,7 +480,7 @@ void LucidRenderer::bindRaster(Program &program, const Context &ctx) {
 	program["background_color"] = u32(ctx.config.background_color);
 	ctx.lighting.setUniforms(program.glProgram());*/
 }
-
+/*
 void LucidRenderer::rasterLow(const Context &ctx) {
 	auto &cmds = ctx.device.cmdQueue();
 	PERF_GPU_SCOPE(cmds);
@@ -455,7 +505,7 @@ void LucidRenderer::rasterHigh(const Context &ctx) {
 	if(m_opts & Opt::debug_raster)
 		debugProgram(p_raster_high, "raster_high");
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
-}
+}*/
 
 void LucidRenderer::compose(const Context &ctx) {
 	auto &cmds = ctx.device.cmdQueue();
@@ -477,7 +527,7 @@ void LucidRenderer::compose(const Context &ctx) {
 }
 
 void LucidRenderer::copyInfo(int num_skip_frames) {
-	static int frame_counter = 0;
+	/*static int frame_counter = 0;
 	if(num_skip_frames && frame_counter++ % (num_skip_frames + 1) != 0)
 		return;
 
@@ -491,7 +541,7 @@ void LucidRenderer::copyInfo(int num_skip_frames) {
 	}
 
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
-	m_info->copyTo(m_old_info[0], 0, 0, m_old_info[0]->size());
+	m_info->copyTo(m_old_info[0], 0, 0, m_old_info[0]->size());*/
 }
 
 static vector<StatsRow> processTimers(CSpan<uint> timers, CSpan<Str> names) {
@@ -532,7 +582,7 @@ static string formatLarge(i64 value) {
 vector<StatsGroup> LucidRenderer::getStats() const {
 	vector<StatsGroup> out;
 
-	if(!m_old_info.back())
+	/*if(!m_old_info.back())
 		return out;
 
 	auto bin_counters = m_old_info.back()->download<u32>();
@@ -659,6 +709,7 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 		out.emplace_back(move(raster_timers), "raster_low & raster_high timers", 130);
 
 	out.emplace_back(move(bin_level_rows), "Bins categorized by quad density levels:", 130);
-	out.emplace_back(move(basic_rows), "", 130);
+	out.emplace_back(move(basic_rows), "", 130);*/
+
 	return out;
 }

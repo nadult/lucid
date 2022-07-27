@@ -1,4 +1,10 @@
-// $$include funcs lighting frustum viewport shading scanline timers
+#include "shared/scanline.glsl"
+#include "shared/shading.glsl"
+#include "shared/timers.glsl"
+
+#extension GL_KHR_shader_subgroup_ballot : require
+#extension GL_KHR_shader_subgroup_shuffle_relative : require
+#extension GL_KHR_shader_subgroup_clustered : require
 
 #define LSIZE 256
 #define LSHIFT 8
@@ -179,7 +185,7 @@ void prepareSortTris() {
 
 #ifdef VENDOR_NVIDIA
 uint swap(uint x, int mask, uint dir) {
-	uint y = shuffleXorNV(x, mask, 32);
+	uint y = subgroupShuffleXor(x, mask);
 	return uint(x < y) == dir ? y : x;
 }
 uint bitExtract(uint value, int boffset) { return (value >> boffset) & 1; }
@@ -260,7 +266,7 @@ void generateBlocks(uint bid) {
 
 		for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_SIZE) {
 			uint bx_bit = (g_scratch_64[src_offset_64 + i].x >> bx_bits_shift) & 1;
-			uint bit_mask = uint(ballotARB(bx_bit != 0));
+			uint bit_mask = uint(subgroupBallot(bx_bit != 0).x); // TODO
 			if(bit_mask == 0)
 				continue;
 
@@ -361,7 +367,7 @@ void generateBlocks(uint bid) {
 
 #define PREFIX_SUM_STEP(value, step)                                                               \
 	{                                                                                              \
-		uint temp = shuffleUpNV(value, step, 32);                                                  \
+		uint temp = subgroupShuffleUp(value, step);                                                \
 		if((LIX & 31) >= step)                                                                     \
 			value += temp;                                                                         \
 	}
@@ -394,10 +400,7 @@ void generateBlocks(uint bid) {
 			value = s_buffer[buf_offset + block_tri_idx];
 		}
 		value = (value & 0xfff) | ((value & 0xfff000) << 4);
-		uint sum = value, temp;
-		temp = shuffleUpNV(sum, 1, 8), sum += warp_idx >= 1 ? temp : 0;
-		temp = shuffleUpNV(sum, 2, 8), sum += warp_idx >= 2 ? temp : 0;
-		temp = shuffleUpNV(sum, 4, 8), sum += warp_idx >= 4 ? temp : 0;
+		uint sum = subgroupClusteredAdd(value, 8);
 
 		if(warp_idx == 7) {
 			uint v0 = sum & 0xffff, v1 = sum >> 16;
@@ -498,8 +501,10 @@ void loadSamples(uint hbid, int segment_id) {
 
 		int minx = int((tri_data.y >> min_shift) & 7);
 		int countx = int((tri_data.y >> count_shift) & 15);
-		int prevx = countx + (shuffleUpNV(countx, 1, 4) & mask1);
-		prevx += (shuffleUpNV(prevx, 2, 4) & mask2);
+		// TODO: FIXME
+		int prevx = 0;
+		//int prevx = countx + (shuffleUpNV(countx, 1, 4) & mask1);
+		//prevx += (shuffleUpNV(prevx, 2, 4) & mask2);
 		tri_offset += prevx - countx;
 		countx = min(countx, SEGMENT_SIZE - tri_offset);
 		if(tri_offset < 0)

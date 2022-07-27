@@ -1,23 +1,35 @@
-// $$include structures
+#ifndef _SHADING_GLSL_
+#define _SHADING_GLSL_
 
-layout(std430, binding = 1) readonly restrict buffer buf1_ { uint g_bin_quads[]; };
-layout(std430, binding = 2) readonly restrict buffer buf2_ { uint g_bin_tris[]; };
+#include "funcs.glsl"
+#include "structures.glsl"
 
-layout(std430, binding = 3) coherent restrict buffer buf3_ { uint g_scratch_32[]; };
-layout(std430, binding = 4) coherent restrict buffer buf4_ { uvec2 g_scratch_64[]; };
-layout(std430, binding = 5) readonly restrict buffer buf5_ { uint g_instance_colors[]; };
-layout(std430, binding = 6) readonly restrict buffer buf6_ { vec4 g_instance_uv_rects[]; };
-layout(std430, binding = 7) readonly restrict buffer buf7_ { uvec4 g_uvec4_storage[]; };
-layout(std430, binding = 8) readonly restrict buffer buf8_ { uint g_uint_storage[]; };
+#extension GL_ARB_shader_group_vote : require
+#extension GL_KHR_shader_subgroup_shuffle : require
 
-layout(std430, binding = 9) writeonly restrict buffer buf9_ { uint g_raster_image[]; };
+coherent layout(std430, binding = 0) buffer lucid_info_ {
+	LucidInfo g_info;
+	int g_counts[];
+};
+layout(binding = 1) uniform lucid_config_ { LucidConfig u_config; };
 
-layout(binding = 0) uniform sampler2D opaque_texture;
-layout(binding = 1) uniform sampler2D transparent_texture;
+layout(std430, binding = 2) readonly restrict buffer buf1_ { uint g_bin_quads[]; };
+layout(std430, binding = 3) readonly restrict buffer buf2_ { uint g_bin_tris[]; };
+
+layout(std430, binding = 4) coherent restrict buffer buf3_ { uint g_scratch_32[]; };
+layout(std430, binding = 5) coherent restrict buffer buf4_ { uvec2 g_scratch_64[]; };
+layout(std430, binding = 6) readonly restrict buffer buf5_ { uint g_instance_colors[]; };
+layout(std430, binding = 7) readonly restrict buffer buf6_ { vec4 g_instance_uv_rects[]; };
+layout(std430, binding = 8) readonly restrict buffer buf7_ { uvec4 g_uvec4_storage[]; };
+layout(std430, binding = 9) readonly restrict buffer buf8_ { uint g_uint_storage[]; };
+
+layout(std430, binding = 10) writeonly restrict buffer buf9_ { uint g_raster_image[]; };
+
+layout(binding = 11) uniform sampler2D opaque_texture;
+layout(binding = 12) uniform sampler2D transparent_texture;
 
 // TODO: separate opaque and transparent objects, draw opaque objects first to texture
 // then read it and use depth to optimize drawing
-uniform uint background_color;
 
 const float alpha_threshold = 1.0 / 128.0;
 
@@ -138,8 +150,8 @@ uint shadeSample(ivec2 pixel_pos, uint tri_idx, out float out_depth) {
 		normal = decodeNormalUint(g_uint_storage[tri_idx]);
 	}
 
-	float light_value = max(0.0, dot(-lighting.sun_dir, normal) * 0.7 + 0.3);
-	color.rgb = SATURATE(finalShading(color.rgb, light_value));
+	float light_value = max(0.0, dot(-u_config.lighting.sun_dir.xyz, normal) * 0.7 + 0.3);
+	color.rgb = SATURATE(finalShading(u_config.lighting, color.rgb, light_value));
 	return encodeRGBA8(color);
 }
 
@@ -170,7 +182,7 @@ bool reduceSample(inout ReductionContext ctx, inout vec3 out_color, uvec2 sample
 	int j = findLSB(pixel_bitmask);
 
 	while(anyInvocationARB(j != -1)) {
-		uvec2 value = shuffleNV(sample_s, j, 32);
+		uvec2 value = subgroupShuffle(sample_s, j);
 		uint color = value.x;
 		float depth = uintBitsToFloat(value.y);
 
@@ -180,14 +192,14 @@ bool reduceSample(inout ReductionContext ctx, inout vec3 out_color, uvec2 sample
 		j = findLSB(pixel_bitmask);
 
 		if(depth > ctx.prev_depths[0]) {
-			SWAP_UINT(color, ctx.prev_colors[0]);
-			SWAP_FLOAT(depth, ctx.prev_depths[0]);
+			swap(color, ctx.prev_colors[0]);
+			swap(depth, ctx.prev_depths[0]);
 			if(ctx.prev_depths[0] > ctx.prev_depths[1]) {
-				SWAP_UINT(ctx.prev_colors[1], ctx.prev_colors[0]);
-				SWAP_FLOAT(ctx.prev_depths[1], ctx.prev_depths[0]);
+				swap(ctx.prev_colors[1], ctx.prev_colors[0]);
+				swap(ctx.prev_depths[1], ctx.prev_depths[0]);
 				if(ctx.prev_depths[1] > ctx.prev_depths[2]) {
-					SWAP_UINT(ctx.prev_colors[2], ctx.prev_colors[1]);
-					SWAP_FLOAT(ctx.prev_depths[2], ctx.prev_depths[1]);
+					swap(ctx.prev_colors[2], ctx.prev_colors[1]);
+					swap(ctx.prev_depths[2], ctx.prev_depths[1]);
 
 #ifdef VISUALIZE_ERRORS
 					if(ctx.prev_depths[2] > ctx.prev_depths[3]) {
@@ -248,7 +260,7 @@ uint finishReduceSamples(ReductionContext ctx) {
 #endif
 		}
 
-	out_color += ctx.out_trans * decodeRGB8(background_color);
+	out_color += ctx.out_trans * u_config.background_color.xyz;
 	return encodeRGB8(SATURATE(out_color)); // TODO: 10 bit
 }
 
@@ -275,3 +287,5 @@ void commitStats() {
 		atomicAdd(g_info.num_half_blocks, s_stat_hblocks);
 	}
 }
+
+#endif

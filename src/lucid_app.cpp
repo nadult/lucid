@@ -67,12 +67,13 @@ LucidApp::LucidApp(VWindowRef window, VDeviceRef device)
 	  m_gui(device, window, m_gui_render_pass, {GuiStyleMode::mini}),
 	  m_cam_control(Plane3F(float3(0, 1, 0), 0.0f)), m_lighting(SceneLighting::makeDefault()) {
 
-	ShaderCompilerOptions sc_options;
-	sc_options.version = device->version();
-	sc_options.source_dirs.emplace_back(dataPath("shaders"));
-	sc_options.spirv_cache_dir = dataPath("spirv");
-	m_shader_compiler.emplace(sc_options);
+	ShaderCompilerSetup sc_setup;
+	sc_setup.vulkan_version = device->version();
+	sc_setup.source_dirs.emplace_back(dataPath("shaders"));
+	sc_setup.spirv_cache_dir = dataPath("spirv");
+	m_shader_compiler.emplace(sc_setup);
 	SimpleRenderer::addShaderDefs(*m_shader_compiler);
+	LucidRenderer::addShaderDefs(*m_shader_compiler);
 
 	m_filtering_params.magnification = TextureFilterOpt::linear;
 	m_filtering_params.minification = TextureFilterOpt::linear;
@@ -132,13 +133,11 @@ void LucidApp::saveConfig() const {
 		out = AnyConfig::load(doc.child("config"), true).get();
 	}
 
-	// TODO: fixme
-	//auto &gl_device = GlDevice::instance();
 	out.set("rendering_mode", m_rendering_mode);
 	out.set("trans_opts", m_lucid_opts);
 	out.set("wireframe", m_wireframe_mode);
-	//out.set("window_rect", gl_device.restoredWindowRect());
-	//out.set("window_maximized", gl_device.isWindowMaximized());
+	out.set("window_rect", m_window->restoredRect());
+	out.set("window_maximized", m_window->isMaximized());
 	out.set("show_stats", m_show_stats);
 	out.set("selected_stats_tab", m_selected_stats_tab);
 
@@ -201,8 +200,8 @@ bool LucidApp::updateViewport() {
 }
 
 Ex<void> LucidApp::updateRenderer() {
-	// TODO: !m_lucid_renderer || m_lucid_renderer->opts() != m_lucid_opts;
-	bool do_update = !m_simple_renderer;
+	bool do_update =
+		!m_simple_renderer || !m_lucid_renderer || m_lucid_renderer->opts() != m_lucid_opts;
 
 	if(updateViewport())
 		do_update = true;
@@ -214,7 +213,8 @@ Ex<void> LucidApp::updateRenderer() {
 
 		m_simple_renderer = EX_PASS(construct<SimpleRenderer>(m_device, *m_shader_compiler,
 															  m_viewport, swap_chain->format()));
-		//m_lucid_renderer = move(construct<LucidRenderer>(m_lucid_opts, m_viewport.size()).get());
+		m_lucid_renderer = EX_PASS(construct<LucidRenderer>(
+			m_device, *m_shader_compiler, swap_chain->format(), m_lucid_opts, m_viewport.size()));
 	}
 
 	return {};
@@ -564,10 +564,10 @@ void LucidApp::drawScene() {
 		for(auto &dc : ctx.dcs)
 			dc.opts &= ~DrawCallOpt::is_opaque;
 
-	if(true || m_rendering_mode != RenderingMode::lucid)
+	if(m_rendering_mode != RenderingMode::lucid)
 		m_simple_renderer->render(ctx, m_wireframe_mode).check();
-	//if(m_rendering_mode != RenderingMode::simple)
-	//	m_lucid_renderer->render(ctx);
+	if(m_rendering_mode != RenderingMode::simple)
+		m_lucid_renderer->render(ctx);
 }
 
 void LucidApp::draw2D() {

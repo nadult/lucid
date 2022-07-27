@@ -134,22 +134,19 @@
     </ProjectReference>
   </ItemGroup>
   <ItemGroup>
-    <None Include="..\data\shaders\bin_categorizer.shader" />
-    <None Include="..\data\shaders\bin_dispatcher.shader" />
-    <None Include="..\data\shaders\compose.shader" />
-    <None Include="..\data\shaders\dummy.shader" />
-    <None Include="..\data\shaders\funcs.glsl" />
-    <None Include="..\data\shaders\macros.glsl" />
-    <None Include="..\data\shaders\pieces\shading.shader" />
-    <None Include="..\data\shaders\pieces\scanline.shader" />
-    <None Include="..\data\shaders\pieces\structures.shader" />
-    <None Include="..\data\shaders\pieces\timers.shader" />
-    <None Include="..\data\shaders\pieces\viewport.shader" />
-    <None Include="..\data\shaders\quad_setup.shader" />
-    <None Include="..\data\shaders\raster_low.shader" />
-    <None Include="..\data\shaders\raster_high.shader" />
+    <None Include="..\data\shaders\bin_categorizer.glsl" />
+    <None Include="..\data\shaders\bin_dispatcher.glsl" />
+    <None Include="..\data\shaders\compose.glsl" />
+    <None Include="..\data\shaders\quad_setup.glsl" />
+    <None Include="..\data\shaders\raster_high.glsl" />
+    <None Include="..\data\shaders\raster_low.glsl" />
+    <None Include="..\data\shaders\shared\funcs.glsl" />
+    <None Include="..\data\shaders\shared\definitions.glsl" />
+    <None Include="..\data\shaders\shared\scanline.glsl" />
+    <None Include="..\data\shaders\shared\shading.glsl" />
+    <None Include="..\data\shaders\shared\structures.glsl" />
+    <None Include="..\data\shaders\shared\timers.glsl" />
     <None Include="..\data\shaders\simple.glsl" />
-    <None Include="..\data\shaders\structures.glsl" />
     <None Include="..\notes.wiki" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

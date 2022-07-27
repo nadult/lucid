@@ -23,7 +23,9 @@ class LucidRenderer {
 
 	LucidRenderer();
 	FWK_MOVABLE_CLASS(LucidRenderer)
-	Ex<void> exConstruct(Opts, int2 view_size);
+
+	static void addShaderDefs(ShaderCompiler &);
+	Ex<void> exConstruct(VDeviceRef, ShaderCompiler &, VColorAttachment, Opts, int2 view_size);
 
 	void render(const Context &);
 
@@ -45,26 +47,20 @@ class LucidRenderer {
 
 	void copyInfo(int num_skip_frames);
 
-	// Does nothing useful; can be used for measuring
-	// performance of simple constructs
-	void dummyIterateBins(const Context &);
-
 	void debugProgram(Program &, ZStr title);
 
 	Opts m_opts;
 
-	Program p_quad_setup;
-	Program p_bin_dispatcher, p_bin_categorizer;
-	Program p_raster_low, p_raster_high;
-	Program p_compose, p_dummy;
+	PVPipeline p_quad_setup;
+	PVPipeline p_bin_dispatcher, p_bin_categorizer;
+	PVPipeline p_raster_low, p_raster_high;
+	PVPipeline p_compose;
 
-	PBuffer m_instances, m_instance_colors, m_instance_uv_rects;
-	PBuffer m_errors, m_scratch_32, m_scratch_64;
-	PBuffer m_info, m_bin_quads, m_bin_tris, m_raster_image;
-	PBuffer m_uint_storage, m_uvec4_storage;
-	array<PBuffer, 3> m_old_info;
-
-	PFramebuffer m_initial_fbo;
+	PVBuffer m_instances, m_instance_colors, m_instance_uv_rects;
+	PVBuffer m_errors, m_scratch_32, m_scratch_64;
+	PVBuffer m_info, m_bin_quads, m_bin_tris, m_raster_image;
+	PVBuffer m_uint_storage, m_uvec4_storage;
+	array<PVBuffer, 3> m_old_info;
 
 	int m_bin_size, m_block_size;
 	int m_max_dispatches;
@@ -78,5 +74,5 @@ class LucidRenderer {
 	FrustumRays m_frustum_rays;
 	Matrix4 m_view_proj_matrix;
 	PBuffer m_compose_quads;
-	PVertexArray m_compose_quads_vao;
+	PVertexArray m_compose_quads_vao; // TODO
 };

@@ -1,4 +1,7 @@
-// $$include structures
+#ifndef _SCANLINE_GLSL_
+#define _SCANLINE_GLSL_
+
+#include "definitions.glsl"
 
 struct ScanlineParams {
 	vec3 min, max, step;
@@ -44,3 +47,5 @@ ScanlineParams loadScanlineParamsBin(uvec4 val0, uvec4 val1, out int min_by, out
 
 	return params;
 }
+
+#endif

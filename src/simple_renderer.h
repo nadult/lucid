@@ -1,6 +1,6 @@
 #pragma once
 
-#include "program.h"
+#include "lucid_base.h"
 #include <fwk/gfx/color.h>
 #include <fwk/gfx/material.h>
 #include <fwk/gfx/matrix_stack.h>
@@ -13,7 +13,7 @@ class SimpleRenderer {
 
 	static void addShaderDefs(ShaderCompiler &);
 
-	Ex<void> exConstruct(VDeviceRef, ShaderCompiler &, const IRect &viewport, VColorAttachment);
+	Ex<> exConstruct(VDeviceRef, ShaderCompiler &, const IRect &viewport, VColorAttachment);
 
 	// TODO: wireframe to config
 	Ex<> render(const RenderContext &, bool wireframe);

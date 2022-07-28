@@ -105,7 +105,7 @@ struct Scene {
 	// ------ Rendering data --------------------------------------------------
 
 	void updatePrimitiveOffsets();
-	Ex<void> updateRenderingData(VDeviceRef);
+	Ex<void> updateRenderingData(VulkanDevice &);
 	void freeRenderingData();
 	void quantizeNormals();
 

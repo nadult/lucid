@@ -1,13 +1,8 @@
 #include "shared/funcs.glsl"
 #include "shared/structures.glsl"
 
-#if BIN_SIZE == 64
-#define LSIZE 128
-#else
-#define LSIZE 512
-#endif
-
-layout(local_size_x = LSIZE) in;
+#define LSIZE BIN_CATEGORIZER_LSIZE
+layout(local_size_x = 512, local_size_x_id = 17) in;
 
 coherent layout(std430, binding = 0) buffer lucid_info_ {
 	LucidInfo g_info;

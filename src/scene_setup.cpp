@@ -152,7 +152,7 @@ Ex<> BoxesSetup::updateScene(VDeviceRef device) {
 	views = {OrbitingCamera({}, 10.0f, 0.5f, 0.8f)};
 	if(!camera)
 		camera = views.front();
-	return scene->updateRenderingData(device);
+	return scene->updateRenderingData(*device);
 }
 
 LoadedSetup::LoadedSetup(string name) : SceneSetup(move(name)) {}
@@ -165,7 +165,7 @@ Ex<> LoadedSetup::updateScene(VDeviceRef device) {
 
 	if(isOneOf(name, "bunny", "hairball", "teapot"))
 		render_config.scene_opacity = 0.5;
-	EXPECT(scene->updateRenderingData(device));
+	EXPECT(scene->updateRenderingData(*device));
 
 	auto box = scene->bounding_box;
 	auto max_size = max(box.width(), box.height(), box.depth());

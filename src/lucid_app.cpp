@@ -38,9 +38,6 @@
 #include <fwk/vulkan/vulkan_swap_chain.h>
 #include <fwk/vulkan/vulkan_window.h>
 
-#include <fwk/gfx/investigator3.h>
-#include <fwk/gfx/visualizer3.h>
-
 Ex<void> loadShaderPieces();
 
 FilePath mainPath() {
@@ -214,7 +211,7 @@ Ex<void> LucidApp::updateRenderer() {
 		m_simple_renderer = EX_PASS(construct<SimpleRenderer>(m_device, *m_shader_compiler,
 															  m_viewport, swap_chain->format()));
 		m_lucid_renderer = EX_PASS(construct<LucidRenderer>(
-			m_device, *m_shader_compiler, swap_chain->format(), m_lucid_opts, m_viewport.size()));
+			*m_device, *m_shader_compiler, swap_chain->format(), m_lucid_opts, m_viewport.size()));
 	}
 
 	return {};
@@ -272,8 +269,6 @@ void LucidApp::showSceneStats(const Scene &scene) {
 }
 
 void LucidApp::showRasterStats(const Scene &scene) {
-	return; // TODO: fixme
-
 	auto groups = m_lucid_renderer->getStats();
 	for(int i : intRange(groups)) {
 		auto &group = groups[i];

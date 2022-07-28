@@ -53,33 +53,22 @@ struct SpecializationConstants {
 	CONSTANT(9, MAX_VISIBLE_QUADS_SHIFT, 20)
 	CONSTANT(10, MAX_VISIBLE_TRIS, 2 * 1024 * 1024)
 	CONSTANT(11, MAX_DISPATCHES, 128)
-	CONSTANT(12, BIN_DISPATCHER_LSIZE, 1024)
-	CONSTANT(13, BIN_DISPATCHER_LSHIFT, 10)
-	CONSTANT(14, BIN_DISPATCHER_XBIN_STEP, 4)
-	CONSTANT(15, BIN_DISPATCHER_YBIN_STEP, 5)
+	CONSTANT(12, RENDER_OPTIONS, 0)
 
-	// TODO: single variable with flags?
-	CONSTANT(16, ENABLE_TIMERS, 0)
-	CONSTANT(17, ADDITIVE_BLENDING, 0)
-	CONSTANT(18, VISUALIZE_ERRORS, 0)
-	CONSTANT(19, ALPHA_THRESHOLD, 0)
+	CONSTANT(13, BIN_DISPATCHER_LSIZE, 1024)
+	CONSTANT(14, BIN_DISPATCHER_LSHIFT, 10)
+	CONSTANT(15, BIN_DISPATCHER_XBIN_STEP, 4)
+	CONSTANT(16, BIN_DISPATCHER_YBIN_STEP, 5)
+	CONSTANT(17, BIN_CATEGORIZER_LSIZE, 512)
 #ifdef __cplusplus
 };
 #endif
 #undef CONSTANT
 
 // clang-format off
-
-#ifndef __cplusplus
-#define RECORD(a, b, c, d) // TODO
-
-#define LIX		gl_LocalInvocationIndex
-#define LID		gl_LocalInvocationID
-#define WGID	gl_WorkGroupID
-
-#define WARP_SIZE	32
-#define WARP_MASK	31
-#define WARP_SHIFT	5
+#define BIN_LEVELS_COUNT		5
+#define REJECTION_TYPE_COUNT	4
+#define TIMERS_COUNT			8
 
 #define BIN_LEVEL_EMPTY		0
 #define BIN_LEVEL_MICRO		1
@@ -103,6 +92,28 @@ struct SpecializationConstants {
 #define REJECTION_TYPE_FRUSTUM			2
 #define REJECTION_TYPE_BETWEEN_SAMPLES	3
 
+#define ROPT_DEBUG_BIN_DISPATCHER	0x01
+#define ROPT_DEBUG_RASTER			0x02
+#define ROPT_ENABLE_TIMERS			0x04
+#define ROPT_ADDITIVE_BLENDING		0x08
+#define ROPT_VISUALIZE_ERRORS		0x10
+#define ROPT_ALPHA_THRESHOLD		0x20
+#define ROPT_BIN_SIZE_64			0x40
+
+#ifndef __cplusplus
+#define RECORD(a, b, c, d) // TODO
+
+#define LIX		gl_LocalInvocationIndex
+#define LID		gl_LocalInvocationID
+#define WGID	gl_WorkGroupID
+
+#define WARP_SIZE	32
+#define WARP_MASK	31
+#define WARP_SHIFT	5
+
+bool renderOptSet(uint bit) {
+	return (RENDER_OPTIONS & bit) != 0u;
+}
 
 // Per-bin number of quad counts, offsets, etc.
 #define BIN_QUAD_COUNTS(idx)		g_counts[BIN_COUNT * 0 + (idx)]
@@ -127,10 +138,6 @@ struct SpecializationConstants {
 #define STORAGE_QUAD_NORMAL_OFFSET	(MAX_VISIBLE_QUADS * 11)
 #define STORAGE_QUAD_TEXTURE_OFFSET	(MAX_VISIBLE_QUADS * 12)
 #endif
-
-#define BIN_LEVELS_COUNT		5
-#define REJECTION_TYPE_COUNT	4
-#define TIMERS_COUNT			8
 
 
 

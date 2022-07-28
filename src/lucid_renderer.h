@@ -1,7 +1,6 @@
 #pragma once
 
 #include "lucid_base.h"
-#include "program.h"
 #include <fwk/gfx/color.h>
 
 // TODO: better handling of phases
@@ -25,7 +24,7 @@ class LucidRenderer {
 	FWK_MOVABLE_CLASS(LucidRenderer)
 
 	static void addShaderDefs(ShaderCompiler &);
-	Ex<void> exConstruct(VDeviceRef, ShaderCompiler &, VColorAttachment, Opts, int2 view_size);
+	Ex<void> exConstruct(VulkanDevice &, ShaderCompiler &, VColorAttachment, Opts, int2 view_size);
 
 	void render(const Context &);
 
@@ -36,18 +35,17 @@ class LucidRenderer {
 	int blockSize() const { return m_block_size; }
 
   private:
-	void uploadInstances(const Context &);
+	Ex<> uploadInstances(const Context &);
+	Ex<> setupInputData(const Context &);
 	void quadSetup(const Context &);
 	void computeBins(const Context &);
-	void bindRasterCommon(const Context &);
-	void bindRaster(Program &, const Context &);
+	//void bindRasterCommon(const Context &);
+	//void bindRaster(Program &, const Context &);
 	void rasterLow(const Context &);
 	void rasterHigh(const Context &);
 	void compose(const Context &);
-
-	void copyInfo(int num_skip_frames);
-
-	void debugProgram(Program &, ZStr title);
+	Ex<> downloadInfo(const Context &, int num_skip_frames);
+	//void debugProgram(Program &, ZStr title);
 
 	Opts m_opts;
 
@@ -56,11 +54,14 @@ class LucidRenderer {
 	PVPipeline p_raster_low, p_raster_high;
 	PVPipeline p_compose;
 
+	PVBuffer m_config, m_info;
 	PVBuffer m_instances, m_instance_colors, m_instance_uv_rects;
 	PVBuffer m_errors, m_scratch_32, m_scratch_64;
-	PVBuffer m_info, m_bin_quads, m_bin_tris, m_raster_image;
+	PVBuffer m_bin_quads, m_bin_tris, m_raster_image;
 	PVBuffer m_uint_storage, m_uvec4_storage;
-	array<PVBuffer, 3> m_old_info;
+
+	vector<VDownloadId> m_info_downloads;
+	vector<u32> m_last_info;
 
 	int m_bin_size, m_block_size;
 	int m_max_dispatches;
@@ -70,9 +71,9 @@ class LucidRenderer {
 
 	int2 m_size;
 	int m_num_instances = 0, m_num_quads = 0;
+	int m_instance_packet_size = 0;
 
-	FrustumRays m_frustum_rays;
-	Matrix4 m_view_proj_matrix;
 	PBuffer m_compose_quads;
 	PVertexArray m_compose_quads_vao; // TODO
+	PVRenderPass m_render_pass;
 };

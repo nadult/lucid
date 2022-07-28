@@ -18,21 +18,23 @@ layout(local_size_x = LSIZE) in;
 
 #define MAX_PACKET_SIZE 4
 
-coherent layout(std430, binding = 0) buffer lucid_info_ {
+coherent layout(std430, set = 0, binding = 0) buffer lucid_info_ {
 	LucidInfo g_info;
 	int g_counts[];
 };
-layout(binding = 1) uniform lucid_config_ { LucidConfig u_config; };
+layout(set = 0, binding = 1) uniform lucid_config_ { LucidConfig u_config; };
 
-layout(std430, binding = 2) readonly restrict buffer buf1_ { InstanceData g_instances[]; };
-layout(std430, binding = 3) readonly restrict buffer buf2_ { uint g_indices[]; };
-layout(std430, binding = 4) readonly restrict buffer buf3_ { float g_verts[]; };
-layout(std430, binding = 5) readonly restrict buffer buf4_ { vec2 g_tex_coords[]; };
-layout(std430, binding = 6) readonly restrict buffer buf5_ { uint g_colors[]; };
-layout(std430, binding = 7) readonly restrict buffer buf6_ { uint g_normals[]; };
-layout(std430, binding = 8) writeonly restrict buffer buf7_ { uint g_quad_aabbs[]; };
-layout(std430, binding = 9) writeonly restrict buffer buf8_ { uvec4 g_uvec4_storage[]; };
-layout(std430, binding = 10) writeonly restrict buffer buf9_ { uint g_uint_storage[]; };
+layout(std430, set = 1, binding = 0) readonly restrict buffer buf02_ {
+	InstanceData g_instances[];
+};
+layout(std430, set = 1, binding = 1) readonly restrict buffer buf03_ { uint g_indices[]; };
+layout(std430, set = 1, binding = 2) readonly restrict buffer buf04_ { float g_verts[]; };
+layout(std430, set = 1, binding = 3) readonly restrict buffer buf05_ { vec2 g_tex_coords[]; };
+layout(std430, set = 1, binding = 4) readonly restrict buffer buf06_ { uint g_colors[]; };
+layout(std430, set = 1, binding = 5) readonly restrict buffer buf07_ { uint g_normals[]; };
+layout(std430, set = 1, binding = 6) writeonly restrict buffer buf08_ { uint g_quad_aabbs[]; };
+layout(std430, set = 1, binding = 7) writeonly restrict buffer buf09_ { uvec4 g_uvec4_storage[]; };
+layout(std430, set = 1, binding = 8) writeonly restrict buffer buf10_ { uint g_uint_storage[]; };
 
 shared uint s_quad_aabbs[LSIZE];
 shared uvec2 s_tri_y_aabbs[LSIZE];
@@ -141,7 +143,7 @@ void processInputQuad(uint quad_id, uint v0, uint v1, uint v2, uint v3, uint loc
 	vec3 vws[4] = {vertexLoad(v0), vertexLoad(v1), vertexLoad(v2), vertexLoad(v3)};
 
 	if(u_config.enable_backface_culling != 0) {
-		vec3 frustum_origin = u_config.frustum.ws_origin[0].xyz;
+		vec3 frustum_origin = u_config.frustum.ws_origin0.xyz;
 		vec3 p0 = vws[0] - frustum_origin;
 		vec3 p1 = vws[1] - frustum_origin;
 		vec3 p2 = vws[2] - frustum_origin;
@@ -339,7 +341,7 @@ void addVisibleQuad(int quad_idx, int src_idx, int instance_id) {
 	uint cull_flags = s_quad_aabbs[src_idx] >> 30;
 	uint instance_flags = g_instances[instance_id].flags;
 
-	vec3 shared_origin = u_config.frustum.ws_shared_origin.xyz;
+	vec3 shared_origin = u_config.frustum.ws_origin0.xyz;
 	vec3 tri0 = vertexLoad(v0) - shared_origin;
 	vec3 tri1 = vertexLoad(v1) - shared_origin;
 	vec3 tri2 = vertexLoad(v2) - shared_origin;
@@ -356,7 +358,7 @@ void addVisibleTri(int quad_idx, int src_idx, uint instance_flags_id, int second
 	uint v1 = s_quad_indices[src_idx][1 + second_tri];
 	uint v2 = s_quad_indices[src_idx][2 + second_tri];
 
-	vec3 shared_origin = u_config.frustum.ws_shared_origin.xyz;
+	vec3 shared_origin = u_config.frustum.ws_origin0.xyz;
 	vec3 tri0 = vertexLoad(v0) - shared_origin;
 	vec3 tri1 = vertexLoad(v1) - shared_origin;
 	vec3 tri2 = vertexLoad(v2) - shared_origin;

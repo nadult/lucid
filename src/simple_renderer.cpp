@@ -100,9 +100,10 @@ Ex<> SimpleRenderer::renderPhase(const RenderContext &ctx, PVBuffer simple_dc_bu
 		if(bool(draw_call.opts & DrawCallOpt::is_opaque) != opaque)
 			continue;
 		if(prev_mat_id != draw_call.material_id) {
-			cmds.bindDS(1)(0, span<shader::SimpleDrawCall>(simple_dc_buf, dc, 1),
-						   VDescriptorType::uniform_buffer)(1, sampler,
-															material.diffuse_tex.vk_image);
+			auto ds = cmds.bindDS(1);
+			ds(0, VDescriptorType::uniform_buffer,
+			   {span<shader::SimpleDrawCall>(simple_dc_buf, dc, 1)});
+			ds(1, {{sampler, material.diffuse_tex.vk_image}});
 			prev_mat_id = draw_call.material_id;
 		}
 
@@ -120,13 +121,7 @@ Ex<> SimpleRenderer::render(const RenderContext &ctx, bool wireframe) {
 	auto &cmds = ctx.device.cmdQueue();
 	PERF_GPU_SCOPE(cmds);
 
-	auto lighting_buf = EX_PASS(VulkanBuffer::create<shader::Lighting>(
-		ctx.device.ref(), 1, VBufferUsage::uniform_buffer | VBufferUsage::transfer_dst,
-		VMemoryUsage::frame));
-	auto simple_dc_buf = EX_PASS(VulkanBuffer::create<shader::SimpleDrawCall>(
-		ctx.device.ref(), ctx.dcs.size(), VBufferUsage::uniform_buffer | VBufferUsage::transfer_dst,
-		VMemoryUsage::frame));
-
+	auto ubo_usage = VBufferUsage::uniform_buffer | VBufferUsage::transfer_dst;
 	shader::Lighting lighting;
 	lighting.ambient_color = ctx.lighting.ambient.color;
 	lighting.ambient_power = ctx.lighting.ambient.power;
@@ -135,7 +130,8 @@ Ex<> SimpleRenderer::render(const RenderContext &ctx, bool wireframe) {
 	lighting.sun_color = ctx.lighting.sun.color;
 	lighting.sun_power = ctx.lighting.sun.power;
 	lighting.sun_dir = ctx.lighting.sun.dir;
-	EXPECT(cmds.upload(lighting_buf, cspan(&lighting, 1)));
+	auto lighting_buf = EX_PASS(VulkanBuffer::createAndUpload(ctx.device, cspan(&lighting, 1),
+															  ubo_usage, VMemoryUsage::frame));
 
 	int num_opaque = 0;
 
@@ -158,9 +154,11 @@ Ex<> SimpleRenderer::render(const RenderContext &ctx, bool wireframe) {
 		if(material.diffuse_tex)
 			; // TODO
 	}
-	EXPECT(cmds.upload(simple_dc_buf, simple_dcs));
+	auto simple_dc_buf = EX_PASS(
+		VulkanBuffer::createAndUpload(ctx.device, simple_dcs, ubo_usage, VMemoryUsage::frame));
+
 	cmds.bind(m_pipeline_layout);
-	cmds.bindDS(0)(0, lighting_buf, VDescriptorType::uniform_buffer);
+	cmds.bindDS(0)(0, VDescriptorType::uniform_buffer, {lighting_buf});
 	cmds.setViewport(m_viewport);
 	cmds.setScissor(none);
 

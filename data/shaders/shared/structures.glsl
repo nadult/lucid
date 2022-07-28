@@ -18,18 +18,11 @@ struct Lighting {
 	float scene_power, sun_power, ambient_power;
 };
 
+// All vectors in world space
 struct Frustum {
-	// World space rays;
-	// Ray indices are compatible with rect vertex indices
-	vec4 ws_origin[4];
-	vec4 ws_dir[4];
-
-	vec4 ws_dir0, ws_dirx, ws_diry;
-	vec4 ws_shared_origin;
-
-	// For computation from screen_pos
-	vec2 vs_pos, vs_diff;
-	vec4 ws_pos, ws_diff;
+	vec4 ws_origins[4], ws_dirs[4];
+	vec4 ws_origin0, ws_dir0;
+	vec4 ws_dirx, ws_diry;
 };
 
 struct SimpleDrawCall {

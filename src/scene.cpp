@@ -218,13 +218,14 @@ void Scene::updatePrimitiveOffsets() {
 	}
 }
 
-Ex<void> Scene::updateRenderingData(VDeviceRef device) {
+Ex<void> Scene::updateRenderingData(VulkanDevice &device) {
 	updatePrimitiveOffsets();
 	freeRenderingData();
 
-	auto &cmds = device->cmdQueue();
-	auto vb_usage = VBufferUsage::vertex_buffer | VBufferUsage::transfer_dst;
-	auto ib_usage = VBufferUsage::index_buffer | VBufferUsage::transfer_dst;
+	auto &cmds = device.cmdQueue();
+	auto buf_usage = VBufferUsage::storage_buffer | VBufferUsage::transfer_dst;
+	auto vb_usage = buf_usage | VBufferUsage::vertex_buffer;
+	auto ib_usage = buf_usage | VBufferUsage::index_buffer;
 
 	verts.pos = EX_PASS(VulkanBuffer::create<float3>(device, numVerts(), vb_usage));
 	EXPECT(cmds.upload(verts.pos, positions));
@@ -264,14 +265,14 @@ Ex<void> Scene::updateRenderingData(VDeviceRef device) {
 			if(tex.block_mips) {
 				auto &first = tex.block_mips[0];
 				VImageSetup setup(first.format(), {first.size(), uint(tex.block_mips.size())});
-				tex.vk_image = EX_PASS(VulkanImage::create(device, setup));
+				tex.vk_image = EX_PASS(VulkanImage::create(device.ref(), setup));
 				EXPECT(tex.vk_image->upload(tex.block_mips));
 			} else {
 				auto &first = tex.plain_mips[0];
 				print("Loading plain texture (%)\n", first.size());
 				auto format = tex.is_opaque ? VK_FORMAT_B8G8R8_SRGB : VK_FORMAT_B8G8R8A8_SRGB;
 				VImageSetup setup(format, {first.size(), uint(tex.plain_mips.size())});
-				tex.vk_image = EX_PASS(VulkanImage::create(device, setup));
+				tex.vk_image = EX_PASS(VulkanImage::create(device.ref(), setup));
 				EXPECT(tex.vk_image->upload(tex.plain_mips));
 			}
 
@@ -280,7 +281,7 @@ Ex<void> Scene::updateRenderingData(VDeviceRef device) {
 			//auto wrap_opt = tex.is_clamped ? TextureWrapOpt::clamp_to_edge : TextureWrapOpt::repeat;
 			//tex.gl_texture->setWrapping(wrap_opt);
 		}
-		used_tex.vk_image = VulkanImageView::create(device, tex.vk_image);
+		used_tex.vk_image = VulkanImageView::create(device.ref(), tex.vk_image);
 		used_tex.is_opaque = tex.is_opaque;
 		return {};
 	};

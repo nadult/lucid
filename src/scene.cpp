@@ -263,17 +263,10 @@ Ex<void> Scene::updateRenderingData(VulkanDevice &device) {
 		if(!tex.vk_image) {
 			DASSERT(tex.block_mips || tex.plain_mips);
 			if(tex.block_mips) {
-				auto &first = tex.block_mips[0];
-				VImageSetup setup(first.format(), {first.size(), uint(tex.block_mips.size())});
-				tex.vk_image = EX_PASS(VulkanImage::create(device.ref(), setup));
-				EXPECT(tex.vk_image->upload(tex.block_mips));
+				tex.vk_image = EX_PASS(VulkanImage::createAndUpload(device.ref(), tex.block_mips));
 			} else {
-				auto &first = tex.plain_mips[0];
-				print("Loading plain texture (%)\n", first.size());
-				auto format = tex.is_opaque ? VK_FORMAT_B8G8R8_SRGB : VK_FORMAT_B8G8R8A8_SRGB;
-				VImageSetup setup(format, {first.size(), uint(tex.plain_mips.size())});
-				tex.vk_image = EX_PASS(VulkanImage::create(device.ref(), setup));
-				EXPECT(tex.vk_image->upload(tex.plain_mips));
+				// TODO: different format for opaque tex? R8G8B8?
+				tex.vk_image = EX_PASS(VulkanImage::createAndUpload(device.ref(), tex.plain_mips));
 			}
 
 			// TODO: samplers

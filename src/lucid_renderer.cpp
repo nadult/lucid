@@ -340,7 +340,7 @@ Ex<> LucidRenderer::setupInputData(const Context &ctx) {
 	auto mem_usage = VMemoryUsage::frame;
 	m_info =
 		EX_PASS(VulkanBuffer::create<u32>(ctx.device, bin_counters_size, info_usage, mem_usage));
-	cmds.fill(span<u32>(m_info, 0, LUCID_INFO_SIZE + m_bin_count * 6), 0);
+	cmds.fill(vspan<u32>(m_info, 0, LUCID_INFO_SIZE + m_bin_count * 6), 0);
 
 	struct shader::LucidConfig config;
 	config.frustum = FrustumInfo(ctx.camera);

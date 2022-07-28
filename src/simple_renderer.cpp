@@ -102,7 +102,7 @@ Ex<> SimpleRenderer::renderPhase(const RenderContext &ctx, PVBuffer simple_dc_bu
 		if(prev_mat_id != draw_call.material_id) {
 			auto ds = cmds.bindDS(1);
 			ds(0, VDescriptorType::uniform_buffer,
-			   {span<shader::SimpleDrawCall>(simple_dc_buf, dc, 1)});
+			   {vspan<shader::SimpleDrawCall>(simple_dc_buf, dc, 1)});
 			ds(1, {{sampler, material.diffuse_tex.vk_image}});
 			prev_mat_id = draw_call.material_id;
 		}

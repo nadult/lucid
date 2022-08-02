@@ -71,6 +71,8 @@ class LucidRenderer {
 	VBufferSpan<u32> m_bin_quads, m_bin_tris, m_raster_image;
 	VBufferSpan<u32> m_uint_storage;
 	VBufferSpan<int4> m_uvec4_storage;
+	VBufferSpan<u32> m_compose_quads;
+	VBufferSpan<u16> m_compose_ibuffer;
 
 	vector<VDownloadId> m_info_downloads;
 	vector<u32> m_last_info;
@@ -85,7 +87,5 @@ class LucidRenderer {
 	int m_num_instances = 0, m_num_quads = 0;
 	int m_instance_packet_size = 0;
 
-	//PBuffer m_compose_quads;
-	//PVertexArray m_compose_quads_vao; // TODO
 	PVRenderPass m_render_pass;
 };

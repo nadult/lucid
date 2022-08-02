@@ -101,8 +101,8 @@ Ex<> SimpleRenderer::renderPhase(const RenderContext &ctx,
 			continue;
 		if(prev_mat_id != draw_call.material_id) {
 			auto ds = cmds.bindDS(1);
-			ds(0, VDescriptorType::uniform_buffer, simple_dc_buf.subSpan(dc, 1));
-			ds(1, {{sampler, material.diffuse_tex.vk_image}});
+			ds.set(0, VDescriptorType::uniform_buffer, simple_dc_buf.subSpan(dc, 1));
+			ds.set(1, {{sampler, material.diffuse_tex.vk_image}});
 			prev_mat_id = draw_call.material_id;
 		}
 
@@ -157,7 +157,7 @@ Ex<> SimpleRenderer::render(const RenderContext &ctx, bool wireframe) {
 		VulkanBuffer::createAndUpload(ctx.device, simple_dcs, ubo_usage, VMemoryUsage::frame));
 
 	cmds.bind(m_pipeline_layout);
-	cmds.bindDS(0)(0, VDescriptorType::uniform_buffer, lighting_buf);
+	cmds.bindDS(0).set(0, VDescriptorType::uniform_buffer, lighting_buf);
 	cmds.setViewport(m_viewport);
 	cmds.setScissor(none);
 

@@ -27,12 +27,11 @@ coherent layout(std430, binding = 0) buffer lucid_info_ {
 };
 layout(binding = 1) uniform lucid_config_ { LucidConfig u_config; };
 
-layout(std430, binding = 2) readonly buffer buf1_ { uint g_quad_aabbs[]; };
-layout(std430, binding = 3) writeonly buffer buf2_ { uint g_bin_quads[]; };
-layout(std430, binding = 4) writeonly buffer buf3_ { uint g_bin_tris[]; };
-
-layout(std430, binding = 5) buffer buf4_ { int g_tasks[]; };
-layout(std430, binding = 6) buffer buf5_ { uvec4 g_uvec4_storage[]; };
+layout(std430, set = 1, binding = 0) readonly buffer buf1_ { uint g_quad_aabbs[]; };
+layout(std430, set = 1, binding = 1) writeonly buffer buf2_ { uint g_bin_quads[]; };
+layout(std430, set = 1, binding = 2) writeonly buffer buf3_ { uint g_bin_tris[]; };
+layout(std430, set = 1, binding = 3) buffer buf4_ { int g_tasks[]; };
+layout(std430, set = 1, binding = 4) buffer buf5_ { uvec4 g_uvec4_storage[]; };
 
 shared int s_bins[BIN_COUNT];
 shared int s_temp[LSIZE];
@@ -83,7 +82,7 @@ void countSmallQuadBins(uint quad_idx) {
 		atomicAdd(s_bins[bmy * BIN_COUNT_X + bmx], 1);*/
 }
 
-void accumulateLargeTriCounts() {
+void accumulateLargeTriCountsAcrossRows() {
 	// TODO: fixme
 	// Accumulating large quad counts across rows
 	/*if(LIX < BIN_COUNT_Y * ybin_count) {
@@ -102,6 +101,16 @@ void accumulateLargeTriCounts() {
 			accum = shuffleNV(cur, ybin_count - 1, ybin_count);
 		}
 	}*/
+
+	if(LIX < BIN_COUNT_Y) { // Slow version
+		uint by = LIX;
+		int accum = 0;
+		for(uint bx = 0; bx < BIN_COUNT_X; bx++) {
+			uint idx = bx + by * BIN_COUNT_X;
+			accum += s_bins[idx];
+			s_bins[idx] = accum;
+		}
+	}
 }
 
 void computeQuadOffsets() {
@@ -122,13 +131,22 @@ void computeQuadOffsets() {
 				BIN_QUAD_OFFSETS(idx) = cur;
 			accum = shuffleNV(cur, ybin_count - 1, ybin_count);
 		}
+	}*/
+	if(LIX < BIN_COUNT_Y) { // Slow version
+		uint by = LIX;
+		int accum = 0;
+		for(uint bx = 0; bx < BIN_COUNT_X; bx++) {
+			uint idx = bx + by * BIN_COUNT_X;
+			accum += BIN_QUAD_COUNTS(idx);
+			BIN_QUAD_OFFSETS(idx) = accum;
+		}
 	}
 	barrier();
 	// Storing accumulated bin quad counts for each row
 	if(LIX < BIN_COUNT_Y)
 		s_temp[LIX] = BIN_QUAD_OFFSETS((BIN_COUNT_X - 1) + LIX * BIN_COUNT_X);
 	barrier();
-	if(LIX < BIN_COUNT_X * xbin_count) {
+	/*if(LIX < BIN_COUNT_X * xbin_count) {
 		uint bx = LIX >> xbin_step;
 		int accum = 0;
 		for(uint by = 0, suby = LIX & (xbin_count - 1); by < BIN_COUNT_Y; by += xbin_count) {
@@ -147,8 +165,19 @@ void computeQuadOffsets() {
 			}
 			accum = shuffleNV(cur, xbin_count - 1, xbin_count);
 		}
+	}*/
+	if(LIX < BIN_COUNT_X) { // Slow version
+		uint bx = LIX;
+		int accum = 0;
+		for(uint by = 0; by < BIN_COUNT_Y; by++) {
+			uint idx = bx + by * BIN_COUNT_X;
+			accum += by > 0 ? s_temp[by - 1] : 0;
+			int value = BIN_QUAD_OFFSETS(idx) + accum - BIN_QUAD_COUNTS(idx);
+			BIN_QUAD_OFFSETS(idx) = value;
+			BIN_QUAD_OFFSETS_TEMP(idx) = value;
+		}
 	}
-	barrier();*/
+	barrier();
 }
 
 void computeTriOffsets() {
@@ -169,13 +198,22 @@ void computeTriOffsets() {
 				BIN_TRI_OFFSETS(idx) = cur;
 			accum = shuffleNV(cur, ybin_count - 1, ybin_count);
 		}
+	}*/
+	if(LIX < BIN_COUNT_Y) { // Slow version
+		uint by = LIX;
+		int accum = 0;
+		for(uint bx = 0; bx < BIN_COUNT_X; bx++) {
+			uint idx = bx + by * BIN_COUNT_X;
+			accum += BIN_TRI_COUNTS(idx);
+			BIN_TRI_OFFSETS(idx) = accum;
+		}
 	}
 	barrier();
 	// Storing accumulated bin quad counts for each row
 	if(LIX < BIN_COUNT_Y)
 		s_temp[LIX] = BIN_TRI_OFFSETS((BIN_COUNT_X - 1) + LIX * BIN_COUNT_X);
 	barrier();
-	if(LIX < BIN_COUNT_X * xbin_count) {
+	/*if(LIX < BIN_COUNT_X * xbin_count) {
 		uint bx = LIX >> xbin_step;
 		int accum = 0;
 		for(uint by = 0, suby = LIX & (xbin_count - 1); by < BIN_COUNT_Y; by += xbin_count) {
@@ -194,8 +232,19 @@ void computeTriOffsets() {
 			}
 			accum = shuffleNV(cur, xbin_count - 1, xbin_count);
 		}
+	}*/
+	if(LIX < BIN_COUNT_X) { // Slow version
+		uint bx = LIX;
+		int accum = 0;
+		for(uint by = 0; by < BIN_COUNT_Y; by++) {
+			uint idx = bx + by * BIN_COUNT_X;
+			accum += by > 0 ? s_temp[by - 1] : 0;
+			int value = BIN_TRI_OFFSETS(idx) + accum - BIN_TRI_COUNTS(idx);
+			BIN_TRI_OFFSETS(idx) = value;
+			BIN_TRI_OFFSETS_TEMP(idx) = value;
+		}
 	}
-	barrier();*/
+	barrier();
 }
 
 void dispatchQuad(int quad_idx) {
@@ -511,7 +560,7 @@ void processLargeTris() {
 	// they won't participate in dispatching either
 	if(s_num_tasks[1] == 0)
 		return;
-	accumulateLargeTriCounts();
+	accumulateLargeTriCountsAcrossRows();
 	barrier();
 
 	// Copying bin counters to global memory buffer

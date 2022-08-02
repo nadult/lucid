@@ -175,6 +175,20 @@ Ex<void> LucidRenderer::exConstruct(VulkanDevice &device, ShaderCompiler &compil
 	m_scratch_64 = EX_PASS(VulkanBuffer::create(device, scratch_64_size, usage));
 	m_raster_image =
 		EX_PASS(VulkanBuffer::create<u32>(device, m_bin_count * square(m_bin_size), usage));
+	m_compose_quads = EX_PASS(VulkanBuffer::create<u32>(
+		device, m_bin_count * 4,
+		VBufferUsage::vertex_buffer | VBufferUsage::storage_buffer | VBufferUsage::transfer_dst));
+	vector<u16> indices(m_bin_count * 6);
+	DASSERT(m_bin_count * 4 * 4 <= 64 * 1024);
+	for(int i = 0; i < m_bin_count; i++) {
+		int offsets[6] = {0, 1, 2, 0, 2, 3};
+		for(int j = 0; j < 6; j++) {
+			int value = offsets[j] + i * 4;
+			indices[i * 6 + j] = offsets[j] + i * 4;
+		}
+	}
+	m_compose_ibuffer = EX_PASS(VulkanBuffer::createAndUpload(
+		device, indices, VBufferUsage::index_buffer | VBufferUsage::transfer_dst));
 
 	if(m_opts & (Opt::debug_bin_dispatcher | Opt::debug_raster))
 		m_errors = EX_PASS(VulkanBuffer::create<u32>(device, 1024 * 1024, usage_copyable));
@@ -211,23 +225,6 @@ Ex<void> LucidRenderer::exConstruct(VulkanDevice &device, ShaderCompiler &compil
 	compose_setup.vertex_bindings = {vertexBinding<uint>(0)};
 	compose_setup.spec_constants.emplace_back(consts, 0u);
 	p_compose = EX_PASS(VulkanPipeline::create(device_ref, compose_setup));
-
-	vector<u16> indices(m_bin_count * 6);
-	DASSERT(m_bin_count * 4 * 4 <= 64 * 1024);
-	for(int i = 0; i < m_bin_count; i++) {
-		int offsets[6] = {0, 1, 2, 0, 2, 3};
-		for(int j = 0; j < 6; j++) {
-			int value = offsets[j] + i * 4;
-			indices[i * 6 + j] = offsets[j] + i * 4;
-		}
-	}
-	/*auto ibuffer = GlBuffer::make(BufferType::element_array, indices);
-	m_compose_quads =
-		GlBuffer::make(BufferType::array, m_bin_count * 4 * sizeof(uint), ImmBufferFlags());
-
-	m_compose_quads_vao = GlVertexArray::make();
-	m_compose_quads_vao->set({m_compose_quads}, defaultVertexAttribs<uint>(), ibuffer,
-							 IndexType::uint16);*/
 
 	return {};
 }
@@ -327,8 +324,8 @@ Ex<> LucidRenderer::uploadInstances(const Context &ctx) {
 Ex<> LucidRenderer::setupInputData(const Context &ctx) {
 	auto &cmds = ctx.device.cmdQueue();
 	uint bin_counters_size = LUCID_INFO_SIZE + m_bin_count * 10;
-	auto info_usage =
-		VBufferUsage::storage_buffer | VBufferUsage::transfer_src | VBufferUsage::transfer_dst;
+	auto info_usage = VBufferUsage::storage_buffer | VBufferUsage::transfer_src |
+					  VBufferUsage::transfer_dst | VBufferUsage::indirect_buffer;
 	auto config_usage = VBufferUsage::uniform_buffer | VBufferUsage::transfer_dst;
 	auto mem_usage = VMemoryUsage::frame;
 	m_info =
@@ -359,11 +356,11 @@ void LucidRenderer::quadSetup(const Context &ctx) {
 
 	// TODO: descriptor set may be optimized out, what should we do in such a case?
 	auto ds = cmds.bindDS(0);
-	ds(0, m_info);
-	ds(1, VDescriptorType::uniform_buffer, m_config);
+	ds.set(0, m_info);
+	ds.set(1, VDescriptorType::uniform_buffer, m_config);
 	ds = cmds.bindDS(1);
-	ds(0, m_instances, ctx.quads_ib, ctx.verts.pos, ctx.verts.tex, ctx.verts.col, ctx.verts.nrm,
-	   m_scratch_64, m_uvec4_storage, m_uint_storage);
+	ds.set(0, m_instances, ctx.quads_ib, ctx.verts.pos, ctx.verts.tex, ctx.verts.col, ctx.verts.nrm,
+		   m_scratch_64, m_uvec4_storage, m_uint_storage);
 
 	int num_workgroups = (m_num_instances + m_instance_packet_size - 1) / m_instance_packet_size;
 	cmds.dispatchCompute({num_workgroups, 1, 1});
@@ -373,30 +370,24 @@ void LucidRenderer::computeBins(const Context &ctx) {
 	auto &cmds = ctx.device.cmdQueue();
 	PERF_GPU_SCOPE(cmds);
 
-	/*m_info->bindIndex(0);
-
-	m_scratch_64->bindIndex(1);
-	m_bin_quads->bindIndex(2);
-	m_bin_tris->bindIndex(3);
-	m_scratch_32->bindIndex(4);
-	m_uvec4_storage->bindIndex(5);
+	cmds.bind(p_bin_dispatcher);
+	auto ds = cmds.bindDS(0);
+	ds.set(0, m_info);
+	ds.set(1, VDescriptorType::uniform_buffer, m_config);
+	ds = cmds.bindDS(1);
+	ds.set(0, m_scratch_64, m_bin_quads, m_bin_tris, m_scratch_32, m_uvec4_storage);
 
 	PERF_CHILD_SCOPE("dispatcher phase");
-	p_bin_dispatcher.use();
-	p_bin_dispatcher.setFrustum(ctx.camera);
 
-	if(m_opts & Opt::debug_bin_dispatcher)
-		shaderDebugUseBuffer(m_errors);
-	dispatchIndirect(LUCID_INFO_MEMBER_OFFSET(num_binning_dispatches));
-	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
-	if(m_opts & Opt::debug_bin_dispatcher)
-		debugProgram(p_bin_dispatcher, "bin_dispatcher");
+	cmds.dispatchComputeIndirect(m_info, LUCID_INFO_MEMBER_OFFSET(num_binning_dispatches));
+	//if(m_opts & Opt::debug_bin_dispatcher)
+	//	debugProgram(p_bin_dispatcher, "bin_dispatcher");
 
 	PERF_SIBLING_SCOPE("categorizer phase");
-	p_bin_categorizer.use();
-	m_compose_quads->bindIndexAs(1, BufferType::shader_storage);
-	glDispatchCompute(1, 1, 1);
-	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_COMMAND_BARRIER_BIT);*/
+	cmds.bind(p_bin_categorizer);
+	ds = cmds.bindDS(1);
+	ds.set(0, m_compose_quads);
+	cmds.dispatchCompute({1, 1, 1});
 }
 
 /*void LucidRenderer::bindRasterCommon(const Context &ctx) {

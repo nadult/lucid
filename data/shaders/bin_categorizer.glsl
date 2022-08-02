@@ -4,12 +4,12 @@
 #define LSIZE BIN_CATEGORIZER_LSIZE
 layout(local_size_x = 512, local_size_x_id = 17) in;
 
-coherent layout(std430, binding = 0) buffer lucid_info_ {
+coherent layout(std430, set = 0, binding = 0) buffer lucid_info_ {
 	LucidInfo g_info;
 	int g_counts[];
 };
 layout(binding = 1) uniform lucid_config_ { LucidConfig u_config; };
-layout(std430, binding = 2) buffer buf1_ { uint g_compose_quads[]; };
+layout(std430, set = 1, binding = 0) buffer buf1_ { uint g_compose_quads[]; };
 
 shared int s_bin_level_counts[BIN_LEVELS_COUNT];
 

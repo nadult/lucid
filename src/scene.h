@@ -113,7 +113,7 @@ struct Scene {
 	Pair<PVImage> textureAtlasPair() const;
 
 	VertexArray verts;
-	PVBuffer tris_ib, quads_ib;
+	VBufferSpan<u32> tris_ib, quads_ib;
 
 	vector<Pair<int>> mesh_primitive_offsets;
 };

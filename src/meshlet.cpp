@@ -3,8 +3,8 @@
 #include "quad_generator.h"
 #include "scene.h"
 #include <fwk/geom/graph.h>
+#include <fwk/gfx/canvas_3d.h>
 #include <fwk/gfx/investigator3.h>
-#include <fwk/gfx/visualizer3.h>
 #include <fwk/heap.h>
 #include <fwk/math/interval.h>
 #include <fwk/static_vector.h>
@@ -263,18 +263,20 @@ void visualizeMeshPartitions(const Scene &scene, CSpan<MeshPartition> partitions
 			colors.emplace_back((IColor)lerp(FColor(color_id), FColor(ColorId::white), 0.2f));
 		}
 
-	auto vis_func = [&](Visualizer3 &vis, double2 mouse_pos) -> string {
-		for(int i : intRange(partitions)) {
+	auto vis_func = [&](Canvas3D &canvas, double2 mouse_pos) -> string {
+		FATAL("fixme");
+		/*for(int i : intRange(partitions)) {
 			IColor color = colors[i % colors.size()];
-			vis(partition_tris[i], partition_tris[i].size() == 1 ? ColorId::black : color);
-		}
+			canvas(partition_tris[i], partition_tris[i].size() == 1 ? ColorId::black : color);
+		}*/
 
 		return "";
 	};
 
-	Investigator3 investigator(vis_func, InvestigatorOpt::exit_with_space,
-							   {DBox(scene.bounding_box), none, 0.1f});
-	investigator.run();
+	FATAL("fixme");
+	//Investigator3 investigator(vis_func, InvestigatorOpt::exit_with_space,
+	//						   {DBox(scene.bounding_box), none, 0.1f});
+	//investigator.run();
 }
 
 void meshletTest(const Scene &scene, float square_weight) {

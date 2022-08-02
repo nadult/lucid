@@ -5,7 +5,6 @@
 #include "shading.h"
 #include <fwk/gfx/camera.h>
 #include <fwk/gfx/colored_triangle.h>
-#include <fwk/gfx/draw_call.h>
 #include <fwk/gfx/shader_compiler.h>
 #include <fwk/gfx/shader_defs.h>
 #include <fwk/hash_map.h>
@@ -80,7 +79,8 @@ Matrix3 normalMatrix(const Matrix4 &affine) {
 }
 
 // TODO: add typed VSpan type
-Ex<> SimpleRenderer::renderPhase(const RenderContext &ctx, PVBuffer simple_dc_buf, bool opaque,
+Ex<> SimpleRenderer::renderPhase(const RenderContext &ctx,
+								 VBufferSpan<shader::SimpleDrawCall> simple_dc_buf, bool opaque,
 								 bool wireframe) {
 	// TODO: don't run if we don't have any drawcalls of given type
 
@@ -91,7 +91,7 @@ Ex<> SimpleRenderer::renderPhase(const RenderContext &ctx, PVBuffer simple_dc_bu
 	cmds.bind(pipeline);
 
 	VSamplerSetup sam_setup;
-	auto sampler = ctx.device.createSampler(sam_setup);
+	auto sampler = ctx.device.getSampler(sam_setup);
 
 	int prev_mat_id = -1;
 	for(int dc : intRange(ctx.dcs)) {
@@ -101,8 +101,7 @@ Ex<> SimpleRenderer::renderPhase(const RenderContext &ctx, PVBuffer simple_dc_bu
 			continue;
 		if(prev_mat_id != draw_call.material_id) {
 			auto ds = cmds.bindDS(1);
-			ds(0, VDescriptorType::uniform_buffer,
-			   {vspan<shader::SimpleDrawCall>(simple_dc_buf, dc, 1)});
+			ds(0, VDescriptorType::uniform_buffer, simple_dc_buf.subSpan(dc, 1));
 			ds(1, {{sampler, material.diffuse_tex.vk_image}});
 			prev_mat_id = draw_call.material_id;
 		}
@@ -158,19 +157,12 @@ Ex<> SimpleRenderer::render(const RenderContext &ctx, bool wireframe) {
 		VulkanBuffer::createAndUpload(ctx.device, simple_dcs, ubo_usage, VMemoryUsage::frame));
 
 	cmds.bind(m_pipeline_layout);
-	cmds.bindDS(0)(0, VDescriptorType::uniform_buffer, {lighting_buf});
+	cmds.bindDS(0)(0, VDescriptorType::uniform_buffer, lighting_buf);
 	cmds.setViewport(m_viewport);
 	cmds.setScissor(none);
 
-	auto verts = ctx.verts;
-	// TODO: fix this properly
-	if(!verts.col)
-		verts.col = verts.pos;
-	if(!verts.tex)
-		verts.tex = verts.pos;
-	if(!verts.nrm)
-		verts.nrm = verts.pos;
-	cmds.bindVertices({verts.pos, verts.col, verts.tex, verts.nrm});
+	auto &verts = ctx.verts;
+	cmds.bindVertices(0, verts.pos, verts.col, verts.tex, verts.nrm);
 	cmds.bindIndices(ctx.tris_ib);
 
 	auto swap_chain = ctx.device.swapChain();

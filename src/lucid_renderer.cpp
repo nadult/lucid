@@ -5,13 +5,10 @@
 #include "shading.h"
 #include <fwk/gfx/camera.h>
 #include <fwk/gfx/image.h>
-#include <fwk/gfx/opengl.h>
-#include <fwk/gfx/render_list.h>
 #include <fwk/gfx/shader_compiler.h>
 #include <fwk/gfx/shader_debug.h>
 #include <fwk/hash_set.h>
 #include <fwk/io/file_system.h>
-#include <fwk/math/ray.h>
 #include <fwk/vulkan/vulkan_buffer.h>
 #include <fwk/vulkan/vulkan_device.h>
 #include <fwk/vulkan/vulkan_pipeline.h>
@@ -124,7 +121,7 @@ Ex<void> LucidRenderer::exConstruct(VulkanDevice &device, ShaderCompiler &compil
 	// TODO: properly get number of compute units (use opencl?)
 	// TODO: max dispatches should also depend on lsize
 	// https://tinyurl.com/o7s9ph3
-	m_max_dispatches = gl_info->vendor == GlVendor::intel ? 32 : 128;
+	m_max_dispatches = 128; //device. gl_info->vendor == GlVendor::intel ? 32 : 128;
 	DASSERT(m_max_dispatches <= sizeof(shader::LucidInfo::dispatcher_task_counts) / sizeof(u32));
 
 	m_opts = opts;
@@ -243,10 +240,6 @@ Ex<void> LucidRenderer::exConstruct(VulkanDevice &device, ShaderCompiler &compil
 		print("% debug records: %\n", name, records);
 }*/
 
-static void dispatchIndirect(int bin_counters_offset) {
-	glDispatchComputeIndirect((GLintptr)(bin_counters_offset * sizeof(int)));
-}
-
 void LucidRenderer::render(const Context &ctx) {
 	auto &cmds = ctx.device.cmdQueue();
 	PERF_GPU_SCOPE(cmds);
@@ -340,7 +333,7 @@ Ex<> LucidRenderer::setupInputData(const Context &ctx) {
 	auto mem_usage = VMemoryUsage::frame;
 	m_info =
 		EX_PASS(VulkanBuffer::create<u32>(ctx.device, bin_counters_size, info_usage, mem_usage));
-	cmds.fill(vspan<u32>(m_info, 0, LUCID_INFO_SIZE + m_bin_count * 6), 0);
+	cmds.fill(m_info.subSpan(0, LUCID_INFO_SIZE + m_bin_count * 6), 0);
 
 	struct shader::LucidConfig config;
 	config.frustum = FrustumInfo(ctx.camera);
@@ -366,11 +359,11 @@ void LucidRenderer::quadSetup(const Context &ctx) {
 
 	// TODO: descriptor set may be optimized out, what should we do in such a case?
 	auto ds = cmds.bindDS(0);
-	ds(0, {m_info});
-	ds(1, VDescriptorType::uniform_buffer, {m_config});
+	ds(0, m_info);
+	ds(1, VDescriptorType::uniform_buffer, m_config);
 	ds = cmds.bindDS(1);
-	ds(0, {m_instances, ctx.quads_ib, ctx.verts.pos, ctx.verts.tex, ctx.verts.col, ctx.verts.nrm,
-		   m_scratch_64, m_uvec4_storage, m_uint_storage});
+	ds(0, m_instances, ctx.quads_ib, ctx.verts.pos, ctx.verts.tex, ctx.verts.col, ctx.verts.nrm,
+	   m_scratch_64, m_uvec4_storage, m_uint_storage);
 
 	int num_workgroups = (m_num_instances + m_instance_packet_size - 1) / m_instance_packet_size;
 	cmds.dispatchCompute({num_workgroups, 1, 1});

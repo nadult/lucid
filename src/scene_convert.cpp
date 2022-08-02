@@ -4,8 +4,6 @@
 #include "wavefront_obj.h"
 #include <fwk/gfx/compressed_image.h>
 #include <fwk/gfx/float_image.h>
-#include <fwk/gfx/gl_format.h>
-#include <fwk/gfx/gl_texture.h>
 #include <fwk/gfx/image.h>
 #include <fwk/io/file_stream.h>
 
@@ -260,7 +258,7 @@ Scene convertScene(WavefrontObject obj, bool flip_yz, Str scene_name, float squa
 		texture.block_mips.emplace_back(plain_tex, format);
 		auto size = plain_tex.size();
 
-		int max_mips = GlTexture::maxMipmapLevels(size) - 1;
+		int max_mips = Image::maxMipmapLevels(size) - 1;
 		if(texture.is_atlas)
 			max_mips = min(max_mips, max_atlas_mips);
 

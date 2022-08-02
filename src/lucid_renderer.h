@@ -9,6 +9,12 @@ DEFINE_ENUM(LucidRenderOpt, debug_bin_dispatcher, debug_raster, timers, additive
 			visualize_errors, alpha_threshold, bin_size_64);
 using LucidRenderOpts = EnumFlags<LucidRenderOpt>;
 
+namespace shader {
+struct LucidConfig;
+struct LucidInfo;
+struct InstanceData;
+}
+
 class LucidRenderer {
   public:
 	using Opt = LucidRenderOpt;
@@ -54,11 +60,17 @@ class LucidRenderer {
 	PVPipeline p_raster_low, p_raster_high;
 	PVPipeline p_compose;
 
-	PVBuffer m_config, m_info;
-	PVBuffer m_instances, m_instance_colors, m_instance_uv_rects;
-	PVBuffer m_errors, m_scratch_32, m_scratch_64;
-	PVBuffer m_bin_quads, m_bin_tris, m_raster_image;
-	PVBuffer m_uint_storage, m_uvec4_storage;
+	VBufferSpan<shader::LucidConfig> m_config;
+	VBufferSpan<u32> m_info;
+	VBufferSpan<shader::InstanceData> m_instances;
+	VBufferSpan<u32> m_instance_colors;
+	VBufferSpan<float4> m_instance_uv_rects;
+	VBufferSpan<u32> m_scratch_32;
+	VBufferSpan<u64> m_scratch_64;
+	VBufferSpan<u32> m_errors;
+	VBufferSpan<u32> m_bin_quads, m_bin_tris, m_raster_image;
+	VBufferSpan<u32> m_uint_storage;
+	VBufferSpan<int4> m_uvec4_storage;
 
 	vector<VDownloadId> m_info_downloads;
 	vector<u32> m_last_info;
@@ -73,7 +85,7 @@ class LucidRenderer {
 	int m_num_instances = 0, m_num_quads = 0;
 	int m_instance_packet_size = 0;
 
-	PBuffer m_compose_quads;
-	PVertexArray m_compose_quads_vao; // TODO
+	//PBuffer m_compose_quads;
+	//PVertexArray m_compose_quads_vao; // TODO
 	PVRenderPass m_render_pass;
 };

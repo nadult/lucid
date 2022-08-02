@@ -3,9 +3,7 @@
 #include "quad_generator.h"
 #include "shading.h"
 #include <fwk/gfx/compressed_image.h>
-#include <fwk/gfx/gl_format.h>
 #include <fwk/gfx/image.h>
-#include <fwk/gfx/opengl.h>
 #include <fwk/io/file_stream.h>
 #include <fwk/math/ray.h>
 #include <fwk/math/segment.h>

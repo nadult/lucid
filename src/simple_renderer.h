@@ -2,9 +2,11 @@
 
 #include "lucid_base.h"
 #include <fwk/gfx/color.h>
-#include <fwk/gfx/material.h>
-#include <fwk/gfx/matrix_stack.h>
 #include <fwk/math/box.h>
+
+namespace shader {
+struct SimpleDrawCall; // TODO: change name to diff from fwk
+}
 
 class SimpleRenderer {
   public:
@@ -23,7 +25,8 @@ class SimpleRenderer {
   private:
 	Ex<PVPipeline> getPipeline(const RenderContext &, bool opaque, bool wireframe) const;
 	const SceneMaterial &bindMaterial(const RenderContext &, int mat_id);
-	Ex<> renderPhase(const RenderContext &, PVBuffer, bool opaque, bool wireframe);
+	Ex<> renderPhase(const RenderContext &, VBufferSpan<shader::SimpleDrawCall>, bool opaque,
+					 bool wireframe);
 
 	PVShaderModule m_frag_module, m_vert_module;
 	PVPipelineLayout m_pipeline_layout;

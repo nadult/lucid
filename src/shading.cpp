@@ -1,8 +1,6 @@
 #include "shading.h"
 
 #include <fwk/gfx/camera.h>
-#include <fwk/gfx/gl_program.h>
-#include <fwk/gfx/gl_texture.h>
 #include <fwk/io/stream.h>
 #include <fwk/math/frustum.h>
 #include <fwk/math/ray.h>

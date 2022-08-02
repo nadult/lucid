@@ -7,25 +7,13 @@
 
 #include <fwk/any_config.h>
 #include <fwk/gfx/camera_variant.h>
-#include <fwk/gfx/draw_call.h>
-#include <fwk/gfx/gl_device.h>
-#include <fwk/gfx/gl_format.h>
-#include <fwk/gfx/gl_framebuffer.h>
-#include <fwk/gfx/gl_texture.h>
+#include <fwk/gfx/canvas_2d.h>
 #include <fwk/gfx/image.h>
-#include <fwk/gfx/line_buffer.h>
-#include <fwk/gfx/material_set.h>
-#include <fwk/gfx/mesh.h>
-#include <fwk/gfx/opengl.h>
-#include <fwk/gfx/renderer2d.h>
 #include <fwk/gfx/shader_compiler.h>
 #include <fwk/gui/imgui.h>
 #include <fwk/gui/widgets.h>
 #include <fwk/io/file_system.h>
 #include <fwk/math/axis_angle.h>
-#include <fwk/math/quat.h>
-#include <fwk/math/random.h>
-#include <fwk/math/rotation.h>
 #include <fwk/perf/analyzer.h>
 #include <fwk/perf/exec_tree.h>
 #include <fwk/perf/manager.h>
@@ -72,9 +60,10 @@ LucidApp::LucidApp(VWindowRef window, VDeviceRef device)
 	SimpleRenderer::addShaderDefs(*m_shader_compiler);
 	LucidRenderer::addShaderDefs(*m_shader_compiler);
 
-	m_filtering_params.magnification = TextureFilterOpt::linear;
-	m_filtering_params.minification = TextureFilterOpt::linear;
-	m_filtering_params.mipmap = TextureFilterOpt::linear;
+	//m_filtering_params.magnification = TextureFilterOpt::linear;
+	//m_filtering_params.minification = TextureFilterOpt::linear;
+	//m_filtering_params.mipmap = TextureFilterOpt::linear;
+
 	if(perf::Manager::instance())
 		m_perf_analyzer.emplace();
 
@@ -188,7 +177,7 @@ void LucidApp::switchView() {
 }
 
 bool LucidApp::updateViewport() {
-	auto viewport = IRect(m_window->extent());
+	auto viewport = IRect(m_window->size());
 	bool changed = m_viewport != viewport;
 	m_viewport = viewport;
 	if(changed)
@@ -364,7 +353,8 @@ void LucidApp::doMenu() {
 		ImGui::EndPopup();
 	}
 
-	if(ImGui::BeginPopup("filter_opts")) {
+	// TODO: fixme
+	/*if(ImGui::BeginPopup("filter_opts")) {
 		m_gui.selectEnum("Magnification filter", m_filtering_params.magnification);
 		m_gui.selectEnum("Minification filter", m_filtering_params.minification);
 
@@ -388,7 +378,7 @@ void LucidApp::doMenu() {
 			m_filtering_params.max_anisotropy_samples = aniso;
 		}
 		ImGui::EndPopup();
-	}
+	}*/
 
 	m_gui.selectEnum("Rendering mode", m_rendering_mode);
 	ImGui::Checkbox("Back-face culling", &setup.render_config.backface_culling);
@@ -492,7 +482,7 @@ bool LucidApp::tick(float time_diff) {
 	events = m_window->inputEvents();
 
 	TextFormatter title;
-	title("Lucid rasterizer res:%", m_window->extent());
+	title("Lucid rasterizer res:%", m_window->size());
 	if(auto dpi_scale = m_window->dpiScale(); dpi_scale > 1.0f)
 		title(" dpi_scale:%", dpi_scale);
 	m_window->setTitle(title.text());
@@ -567,7 +557,7 @@ void LucidApp::drawScene() {
 
 void LucidApp::draw2D() {
 	// TODO: fixme
-	/*Renderer2D renderer_2d(m_viewport, Orient2D::y_up);
+	/*Canvas2D renderer_2d(m_viewport, Orient2D::y_up);
 	if(m_selected_block && m_lucid_renderer) {
 		int bin_size = m_lucid_renderer->binSize();
 		int block_size = m_lucid_renderer->blockSize();

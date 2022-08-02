@@ -3,7 +3,6 @@
 #include "lucid_renderer.h"
 #include "shading.h"
 #include <fwk/gfx/camera_control.h>
-#include <fwk/gfx/gl_texture.h>
 #include <fwk/gui/gui.h>
 #include <fwk/perf_base.h>
 
@@ -74,7 +73,6 @@ class LucidApp {
 	IRect m_viewport;
 	CameraControl m_cam_control;
 	vector<Dynamic<SceneSetup>> m_setups;
-	TextureFilteringParams m_filtering_params;
 	float m_square_weight = 0.5f;
 	int m_setup_idx = -1;
 

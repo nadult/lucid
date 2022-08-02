@@ -2,7 +2,6 @@
 
 #include "lucid_pch.h"
 #include <fwk/gfx/color.h>
-#include <fwk/gfx/gl_ref.h>
 #include <fwk/gfx_base.h>
 #include <fwk/io/file_system.h>
 #include <fwk/light_tuple.h>
@@ -41,14 +40,18 @@ struct SceneLighting;
 
 struct VertexArray {
 	static void getDefs(VPipelineSetup &);
-	PVBuffer pos, col, tex, nrm;
+
+	VBufferSpan<float3> pos;
+	VBufferSpan<IColor> col;
+	VBufferSpan<float2> tex;
+	VBufferSpan<u32> nrm;
 };
 
 struct RenderContext {
 	VulkanDevice &device;
 	RenderConfig config;
 	VertexArray verts;
-	PVBuffer tris_ib, quads_ib;
+	VBufferSpan<u32> tris_ib, quads_ib;
 	vector<SceneDrawCall> dcs;
 	vector<SceneMaterial> materials;
 	PVImage opaque_tex, trans_tex;

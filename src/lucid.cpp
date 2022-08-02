@@ -2,8 +2,6 @@
 #include "scene_convert.h"
 
 #include <fwk/any_config.h>
-#include <fwk/gfx/gl_device.h>
-#include <fwk/gfx/opengl.h>
 #include <fwk/perf/manager.h>
 #include <fwk/perf/thread_context.h>
 
@@ -27,7 +25,7 @@ Ex<int> exMain(int argc, char **argv) {
 
 	// TODO: xml loading is still messy
 	Maybe<AnyConfig> config = LucidApp::loadConfig();
-	VulkanInstanceSetup setup;
+	VInstanceSetup setup;
 	setup.debug_levels = VDebugLevel::warning | VDebugLevel::error;
 	setup.debug_types = all<VDebugType>;
 	auto window_flags = VWindowFlag::resizable | VWindowFlag::centered | VWindowFlag::allow_hidpi |
@@ -62,7 +60,7 @@ Ex<int> exMain(int argc, char **argv) {
 		// TODO: first initialize SDL?
 		auto display_rects = VulkanWindow::displayRects();
 		if(auto *rect = config->get<IRect>("window_rect")) {
-			window_rect = GlDevice::sanitizeWindowRect(display_rects, *rect);
+			window_rect = VulkanWindow::sanitizeWindowRect(display_rects, *rect);
 			window_flags &= ~VWindowFlag::centered;
 		}
 		if(config->get<bool>("window_maximized", false))

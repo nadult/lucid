@@ -351,6 +351,8 @@ void LucidRenderer::quadSetup(const Context &ctx) {
 	// TODO: backface-culling ?
 
 	auto &cmds = ctx.device.cmdQueue();
+
+	cmds.barrier(VPipeStage::bottom, VPipeStage::top, VAccess::memory_write, VAccess::memory_read);
 	PERF_GPU_SCOPE(cmds);
 	cmds.bind(p_quad_setup);
 
@@ -370,6 +372,10 @@ void LucidRenderer::computeBins(const Context &ctx) {
 	auto &cmds = ctx.device.cmdQueue();
 	PERF_GPU_SCOPE(cmds);
 
+	cmds.barrier(VPipeStage::all_graphics | VPipeStage::compute_shader,
+				 VPipeStage::draw_indirect | VPipeStage::compute_shader,
+				 VAccess::memory_write | VAccess::shader_write,
+				 VAccess::memory_read | VAccess::shader_read | VAccess::indirect_command_read);
 	cmds.bind(p_bin_dispatcher);
 	auto ds = cmds.bindDS(0);
 	ds.set(0, m_info);
@@ -523,6 +529,8 @@ static string formatLarge(i64 value) {
 };
 
 vector<StatsGroup> LucidRenderer::getStats() const {
+	PERF_SCOPE();
+
 	vector<StatsGroup> out;
 
 	if(!m_last_info)

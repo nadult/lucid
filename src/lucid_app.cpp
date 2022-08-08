@@ -295,6 +295,8 @@ void LucidApp::showStatsMenu(const Scene &scene) {
 }
 
 void LucidApp::doMenu() {
+	PERF_SCOPE();
+
 	ImGui::SetNextWindowSize({240 * m_gui.dpiScale(), 0});
 	ImGui::Begin("Lucid rasterizer tools", nullptr, ImGuiWindowFlags_NoResize);
 

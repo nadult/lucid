@@ -435,6 +435,11 @@ void LucidRenderer::rasterLow(const Context &ctx) {
 	auto &cmds = ctx.device.cmdQueue();
 	PERF_GPU_SCOPE(cmds);
 
+	cmds.barrier(VPipeStage::all_graphics | VPipeStage::compute_shader,
+				 VPipeStage::draw_indirect | VPipeStage::compute_shader,
+				 VAccess::memory_write | VAccess::shader_write,
+				 VAccess::memory_read | VAccess::shader_read | VAccess::indirect_command_read);
+
 	/*	bindRaster(p_raster_low, ctx);
 	if(m_opts & Opt::debug_raster)
 		shaderDebugUseBuffer(m_errors);
@@ -496,6 +501,8 @@ Ex<> LucidRenderer::downloadInfo(const Context &ctx, int num_skip_frames) {
 	static int frame_counter = 0;
 	if(num_skip_frames && frame_counter++ % (num_skip_frames + 1) != 0)
 		return {};
+	cmds.barrier(VPipeStage::compute_shader, VPipeStage::transfer, VAccess::memory_write,
+				 VAccess::memory_read);
 	m_info_downloads.emplace_back(EX_PASS(cmds.download(m_info)));
 	return {};
 }
@@ -558,24 +565,34 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 
 	// Checking bins quad offsets
 	for(uint i = 0; i < m_bin_count; i++) {
+		int prev_value = i == 0 ? 0 : bin_quad_counts[i - 1];
+		int prev_offset = i == 0 ? 0 : bin_quad_offsets[i - 1];
 		int cur_value = bin_quad_counts[i];
 		int cur_offset = bin_quad_offsets[i];
 		int cur_offset_temp = bin_quad_offsets_temp[i];
 
+		if(i > 0 && cur_offset != prev_offset + prev_value)
+			print("Invalid bin quad offset [%]: % != % (prev_offset:% + prev_count:%)\n", i,
+				  cur_offset, prev_offset + prev_value, prev_offset, prev_value);
 		if(cur_offset_temp != cur_offset + cur_value)
-			print("Invalid bin quad offset [%]: % != % (offset:% + count:%)\n", i, cur_offset_temp,
-				  cur_offset + cur_value, cur_offset, cur_value);
+			print("Invalid temp bin quad offset [%]: % != % (offset:% + count:%)\n", i,
+				  cur_offset_temp, cur_offset + cur_value, cur_offset, cur_value);
 	}
 
 	// Checking bins tris offsets
 	for(uint i = 0; i < m_bin_count; i++) {
+		int prev_value = i == 0 ? 0 : bin_tri_counts[i - 1];
+		int prev_offset = i == 0 ? 0 : bin_tri_offsets[i - 1];
 		int cur_value = bin_tri_counts[i];
 		int cur_offset = bin_tri_offsets[i];
 		int cur_offset_temp = bin_tri_offsets_temp[i];
 
+		if(i > 0 && cur_offset != prev_offset + prev_value)
+			print("Invalid bin tri offset [%]: % != % (prev_offset:% + prev_count:%)\n", i,
+				  cur_offset, prev_offset + prev_value, prev_offset, prev_value);
 		if(cur_offset_temp != cur_offset + cur_value)
-			print("Invalid bin tri offset [%]: % != % (offset:% + count:%)\n", i, cur_offset_temp,
-				  cur_offset + cur_value, cur_offset, cur_value);
+			print("Invalid temp bin tri offset [%]: % != % (offset:% + count:%)\n", i,
+				  cur_offset_temp, cur_offset + cur_value, cur_offset, cur_value);
 	}
 
 	int num_pixels = m_size.x * m_size.y;

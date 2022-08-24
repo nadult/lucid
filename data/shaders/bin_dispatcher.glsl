@@ -19,7 +19,7 @@
 #define LARGE_TASK_SHIFT (LSHIFT - 1)
 #define LARGE_TASK_SIZE (LSIZE / 2)
 
-layout(local_size_x = 512, local_size_x_id = 12) in;
+layout(local_size_x = 1024, local_size_x_id = 12) in;
 
 coherent layout(std430, binding = 0) buffer lucid_info_ {
 	LucidInfo g_info;

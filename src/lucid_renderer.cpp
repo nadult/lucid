@@ -135,7 +135,6 @@ Ex<void> LucidRenderer::exConstruct(VulkanDevice &device, ShaderCompiler &compil
 	consts.BIN_COUNT_Y = m_bin_counts.y;
 	consts.BIN_SIZE = m_bin_size;
 	consts.BIN_SHIFT = log2(m_bin_size);
-	consts.MAX_QUADS = max_quads;
 	consts.MAX_VISIBLE_QUADS = max_visible_quads;
 	consts.MAX_VISIBLE_QUADS_SHIFT = log2(max_visible_quads);
 	consts.MAX_VISIBLE_TRIS = max_visible_quads * 2;
@@ -153,8 +152,8 @@ Ex<void> LucidRenderer::exConstruct(VulkanDevice &device, ShaderCompiler &compil
 	// TODO: what should we do when quads won't fit?
 	// TODO: better estimate needed; it should depend on bin size
 	// TODO: properly handle situations when limits are reached
-	uint max_bin_quads = max_quads * 3 / 2;
-	uint max_bin_tris = max_quads;
+	uint max_bin_quads = max_visible_quads * 2;
+	uint max_bin_tris = max_visible_quads * 2;
 
 	auto usage = VBufferUsage::storage_buffer;
 	auto usage_copyable = VBufferUsage::storage_buffer | VBufferUsage::transfer_src;
@@ -178,6 +177,7 @@ Ex<void> LucidRenderer::exConstruct(VulkanDevice &device, ShaderCompiler &compil
 	m_compose_quads = EX_PASS(VulkanBuffer::create<u32>(
 		device, m_bin_count * 4,
 		VBufferUsage::vertex_buffer | VBufferUsage::storage_buffer | VBufferUsage::transfer_dst));
+
 	vector<u16> indices(m_bin_count * 6);
 	DASSERT(m_bin_count * 4 * 4 <= 64 * 1024);
 	for(int i = 0; i < m_bin_count; i++) {
@@ -273,11 +273,8 @@ Ex<> LucidRenderer::uploadInstances(const Context &ctx) {
 
 	m_num_quads = 0;
 	for(auto &dc : ctx.dcs) {
-		int num_quads = dc.num_quads;
-		if(m_num_quads + num_quads > max_quads)
-			num_quads = max_quads - m_num_quads;
-		if(num_quads == 0)
-			break;
+		if(!dc.num_quads)
+			continue;
 
 		auto opts = dc.opts;
 		u32 color = u32(mat_colors[dc.material_id]);
@@ -287,24 +284,33 @@ Ex<> LucidRenderer::uploadInstances(const Context &ctx) {
 		InstanceData out;
 		out.index_offset = dc.quad_offset * 4;
 		out.vertex_offset = 0;
-		out.num_quads = num_quads;
+		out.num_quads = dc.num_quads;
 		out.flags = (uint(opts.bits) & 0xffff);
 		float4 uv_rect(dc.uv_rect.x(), dc.uv_rect.y(), dc.uv_rect.width(), dc.uv_rect.height());
 		m_num_quads += dc.num_quads;
 
-		if(num_quads <= max_instance_quads) {
+		if(dc.num_quads <= max_instance_quads) {
 			instances.emplace_back(out);
 			uv_rects.emplace_back(uv_rect);
 			colors.emplace_back(color);
 		} else {
-			for(int i = 0; i < num_quads; i += max_instance_quads) {
+			for(int i = 0; i < dc.num_quads; i += max_instance_quads) {
 				out.index_offset = dc.quad_offset * 4 + i * 4;
-				out.num_quads = min(max_instance_quads, num_quads - i);
+				out.num_quads = min(max_instance_quads, dc.num_quads - i);
 				instances.emplace_back(out);
 				uv_rects.emplace_back(uv_rect);
 				colors.emplace_back(color);
 			}
 		}
+	}
+
+	if(instances.size() > max_instances) {
+		static int prev_instance_count = 0;
+		if(instances.size() != prev_instance_count) {
+			prev_instance_count = instances.size();
+			print("Instance limit reached! count:% max:%\n", instances.size(), max_instances);
+		}
+		instances.resize(max_instances);
 	}
 
 	auto usage = VBufferUsage::storage_buffer | VBufferUsage::transfer_dst;
@@ -314,6 +320,7 @@ Ex<> LucidRenderer::uploadInstances(const Context &ctx) {
 		EX_PASS(VulkanBuffer::createAndUpload(ctx.device, colors, usage, mem_usage));
 	m_instance_uv_rects =
 		EX_PASS(VulkanBuffer::createAndUpload(ctx.device, uv_rects, usage, mem_usage));
+
 	m_num_instances = instances.size();
 	int max_dispatches = m_max_dispatches / 2; // TODO: tweak this properly...
 	m_instance_packet_size = clamp(m_num_instances / max_dispatches, 1, 2);

@@ -622,7 +622,6 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 		 format_percentage(info.bin_level_counts[BIN_LEVEL_MICRO], m_bin_count)},
 		{"low level bins", format_percentage(info.bin_level_counts[BIN_LEVEL_LOW], m_bin_count)},
 		{"high level bins", format_percentage(info.bin_level_counts[BIN_LEVEL_HIGH], m_bin_count)},
-		{"high level bins", format_percentage(info.bin_level_counts[BIN_LEVEL_HIGH], m_bin_count)},
 		{"promoted bins", format_percentage(num_promoted_bins, m_bin_count)},
 	};
 

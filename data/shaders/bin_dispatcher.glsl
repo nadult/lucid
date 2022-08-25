@@ -4,6 +4,7 @@
 #include "shared/timers.glsl"
 
 // TODO: use gl_SubgroupSize, gl_SubgroupId
+// TODO: simplify offsets generation; we don't have to do this in 2D
 
 #extension GL_KHR_shader_subgroup_shuffle : require
 #extension GL_KHR_shader_subgroup_shuffle_relative : require

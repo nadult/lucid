@@ -693,7 +693,7 @@ void rasterBin(int bin_id) {
 
 		//finishVisualizeSamples(pixel_pos);
 		//visualizeFragmentCounts(hbid, pixel_pos);
-		//visualizeTriangleCounts(hbid, pixel_pos);
+		visualizeTriangleCounts(hbid, pixel_pos);
 		UPDATE_TIMER(4);
 		barrier();
 	}

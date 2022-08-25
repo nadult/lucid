@@ -15,7 +15,7 @@ struct SceneTexture {
 	Ex<void> save(Stream &) const;
 
 	string name;
-	PVImage vk_image;
+	PVImageView vk_image;
 	vector<Image> plain_mips;
 	vector<CompressedImage> block_mips;
 	bool is_opaque = true;
@@ -110,7 +110,7 @@ struct Scene {
 	void quantizeNormals();
 
 	vector<SceneDrawCall> draws(const Frustum &) const;
-	Pair<PVImage> textureAtlasPair() const;
+	Pair<PVImageView> textureAtlasPair() const;
 
 	VertexArray verts;
 	VBufferSpan<u32> tris_ib, quads_ib;

@@ -54,7 +54,7 @@ struct RenderContext {
 	VBufferSpan<u32> tris_ib, quads_ib;
 	vector<SceneDrawCall> dcs;
 	vector<SceneMaterial> materials;
-	PVImage opaque_tex, trans_tex;
+	PVImageView opaque_tex, trans_tex;
 	const SceneLighting &lighting;
 	const Frustum &frustum;
 	const Camera &camera;

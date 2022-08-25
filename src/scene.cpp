@@ -261,10 +261,12 @@ Ex<void> Scene::updateRenderingData(VulkanDevice &device) {
 		if(!tex.vk_image) {
 			DASSERT(tex.block_mips || tex.plain_mips);
 			if(tex.block_mips) {
-				tex.vk_image = EX_PASS(VulkanImage::createAndUpload(device.ref(), tex.block_mips));
+				auto vk_image = EX_PASS(VulkanImage::createAndUpload(device.ref(), tex.block_mips));
+				tex.vk_image = VulkanImageView::create(device.ref(), vk_image);
 			} else {
 				// TODO: different format for opaque tex? R8G8B8?
-				tex.vk_image = EX_PASS(VulkanImage::createAndUpload(device.ref(), tex.plain_mips));
+				auto vk_image = EX_PASS(VulkanImage::createAndUpload(device.ref(), tex.plain_mips));
+				tex.vk_image = VulkanImageView::create(device.ref(), vk_image);
 			}
 
 			// TODO: samplers
@@ -272,7 +274,7 @@ Ex<void> Scene::updateRenderingData(VulkanDevice &device) {
 			//auto wrap_opt = tex.is_clamped ? TextureWrapOpt::clamp_to_edge : TextureWrapOpt::repeat;
 			//tex.gl_texture->setWrapping(wrap_opt);
 		}
-		used_tex.vk_image = VulkanImageView::create(device.ref(), tex.vk_image);
+		used_tex.vk_image = tex.vk_image;
 		used_tex.is_opaque = tex.is_opaque;
 		return {};
 	};
@@ -346,8 +348,8 @@ vector<SceneDrawCall> Scene::draws(const Frustum &frustum) const {
 	return out;
 }
 
-Pair<PVImage> Scene::textureAtlasPair() const {
-	Pair<PVImage> out;
+Pair<PVImageView> Scene::textureAtlasPair() const {
+	Pair<PVImageView> out;
 	for(auto &tex : textures) {
 		if(!tex.vk_image)
 			continue;

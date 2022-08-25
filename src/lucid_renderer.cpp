@@ -359,7 +359,9 @@ void LucidRenderer::quadSetup(const Context &ctx) {
 
 	auto &cmds = ctx.device.cmdQueue();
 
-	cmds.barrier(VPipeStage::bottom, VPipeStage::top, VAccess::memory_write, VAccess::memory_read);
+	// TODO: that's too much
+	cmds.barrier(VPipeStage::all_commands, VPipeStage::top, VAccess::memory_write,
+				 VAccess::memory_read);
 	PERF_GPU_SCOPE(cmds);
 	cmds.bind(p_quad_setup);
 
@@ -379,8 +381,9 @@ void LucidRenderer::computeBins(const Context &ctx) {
 	auto &cmds = ctx.device.cmdQueue();
 	PERF_GPU_SCOPE(cmds);
 
-	cmds.barrier(VPipeStage::all_graphics | VPipeStage::compute_shader,
-				 VPipeStage::draw_indirect | VPipeStage::compute_shader,
+	cmds.barrier(VPipeStage::all_commands, VPipeStage::top, VAccess::memory_write,
+				 VAccess::memory_read);
+	cmds.barrier(VPipeStage::compute_shader, VPipeStage::draw_indirect | VPipeStage::compute_shader,
 				 VAccess::memory_write | VAccess::shader_write,
 				 VAccess::memory_read | VAccess::shader_read | VAccess::indirect_command_read);
 	cmds.bind(p_bin_dispatcher);
@@ -392,61 +395,71 @@ void LucidRenderer::computeBins(const Context &ctx) {
 
 	PERF_CHILD_SCOPE("dispatcher phase");
 
+	cmds.barrier(VPipeStage::all_commands, VPipeStage::top, VAccess::memory_write,
+				 VAccess::memory_read);
 	cmds.dispatchComputeIndirect(m_info, LUCID_INFO_MEMBER_OFFSET(num_binning_dispatches));
 	//if(m_opts & Opt::debug_bin_dispatcher)
 	//	debugProgram(p_bin_dispatcher, "bin_dispatcher");
+
+	cmds.barrier(VPipeStage::compute_shader | VPipeStage::draw_indirect, VPipeStage::compute_shader,
+				 VAccess::memory_write | VAccess::shader_write,
+				 VAccess::memory_read | VAccess::shader_read);
 
 	PERF_SIBLING_SCOPE("categorizer phase");
 	cmds.bind(p_bin_categorizer);
 	ds = cmds.bindDS(1);
 	ds.set(0, m_compose_quads);
+	cmds.barrier(VPipeStage::all_commands, VPipeStage::top, VAccess::memory_write,
+				 VAccess::memory_read);
 	cmds.dispatchCompute({1, 1, 1});
 }
 
-/*void LucidRenderer::bindRasterCommon(const Context &ctx) {
-	m_info->bindIndex(0);
-	m_bin_quads->bindIndex(1);
-	m_bin_tris->bindIndex(2);
+/*
+layout(std430, set = 1, binding = 0) readonly restrict buffer buf1_ { uint g_bin_quads[]; };
+layout(std430, set = 1, binding = 1) readonly restrict buffer buf2_ { uint g_bin_tris[]; };
+layout(std430, set = 1, binding = 2) coherent restrict buffer buf3_ { uint g_scratch_32[]; };
+layout(std430, set = 1, binding = 3) coherent restrict buffer buf4_ { uvec2 g_scratch_64[]; };
+layout(std430, set = 1, binding = 4) readonly restrict buffer buf5_ { uint g_instance_colors[]; };
+layout(std430, set = 1, binding = 5) readonly restrict buffer buf6_ { vec4 g_instance_uv_rects[]; };
+layout(std430, set = 1, binding = 6) readonly restrict buffer buf7_ { uvec4 g_uvec4_storage[]; };
+layout(std430, set = 1, binding = 7) readonly restrict buffer buf8_ { uint g_uint_storage[]; };
+layout(std430, set = 1, binding = 8) writeonly restrict buffer buf9_ { uint g_raster_image[]; };
+layout(set = 1, binding = 9) uniform sampler2D opaque_texture;
+layout(set = 1, binding = 10) uniform sampler2D transparent_texture;*/
 
-	m_scratch_32->bindIndex(3);
-	m_scratch_64->bindIndex(4);
-	m_instance_colors->bindIndex(5);
-	m_instance_uv_rects->bindIndex(6);
-	m_uvec4_storage->bindIndex(7);
-	m_uint_storage->bindIndex(8);
+void LucidRenderer::bindRaster(PVPipeline pipeline, const Context &ctx) {
+	auto &cmds = ctx.device.cmdQueue();
 
-	m_raster_image->bindIndex(9);
+	cmds.bind(pipeline);
+	auto ds = cmds.bindDS(0);
+	ds.set(0, m_info);
+	ds.set(1, VDescriptorType::uniform_buffer, m_config);
+
+	ds = cmds.bindDS(1);
+	ds.set(0, m_bin_quads, m_bin_tris, m_scratch_32, m_scratch_64, m_instance_colors,
+		   m_instance_uv_rects, m_uvec4_storage, m_uint_storage);
+	// TODO: why this needs to be separate?
+	ds.set(8, m_raster_image);
+
+	VSamplerSetup sam_setup;
+	auto sampler = ctx.device.getSampler(sam_setup);
+	ds.set(9, {{sampler, ctx.opaque_tex}});
+	ds.set(10, {{sampler, ctx.trans_tex}});
 }
-
-void LucidRenderer::bindRaster(Program &program, const Context &ctx) {
-	program.use();
-
-	GlTexture::bind({ctx.opaque_tex, ctx.trans_tex});
-	//GlTexture::bind({ctx.depth_buffer, ctx.shadows.map});
-
-	ctx.lighting.setUniforms(program.glProgram());
-	program.setFrustum(ctx.camera);
-	program.setViewport(ctx.camera, m_size);
-	program["background_color"] = u32(ctx.config.background_color);
-	ctx.lighting.setUniforms(program.glProgram());
-}*/
 
 void LucidRenderer::rasterLow(const Context &ctx) {
 	auto &cmds = ctx.device.cmdQueue();
 	PERF_GPU_SCOPE(cmds);
 
-	cmds.barrier(VPipeStage::all_graphics | VPipeStage::compute_shader,
-				 VPipeStage::draw_indirect | VPipeStage::compute_shader,
-				 VAccess::memory_write | VAccess::shader_write,
-				 VAccess::memory_read | VAccess::shader_read | VAccess::indirect_command_read);
-
-	/*	bindRaster(p_raster_low, ctx);
-	if(m_opts & Opt::debug_raster)
-		shaderDebugUseBuffer(m_errors);
-	dispatchIndirect(LUCID_INFO_MEMBER_OFFSET(bin_level_dispatches[BIN_LEVEL_LOW]));
-	if(m_opts & Opt::debug_raster)
-		debugProgram(p_raster_low, "raster_low");
-	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_COMMAND_BARRIER_BIT);*/
+	cmds.barrier(VPipeStage::compute_shader, VPipeStage::draw_indirect | VPipeStage::compute_shader,
+				 VAccess::memory_write, VAccess::memory_read | VAccess::indirect_command_read);
+	bindRaster(p_raster_low, ctx);
+	//if(m_opts & Opt::debug_raster)
+	//	shaderDebugUseBuffer(m_errors);
+	cmds.dispatchComputeIndirect(m_info,
+								 LUCID_INFO_MEMBER_OFFSET(bin_level_dispatches[BIN_LEVEL_LOW]));
+	//if(m_opts & Opt::debug_raster)
+	//	debugProgram(p_raster_low, "raster_low");
 }
 
 /*void LucidRenderer::rasterHigh(const Context &ctx) {
@@ -466,9 +479,21 @@ void LucidRenderer::compose(const Context &ctx) {
 	auto &cmds = ctx.device.cmdQueue();
 	PERF_GPU_SCOPE(cmds);
 
+	cmds.barrier(VPipeStage::compute_shader, VPipeStage::all_graphics, VAccess::memory_write,
+				 VAccess::memory_read);
+
 	auto swap_chain = ctx.device.swapChain();
 	auto framebuffer = ctx.device.getFramebuffer({swap_chain->acquiredImage()});
 	cmds.beginRenderPass(framebuffer, m_render_pass, none, {FColor(0.0, 0.0, 0.2)});
+
+	cmds.bind(p_compose);
+	auto ds = cmds.bindDS(0);
+	ds.set(0, m_raster_image);
+	cmds.bindVertices(0, m_compose_quads);
+	cmds.bindIndices(m_compose_ibuffer);
+	cmds.setViewport(IRect(m_size));
+	cmds.setScissor(none);
+	cmds.drawIndexed(m_bin_counts.x * m_bin_counts.y * 6);
 
 	/*DASSERT(!ctx.out_fbo || ctx.out_fbo->size() == m_size);
 	glDrawBuffer(GL_BACK);
@@ -501,7 +526,7 @@ Ex<> LucidRenderer::downloadInfo(const Context &ctx, int num_skip_frames) {
 	static int frame_counter = 0;
 	if(num_skip_frames && frame_counter++ % (num_skip_frames + 1) != 0)
 		return {};
-	cmds.barrier(VPipeStage::compute_shader, VPipeStage::transfer, VAccess::memory_write,
+	cmds.barrier(VPipeStage::all_commands, VPipeStage::top, VAccess::memory_write,
 				 VAccess::memory_read);
 	m_info_downloads.emplace_back(EX_PASS(cmds.download(m_info)));
 	return {};
@@ -563,6 +588,11 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 	CSpan<uint> bin_tri_offsets = cspan(bin_counters.data() + m_bin_count * 4, m_bin_count);
 	CSpan<uint> bin_tri_offsets_temp = cspan(bin_counters.data() + m_bin_count * 5, m_bin_count);
 
+	// TODO: jest problem z tempami, ale tylko gdy jest więcej niż jedna workgroupa w dispatcherze
+
+	int num_errors[2] = {0, 0};
+	int num_valid = 0;
+
 	// Checking bins quad offsets
 	for(uint i = 0; i < m_bin_count; i++) {
 		int prev_value = i == 0 ? 0 : bin_quad_counts[i - 1];
@@ -571,14 +601,15 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 		int cur_offset = bin_quad_offsets[i];
 		int cur_offset_temp = bin_quad_offsets_temp[i];
 
-		if(i > 0 && cur_offset != prev_offset + prev_value)
+		if(i > 0 && cur_offset != prev_offset + prev_value && num_errors[0]++ < 32)
 			print("Invalid bin quad offset [%]: % != % (prev_offset:% + prev_count:%)\n", i,
 				  cur_offset, prev_offset + prev_value, prev_offset, prev_value);
-		if(cur_offset_temp != cur_offset + cur_value)
+		if(cur_offset_temp != cur_offset + cur_value && num_errors[1]++ < 32)
 			print("Invalid temp bin quad offset [%]: % != % (offset:% + count:%)\n", i,
 				  cur_offset_temp, cur_offset + cur_value, cur_offset, cur_value);
 	}
 
+	num_errors[0] = num_errors[1] = 0;
 	// Checking bins tris offsets
 	for(uint i = 0; i < m_bin_count; i++) {
 		int prev_value = i == 0 ? 0 : bin_tri_counts[i - 1];
@@ -587,10 +618,10 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 		int cur_offset = bin_tri_offsets[i];
 		int cur_offset_temp = bin_tri_offsets_temp[i];
 
-		if(i > 0 && cur_offset != prev_offset + prev_value)
+		if(i > 0 && cur_offset != prev_offset + prev_value && num_errors[0]++ < 32)
 			print("Invalid bin tri offset [%]: % != % (prev_offset:% + prev_count:%)\n", i,
 				  cur_offset, prev_offset + prev_value, prev_offset, prev_value);
-		if(cur_offset_temp != cur_offset + cur_value)
+		if(cur_offset_temp != cur_offset + cur_value && num_errors[1]++ < 32)
 			print("Invalid temp bin tri offset [%]: % != % (offset:% + count:%)\n", i,
 				  cur_offset_temp, cur_offset + cur_value, cur_offset, cur_value);
 	}

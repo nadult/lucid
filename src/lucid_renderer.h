@@ -46,10 +46,9 @@ class LucidRenderer {
 	Ex<> setupInputData(const Context &);
 	void quadSetup(const Context &);
 	void computeBins(const Context &);
-	//void bindRasterCommon(const Context &);
-	//void bindRaster(Program &, const Context &);
+	void bindRaster(PVPipeline, const Context &);
 	void rasterLow(const Context &);
-	void rasterHigh(const Context &);
+	//void rasterHigh(const Context &);
 	void compose(const Context &);
 	Ex<> downloadInfo(const Context &, int num_skip_frames);
 	//void debugProgram(Program &, ZStr title);

@@ -13,20 +13,17 @@ coherent layout(std430, binding = 0) buffer lucid_info_ {
 };
 layout(binding = 1) uniform lucid_config_ { LucidConfig u_config; };
 
-layout(std430, binding = 2) readonly restrict buffer buf1_ { uint g_bin_quads[]; };
-layout(std430, binding = 3) readonly restrict buffer buf2_ { uint g_bin_tris[]; };
-
-layout(std430, binding = 4) coherent restrict buffer buf3_ { uint g_scratch_32[]; };
-layout(std430, binding = 5) coherent restrict buffer buf4_ { uvec2 g_scratch_64[]; };
-layout(std430, binding = 6) readonly restrict buffer buf5_ { uint g_instance_colors[]; };
-layout(std430, binding = 7) readonly restrict buffer buf6_ { vec4 g_instance_uv_rects[]; };
-layout(std430, binding = 8) readonly restrict buffer buf7_ { uvec4 g_uvec4_storage[]; };
-layout(std430, binding = 9) readonly restrict buffer buf8_ { uint g_uint_storage[]; };
-
-layout(std430, binding = 10) writeonly restrict buffer buf9_ { uint g_raster_image[]; };
-
-layout(binding = 11) uniform sampler2D opaque_texture;
-layout(binding = 12) uniform sampler2D transparent_texture;
+layout(std430, set = 1, binding = 0) readonly restrict buffer buf0_ { uint g_bin_quads[]; };
+layout(std430, set = 1, binding = 1) readonly restrict buffer buf1_ { uint g_bin_tris[]; };
+layout(std430, set = 1, binding = 2) coherent restrict buffer buf2_ { uint g_scratch_32[]; };
+layout(std430, set = 1, binding = 3) coherent restrict buffer buf3_ { uvec2 g_scratch_64[]; };
+layout(std430, set = 1, binding = 4) readonly restrict buffer buf4_ { uint g_instance_colors[]; };
+layout(std430, set = 1, binding = 5) readonly restrict buffer buf5_ { vec4 g_instance_uv_rects[]; };
+layout(std430, set = 1, binding = 6) readonly restrict buffer buf6_ { uvec4 g_uvec4_storage[]; };
+layout(std430, set = 1, binding = 7) readonly restrict buffer buf7_ { uint g_uint_storage[]; };
+layout(std430, set = 1, binding = 8) writeonly restrict buffer buf8_ { uint g_raster_image[]; };
+layout(set = 1, binding = 9) uniform sampler2D opaque_texture;
+layout(set = 1, binding = 10) uniform sampler2D transparent_texture;
 
 // TODO: separate opaque and transparent objects, draw opaque objects first to texture
 // then read it and use depth to optimize drawing

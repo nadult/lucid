@@ -74,6 +74,11 @@ class LucidRenderer {
 	VBufferSpan<u32> m_compose_quads;
 	VBufferSpan<u16> m_compose_ibuffer;
 
+	static constexpr int num_frames = 2;
+	VBufferSpan<> m_frame_instance_data[num_frames];
+	VBufferSpan<u32> m_frame_info[num_frames];
+	VBufferSpan<shader::LucidConfig> m_frame_config[num_frames];
+
 	vector<VDownloadId> m_info_downloads;
 	vector<u32> m_last_info;
 

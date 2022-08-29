@@ -226,6 +226,23 @@ Ex<void> LucidRenderer::exConstruct(VulkanDevice &device, ShaderCompiler &compil
 	compose_setup.spec_constants.emplace_back(consts, 0u);
 	p_compose = EX_PASS(VulkanPipeline::create(device_ref, compose_setup));
 
+	uint bin_counters_size = LUCID_INFO_SIZE + m_bin_count * 10;
+	for(int i : intRange(num_frames)) {
+		auto instance_usage = VBufferUsage::storage_buffer | VBufferUsage::transfer_dst;
+		auto info_usage = VBufferUsage::storage_buffer | VBufferUsage::transfer_src |
+						  VBufferUsage::transfer_dst | VBufferUsage::indirect_buffer;
+		auto config_usage = VBufferUsage::uniform_buffer | VBufferUsage::transfer_dst;
+		auto mem_usage = VMemoryUsage::temporary;
+		m_frame_info[i] =
+			EX_PASS(VulkanBuffer::create<u32>(device, bin_counters_size, info_usage, mem_usage));
+		m_frame_config[i] =
+			EX_PASS(VulkanBuffer::create<shader::LucidConfig>(device, 1, config_usage, mem_usage));
+		u32 instance_data_size =
+			max_instances * (sizeof(shader::InstanceData) + sizeof(u32) + sizeof(float4));
+		m_frame_instance_data[i] =
+			EX_PASS(VulkanBuffer::create(device, instance_data_size, instance_usage, mem_usage));
+	}
+
 	return {};
 }
 
@@ -335,11 +352,18 @@ Ex<> LucidRenderer::uploadInstances(const Context &ctx) {
 
 	auto usage = VBufferUsage::storage_buffer | VBufferUsage::transfer_dst;
 	auto mem_usage = VMemoryUsage::frame;
-	m_instances = EX_PASS(VulkanBuffer::createAndUpload(ctx.device, instances, usage, mem_usage));
+
+	auto instance_data = m_frame_instance_data[cmds.frameIndex() % num_frames];
+	m_instances = instance_data.reinterpret<shader::InstanceData>().subSpan(0, max_instances);
+	uint offset = sizeof(shader::InstanceData) * max_instances;
 	m_instance_colors =
-		EX_PASS(VulkanBuffer::createAndUpload(ctx.device, colors, usage, mem_usage));
-	m_instance_uv_rects =
-		EX_PASS(VulkanBuffer::createAndUpload(ctx.device, uv_rects, usage, mem_usage));
+		instance_data.subSpan(offset, offset + max_instances * sizeof(u32)).reinterpret<u32>();
+	offset += sizeof(u32) * max_instances;
+	m_instance_uv_rects = instance_data.subSpan(offset).reinterpret<float4>();
+
+	EXPECT(cmds.upload(m_instances, instances));
+	EXPECT(cmds.upload(m_instance_colors, colors));
+	EXPECT(cmds.upload(m_instance_uv_rects, uv_rects));
 
 	m_num_instances = instances.size();
 	int max_dispatches = m_max_dispatches / 2; // TODO: tweak this properly...
@@ -354,12 +378,12 @@ Ex<> LucidRenderer::setupInputData(const Context &ctx) {
 	auto info_usage = VBufferUsage::storage_buffer | VBufferUsage::transfer_src |
 					  VBufferUsage::transfer_dst | VBufferUsage::indirect_buffer;
 	auto config_usage = VBufferUsage::uniform_buffer | VBufferUsage::transfer_dst;
-	auto mem_usage = VMemoryUsage::frame;
-	m_info =
-		EX_PASS(VulkanBuffer::create<u32>(ctx.device, bin_counters_size, info_usage, mem_usage));
+	auto mem_usage = VMemoryUsage::device;
+	auto frame_index = cmds.frameIndex() % num_frames;
+	m_info = m_frame_info[frame_index];
 	cmds.fill(m_info.subSpan(0, LUCID_INFO_SIZE + m_bin_count * 6), 0);
 
-	struct shader::LucidConfig config;
+	shader::LucidConfig config;
 	config.frustum = FrustumInfo(ctx.camera);
 	config.view_proj_matrix = ctx.camera.matrix();
 	config.lighting = ctx.lighting;
@@ -367,8 +391,9 @@ Ex<> LucidRenderer::setupInputData(const Context &ctx) {
 	config.num_instances = m_num_instances;
 	config.enable_backface_culling = ctx.config.backface_culling;
 	config.instance_packet_size = m_instance_packet_size;
-	m_config = EX_PASS(
-		VulkanBuffer::createAndUpload(ctx.device, cspan(&config, 1), config_usage, mem_usage));
+	mem_usage = VMemoryUsage::frame;
+	m_config = m_frame_config[frame_index];
+	EXPECT(cmds.upload(m_config, cspan(&config, 1)));
 
 	return {};
 }
@@ -436,19 +461,6 @@ void LucidRenderer::computeBins(const Context &ctx) {
 				 VAccess::memory_read | VAccess::memory_write);
 	cmds.dispatchCompute({1, 1, 1});
 }
-
-/*
-layout(std430, set = 1, binding = 0) readonly restrict buffer buf1_ { uint g_bin_quads[]; };
-layout(std430, set = 1, binding = 1) readonly restrict buffer buf2_ { uint g_bin_tris[]; };
-layout(std430, set = 1, binding = 2) coherent restrict buffer buf3_ { uint g_scratch_32[]; };
-layout(std430, set = 1, binding = 3) coherent restrict buffer buf4_ { uvec2 g_scratch_64[]; };
-layout(std430, set = 1, binding = 4) readonly restrict buffer buf5_ { uint g_instance_colors[]; };
-layout(std430, set = 1, binding = 5) readonly restrict buffer buf6_ { vec4 g_instance_uv_rects[]; };
-layout(std430, set = 1, binding = 6) readonly restrict buffer buf7_ { uvec4 g_uvec4_storage[]; };
-layout(std430, set = 1, binding = 7) readonly restrict buffer buf8_ { uint g_uint_storage[]; };
-layout(std430, set = 1, binding = 8) writeonly restrict buffer buf9_ { uint g_raster_image[]; };
-layout(set = 1, binding = 9) uniform sampler2D opaque_texture;
-layout(set = 1, binding = 10) uniform sampler2D transparent_texture;*/
 
 void LucidRenderer::bindRaster(PVPipeline pipeline, const Context &ctx) {
 	auto &cmds = ctx.device.cmdQueue();

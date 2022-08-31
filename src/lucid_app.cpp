@@ -56,6 +56,9 @@ LucidApp::LucidApp(VWindowRef window, VDeviceRef device)
 	sc_setup.vulkan_version = device->version();
 	sc_setup.source_dirs.emplace_back(dataPath("shaders"));
 	sc_setup.spirv_cache_dir = dataPath("spirv");
+#ifndef NDEBUG
+	sc_setup.debug_info = true;
+#endif
 	m_shader_compiler.emplace(sc_setup);
 	SimpleRenderer::addShaderDefs(*m_shader_compiler);
 	LucidRenderer::addShaderDefs(*m_shader_compiler);
@@ -186,6 +189,8 @@ bool LucidApp::updateViewport() {
 }
 
 Ex<void> LucidApp::updateRenderer() {
+	PERF_SCOPE();
+
 	bool do_update =
 		!m_simple_renderer || !m_lucid_renderer || m_lucid_renderer->opts() != m_lucid_opts;
 
@@ -573,18 +578,9 @@ void LucidApp::draw2D() {
 	renderer_2d.render();*/
 }
 
-bool LucidApp::mainLoop() {
-	perf::nextFrame();
-	perf::Manager::instance()->getNewFrames();
+void LucidApp::drawFrame() {
+	PERF_SCOPE();
 
-	auto cur_time = getTime();
-	float time_diff = m_last_time < 0.0 ? 1.0f / 60.0f : (cur_time - m_last_time);
-	m_last_time = cur_time;
-
-	if(!tick(time_diff))
-		return false;
-
-	updateRenderer().check();
 	m_device->beginFrame().check();
 	auto swap_chain = m_device->swapChain();
 	if(swap_chain->status() == VSwapChainStatus::image_acquired) {
@@ -600,6 +596,21 @@ bool LucidApp::mainLoop() {
 	}
 	m_device->finishFrame().check();
 	m_gui.endFrame();
+}
+
+bool LucidApp::mainLoop() {
+	perf::nextFrame();
+	perf::Manager::instance()->getNewFrames();
+
+	auto cur_time = getTime();
+	float time_diff = m_last_time < 0.0 ? 1.0f / 60.0f : (cur_time - m_last_time);
+	m_last_time = cur_time;
+
+	if(!tick(time_diff))
+		return false;
+
+	updateRenderer().check();
+	drawFrame();
 
 	if(m_selected_block && m_lucid_renderer && m_rendering_mode != RenderingMode::simple &&
 	   m_setup_idx != -1) {

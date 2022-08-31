@@ -37,6 +37,7 @@ class LucidApp {
 	bool handleInput(vector<InputEvent> events, float time_diff);
 	bool tick(float time_diff);
 
+	void drawFrame();
 	void drawScene();
 	void draw2D();
 

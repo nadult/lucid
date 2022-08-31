@@ -740,7 +740,7 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 		{"fragments", formatLarge(info.num_fragments), fragment_info},
 	};
 
-	// TODO: add better stats once rasterizez is working on all levels
+	// TODO: add better stats once rasterizer is working on all levels
 
 	if(setup_timers)
 		out.emplace_back(move(setup_timers), "quad_setup timers", 130);

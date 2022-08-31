@@ -17,9 +17,6 @@
 #include <fwk/vulkan/vulkan_swap_chain.h>
 #include <fwk/vulkan/vulkan_window.h>
 
-void initShaderCombiner();
-Ex<void> loadShaderPieces();
-
 Ex<int> exMain(int argc, char **argv) {
 	IRect window_rect(int2(1200, 700));
 

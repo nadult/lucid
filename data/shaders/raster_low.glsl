@@ -2,6 +2,9 @@
 #include "shared/shading.glsl"
 #include "shared/timers.glsl"
 
+#include "%shader_debug"
+DEBUG_SETUP(1, 11)
+
 #extension GL_KHR_shader_subgroup_ballot : require
 #extension GL_KHR_shader_subgroup_shuffle_relative : require
 #extension GL_KHR_shader_subgroup_clustered : require
@@ -336,7 +339,7 @@ void generateBlocks(uint bid) {
 		float depth = 0xffffe * SATURATE(inversesqrt(ray_pos + 1)); // 20 bits
 
 		if(num_all_frags == 0) // This means that bx_mask is invalid
-			RECORD(0, 0, 0, 0);
+			DEBUG_RECORD(0, 0, 0, 0);
 		uint frag_bits = num_frags.x | (num_frags.y << 6);
 		// TODO: change order
 		g_scratch_64[dst_offset_64 + i] = bits;
@@ -361,7 +364,7 @@ void generateBlocks(uint bid) {
 			uint value = s_buffer[buf_offset + i];
 			uint prev_value = i == 0 ? 0 : s_buffer[buf_offset + i - 1];
 			if(value <= prev_value)
-				RECORD(i, tri_count, prev_value, value);
+				DEBUG_RECORD(i, tri_count, prev_value, value);
 		}
 #endif
 
@@ -400,7 +403,11 @@ void generateBlocks(uint bid) {
 			value = s_buffer[buf_offset + block_tri_idx];
 		}
 		value = (value & 0xfff) | ((value & 0xfff000) << 4);
-		uint sum = subgroupClusteredAdd(value, 8);
+		uint sum = value, temp;
+		//temp = subgroupShuffleUp(sum, 1), sum += (warp_idx & 7) >= 1 ? temp : 0;
+		//temp = subgroupShuffleUp(sum, 2), sum += (warp_idx & 7) >= 2 ? temp : 0;
+		//temp = subgroupShuffleUp(sum, 4), sum += (warp_idx & 7) >= 4 ? temp : 0;
+		sum = subgroupClusteredAdd(value, 8);
 
 		if(warp_idx == 7) {
 			uint v0 = sum & 0xffff, v1 = sum >> 16;
@@ -501,10 +508,8 @@ void loadSamples(uint hbid, int segment_id) {
 
 		int minx = int((tri_data.y >> min_shift) & 7);
 		int countx = int((tri_data.y >> count_shift) & 15);
-		// TODO: FIXME
-		int prevx = 0;
-		//int prevx = countx + (shuffleUpNV(countx, 1, 4) & mask1);
-		//prevx += (shuffleUpNV(prevx, 2, 4) & mask2);
+		int prevx = countx + (subgroupShuffleUp(countx, 1) & mask1);
+		prevx += (subgroupShuffleUp(prevx, 2) & mask2);
 		tri_offset += prevx - countx;
 		countx = min(countx, SEGMENT_SIZE - tri_offset);
 		if(tri_offset < 0)
@@ -575,8 +580,8 @@ void visualizeFragmentCounts(uint hbid, ivec2 pixel_pos) {
 
 void visualizeTriangleCounts(uint hbid, ivec2 pixel_pos) {
 	uint count = s_block_tri_count[(hbid >> 1) & (NUM_WARPS - 1)];
-	//count = s_block_row_tri_count[hbid >> (BLOCK_ROW_SHIFT + 1)];
-	//count = s_bin_quad_count;
+	count = s_block_row_tri_count[pixel_pos.y >> 3];
+	//count = s_bin_quad_count * 2 + s_bin_tri_count;
 
 	vec3 color;
 	if(count == 0)
@@ -693,7 +698,7 @@ void rasterBin(int bin_id) {
 
 		//finishVisualizeSamples(pixel_pos);
 		//visualizeFragmentCounts(hbid, pixel_pos);
-		visualizeTriangleCounts(hbid, pixel_pos);
+		//visualizeTriangleCounts(hbid, pixel_pos);
 		UPDATE_TIMER(4);
 		barrier();
 	}

@@ -2,7 +2,7 @@
 #include "shared/structures.glsl"
 
 #define LSIZE BIN_CATEGORIZER_LSIZE
-layout(local_size_x = 512, local_size_x_id = 16) in;
+layout(local_size_x = 512, local_size_x_id = BIN_CATEGORIZER_LSIZE_ID) in;
 
 coherent layout(std430, set = 0, binding = 0) buffer lucid_info_ {
 	LucidInfo g_info;

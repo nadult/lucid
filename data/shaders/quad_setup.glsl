@@ -3,6 +3,8 @@
 #include "shared/structures.glsl"
 #include "shared/timers.glsl"
 
+#include "%shader_debug"
+
 // TODO: detect visible quads overflow
 // TODO: do something about divergence in input data
 // TODO: dynamic geometry support
@@ -18,7 +20,7 @@ layout(local_size_x = LSIZE) in;
 
 #define MAX_PACKET_SIZE 4
 
-coherent layout(std430, set = 0, binding = 0) buffer lucid_info_ {
+layout(std430, set = 0, binding = 0) coherent buffer lucid_info_ {
 	LucidInfo g_info;
 	int g_counts[];
 };
@@ -35,6 +37,7 @@ layout(std430, set = 1, binding = 5) readonly restrict buffer buf07_ { uint g_no
 layout(std430, set = 1, binding = 6) writeonly restrict buffer buf08_ { uint g_quad_aabbs[]; };
 layout(std430, set = 1, binding = 7) writeonly restrict buffer buf09_ { uvec4 g_uvec4_storage[]; };
 layout(std430, set = 1, binding = 8) writeonly restrict buffer buf10_ { uint g_uint_storage[]; };
+DEBUG_SETUP(1, 9)
 
 shared uint s_quad_aabbs[LSIZE];
 shared uvec2 s_tri_y_aabbs[LSIZE];
@@ -471,7 +474,8 @@ void main() {
 			int num_quads = g_info.num_visible_quads[0] + g_info.num_visible_quads[1];
 			int batch_size = BIN_DISPATCHER_LSIZE / 2;
 			int num_dispatches = (num_quads + (batch_size - 1)) / batch_size;
-			g_info.num_binning_dispatches[0] = uint(clamp(num_dispatches, 4, MAX_DISPATCHES));
+			g_info.num_binning_dispatches[0] =
+				1; //TODO: uint(clamp(num_dispatches, 4, MAX_DISPATCHES));
 			g_info.num_binning_dispatches[1] = 1;
 			g_info.num_binning_dispatches[2] = 1;
 		}

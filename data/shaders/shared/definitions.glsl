@@ -54,11 +54,15 @@ struct SpecializationConstants {
 	CONSTANT(10, MAX_DISPATCHES, 128)
 	CONSTANT(11, RENDER_OPTIONS, 0)
 
-	CONSTANT(12, BIN_DISPATCHER_LSIZE, 1024) // -> local_size_x_id in bin_dispatcher
-	CONSTANT(13, BIN_DISPATCHER_LSHIFT, 10)
-	CONSTANT(14, BIN_DISPATCHER_XBIN_STEP, 4)
-	CONSTANT(15, BIN_DISPATCHER_YBIN_STEP, 5)
-	CONSTANT(16, BIN_CATEGORIZER_LSIZE, 512) // -> local_size_x_id in bin_categorizer
+	CONSTANT(12, BIN_DISPATCHER_LSHIFT, 10)
+	CONSTANT(13, BIN_DISPATCHER_XBIN_STEP, 4)
+	CONSTANT(14, BIN_DISPATCHER_YBIN_STEP, 5)
+
+#define BIN_DISPATCHER_LSIZE_ID 15
+#define BIN_CATEGORIZER_LSIZE_ID 16
+	CONSTANT(BIN_DISPATCHER_LSIZE_ID, BIN_DISPATCHER_LSIZE, 1024)
+	CONSTANT(BIN_CATEGORIZER_LSIZE_ID, BIN_CATEGORIZER_LSIZE, 512)
+
 #ifdef __cplusplus
 };
 #endif
@@ -100,8 +104,6 @@ struct SpecializationConstants {
 #define ROPT_BIN_SIZE_64			0x40
 
 #ifndef __cplusplus
-#define RECORD(a, b, c, d) // TODO
-
 #define LIX		gl_LocalInvocationIndex
 #define LID		gl_LocalInvocationID
 #define WGID	gl_WorkGroupID

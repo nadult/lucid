@@ -5,8 +5,8 @@
 
 // TODO: better handling of phases
 // TODO: ability to change options without recreating renderer
-DEFINE_ENUM(LucidRenderOpt, debug_bin_dispatcher, debug_raster, timers, additive_blending,
-			visualize_errors, alpha_threshold, bin_size_64);
+DEFINE_ENUM(LucidRenderOpt, debug_quad_setup, debug_bin_dispatcher, debug_raster, timers,
+			additive_blending, visualize_errors, alpha_threshold, bin_size_64);
 using LucidRenderOpts = EnumFlags<LucidRenderOpt>;
 
 namespace shader {
@@ -25,7 +25,7 @@ class LucidRenderer {
 	static constexpr int max_verts = 12 * 1024 * 1024;
 	static constexpr int max_instances = 64 * 1024;
 	static constexpr int max_instance_quads = 1024;
-	static constexpr int max_visible_quads = 2 * 1024 * 1024;
+	static constexpr int max_visible_quads = 64 * 1024; //2 * 1024 * 1024;
 
 	LucidRenderer();
 	FWK_MOVABLE_CLASS(LucidRenderer)
@@ -50,8 +50,6 @@ class LucidRenderer {
 	void rasterLow(const Context &);
 	//void rasterHigh(const Context &);
 	void compose(const Context &);
-	Ex<> downloadInfo(const Context &, int num_skip_frames);
-	//void debugProgram(Program &, ZStr title);
 
 	Opts m_opts;
 
@@ -78,9 +76,16 @@ class LucidRenderer {
 	VBufferSpan<> m_frame_instance_data[num_frames];
 	VBufferSpan<u32> m_frame_info[num_frames];
 	VBufferSpan<shader::LucidConfig> m_frame_config[num_frames];
+	VBufferSpan<u32> m_debug_buffer;
 
-	vector<VDownloadId> m_info_downloads;
 	vector<u32> m_last_info;
+	vector<int4> m_last_uvec4;
+	vector<u32> m_last_bin_quads;
+	vector<u32> m_last_quad_aabbs;
+
+	vector<u32> m_last_quad_setup_debug;
+	vector<u32> m_last_bin_dispatcher_debug;
+	vector<u32> m_last_raster_low_debug;
 
 	int m_bin_size, m_block_size;
 	int m_max_dispatches;
@@ -88,7 +93,7 @@ class LucidRenderer {
 	int2 m_bin_counts;
 	int m_bin_count;
 
-	int2 m_size;
+	int2 m_size; // TODO: rename
 	int m_num_instances = 0, m_num_quads = 0;
 	int m_instance_packet_size = 0;
 

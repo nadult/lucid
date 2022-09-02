@@ -89,14 +89,20 @@ FWK_MOVABLE_CLASS_IMPL(LucidRenderer)
 void LucidRenderer::addShaderDefs(ShaderCompiler &compiler) {
 	vector<Pair<string>> vsh_macros = {{"VERTEX_SHADER", "1"}};
 	vector<Pair<string>> fsh_macros = {{"FRAGMENT_SHADER", "1"}};
+	vector<Pair<string>> debug_macros = {{"DEBUG_ENABLED", ""}};
 
 	compiler.add({"compose_vert", VShaderStage::vertex, "compose.glsl", vsh_macros});
 	compiler.add({"compose_frag", VShaderStage::fragment, "compose.glsl", fsh_macros});
 
 	compiler.add({"quad_setup", VShaderStage::compute, "quad_setup.glsl"});
+	compiler.add({"quad_setup_debug", VShaderStage::compute, "quad_setup.glsl", debug_macros});
 	compiler.add({"bin_dispatcher", VShaderStage::compute, "bin_dispatcher.glsl"});
+	compiler.add(
+		{"bin_dispatcher_debug", VShaderStage::compute, "bin_dispatcher.glsl", debug_macros});
+
 	compiler.add({"bin_categorizer", VShaderStage::compute, "bin_categorizer.glsl"});
 	compiler.add({"raster_low", VShaderStage::compute, "raster_low.glsl"});
+	compiler.add({"raster_low_debug", VShaderStage::compute, "raster_low.glsl", debug_macros});
 	compiler.add({"raster_high", VShaderStage::compute, "raster_high.glsl"});
 }
 
@@ -157,12 +163,14 @@ Ex<void> LucidRenderer::exConstruct(VulkanDevice &device, ShaderCompiler &compil
 
 	auto usage = VBufferUsage::storage_buffer;
 	auto usage_copyable = VBufferUsage::storage_buffer | VBufferUsage::transfer_src;
-	m_bin_quads = EX_PASS(VulkanBuffer::create<u32>(device, max_bin_quads, usage));
+	m_bin_quads = EX_PASS(
+		VulkanBuffer::create<u32>(device, max_bin_quads, usage | VBufferUsage::transfer_src));
 	m_bin_tris = EX_PASS(VulkanBuffer::create<u32>(device, max_bin_tris, usage));
 
 	int max_visible_tris = max_visible_quads * 2;
 	int uvec4_storage_size = max_visible_tris * 5 + max_visible_quads * 4; // 480MB ...
-	m_uvec4_storage = EX_PASS(VulkanBuffer::create<int4>(device, uvec4_storage_size, usage));
+	m_uvec4_storage = EX_PASS(
+		VulkanBuffer::create<int4>(device, uvec4_storage_size, usage | VBufferUsage::transfer_src));
 	m_uint_storage = EX_PASS(VulkanBuffer::create<u32>(device, max_visible_tris, usage));
 
 	uint scratch_32_size = 64 * 1024 * m_max_dispatches * sizeof(u32);
@@ -171,7 +179,8 @@ Ex<void> LucidRenderer::exConstruct(VulkanDevice &device, ShaderCompiler &compil
 
 	// TODO: control size of scratch mem
 	m_scratch_32 = EX_PASS(VulkanBuffer::create(device, scratch_32_size, usage));
-	m_scratch_64 = EX_PASS(VulkanBuffer::create(device, scratch_64_size, usage));
+	m_scratch_64 =
+		EX_PASS(VulkanBuffer::create(device, scratch_64_size, usage | VBufferUsage::transfer_src));
 	m_raster_image =
 		EX_PASS(VulkanBuffer::create<u32>(device, m_bin_count * square(m_bin_size), usage));
 	m_compose_quads = EX_PASS(VulkanBuffer::create<u32>(
@@ -195,11 +204,23 @@ Ex<void> LucidRenderer::exConstruct(VulkanDevice &device, ShaderCompiler &compil
 
 	p_bin_categorizer = EX_PASS(makeComputePipeline(device, compiler, consts, "bin_categorizer"));
 
-	p_quad_setup = EX_PASS(makeComputePipeline(device, compiler, consts, "quad_setup"));
-	p_bin_dispatcher = EX_PASS(makeComputePipeline(device, compiler, consts, "bin_dispatcher"));
+	p_quad_setup = EX_PASS(
+		makeComputePipeline(device, compiler, consts,
+							opts & Opt::debug_quad_setup ? "quad_setup_debug" : "quad_setup"));
+	p_bin_dispatcher = EX_PASS(makeComputePipeline(
+		device, compiler, consts,
+		opts & Opt::debug_bin_dispatcher ? "bin_dispatcher_debug" : "bin_dispatcher"));
 
-	p_raster_low = EX_PASS(makeComputePipeline(device, compiler, consts, "raster_low"));
+	p_raster_low = EX_PASS(makeComputePipeline(
+		device, compiler, consts, opts & Opt::debug_raster ? "raster_low_debug" : "raster_low"));
 	//p_raster_high = EX_PASS(makeComputePipeline(device, compiler, consts, "raster_high"));
+
+	if(opts & (Opt::debug_bin_dispatcher | Opt::debug_quad_setup | Opt::debug_raster)) {
+		auto usage =
+			VBufferUsage::storage_buffer | VBufferUsage::transfer_dst | VBufferUsage::transfer_src;
+		auto mem_usage = VMemoryUsage::temporary;
+		m_debug_buffer = EX_PASS(VulkanBuffer::create<u32>(device, 1024 * 1024, usage, mem_usage));
+	}
 
 	// TODO: disassemble spirv
 	/*mkdirRecursive("temp").ignore();
@@ -258,37 +279,54 @@ void LucidRenderer::render(const Context &ctx) {
 	auto &cmds = ctx.device.cmdQueue();
 	PERF_GPU_SCOPE(cmds);
 
-	cmds.barrier(VPipeStage::all_commands, VPipeStage::all_commands, VAccess::memory_write,
+	cmds.barrier(VPipeStage::all_commands, VPipeStage::all_commands,
+				 VAccess::memory_write | VAccess::memory_read,
 				 VAccess::memory_read | VAccess::memory_write);
 
 	setupInputData(ctx).check();
 
-	cmds.barrier(VPipeStage::all_commands, VPipeStage::all_commands, VAccess::memory_write,
+	cmds.barrier(VPipeStage::all_commands, VPipeStage::all_commands,
+				 VAccess::memory_write | VAccess::memory_read,
 				 VAccess::memory_read | VAccess::memory_write);
 
 	uploadInstances(ctx).check();
-	cmds.barrier(VPipeStage::all_commands, VPipeStage::all_commands, VAccess::memory_write,
+	cmds.barrier(VPipeStage::all_commands, VPipeStage::all_commands,
+				 VAccess::memory_write | VAccess::memory_read,
 				 VAccess::memory_read | VAccess::memory_write);
 
 	quadSetup(ctx);
-	cmds.barrier(VPipeStage::all_commands, VPipeStage::all_commands, VAccess::memory_write,
+	cmds.barrier(VPipeStage::all_commands, VPipeStage::all_commands,
+				 VAccess::memory_write | VAccess::memory_read,
+				 VAccess::memory_read | VAccess::memory_write);
+
+	cmds.barrier(VPipeStage::all_commands, VPipeStage::all_commands,
+				 VAccess::memory_write | VAccess::memory_read,
 				 VAccess::memory_read | VAccess::memory_write);
 	computeBins(ctx);
-	cmds.barrier(VPipeStage::all_commands, VPipeStage::all_commands, VAccess::memory_write,
+	cmds.barrier(VPipeStage::all_commands, VPipeStage::all_commands,
+				 VAccess::memory_write | VAccess::memory_read,
 				 VAccess::memory_read | VAccess::memory_write);
 
-	//bindRasterCommon(ctx);
 	rasterLow(ctx);
-	cmds.barrier(VPipeStage::all_commands, VPipeStage::all_commands, VAccess::memory_write,
+	cmds.barrier(VPipeStage::all_commands, VPipeStage::all_commands,
+				 VAccess::memory_write | VAccess::memory_read,
 				 VAccess::memory_read | VAccess::memory_write);
+
+	auto quad_aabbs_buf = m_scratch_64.reinterpret<u32>().subSpan(0, max_visible_quads);
+	cmds.download(m_last_quad_aabbs, quad_aabbs_buf, "quad_aabbs", 8).check();
 
 	//rasterHigh(ctx);
-	downloadInfo(ctx, 8).check();
-	cmds.barrier(VPipeStage::all_commands, VPipeStage::all_commands, VAccess::memory_write,
+	cmds.download(m_last_bin_quads, m_bin_quads, "bin_quads", 8).check();
+	cmds.download(m_last_info, m_info, "info", 8).check();
+	cmds.download(m_last_uvec4, m_uvec4_storage, "uvec4_storage", 8).check();
+
+	cmds.barrier(VPipeStage::all_commands, VPipeStage::all_commands,
+				 VAccess::memory_write | VAccess::memory_read,
 				 VAccess::memory_read | VAccess::memory_write);
 
 	compose(ctx);
-	cmds.barrier(VPipeStage::all_commands, VPipeStage::all_commands, VAccess::memory_write,
+	cmds.barrier(VPipeStage::all_commands, VPipeStage::all_commands,
+				 VAccess::memory_write | VAccess::memory_read,
 				 VAccess::memory_read | VAccess::memory_write);
 }
 
@@ -417,9 +455,22 @@ void LucidRenderer::quadSetup(const Context &ctx) {
 	ds = cmds.bindDS(1);
 	ds.set(0, m_instances, ctx.quads_ib, ctx.verts.pos, ctx.verts.tex, ctx.verts.col, ctx.verts.nrm,
 		   m_scratch_64, m_uvec4_storage, m_uint_storage);
+	if(m_opts & Opt::debug_quad_setup) {
+		ds.set(9, m_debug_buffer);
+		shaderDebugInitBuffer(cmds, m_debug_buffer);
+	}
 
 	int num_workgroups = (m_num_instances + m_instance_packet_size - 1) / m_instance_packet_size;
 	cmds.dispatchCompute({num_workgroups, 1, 1});
+
+	if(m_opts & Opt::debug_bin_dispatcher) {
+		cmds.barrier(VPipeStage::all_commands, VPipeStage::all_commands, VAccess::memory_write,
+					 VAccess::memory_read | VAccess::memory_write);
+		cmds.download(m_last_quad_setup_debug, m_debug_buffer, "quad_setup_debug", 32).check();
+		if(m_last_quad_setup_debug)
+			print("Quad setup debug: ----------------------------------------------------\n%",
+				  ShaderDebugInfo(m_last_quad_setup_debug));
+	}
 }
 
 void LucidRenderer::computeBins(const Context &ctx) {
@@ -437,14 +488,33 @@ void LucidRenderer::computeBins(const Context &ctx) {
 	ds.set(1, VDescriptorType::uniform_buffer, m_config);
 	ds = cmds.bindDS(1);
 	ds.set(0, m_scratch_64, m_bin_quads, m_bin_tris, m_scratch_32, m_uvec4_storage);
+	if(m_opts & Opt::debug_bin_dispatcher) {
+		ds.set(5, m_debug_buffer);
+		shaderDebugInitBuffer(cmds, m_debug_buffer);
+	}
 
 	PERF_CHILD_SCOPE("dispatcher phase");
 
 	cmds.barrier(VPipeStage::all_commands, VPipeStage::all_commands, VAccess::memory_write,
 				 VAccess::memory_read | VAccess::memory_write);
 	cmds.dispatchComputeIndirect(m_info, LUCID_INFO_MEMBER_OFFSET(num_binning_dispatches));
+	if(m_opts & Opt::debug_bin_dispatcher) {
+		cmds.barrier(VPipeStage::all_commands, VPipeStage::all_commands, VAccess::memory_write,
+					 VAccess::memory_read | VAccess::memory_write);
+		cmds.download(m_last_bin_dispatcher_debug, m_debug_buffer, "bin_dispatcher_debug", 32)
+			.check();
+		if(m_last_bin_dispatcher_debug)
+			print("Dispatcher debug: ----------------------------------------------------\n%",
+				  ShaderDebugInfo(m_last_bin_dispatcher_debug));
+	}
+
+	//cmds.dispatchCompute({16, 1, 1});
 	//if(m_opts & Opt::debug_bin_dispatcher)
 	//	debugProgram(p_bin_dispatcher, "bin_dispatcher");
+
+	cmds.barrier(VPipeStage::all_commands, VPipeStage::all_commands,
+				 VAccess::memory_write | VAccess::memory_read,
+				 VAccess::memory_read | VAccess::memory_write);
 
 	cmds.barrier(VPipeStage::all_commands, VPipeStage::all_commands, VAccess::memory_write,
 				 VAccess::memory_read | VAccess::memory_write);
@@ -472,9 +542,12 @@ void LucidRenderer::bindRaster(PVPipeline pipeline, const Context &ctx) {
 
 	ds = cmds.bindDS(1);
 	ds.set(0, m_bin_quads, m_bin_tris, m_scratch_32, m_scratch_64, m_instance_colors,
-		   m_instance_uv_rects, m_uvec4_storage, m_uint_storage);
+		   m_instance_uv_rects, m_uvec4_storage, m_uint_storage, m_raster_image);
 	// TODO: why this needs to be separate?
-	ds.set(8, m_raster_image);
+	if(m_opts & Opt::debug_raster) {
+		ds.set(11, m_debug_buffer);
+		shaderDebugInitBuffer(cmds, m_debug_buffer);
+	}
 
 	VSamplerSetup sam_setup;
 	auto sampler = ctx.device.getSampler(sam_setup);
@@ -493,6 +566,16 @@ void LucidRenderer::rasterLow(const Context &ctx) {
 	//	shaderDebugUseBuffer(m_errors);
 	cmds.dispatchComputeIndirect(m_info,
 								 LUCID_INFO_MEMBER_OFFSET(bin_level_dispatches[BIN_LEVEL_LOW]));
+
+	if(m_opts & Opt::debug_raster) {
+		cmds.barrier(VPipeStage::all_commands, VPipeStage::all_commands, VAccess::memory_write,
+					 VAccess::memory_read | VAccess::memory_write);
+		cmds.download(m_last_raster_low_debug, m_debug_buffer, "raster_low_debug", 32).check();
+		if(m_last_raster_low_debug)
+			print("Raster low debug: ----------------------------------------------------\n%",
+				  ShaderDebugInfo(m_last_raster_low_debug));
+	}
+	//cmds.dispatchCompute({64, 1, 1});
 	//if(m_opts & Opt::debug_raster)
 	//	debugProgram(p_raster_low, "raster_low");
 }
@@ -547,26 +630,6 @@ void LucidRenderer::compose(const Context &ctx) {
 	cmds.endRenderPass();
 }
 
-Ex<> LucidRenderer::downloadInfo(const Context &ctx, int num_skip_frames) {
-	auto &cmds = ctx.device.cmdQueue();
-	while(m_info_downloads) {
-		auto id = m_info_downloads.front();
-		auto data = cmds.retrieve<u32>(id);
-		if(!data)
-			break;
-		m_last_info = move(data);
-		m_info_downloads.erase(m_info_downloads.begin());
-	}
-
-	static int frame_counter = 0;
-	if(num_skip_frames && frame_counter++ % (num_skip_frames + 1) != 0)
-		return {};
-	cmds.barrier(VPipeStage::all_commands, VPipeStage::all_commands, VAccess::memory_write,
-				 VAccess::memory_read | VAccess::memory_write);
-	m_info_downloads.emplace_back(EX_PASS(cmds.download(m_info)));
-	return {};
-}
-
 static vector<StatsRow> processTimers(CSpan<uint> timers, CSpan<Str> names) {
 	vector<StatsRow> out;
 	DASSERT(names.size() <= timers.size());
@@ -602,6 +665,18 @@ static string formatLarge(i64 value) {
 	return fmt.text();
 };
 
+struct ScanInfo {
+	float3 scan;
+	int y_aabb;
+	float3 scan_step;
+	int signs;
+};
+static_assert(sizeof(ScanInfo) == sizeof(int4) * 2);
+
+array<uint, 4> decodeAABB28(uint aabb) {
+	return {aabb & 0x7fu, (aabb >> 7) & 0x7fu, (aabb >> 14) & 0x7fu, (aabb >> 21) & 0x7fu};
+}
+
 vector<StatsGroup> LucidRenderer::getStats() const {
 	PERF_SCOPE();
 
@@ -622,6 +697,46 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 	CSpan<uint> bin_tri_counts = cspan(bin_counters.data() + m_bin_count * 3, m_bin_count);
 	CSpan<uint> bin_tri_offsets = cspan(bin_counters.data() + m_bin_count * 4, m_bin_count);
 	CSpan<uint> bin_tri_offsets_temp = cspan(bin_counters.data() + m_bin_count * 5, m_bin_count);
+
+	auto scan_data =
+		subSpan(m_last_uvec4, max_visible_quads * 4, max_visible_quads * 8).reinterpret<ScanInfo>();
+
+	vector<int2> tri_yaabbs = transform(
+		scan_data, [](auto &info) { return int2(info.y_aabb & 0xffff, info.y_aabb >> 16); });
+	auto aabbs = transform(m_last_quad_aabbs, [](auto aabb) { return decodeAABB28(aabb); });
+
+	vector<vector<u32>> bin_quads(m_bin_count);
+	for(int i : intRange(m_bin_count)) {
+		int cur_count = bin_quad_counts[i];
+		int offset = bin_quad_offsets[i];
+		insertBack(bin_quads[i], subSpan(m_last_bin_quads, offset, offset + cur_count));
+	}
+
+	int num_aabb_errors = 0;
+	int num_inside = 0, num_outside = 0;
+
+	// TODO: możliwe, że aabbsy są za duże?
+	for(int bx : intRange(m_bin_counts.x))
+		for(int by : intRange(m_bin_counts.y)) {
+			int bid = bx + by * m_bin_counts.x;
+
+			IRect rect = IRect({bx, by}, {bx + 1, by + 1}) * m_bin_size;
+			for(auto qid : bin_quads[bid]) {
+				qid &= 0xfffffff;
+
+				int miny = min(tri_yaabbs[qid * 2 + 0][0], tri_yaabbs[qid * 2 + 1][0]);
+				int maxy = min(tri_yaabbs[qid * 2 + 0][1], tri_yaabbs[qid * 2 + 1][1]);
+
+				if((miny > rect.ey() || maxy < rect.y())) {
+					num_outside++;
+					if(num_aabb_errors++ < 32)
+						print("Quad % outside bin %x% (% - %): min_y:% max_y:% aabb:%\n", qid, bx,
+							  by, rect.min(), rect.max(), miny, maxy, aabbs[qid]);
+				} else
+					num_inside++;
+			}
+		}
+	print("Inside: %  / Outside: %\n", num_inside, num_outside);
 
 	// TODO: jest problem z tempami, ale tylko gdy jest więcej niż jedna workgroupa w dispatcherze
 

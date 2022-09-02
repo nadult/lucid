@@ -3,6 +3,8 @@
 #include "shared/structures.glsl"
 #include "shared/timers.glsl"
 
+#include "%shader_debug"
+
 // TODO: use gl_SubgroupSize, gl_SubgroupId
 // TODO: simplify offsets generation; we don't have to do this in 2D
 
@@ -20,9 +22,9 @@
 #define LARGE_TASK_SHIFT (LSHIFT - 1)
 #define LARGE_TASK_SIZE (LSIZE / 2)
 
-layout(local_size_x = 1024, local_size_x_id = 12) in;
+layout(local_size_x = 1024, local_size_x_id = BIN_DISPATCHER_LSIZE_ID) in;
 
-coherent layout(std430, binding = 0) buffer lucid_info_ {
+layout(std430, binding = 0) coherent buffer lucid_info_ {
 	LucidInfo g_info;
 	int g_counts[];
 };
@@ -32,7 +34,8 @@ layout(std430, set = 1, binding = 0) readonly buffer buf1_ { uint g_quad_aabbs[]
 layout(std430, set = 1, binding = 1) writeonly buffer buf2_ { uint g_bin_quads[]; };
 layout(std430, set = 1, binding = 2) writeonly buffer buf3_ { uint g_bin_tris[]; };
 layout(std430, set = 1, binding = 3) buffer buf4_ { int g_tasks[]; };
-layout(std430, set = 1, binding = 4) buffer buf5_ { uvec4 g_uvec4_storage[]; };
+layout(std430, set = 1, binding = 4) readonly buffer buf5_ { uvec4 g_uvec4_storage[]; };
+DEBUG_SETUP(1, 5)
 
 shared int s_bins[BIN_COUNT];
 shared int s_temp[LSIZE];

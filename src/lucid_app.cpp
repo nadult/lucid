@@ -22,6 +22,7 @@
 #include <fwk/vulkan/vulkan_command_queue.h>
 #include <fwk/vulkan/vulkan_device.h>
 #include <fwk/vulkan/vulkan_image.h>
+#include <fwk/vulkan/vulkan_memory_manager.h>
 #include <fwk/vulkan/vulkan_pipeline.h>
 #include <fwk/vulkan/vulkan_swap_chain.h>
 #include <fwk/vulkan/vulkan_window.h>
@@ -52,6 +53,7 @@ LucidApp::LucidApp(VWindowRef window, VDeviceRef device)
 	  m_gui(device, window, m_gui_render_pass, {GuiStyleMode::mini}),
 	  m_cam_control(Plane3F(float3(0, 1, 0), 0.0f)), m_lighting(SceneLighting::makeDefault()) {
 
+	//m_device->memory().setLogging(true);
 	ShaderCompilerSetup sc_setup;
 	sc_setup.vulkan_version = device->version();
 	sc_setup.source_dirs.emplace_back(dataPath("shaders"));

@@ -15,8 +15,8 @@ layout(binding = 1) uniform lucid_config_ { LucidConfig u_config; };
 
 layout(std430, set = 1, binding = 0) readonly restrict buffer buf0_ { uint g_bin_quads[]; };
 layout(std430, set = 1, binding = 1) readonly restrict buffer buf1_ { uint g_bin_tris[]; };
-layout(std430, set = 1, binding = 2) coherent restrict buffer buf2_ { uint g_scratch_32[]; };
-layout(std430, set = 1, binding = 3) coherent restrict buffer buf3_ { uvec2 g_scratch_64[]; };
+layout(std430, set = 1, binding = 2) restrict buffer buf2_ { uint g_scratch_32[]; };
+layout(std430, set = 1, binding = 3) restrict buffer buf3_ { uvec2 g_scratch_64[]; };
 layout(std430, set = 1, binding = 4) readonly restrict buffer buf4_ { uint g_instance_colors[]; };
 layout(std430, set = 1, binding = 5) readonly restrict buffer buf5_ { vec4 g_instance_uv_rects[]; };
 layout(std430, set = 1, binding = 6) readonly restrict buffer buf6_ { uvec4 g_uvec4_storage[]; };

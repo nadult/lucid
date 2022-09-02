@@ -318,8 +318,10 @@ void LucidRenderer::render(const Context &ctx) {
 				 VAccess::memory_write | VAccess::memory_read,
 				 VAccess::memory_read | VAccess::memory_write);
 
-	if(auto result = cmds.download(m_info, "info", 8); result && *result)
+	if(auto result = cmds.download(m_info, "info", 16); result && *result) {
 		m_last_info = move(*result);
+		m_last_info_updated = true;
+	}
 }
 
 Ex<> LucidRenderer::uploadInstances(const Context &ctx) {
@@ -485,7 +487,7 @@ void LucidRenderer::computeBins(const Context &ctx) {
 				 VAccess::memory_read | VAccess::memory_write);
 	cmds.dispatchComputeIndirect(m_info, LUCID_INFO_MEMBER_OFFSET(num_binning_dispatches));
 	if(m_opts & Opt::debug_bin_dispatcher)
-		getDebugData(ctx, m_debug_buffer, "bin_dspatcher_debug");
+		getDebugData(ctx, m_debug_buffer, "bin_dispatcher_debug");
 
 	//cmds.dispatchCompute({16, 1, 1});
 	//if(m_opts & Opt::debug_bin_dispatcher)
@@ -650,18 +652,15 @@ array<uint, 4> decodeAABB28(uint aabb) {
 	return {aabb & 0x7fu, (aabb >> 7) & 0x7fu, (aabb >> 14) & 0x7fu, (aabb >> 21) & 0x7fu};
 }
 
-vector<StatsGroup> LucidRenderer::getStats() const {
+void LucidRenderer::verifyInfo() {
+	if(!m_last_info_updated)
+		return;
+	m_last_info_updated = false;
 	PERF_SCOPE();
 
-	vector<StatsGroup> out;
-
-	if(!m_last_info)
-		return out;
-
-	auto bin_counters = m_last_info;
 	shader::LucidInfo info;
-	memcpy(&info, bin_counters.data(), sizeof(info));
-	bin_counters.erase(bin_counters.begin(), bin_counters.begin() + LUCID_INFO_SIZE);
+	memcpy(&info, m_last_info.data(), sizeof(info));
+	auto bin_counters = cspan(m_last_info).subSpan(LUCID_INFO_SIZE);
 
 	CSpan<uint> bin_quad_counts = cspan(bin_counters.data() + m_bin_count * 0, m_bin_count);
 	CSpan<uint> bin_quad_offsets = cspan(bin_counters.data() + m_bin_count * 1, m_bin_count);
@@ -706,6 +705,21 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 			print("Invalid temp bin tri offset [%]: % != % (offset:% + count:%)\n", i,
 				  cur_offset_temp, cur_offset + cur_value, cur_offset, cur_value);
 	}
+}
+
+vector<StatsGroup> LucidRenderer::getStats() const {
+	PERF_SCOPE();
+
+	vector<StatsGroup> out;
+
+	if(!m_last_info)
+		return out;
+
+	shader::LucidInfo info;
+	memcpy(&info, m_last_info.data(), sizeof(info));
+	auto bin_counters = cspan(m_last_info).subSpan(LUCID_INFO_SIZE);
+	CSpan<uint> bin_quad_counts = cspan(bin_counters.data() + m_bin_count * 0, m_bin_count);
+	CSpan<uint> bin_tri_counts = cspan(bin_counters.data() + m_bin_count * 3, m_bin_count);
 
 	int num_pixels = m_size.x * m_size.y;
 	int num_blocks = ((m_size.x + m_block_size - 1) / m_block_size) *

@@ -35,6 +35,7 @@ class LucidRenderer {
 
 	void render(const Context &);
 
+	void verifyInfo();
 	vector<StatsGroup> getStats() const;
 
 	auto opts() const { return m_opts; }
@@ -79,7 +80,9 @@ class LucidRenderer {
 	VBufferSpan<u32> m_frame_info[num_frames];
 	VBufferSpan<shader::LucidConfig> m_frame_config[num_frames];
 	VBufferSpan<u32> m_debug_buffer;
+
 	vector<u32> m_last_info;
+	bool m_last_info_updated = false;
 
 	int m_bin_size, m_block_size;
 	int m_max_dispatches;

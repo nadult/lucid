@@ -266,6 +266,7 @@ void LucidApp::showSceneStats(const Scene &scene) {
 
 void LucidApp::showRasterStats(const Scene &scene) {
 	auto groups = m_lucid_renderer->getStats();
+
 	for(int i : intRange(groups)) {
 		auto &group = groups[i];
 		if(!group.title.empty())
@@ -517,6 +518,9 @@ bool LucidApp::tick(float time_diff) {
 	events = m_gui.finishFrame(*m_window);
 	auto result = handleInput(events, time_diff);
 	updatePerfStats();
+
+	if(m_lucid_renderer)
+		m_lucid_renderer->verifyInfo();
 
 	return result;
 }

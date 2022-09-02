@@ -273,52 +273,26 @@ void LucidRenderer::render(const Context &ctx) {
 
 	// TODO: second frame is broken
 	// TODO: minimize barriers
-	cmds.barrier(VPipeStage::all_commands, VPipeStage::all_commands,
-				 VAccess::memory_write | VAccess::memory_read,
-				 VAccess::memory_read | VAccess::memory_write);
-
 	setupInputData(ctx).check();
-
-	cmds.barrier(VPipeStage::all_commands, VPipeStage::all_commands,
-				 VAccess::memory_write | VAccess::memory_read,
-				 VAccess::memory_read | VAccess::memory_write);
-
 	uploadInstances(ctx).check();
-	cmds.barrier(VPipeStage::all_commands, VPipeStage::all_commands,
-				 VAccess::memory_write | VAccess::memory_read,
+	cmds.barrier(VPipeStage::transfer, VPipeStage::compute_shader, VAccess::transfer_write,
 				 VAccess::memory_read | VAccess::memory_write);
-
 	quadSetup(ctx);
-	cmds.barrier(VPipeStage::all_commands, VPipeStage::all_commands,
-				 VAccess::memory_write | VAccess::memory_read,
-				 VAccess::memory_read | VAccess::memory_write);
-
-	cmds.barrier(VPipeStage::all_commands, VPipeStage::all_commands,
-				 VAccess::memory_write | VAccess::memory_read,
+	cmds.barrier(VPipeStage::compute_shader, VPipeStage::compute_shader, VAccess::memory_write,
 				 VAccess::memory_read | VAccess::memory_write);
 	computeBins(ctx);
-	cmds.barrier(VPipeStage::all_commands, VPipeStage::all_commands,
-				 VAccess::memory_write | VAccess::memory_read,
+	cmds.barrier(VPipeStage::compute_shader, VPipeStage::compute_shader, VAccess::memory_write,
 				 VAccess::memory_read | VAccess::memory_write);
-
 	rasterLow(ctx);
-	cmds.barrier(VPipeStage::all_commands, VPipeStage::all_commands,
-				 VAccess::memory_write | VAccess::memory_read,
-				 VAccess::memory_read | VAccess::memory_write);
-
-	auto quad_aabbs_buf = m_scratch_64.reinterpret<u32>().subSpan(0, max_visible_quads);
-
 	//rasterHigh(ctx);
 
-	cmds.barrier(VPipeStage::all_commands, VPipeStage::all_commands,
-				 VAccess::memory_write | VAccess::memory_read,
+	cmds.barrier(VPipeStage::compute_shader, VPipeStage::all_graphics, VAccess::memory_write,
 				 VAccess::memory_read | VAccess::memory_write);
 
 	compose(ctx);
-	cmds.barrier(VPipeStage::all_commands, VPipeStage::all_commands,
-				 VAccess::memory_write | VAccess::memory_read,
-				 VAccess::memory_read | VAccess::memory_write);
 
+	cmds.barrier(VPipeStage::compute_shader, VPipeStage::transfer, VAccess::memory_write,
+				 VAccess::transfer_read);
 	if(auto result = cmds.download(m_info, "info", 16); result && *result) {
 		m_last_info = move(*result);
 		m_last_info_updated = true;
@@ -439,9 +413,6 @@ void LucidRenderer::quadSetup(const Context &ctx) {
 
 	auto &cmds = ctx.device.cmdQueue();
 
-	// TODO: that's too much
-	cmds.barrier(VPipeStage::all_commands, VPipeStage::all_commands, VAccess::memory_write,
-				 VAccess::memory_read | VAccess::memory_write);
 	PERF_GPU_SCOPE(cmds);
 	cmds.bind(p_quad_setup);
 
@@ -468,11 +439,6 @@ void LucidRenderer::computeBins(const Context &ctx) {
 	auto &cmds = ctx.device.cmdQueue();
 	PERF_GPU_SCOPE(cmds);
 
-	cmds.barrier(VPipeStage::all_commands, VPipeStage::all_commands, VAccess::memory_write,
-				 VAccess::memory_read | VAccess::memory_write);
-	cmds.barrier(VPipeStage::compute_shader, VPipeStage::draw_indirect | VPipeStage::compute_shader,
-				 VAccess::memory_write | VAccess::shader_write,
-				 VAccess::memory_read | VAccess::shader_read | VAccess::indirect_command_read);
 	cmds.bind(p_bin_dispatcher);
 	auto ds = cmds.bindDS(0);
 	ds.set(0, m_info);
@@ -486,8 +452,9 @@ void LucidRenderer::computeBins(const Context &ctx) {
 
 	PERF_CHILD_SCOPE("dispatcher phase");
 
-	cmds.barrier(VPipeStage::all_commands, VPipeStage::all_commands, VAccess::memory_write,
-				 VAccess::memory_read | VAccess::memory_write);
+	cmds.barrier(VPipeStage::compute_shader, VPipeStage::draw_indirect, VAccess::memory_write,
+				 VAccess::indirect_command_read);
+
 	cmds.dispatchComputeIndirect(m_info, LUCID_INFO_MEMBER_OFFSET(num_binning_dispatches));
 	if(m_opts & Opt::debug_bin_dispatcher)
 		getDebugData(ctx, m_debug_buffer, "bin_dispatcher_debug");
@@ -496,23 +463,13 @@ void LucidRenderer::computeBins(const Context &ctx) {
 	//if(m_opts & Opt::debug_bin_dispatcher)
 	//	debugProgram(p_bin_dispatcher, "bin_dispatcher");
 
-	cmds.barrier(VPipeStage::all_commands, VPipeStage::all_commands,
-				 VAccess::memory_write | VAccess::memory_read,
-				 VAccess::memory_read | VAccess::memory_write);
-
-	cmds.barrier(VPipeStage::all_commands, VPipeStage::all_commands, VAccess::memory_write,
-				 VAccess::memory_read | VAccess::memory_write);
-
-	cmds.barrier(VPipeStage::compute_shader | VPipeStage::draw_indirect, VPipeStage::compute_shader,
-				 VAccess::memory_write | VAccess::shader_write,
-				 VAccess::memory_read | VAccess::shader_read);
+	cmds.barrier(VPipeStage::compute_shader, VPipeStage::compute_shader, VAccess::memory_write,
+				 VAccess::memory_read | VAccess::memory_read);
 
 	PERF_SIBLING_SCOPE("categorizer phase");
 	cmds.bind(p_bin_categorizer);
 	ds = cmds.bindDS(1);
 	ds.set(0, m_compose_quads);
-	cmds.barrier(VPipeStage::all_commands, VPipeStage::all_commands, VAccess::memory_write,
-				 VAccess::memory_read | VAccess::memory_write);
 	cmds.dispatchCompute({1, 1, 1});
 }
 
@@ -543,8 +500,8 @@ void LucidRenderer::rasterLow(const Context &ctx) {
 	auto &cmds = ctx.device.cmdQueue();
 	PERF_GPU_SCOPE(cmds);
 
-	cmds.barrier(VPipeStage::compute_shader, VPipeStage::draw_indirect | VPipeStage::compute_shader,
-				 VAccess::memory_write, VAccess::memory_read | VAccess::indirect_command_read);
+	cmds.barrier(VPipeStage::compute_shader, VPipeStage::draw_indirect, VAccess::memory_write,
+				 VAccess::indirect_command_read);
 	bindRaster(p_raster_low, ctx);
 	//if(m_opts & Opt::debug_raster)
 	//	shaderDebugUseBuffer(m_errors);

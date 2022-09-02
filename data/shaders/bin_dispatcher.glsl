@@ -30,11 +30,11 @@ layout(std430, binding = 0) coherent buffer lucid_info_ {
 };
 layout(binding = 1) uniform lucid_config_ { LucidConfig u_config; };
 
-layout(std430, set = 1, binding = 0) readonly buffer buf1_ { uint g_quad_aabbs[]; };
-layout(std430, set = 1, binding = 1) writeonly buffer buf2_ { uint g_bin_quads[]; };
-layout(std430, set = 1, binding = 2) writeonly buffer buf3_ { uint g_bin_tris[]; };
-layout(std430, set = 1, binding = 3) buffer buf4_ { int g_tasks[]; };
-layout(std430, set = 1, binding = 4) readonly buffer buf5_ { uvec4 g_uvec4_storage[]; };
+layout(std430, set = 1, binding = 0) restrict readonly buffer buf1_ { uint g_quad_aabbs[]; };
+layout(std430, set = 1, binding = 1) restrict writeonly buffer buf2_ { uint g_bin_quads[]; };
+layout(std430, set = 1, binding = 2) restrict writeonly buffer buf3_ { uint g_bin_tris[]; };
+layout(std430, set = 1, binding = 3) restrict buffer buf4_ { int g_tasks[]; };
+layout(std430, set = 1, binding = 4) restrict readonly buffer buf5_ { uvec4 g_uvec4_storage[]; };
 DEBUG_SETUP(1, 5)
 
 shared int s_bins[BIN_COUNT];
@@ -482,8 +482,9 @@ void processSmallQuads() {
 
 	// Last group is responsible for computing bin offsets
 	if(s_num_finished_tasks[0] == s_num_all_tasks[0]) {
-		groupMemoryBarrier();
+		memoryBarrier();
 		computeQuadOffsets();
+		memoryBarrier();
 		if(LIX == 0)
 			atomicExchange(g_info.a_bin_dispatcher_phase[0], 1);
 	}
@@ -493,7 +494,7 @@ void processSmallQuads() {
 	// We could run bin categorizer here ! All it needs is bin quad counts
 	if(LIX == 0)
 		while(g_info.a_bin_dispatcher_phase[0] == 0)
-			;
+			memoryBarrier();
 	barrier();
 	UPDATE_TIMER(1);
 
@@ -585,8 +586,9 @@ void processLargeTris() {
 
 	// Last group is responsible for computing bin offsets
 	if(s_num_finished_tasks[1] == s_num_all_tasks[1]) {
-		groupMemoryBarrier();
+		memoryBarrier();
 		computeTriOffsets();
+		memoryBarrier();
 		if(LIX == 0)
 			atomicExchange(g_info.a_bin_dispatcher_phase[1], 1);
 	}
@@ -596,7 +598,7 @@ void processLargeTris() {
 	// We could run bin categorizer here ! All it needs is bin quad counts
 	if(LIX == 0)
 		while(g_info.a_bin_dispatcher_phase[1] == 0)
-			;
+			memoryBarrier();
 	barrier();
 	UPDATE_TIMER(4);
 

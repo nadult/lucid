@@ -271,6 +271,7 @@ void LucidRenderer::render(const Context &ctx) {
 	auto &cmds = ctx.device.cmdQueue();
 	PERF_GPU_SCOPE(cmds);
 
+	// TODO: second frame is broken
 	// TODO: minimize barriers
 	cmds.barrier(VPipeStage::all_commands, VPipeStage::all_commands,
 				 VAccess::memory_write | VAccess::memory_read,
@@ -406,6 +407,8 @@ Ex<> LucidRenderer::uploadInstances(const Context &ctx) {
 
 Ex<> LucidRenderer::setupInputData(const Context &ctx) {
 	auto &cmds = ctx.device.cmdQueue();
+	PERF_GPU_SCOPE(cmds);
+
 	uint bin_counters_size = LUCID_INFO_SIZE + m_bin_count * 10;
 	auto info_usage = VBufferUsage::storage_buffer | VBufferUsage::transfer_src |
 					  VBufferUsage::transfer_dst | VBufferUsage::indirect_buffer;
@@ -816,13 +819,17 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 }
 
 template <class T>
-void LucidRenderer::getDebugData(const Context &ctx, VBufferSpan<T> src, Str title) {
+Maybe<ShaderDebugInfo> LucidRenderer::getDebugData(const Context &ctx, VBufferSpan<T> src,
+												   Str title) {
 	auto &cmds = ctx.device.cmdQueue();
 	cmds.barrier(VPipeStage::all_commands, VPipeStage::transfer, VAccess::memory_write,
 				 VAccess::transfer_read);
 	auto debug_data = cmds.download(m_debug_buffer, title, 32);
 	cmds.barrier(VPipeStage::transfer, VPipeStage::all_commands);
-	if(debug_data && *debug_data)
-		print("%: ----------------------------------------------------\n%", title,
-			  ShaderDebugInfo(*debug_data));
+	if(debug_data && *debug_data) {
+		ShaderDebugInfo info(*debug_data);
+		print("%: ----------------------------------------------------\n%", title, info);
+		return info;
+	}
+	return none;
 }

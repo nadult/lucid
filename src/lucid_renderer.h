@@ -3,6 +3,10 @@
 #include "lucid_base.h"
 #include <fwk/gfx/color.h>
 
+namespace fwk {
+struct ShaderDebugInfo;
+}
+
 // TODO: better handling of phases
 // TODO: ability to change options without recreating renderer
 DEFINE_ENUM(LucidRenderOpt, debug_quad_setup, debug_bin_dispatcher, debug_raster, timers,
@@ -52,7 +56,8 @@ class LucidRenderer {
 	//void rasterHigh(const Context &);
 	void compose(const Context &);
 
-	template <class T> void getDebugData(const Context &, VBufferSpan<T>, Str title);
+	template <class T>
+	Maybe<ShaderDebugInfo> getDebugData(const Context &, VBufferSpan<T>, Str title);
 
 	Opts m_opts;
 

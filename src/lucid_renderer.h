@@ -25,7 +25,7 @@ class LucidRenderer {
 	static constexpr int max_verts = 12 * 1024 * 1024;
 	static constexpr int max_instances = 64 * 1024;
 	static constexpr int max_instance_quads = 1024;
-	static constexpr int max_visible_quads = 64 * 1024; //2 * 1024 * 1024;
+	static constexpr int max_visible_quads = 2 * 1024 * 1024;
 
 	LucidRenderer();
 	FWK_MOVABLE_CLASS(LucidRenderer)
@@ -50,6 +50,8 @@ class LucidRenderer {
 	void rasterLow(const Context &);
 	//void rasterHigh(const Context &);
 	void compose(const Context &);
+
+	template <class T> void getDebugData(const Context &, VBufferSpan<T>, Str title);
 
 	Opts m_opts;
 
@@ -77,15 +79,7 @@ class LucidRenderer {
 	VBufferSpan<u32> m_frame_info[num_frames];
 	VBufferSpan<shader::LucidConfig> m_frame_config[num_frames];
 	VBufferSpan<u32> m_debug_buffer;
-
 	vector<u32> m_last_info;
-	vector<int4> m_last_uvec4;
-	vector<u32> m_last_bin_quads;
-	vector<u32> m_last_quad_aabbs;
-
-	vector<u32> m_last_quad_setup_debug;
-	vector<u32> m_last_bin_dispatcher_debug;
-	vector<u32> m_last_raster_low_debug;
 
 	int m_bin_size, m_block_size;
 	int m_max_dispatches;

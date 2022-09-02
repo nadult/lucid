@@ -267,14 +267,6 @@ Ex<void> LucidRenderer::exConstruct(VulkanDevice &device, ShaderCompiler &compil
 	return {};
 }
 
-// TODO
-/*void LucidRenderer::debugProgram(Program &program, ZStr name) {
-	auto source_ranges = program.sourceRanges();
-	ShaderDebugInfo records(m_errors, 1024, source_ranges);
-	if(records)
-		print("% debug records: %\n", name, records);
-}*/
-
 void LucidRenderer::render(const Context &ctx) {
 	auto &cmds = ctx.device.cmdQueue();
 	PERF_GPU_SCOPE(cmds);
@@ -313,12 +305,8 @@ void LucidRenderer::render(const Context &ctx) {
 				 VAccess::memory_read | VAccess::memory_write);
 
 	auto quad_aabbs_buf = m_scratch_64.reinterpret<u32>().subSpan(0, max_visible_quads);
-	cmds.download(m_last_quad_aabbs, quad_aabbs_buf, "quad_aabbs", 8).check();
 
 	//rasterHigh(ctx);
-	cmds.download(m_last_bin_quads, m_bin_quads, "bin_quads", 8).check();
-	cmds.download(m_last_info, m_info, "info", 8).check();
-	cmds.download(m_last_uvec4, m_uvec4_storage, "uvec4_storage", 8).check();
 
 	cmds.barrier(VPipeStage::all_commands, VPipeStage::all_commands,
 				 VAccess::memory_write | VAccess::memory_read,
@@ -328,6 +316,9 @@ void LucidRenderer::render(const Context &ctx) {
 	cmds.barrier(VPipeStage::all_commands, VPipeStage::all_commands,
 				 VAccess::memory_write | VAccess::memory_read,
 				 VAccess::memory_read | VAccess::memory_write);
+
+	if(auto result = cmds.download(m_info, "info", 8); result && *result)
+		m_last_info = move(*result);
 }
 
 Ex<> LucidRenderer::uploadInstances(const Context &ctx) {
@@ -463,14 +454,8 @@ void LucidRenderer::quadSetup(const Context &ctx) {
 	int num_workgroups = (m_num_instances + m_instance_packet_size - 1) / m_instance_packet_size;
 	cmds.dispatchCompute({num_workgroups, 1, 1});
 
-	if(m_opts & Opt::debug_bin_dispatcher) {
-		cmds.barrier(VPipeStage::all_commands, VPipeStage::all_commands, VAccess::memory_write,
-					 VAccess::memory_read | VAccess::memory_write);
-		cmds.download(m_last_quad_setup_debug, m_debug_buffer, "quad_setup_debug", 32).check();
-		if(m_last_quad_setup_debug)
-			print("Quad setup debug: ----------------------------------------------------\n%",
-				  ShaderDebugInfo(m_last_quad_setup_debug));
-	}
+	if(m_opts & Opt::debug_bin_dispatcher)
+		getDebugData(ctx, m_debug_buffer, "quad_setup_debug");
 }
 
 void LucidRenderer::computeBins(const Context &ctx) {
@@ -498,15 +483,8 @@ void LucidRenderer::computeBins(const Context &ctx) {
 	cmds.barrier(VPipeStage::all_commands, VPipeStage::all_commands, VAccess::memory_write,
 				 VAccess::memory_read | VAccess::memory_write);
 	cmds.dispatchComputeIndirect(m_info, LUCID_INFO_MEMBER_OFFSET(num_binning_dispatches));
-	if(m_opts & Opt::debug_bin_dispatcher) {
-		cmds.barrier(VPipeStage::all_commands, VPipeStage::all_commands, VAccess::memory_write,
-					 VAccess::memory_read | VAccess::memory_write);
-		cmds.download(m_last_bin_dispatcher_debug, m_debug_buffer, "bin_dispatcher_debug", 32)
-			.check();
-		if(m_last_bin_dispatcher_debug)
-			print("Dispatcher debug: ----------------------------------------------------\n%",
-				  ShaderDebugInfo(m_last_bin_dispatcher_debug));
-	}
+	if(m_opts & Opt::debug_bin_dispatcher)
+		getDebugData(ctx, m_debug_buffer, "bin_dspatcher_debug");
 
 	//cmds.dispatchCompute({16, 1, 1});
 	//if(m_opts & Opt::debug_bin_dispatcher)
@@ -567,14 +545,8 @@ void LucidRenderer::rasterLow(const Context &ctx) {
 	cmds.dispatchComputeIndirect(m_info,
 								 LUCID_INFO_MEMBER_OFFSET(bin_level_dispatches[BIN_LEVEL_LOW]));
 
-	if(m_opts & Opt::debug_raster) {
-		cmds.barrier(VPipeStage::all_commands, VPipeStage::all_commands, VAccess::memory_write,
-					 VAccess::memory_read | VAccess::memory_write);
-		cmds.download(m_last_raster_low_debug, m_debug_buffer, "raster_low_debug", 32).check();
-		if(m_last_raster_low_debug)
-			print("Raster low debug: ----------------------------------------------------\n%",
-				  ShaderDebugInfo(m_last_raster_low_debug));
-	}
+	if(m_opts & Opt::debug_raster)
+		getDebugData(ctx, m_debug_buffer, "raster_low_debug");
 	//cmds.dispatchCompute({64, 1, 1});
 	//if(m_opts & Opt::debug_raster)
 	//	debugProgram(p_raster_low, "raster_low");
@@ -697,48 +669,6 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 	CSpan<uint> bin_tri_counts = cspan(bin_counters.data() + m_bin_count * 3, m_bin_count);
 	CSpan<uint> bin_tri_offsets = cspan(bin_counters.data() + m_bin_count * 4, m_bin_count);
 	CSpan<uint> bin_tri_offsets_temp = cspan(bin_counters.data() + m_bin_count * 5, m_bin_count);
-
-	auto scan_data =
-		subSpan(m_last_uvec4, max_visible_quads * 4, max_visible_quads * 8).reinterpret<ScanInfo>();
-
-	vector<int2> tri_yaabbs = transform(
-		scan_data, [](auto &info) { return int2(info.y_aabb & 0xffff, info.y_aabb >> 16); });
-	auto aabbs = transform(m_last_quad_aabbs, [](auto aabb) { return decodeAABB28(aabb); });
-
-	vector<vector<u32>> bin_quads(m_bin_count);
-	for(int i : intRange(m_bin_count)) {
-		int cur_count = bin_quad_counts[i];
-		int offset = bin_quad_offsets[i];
-		insertBack(bin_quads[i], subSpan(m_last_bin_quads, offset, offset + cur_count));
-	}
-
-	int num_aabb_errors = 0;
-	int num_inside = 0, num_outside = 0;
-
-	// TODO: możliwe, że aabbsy są za duże?
-	for(int bx : intRange(m_bin_counts.x))
-		for(int by : intRange(m_bin_counts.y)) {
-			int bid = bx + by * m_bin_counts.x;
-
-			IRect rect = IRect({bx, by}, {bx + 1, by + 1}) * m_bin_size;
-			for(auto qid : bin_quads[bid]) {
-				qid &= 0xfffffff;
-
-				int miny = min(tri_yaabbs[qid * 2 + 0][0], tri_yaabbs[qid * 2 + 1][0]);
-				int maxy = min(tri_yaabbs[qid * 2 + 0][1], tri_yaabbs[qid * 2 + 1][1]);
-
-				if((miny > rect.ey() || maxy < rect.y())) {
-					num_outside++;
-					if(num_aabb_errors++ < 32)
-						print("Quad % outside bin %x% (% - %): min_y:% max_y:% aabb:%\n", qid, bx,
-							  by, rect.min(), rect.max(), miny, maxy, aabbs[qid]);
-				} else
-					num_inside++;
-			}
-		}
-	print("Inside: %  / Outside: %\n", num_inside, num_outside);
-
-	// TODO: jest problem z tempami, ale tylko gdy jest więcej niż jedna workgroupa w dispatcherze
 
 	int num_errors[2] = {0, 0};
 	int num_valid = 0;
@@ -868,4 +798,16 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 	out.emplace_back(move(basic_rows), "", 130);
 
 	return out;
+}
+
+template <class T>
+void LucidRenderer::getDebugData(const Context &ctx, VBufferSpan<T> src, Str title) {
+	auto &cmds = ctx.device.cmdQueue();
+	cmds.barrier(VPipeStage::all_commands, VPipeStage::transfer, VAccess::memory_write,
+				 VAccess::transfer_read);
+	auto debug_data = cmds.download(m_debug_buffer, title, 32);
+	cmds.barrier(VPipeStage::transfer, VPipeStage::all_commands);
+	if(debug_data && *debug_data)
+		print("%: ----------------------------------------------------\n%", title,
+			  ShaderDebugInfo(*debug_data));
 }

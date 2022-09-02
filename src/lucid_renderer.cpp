@@ -271,6 +271,7 @@ void LucidRenderer::render(const Context &ctx) {
 	auto &cmds = ctx.device.cmdQueue();
 	PERF_GPU_SCOPE(cmds);
 
+	// TODO: minimize barriers
 	cmds.barrier(VPipeStage::all_commands, VPipeStage::all_commands,
 				 VAccess::memory_write | VAccess::memory_read,
 				 VAccess::memory_read | VAccess::memory_write);

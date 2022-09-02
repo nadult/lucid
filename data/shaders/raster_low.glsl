@@ -7,7 +7,6 @@ DEBUG_SETUP(1, 11)
 
 #extension GL_KHR_shader_subgroup_ballot : require
 #extension GL_KHR_shader_subgroup_shuffle_relative : require
-#extension GL_KHR_shader_subgroup_clustered : require
 
 #define LSIZE 256
 #define LSHIFT 8
@@ -404,10 +403,9 @@ void generateBlocks(uint bid) {
 		}
 		value = (value & 0xfff) | ((value & 0xfff000) << 4);
 		uint sum = value, temp;
-		//temp = subgroupShuffleUp(sum, 1), sum += (warp_idx & 7) >= 1 ? temp : 0;
-		//temp = subgroupShuffleUp(sum, 2), sum += (warp_idx & 7) >= 2 ? temp : 0;
-		//temp = subgroupShuffleUp(sum, 4), sum += (warp_idx & 7) >= 4 ? temp : 0;
-		sum = subgroupClusteredAdd(value, 8);
+		temp = subgroupShuffleUp(sum, 1), sum += (warp_idx & 7) >= 1 ? temp : 0;
+		temp = subgroupShuffleUp(sum, 2), sum += (warp_idx & 7) >= 2 ? temp : 0;
+		temp = subgroupShuffleUp(sum, 4), sum += (warp_idx & 7) >= 4 ? temp : 0;
 
 		if(warp_idx == 7) {
 			uint v0 = sum & 0xffff, v1 = sum >> 16;
@@ -546,6 +544,7 @@ void shadeAndReduceSamples(uint hbid, uint sample_count, in out ReductionContext
 			sample_s = uvec2(sample_color, floatBitsToUint(sample_depth));
 			atomicOr(s_mini_buffer[mini_offset + sample_pixel_id], reduce_pixel_bit);
 		}
+		memoryBarrierShared();
 
 		if(reduceSample(ctx, out_color, sample_s, s_mini_buffer[LIX]))
 			break;
@@ -681,6 +680,7 @@ void rasterBin(int bin_id) {
 			loadSamples(hbid, segment_id);
 			UPDATE_TIMER(2);
 
+			//visualizeSamples(frag_count);
 			shadeAndReduceSamples(hbid, frag_count, context);
 			UPDATE_TIMER(3);
 

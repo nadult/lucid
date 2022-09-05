@@ -490,8 +490,7 @@ void LucidRenderer::bindRaster(PVPipeline pipeline, const Context &ctx) {
 		shaderDebugInitBuffer(cmds, m_debug_buffer);
 	}
 
-	VSamplerSetup sam_setup;
-	auto sampler = ctx.device.getSampler(sam_setup);
+	auto sampler = ctx.device.getSampler(ctx.config.sampler_setup);
 	ds.set(9, {{sampler, ctx.opaque_tex}});
 	ds.set(10, {{sampler, ctx.trans_tex}});
 }

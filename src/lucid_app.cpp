@@ -22,6 +22,7 @@
 #include <fwk/vulkan/vulkan_command_queue.h>
 #include <fwk/vulkan/vulkan_device.h>
 #include <fwk/vulkan/vulkan_image.h>
+#include <fwk/vulkan/vulkan_instance.h>
 #include <fwk/vulkan/vulkan_memory_manager.h>
 #include <fwk/vulkan/vulkan_pipeline.h>
 #include <fwk/vulkan/vulkan_swap_chain.h>
@@ -64,10 +65,6 @@ LucidApp::LucidApp(VWindowRef window, VDeviceRef device)
 	m_shader_compiler.emplace(sc_setup);
 	SimpleRenderer::addShaderDefs(*m_shader_compiler);
 	LucidRenderer::addShaderDefs(*m_shader_compiler);
-
-	//m_filtering_params.magnification = TextureFilterOpt::linear;
-	//m_filtering_params.minification = TextureFilterOpt::linear;
-	//m_filtering_params.mipmap = TextureFilterOpt::linear;
 
 	if(perf::Manager::instance())
 		m_perf_analyzer.emplace();
@@ -363,32 +360,33 @@ void LucidApp::doMenu() {
 		ImGui::EndPopup();
 	}
 
-	// TODO: fixme
-	/*if(ImGui::BeginPopup("filter_opts")) {
-		m_gui.selectEnum("Magnification filter", m_filtering_params.magnification);
-		m_gui.selectEnum("Minification filter", m_filtering_params.minification);
+	if(ImGui::BeginPopup("filter_opts")) {
+		auto &sampler = setup.render_config.sampler_setup;
+		m_gui.selectEnum("Magnification filter", sampler.mag_filter);
+		m_gui.selectEnum("Minification filter", sampler.min_filter);
 
-		bool mipmapping_enabled = !!m_filtering_params.mipmap;
+		bool mipmapping_enabled = !!sampler.mipmap_filter;
 		if(ImGui::Checkbox("Mipmapping", &mipmapping_enabled)) {
 			if(mipmapping_enabled)
-				m_filtering_params.mipmap = TextureFilterOpt::nearest;
+				sampler.mipmap_filter = VTexFilter::nearest;
 			else
-				m_filtering_params.mipmap = none;
+				sampler.mipmap_filter = none;
 		}
 
 		if(mipmapping_enabled)
-			m_gui.selectEnum("Mipmap filter", *m_filtering_params.mipmap);
+			m_gui.selectEnum("Mipmap filter", *sampler.mipmap_filter);
 
-		auto label = format("Anisotropy: %", (int)m_filtering_params.max_anisotropy_samples);
+		auto label = format("Anisotropy: %", (int)sampler.max_anisotropy_samples);
 		if(ImGui::Button(label.c_str())) {
-			int aniso = int(m_filtering_params.max_anisotropy_samples) * 2;
-			int max_aniso = min(128, gl_info->limits[GlLimit::max_texture_anisotropy]);
+			auto &limits = m_device->physInfo().properties.limits;
+			int aniso = int(sampler.max_anisotropy_samples) * 2;
+			int max_aniso = min(128, int(limits.maxSamplerAnisotropy));
 			if(aniso > max_aniso)
 				aniso = 1;
-			m_filtering_params.max_anisotropy_samples = aniso;
+			sampler.max_anisotropy_samples = aniso;
 		}
 		ImGui::EndPopup();
-	}*/
+	}
 
 	m_gui.selectEnum("Rendering mode", m_rendering_mode);
 	ImGui::Checkbox("Back-face culling", &setup.render_config.backface_culling);

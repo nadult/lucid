@@ -16,6 +16,8 @@ struct RenderConfig {
 	float scene_opacity = 1.0f;
 	float3 scene_color = float3(1);
 	IColor background_color = IColor(0, 30, 30);
+	VSamplerSetup sampler_setup = VSamplerSetup(VTexFilter::linear, VTexFilter::linear,
+												VTexFilter::linear, VTexAddress::repeat, 16);
 	bool backface_culling = false;
 	bool additive_blending = false;
 };

@@ -67,6 +67,7 @@ Ex<PVPipeline> SimpleRenderer::getPipeline(const RenderContext &ctx, bool opaque
 		VBlendingMode normal_blend(VBlendFactor::src_alpha, VBlendFactor::one_minus_src_alpha);
 		setup.blending.attachments = {
 			{ctx.config.additive_blending ? additive_blend : normal_blend}};
+		setup.depth = {};
 	}
 
 	// TODO: remove refs
@@ -90,9 +91,7 @@ Ex<> SimpleRenderer::renderPhase(const RenderContext &ctx,
 	auto pipeline = EX_PASS(getPipeline(ctx, opaque, wireframe));
 	cmds.bind(pipeline);
 
-	VSamplerSetup sam_setup;
-	auto sampler = ctx.device.getSampler(sam_setup);
-
+	auto sampler = ctx.device.getSampler(ctx.config.sampler_setup);
 	int prev_mat_id = -1;
 	for(int dc : intRange(ctx.dcs)) {
 		auto &draw_call = ctx.dcs[dc];

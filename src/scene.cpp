@@ -268,11 +268,6 @@ Ex<void> Scene::updateRenderingData(VulkanDevice &device) {
 				auto vk_image = EX_PASS(VulkanImage::createAndUpload(device.ref(), tex.plain_mips));
 				tex.vk_image = VulkanImageView::create(device.ref(), vk_image);
 			}
-
-			// TODO: samplers
-			//tex.gl_texture->setFiltering(TextureFilterOpt::linear);
-			//auto wrap_opt = tex.is_clamped ? TextureWrapOpt::clamp_to_edge : TextureWrapOpt::repeat;
-			//tex.gl_texture->setWrapping(wrap_opt);
 		}
 		used_tex.vk_image = tex.vk_image;
 		used_tex.is_opaque = tex.is_opaque;

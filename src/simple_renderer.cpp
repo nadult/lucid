@@ -79,7 +79,6 @@ Matrix3 normalMatrix(const Matrix4 &affine) {
 	return transpose(inverse(out));
 }
 
-// TODO: add typed VSpan type
 Ex<> SimpleRenderer::renderPhase(const RenderContext &ctx,
 								 VBufferSpan<shader::SimpleDrawCall> simple_dc_buf, bool opaque,
 								 bool wireframe) {
@@ -154,6 +153,7 @@ Ex<> SimpleRenderer::render(const RenderContext &ctx, bool wireframe) {
 	}
 	auto simple_dc_buf = EX_PASS(
 		VulkanBuffer::createAndUpload(ctx.device, simple_dcs, ubo_usage, VMemoryUsage::frame));
+
 
 	cmds.bind(m_pipeline_layout);
 	cmds.bindDS(0).set(0, VDescriptorType::uniform_buffer, lighting_buf);

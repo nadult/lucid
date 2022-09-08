@@ -38,13 +38,7 @@ layout(std430, set = 1, binding = 4) restrict readonly buffer buf5_ { uvec4 g_uv
 DEBUG_SETUP(1, 5)
 
 shared int s_bins[BIN_COUNT];
-shared int s_temp[LSIZE];
-
-// Constants useful for efficient processing of bin counts
-// TODO: make sure that it's <= 32
-//const int xbin_step = int(log2(LSIZE / BIN_COUNT_X)), ybin_step = int(log2(LSIZE / BIN_COUNT_Y));
-const int xbin_step = BIN_DISPATCHER_XBIN_STEP, ybin_step = BIN_DISPATCHER_YBIN_STEP;
-const int xbin_count = 1 << xbin_step, ybin_count = 1 << ybin_step;
+shared int s_temp[LSIZE], s_temp2[WARP_SIZE];
 
 void scanlineStep(in out ScanlineParams params, out int bmin, out int bmax) {
 	float xmin = max(max(params.min[0], params.min[1]), params.min[2]);
@@ -57,6 +51,8 @@ void scanlineStep(in out ScanlineParams params, out int bmin, out int bmax) {
 	bmax = int(xmax) >> BIN_SHIFT;
 }
 
+// Inclusive
+// TODO: make portable
 int prefixSum32(int accum) {
 	int temp;
 	uint thread_id = LIX & 31;
@@ -86,27 +82,24 @@ void countSmallQuadBins(uint quad_idx) {
 		atomicAdd(s_bins[bmy * BIN_COUNT_X + bmx], 1);*/
 }
 
-void accumulateLargeTriCountsAcrossRows() {
-	// TODO: fixme
-	// Accumulating large quad counts across rows
-	/*if(LIX < BIN_COUNT_Y * ybin_count) {
-		uint by = LIX >> ybin_step;
-		int accum = 0;
-		for(uint bx = 0, subx = LIX & (ybin_count - 1); bx < BIN_COUNT_X; bx += ybin_count) {
-			uint idx = bx + subx + by * BIN_COUNT_X;
-			int cur = bx + subx < BIN_COUNT_X ? s_bins[idx] : 0, temp;
-			for(int i = 1; i < ybin_count; i <<= 1) {
-				temp = shuffleUpNV(cur, i, ybin_count);
-				cur += subx >= i ? temp : 0;
-			}
-			cur += accum;
-			if(bx + subx < BIN_COUNT_X)
-				s_bins[idx] = cur;
-			accum = shuffleNV(cur, ybin_count - 1, ybin_count);
-		}
-	}*/
+#define BIN_COUNT_WARPS (BIN_COUNT / WARP_SIZE)
+#if BIN_COUNT_WARPS > LSIZE
+#error "Fix me"
+#endif
 
-	if(LIX < BIN_COUNT_Y) { // Slow version
+void accumulateLargeTriCountsAcrossRows() {
+	// Accumulating large quad counts across rows
+	for(uint by = LIX >> WARP_SHIFT; by < BIN_COUNT_Y; by += LSIZE / WARP_SIZE) {
+		int prev_accum = 0;
+		for(uint bx = LIX & WARP_MASK; bx < BIN_COUNT_X; bx += WARP_SIZE) {
+			uint idx = bx + by * BIN_COUNT_X;
+			int value = s_bins[idx];
+			int accum = prev_accum + prefixSum32(value);
+			s_bins[idx] = accum;
+			prev_accum = subgroupShuffle(accum, WARP_MASK);
+		}
+	}
+	/*if(LIX < BIN_COUNT_Y) { // Slow version
 		uint by = LIX;
 		int accum = 0;
 		for(uint bx = 0; bx < BIN_COUNT_X; bx++) {
@@ -114,29 +107,39 @@ void accumulateLargeTriCountsAcrossRows() {
 			accum += s_bins[idx];
 			s_bins[idx] = accum;
 		}
-	}
+	}*/
 }
 
+
 void computeQuadOffsets() {
-	// TODO: fixme
-	// Computing bin quad counts offsets
-	/*if(LIX < BIN_COUNT_Y * ybin_count) {
-		uint by = LIX >> ybin_step;
-		int accum = 0;
-		for(uint bx = 0, subx = LIX & (ybin_count - 1); bx < BIN_COUNT_X; bx += ybin_count) {
-			uint idx = bx + subx + by * BIN_COUNT_X;
-			int cur = bx + subx < BIN_COUNT_X ? BIN_QUAD_COUNTS(idx) : 0, temp;
-			for(int i = 1; i < ybin_count; i <<= 1) {
-				temp = shuffleUpNV(cur, i, ybin_count);
-				cur += subx >= i ? temp : 0;
-			}
-			cur += accum;
-			if(bx + subx < BIN_COUNT_X)
-				BIN_QUAD_OFFSETS(idx) = cur;
-			accum = shuffleNV(cur, ybin_count - 1, ybin_count);
-		}
-	}*/
-	if(LIX < BIN_COUNT_Y) { // Slow version
+	for(uint idx = LIX; idx < BIN_COUNT; idx += LSIZE) {
+		int value = BIN_QUAD_COUNTS(idx);
+		int accum = prefixSum32(value);
+		BIN_QUAD_OFFSETS(idx) = accum - value;
+		if((idx & 31) == 31)
+			s_temp[idx >> 5] = accum;
+	}
+	barrier();
+	if(LIX < BIN_COUNT_WARPS)
+		s_temp[LIX] = prefixSum32(s_temp[LIX]);
+	barrier();
+	if(LIX < BIN_COUNT_WARPS / WARP_SIZE)
+		s_temp2[LIX] = prefixSum32(s_temp[(LIX << 5) + 31]);
+	barrier();
+	if(LIX < BIN_COUNT_WARPS && LIX >= WARP_SIZE)
+		s_temp[LIX] += s_temp2[int(LIX >> 5) - 1];
+	barrier();
+	groupMemoryBarrier();
+	for(uint idx = LIX; idx < BIN_COUNT; idx += LSIZE) {
+		int widx = int(idx >> 5) - 1;
+		int accum = BIN_QUAD_OFFSETS(idx);
+		if(widx >= 0)
+			accum += s_temp[widx];
+		BIN_QUAD_OFFSETS(idx) = accum;
+		BIN_QUAD_OFFSETS_TEMP(idx) = accum;
+	}
+	/* // Slow version
+	if(LIX < BIN_COUNT_Y) { 
 		uint by = LIX;
 		int accum = 0;
 		for(uint bx = 0; bx < BIN_COUNT_X; bx++) {
@@ -150,27 +153,7 @@ void computeQuadOffsets() {
 	if(LIX < BIN_COUNT_Y)
 		s_temp[LIX] = BIN_QUAD_OFFSETS((BIN_COUNT_X - 1) + LIX * BIN_COUNT_X);
 	barrier();
-	/*if(LIX < BIN_COUNT_X * xbin_count) {
-		uint bx = LIX >> xbin_step;
-		int accum = 0;
-		for(uint by = 0, suby = LIX & (xbin_count - 1); by < BIN_COUNT_Y; by += xbin_count) {
-			uint idx = by + suby;
-			int cur = idx < BIN_COUNT_Y && idx > 0 ? s_temp[idx - 1] : 0, temp;
-			for(int i = 1; i < xbin_count; i <<= 1) {
-				temp = shuffleUpNV(cur, i, xbin_count);
-				cur += suby >= i ? temp : 0;
-			}
-			cur += accum;
-			if(idx < BIN_COUNT_Y) {
-				uint bidx = bx + idx * BIN_COUNT_X;
-				int value = BIN_QUAD_OFFSETS(bidx) + cur - BIN_QUAD_COUNTS(bidx);
-				BIN_QUAD_OFFSETS(bidx) = value;
-				BIN_QUAD_OFFSETS_TEMP(bidx) = value;
-			}
-			accum = shuffleNV(cur, xbin_count - 1, xbin_count);
-		}
-	}*/
-	if(LIX < BIN_COUNT_X) { // Slow version
+	if(LIX < BIN_COUNT_X) {
 		uint bx = LIX;
 		int accum = 0;
 		for(uint by = 0; by < BIN_COUNT_Y; by++) {
@@ -180,30 +163,38 @@ void computeQuadOffsets() {
 			BIN_QUAD_OFFSETS(idx) = value;
 			BIN_QUAD_OFFSETS_TEMP(idx) = value;
 		}
-	}
+	}*/
 	barrier();
 }
 
 void computeTriOffsets() {
-	// TODO: fixme
-	// Computing bin quad counts offsets
-	/*if(LIX < BIN_COUNT_Y * ybin_count) {
-		uint by = LIX >> ybin_step;
-		int accum = 0;
-		for(uint bx = 0, subx = LIX & (ybin_count - 1); bx < BIN_COUNT_X; bx += ybin_count) {
-			uint idx = bx + subx + by * BIN_COUNT_X;
-			int cur = bx + subx < BIN_COUNT_X ? BIN_TRI_COUNTS(idx) : 0, temp;
-			for(int i = 1; i < ybin_count; i <<= 1) {
-				temp = shuffleUpNV(cur, i, ybin_count);
-				cur += subx >= i ? temp : 0;
-			}
-			cur += accum;
-			if(bx + subx < BIN_COUNT_X)
-				BIN_TRI_OFFSETS(idx) = cur;
-			accum = shuffleNV(cur, ybin_count - 1, ybin_count);
-		}
-	}*/
-	if(LIX < BIN_COUNT_Y) { // Slow version
+	for(uint idx = LIX; idx < BIN_COUNT; idx += LSIZE) {
+		int value = BIN_TRI_COUNTS(idx);
+		int accum = prefixSum32(value);
+		BIN_TRI_OFFSETS(idx) = accum - value;
+		if((idx & 31) == 31)
+			s_temp[idx >> 5] = accum;
+	}
+	barrier();
+	if(LIX < BIN_COUNT_WARPS)
+		s_temp[LIX] = prefixSum32(s_temp[LIX]);
+	barrier();
+	if(LIX < BIN_COUNT_WARPS / WARP_SIZE)
+		s_temp2[LIX] = prefixSum32(s_temp[(LIX << 5) + 31]);
+	barrier();
+	if(LIX < BIN_COUNT_WARPS && LIX >= WARP_SIZE)
+		s_temp[LIX] += s_temp2[int(LIX >> 5) - 1];
+	barrier();
+	groupMemoryBarrier();
+	for(uint idx = LIX; idx < BIN_COUNT; idx += LSIZE) {
+		int widx = int(idx >> 5) - 1;
+		int accum = BIN_TRI_OFFSETS(idx);
+		if(widx >= 0)
+			accum += s_temp[widx];
+		BIN_TRI_OFFSETS(idx) = accum;
+		BIN_TRI_OFFSETS_TEMP(idx) = accum;
+	}
+	/*if(LIX < BIN_COUNT_Y) { // Slow version
 		uint by = LIX;
 		int accum = 0;
 		for(uint bx = 0; bx < BIN_COUNT_X; bx++) {
@@ -217,26 +208,6 @@ void computeTriOffsets() {
 	if(LIX < BIN_COUNT_Y)
 		s_temp[LIX] = BIN_TRI_OFFSETS((BIN_COUNT_X - 1) + LIX * BIN_COUNT_X);
 	barrier();
-	/*if(LIX < BIN_COUNT_X * xbin_count) {
-		uint bx = LIX >> xbin_step;
-		int accum = 0;
-		for(uint by = 0, suby = LIX & (xbin_count - 1); by < BIN_COUNT_Y; by += xbin_count) {
-			uint idx = by + suby;
-			int cur = idx < BIN_COUNT_Y && idx > 0 ? s_temp[idx - 1] : 0, temp;
-			for(int i = 1; i < xbin_count; i <<= 1) {
-				temp = shuffleUpNV(cur, i, xbin_count);
-				cur += suby >= i ? temp : 0;
-			}
-			cur += accum;
-			if(idx < BIN_COUNT_Y) {
-				uint bidx = bx + idx * BIN_COUNT_X;
-				int value = BIN_TRI_OFFSETS(bidx) + cur - BIN_TRI_COUNTS(bidx);
-				BIN_TRI_OFFSETS(bidx) = value;
-				BIN_TRI_OFFSETS_TEMP(bidx) = value;
-			}
-			accum = shuffleNV(cur, xbin_count - 1, xbin_count);
-		}
-	}*/
 	if(LIX < BIN_COUNT_X) { // Slow version
 		uint bx = LIX;
 		int accum = 0;
@@ -247,7 +218,7 @@ void computeTriOffsets() {
 			BIN_TRI_OFFSETS(idx) = value;
 			BIN_TRI_OFFSETS_TEMP(idx) = value;
 		}
-	}
+	}*/
 	barrier();
 }
 

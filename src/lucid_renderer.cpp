@@ -150,8 +150,6 @@ Ex<void> LucidRenderer::exConstruct(VulkanDevice &device, ShaderCompiler &compil
 	int bin_dispatcher_lsize = m_bin_size == 64 ? 512 : 1024;
 	consts.BIN_DISPATCHER_LSIZE = bin_dispatcher_lsize;
 	consts.BIN_DISPATCHER_LSHIFT = log2(bin_dispatcher_lsize);
-	consts.BIN_DISPATCHER_XBIN_STEP = log2(bin_dispatcher_lsize / m_bin_counts.x);
-	consts.BIN_DISPATCHER_YBIN_STEP = log2(bin_dispatcher_lsize / m_bin_counts.y);
 	consts.BIN_CATEGORIZER_LSIZE = m_bin_size == 64 ? 128 : 512;
 
 	// TODO: this takes a lot of memory

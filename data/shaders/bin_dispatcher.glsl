@@ -89,6 +89,7 @@ void countSmallQuadBins(uint quad_idx) {
 
 void accumulateLargeTriCountsAcrossRows() {
 	// Accumulating large quad counts across rows
+#if WARP_SIZE == 32
 	for(uint by = LIX >> WARP_SHIFT; by < BIN_COUNT_Y; by += LSIZE / WARP_SIZE) {
 		int prev_accum = 0;
 		for(uint bx = LIX & WARP_MASK; bx < BIN_COUNT_X; bx += WARP_SIZE) {
@@ -99,7 +100,8 @@ void accumulateLargeTriCountsAcrossRows() {
 			prev_accum = subgroupShuffle(accum, WARP_MASK);
 		}
 	}
-	/*if(LIX < BIN_COUNT_Y) { // Slow version
+#else
+	if(LIX < BIN_COUNT_Y) { // Slow version
 		uint by = LIX;
 		int accum = 0;
 		for(uint bx = 0; bx < BIN_COUNT_X; bx++) {
@@ -107,11 +109,13 @@ void accumulateLargeTriCountsAcrossRows() {
 			accum += s_bins[idx];
 			s_bins[idx] = accum;
 		}
-	}*/
+	}
+#endif
 }
 
 
 void computeQuadOffsets() {
+#if WARP_SIZE == 32
 	for(uint idx = LIX; idx < BIN_COUNT; idx += LSIZE) {
 		int value = BIN_QUAD_COUNTS(idx);
 		int accum = prefixSum32(value);
@@ -138,7 +142,8 @@ void computeQuadOffsets() {
 		BIN_QUAD_OFFSETS(idx) = accum;
 		BIN_QUAD_OFFSETS_TEMP(idx) = accum;
 	}
-	/* // Slow version
+#else
+	// Slow version
 	if(LIX < BIN_COUNT_Y) { 
 		uint by = LIX;
 		int accum = 0;
@@ -163,11 +168,13 @@ void computeQuadOffsets() {
 			BIN_QUAD_OFFSETS(idx) = value;
 			BIN_QUAD_OFFSETS_TEMP(idx) = value;
 		}
-	}*/
+	}
+#endif
 	barrier();
 }
 
 void computeTriOffsets() {
+#if WARP_SIZE == 32
 	for(uint idx = LIX; idx < BIN_COUNT; idx += LSIZE) {
 		int value = BIN_TRI_COUNTS(idx);
 		int accum = prefixSum32(value);
@@ -194,7 +201,8 @@ void computeTriOffsets() {
 		BIN_TRI_OFFSETS(idx) = accum;
 		BIN_TRI_OFFSETS_TEMP(idx) = accum;
 	}
-	/*if(LIX < BIN_COUNT_Y) { // Slow version
+#else
+	if(LIX < BIN_COUNT_Y) { // Slow version
 		uint by = LIX;
 		int accum = 0;
 		for(uint bx = 0; bx < BIN_COUNT_X; bx++) {
@@ -218,7 +226,8 @@ void computeTriOffsets() {
 			BIN_TRI_OFFSETS(idx) = value;
 			BIN_TRI_OFFSETS_TEMP(idx) = value;
 		}
-	}*/
+	}
+#endif
 	barrier();
 }
 
@@ -389,6 +398,17 @@ shared int s_num_finished_tasks[2], s_num_all_tasks[2];
 
 #define LARGE_TASKS_OFFSET MAX_SMALL_TASKS
 
+void waitForSecondPhase(int type_index) {
+	// TODO: can we do something useful while waiting?
+	// We could run bin categorizer here ! All it needs is bin quad counts
+	if(LIX == 0)
+		while(g_info.a_bin_dispatcher_phase[type_index] == 0)
+			memoryBarrier();
+	while(g_info.a_bin_dispatcher_phase[type_index] == 0)
+		memoryBarrier();
+	barrier();
+}
+
 void processSmallQuads() {
 	START_TIMER();
 	for(uint i = LIX; i < BIN_COUNT; i += LSIZE)
@@ -461,12 +481,7 @@ void processSmallQuads() {
 	}
 
 	// Waiting until all bin offsets are computed
-	// TODO: can we do something useful while waiting?
-	// We could run bin categorizer here ! All it needs is bin quad counts
-	if(LIX == 0)
-		while(g_info.a_bin_dispatcher_phase[0] == 0)
-			memoryBarrier();
-	barrier();
+	waitForSecondPhase(0);
 	UPDATE_TIMER(1);
 
 	// Reserving space for quad indices in bins
@@ -565,12 +580,7 @@ void processLargeTris() {
 	}
 
 	// Waiting until all bin offsets are computed
-	// TODO: can we do something useful while waiting?
-	// We could run bin categorizer here ! All it needs is bin quad counts
-	if(LIX == 0)
-		while(g_info.a_bin_dispatcher_phase[1] == 0)
-			memoryBarrier();
-	barrier();
+	waitForSecondPhase(1);
 	UPDATE_TIMER(4);
 
 	// Reserving space for quad indices in bins
@@ -590,7 +600,11 @@ void processLargeTris() {
 		}
 		barrier();
 		int large_quad_idx = s_quads_offset + int(LIX >> 1);
+		#if WARP_SIZE == 32
 		dispatchLargeTriBalanced(large_quad_idx, int(LIX & 1), num_quads);
+		#else
+		dispatchLargeTriSimple(large_quad_idx, int(LIX & 1), num_quads);
+		#endif
 	}
 	UPDATE_TIMER(5);
 }

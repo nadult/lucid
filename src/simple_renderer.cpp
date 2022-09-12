@@ -82,8 +82,6 @@ Matrix3 normalMatrix(const Matrix4 &affine) {
 Ex<> SimpleRenderer::renderPhase(const RenderContext &ctx,
 								 VBufferSpan<shader::SimpleDrawCall> simple_dc_buf, bool opaque,
 								 bool wireframe) {
-	// TODO: don't run if we don't have any drawcalls of given type
-
 	auto &cmds = ctx.device.cmdQueue();
 	PERF_GPU_SCOPE(cmds);
 
@@ -118,6 +116,7 @@ Ex<> SimpleRenderer::render(const RenderContext &ctx, bool wireframe) {
 	auto &cmds = ctx.device.cmdQueue();
 	PERF_GPU_SCOPE(cmds);
 
+	// TODO: optimize this
 	auto ubo_usage = VBufferUsage::uniform_buffer | VBufferUsage::transfer_dst;
 	shader::Lighting lighting;
 	lighting.ambient_color = ctx.lighting.ambient.color;
@@ -154,7 +153,6 @@ Ex<> SimpleRenderer::render(const RenderContext &ctx, bool wireframe) {
 	auto simple_dc_buf = EX_PASS(
 		VulkanBuffer::createAndUpload(ctx.device, simple_dcs, ubo_usage, VMemoryUsage::frame));
 
-
 	cmds.bind(m_pipeline_layout);
 	cmds.bindDS(0).set(0, VDescriptorType::uniform_buffer, lighting_buf);
 	cmds.setViewport(m_viewport);
@@ -166,6 +164,8 @@ Ex<> SimpleRenderer::render(const RenderContext &ctx, bool wireframe) {
 
 	auto swap_chain = ctx.device.swapChain();
 	auto framebuffer = ctx.device.getFramebuffer({swap_chain->acquiredImage()}, m_depth_buffer);
+	cmds.fullBarrier();
+
 	cmds.beginRenderPass(framebuffer, m_render_pass, none,
 						 {FColor(0.0, 0.2, 0.0), VClearDepthStencil(1.0)});
 

@@ -295,6 +295,8 @@ void LucidRenderer::render(const Context &ctx) {
 		m_last_info = move(*result);
 		m_last_info_updated = true;
 	}
+	cmds.barrier(VPipeStage::transfer, VPipeStage::all_commands, VAccess::transfer_read,
+				 VAccess::memory_write);
 }
 
 Ex<> LucidRenderer::uploadInstances(const Context &ctx) {

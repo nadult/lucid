@@ -45,6 +45,21 @@ DEBUG_SETUP(1, 11)
 
 #define BIN_MASK (BIN_SIZE - 1)
 
+#define RBLOCK_WIDTH		8
+#define RBLOCK_WIDTH_SHIFT	3
+
+#if WARP_SIZE == 32
+#define RBLOCK_HEIGHT		4
+#define RBLOCK_HEIGHT_SHIFT	2
+#define ACTIVE_RBLOCKS_MASK	(NUM_WARPS * 2 - 1)
+#elif WARP_SIZE == 64
+#define RBLOCK_HEIGHT		8
+#define RBLOCK_HEIGHT_SHIFT	3
+#define ACTIVE_RBLOCKS_MASK	(NUM_WARPS - 1)
+#else
+#error "Currently only 32 & 64 warp size is supported"
+#endif
+
 layout(local_size_x = LSIZE) in;
 
 // TODO: too much mem used
@@ -60,8 +75,8 @@ uint scratch64BlockTrisOffset(uint bid) {
 		   bid * (MAX_BLOCK_TRIS * 2);
 }
 
-uint scratch64HalfBlockTrisOffset(uint hbid) {
-	return (gl_WorkGroupID.x << WORKGROUP_64_SCRATCH_SHIFT) + 48 * 1024 + hbid * MAX_BLOCK_TRIS;
+uint scratch64RasterBlockTrisOffset(uint rbid) {
+	return (gl_WorkGroupID.x << WORKGROUP_64_SCRATCH_SHIFT) + 48 * 1024 + rbid * MAX_BLOCK_TRIS;
 }
 
 shared int s_num_bins, s_bin_id, s_bin_raster_offset;
@@ -71,7 +86,7 @@ shared ivec2 s_bin_pos;
 
 shared uint s_block_row_tri_count[BLOCK_ROWS];
 shared uint s_block_tri_count[NUM_WARPS];
-shared uint s_hblock_counts[NUM_WARPS * 2];
+shared uint s_rblock_counts[NUM_WARPS * 2];
 
 shared uint s_buffer[BUFFER_SIZE + 1];
 shared uint s_mini_buffer[LSIZE];
@@ -410,8 +425,8 @@ void generateBlocks(uint bid) {
 		if(warp_idx == 7) {
 			uint v0 = sum & 0xffff, v1 = sum >> 16;
 			updateStats(int(v0 + v1), int(tri_count * 2));
-			s_hblock_counts[lbid * 2 + 0] = (v0 << 16) | tri_count;
-			s_hblock_counts[lbid * 2 + 1] = (v1 << 16) | tri_count;
+			s_rblock_counts[lbid * 2 + 0] = (v0 << 16) | tri_count;
+			s_rblock_counts[lbid * 2 + 1] = (v1 << 16) | tri_count;
 		}
 
 		s_mini_buffer[LIX] = sum - value;
@@ -423,7 +438,7 @@ void generateBlocks(uint bid) {
 	// Storing triangle fragment offsets to scratch mem
 	// Also finding first triangle for each segment
 	src_offset_64 = dst_offset_64;
-	dst_offset_64 = scratch64HalfBlockTrisOffset(lbid << 1);
+	dst_offset_64 = scratch64RasterBlockTrisOffset(lbid << 1);
 
 	uint seg_block1_offset = lbid << (MAX_SEGMENTS_SHIFT + 1);
 	uint seg_block2_offset = seg_block1_offset + MAX_SEGMENTS;
@@ -471,7 +486,7 @@ void generateBlocks(uint bid) {
 
 void finalizeSegments() {
 	uint hbid = LIX >> 4, seg_group_offset = hbid << MAX_SEGMENTS_SHIFT;
-	uint counts = s_hblock_counts[hbid];
+	uint counts = s_rblock_counts[hbid];
 	uint num_segments = ((counts >> 16) + SEGMENT_SIZE - 1) >> SEGMENT_SHIFT;
 	uint tri_count = counts & 0xffff;
 
@@ -491,7 +506,7 @@ void loadSamples(uint hbid, int segment_id) {
 	uint seg_group_offset = (hbid & (NUM_WARPS * 2 - 1)) << MAX_SEGMENTS_SHIFT;
 	uint segment_data = s_segments[seg_group_offset + segment_id];
 	uint tri_count = segment_data >> 16, first_tri = segment_data & 0xffff;
-	uint src_offset_64 = scratch64HalfBlockTrisOffset(hbid & (NUM_WARPS * 2 - 1)) + first_tri;
+	uint src_offset_64 = scratch64RasterBlockTrisOffset(hbid & (NUM_WARPS * 2 - 1)) + first_tri;
 	uint buf_offset = (LIX >> 5) << SEGMENT_SHIFT;
 
 	int y = int(LIX & 3), count_shift = 16 + (y << 2), min_shift = (y << 1) + y;
@@ -572,14 +587,14 @@ void finishVisualizeSamples(ivec2 pixel_pos) {
 }
 
 void visualizeFragmentCounts(uint hbid, ivec2 pixel_pos) {
-	uint count = s_hblock_counts[hbid & (NUM_WARPS * 2 - 1)] >> 16;
+	uint count = s_rblock_counts[hbid & (NUM_WARPS * 2 - 1)] >> 16;
 	vec4 color = vec4(SATURATE(vec3(count) / 2048.0), 1.0);
 	outputPixel(pixel_pos, encodeRGBA8(color));
 }
 
-void visualizeTriangleCounts(uint hbid, ivec2 pixel_pos) {
-	uint count = s_block_tri_count[(hbid >> 1) & (NUM_WARPS - 1)];
-	count = s_block_row_tri_count[pixel_pos.y >> 3];
+void visualizeTriangleCounts(uint rbid, ivec2 pixel_pos) {
+	uint count = s_block_tri_count[(WARP_SIZE == 64? rbid : rbid >> 1) & (NUM_WARPS - 1)];
+	count = s_block_row_tri_count[pixel_pos.y >> BLOCK_SHIFT];
 	//count = s_bin_quad_count * 2 + s_bin_tri_count;
 
 	vec3 color;
@@ -631,18 +646,18 @@ void rasterBin(int bin_id) {
 	barrier();
 	UPDATE_TIMER(0);
 
-	const int num_blocks = (BIN_SIZE / BLOCK_SIZE) * (BIN_SIZE / BLOCK_SIZE);
+	const int num_rblocks = (BIN_SIZE / RBLOCK_WIDTH) * (BIN_SIZE / RBLOCK_HEIGHT);
 
 	//  bid: block (8x8) id; We have 8 x 8 = 64 blocks
-	// hbid: half block (8x4) id; We have 8 x 16 = 128 half blocks
+	// rbid: half block (8x4) id; We have 8 x 16 = 128 half blocks
 	//       half blocks which make a single block are stored one after another
 	//       (upper block first)
 	// lbid: local block id (range: 0 up to NUM_WARPS - 1)
 	// Each block has 64 pixels, so we need 2 warps to process all pixels within a single block
-	for(uint hbid = LIX >> 5; hbid < num_blocks * 2; hbid += NUM_WARPS) {
+	for(uint rbid = LIX >> WARP_SHIFT; rbid < num_rblocks; rbid += NUM_WARPS) {
 		barrier();
-		if((hbid & NUM_WARPS) == 0) {
-			uint bid = (hbid & ~(NUM_WARPS - 1)) >> 1;
+		/*if(WARP_SIZE == 64 || (rbid & NUM_WARPS) == 0) {
+			uint bid = WARP_SIZE == 64? rbid : (rbid & ~(NUM_WARPS - 1)) >> 1;
 			generateBlocks(bid);
 			barrier();
 			finalizeSegments();
@@ -655,50 +670,51 @@ void rasterBin(int bin_id) {
 					int id = atomicAdd(g_info.bin_level_counts[BIN_LEVEL_HIGH], 1);
 					HIGH_LEVEL_BINS(id) = int(bin_id);
 					s_promoted_bin_count = max(s_promoted_bin_count, id + 1);
-					return;
 				}
-				/*visualizeErrors(bid);
-				hbid += NUM_WARPS;
-				barrier();
-				if(LIX == 0)
-					s_raster_error = 0;
-				continue;*/
+				//visualizeErrors(bid);
+				return;
 			}
-		}
+		}*/
 		UPDATE_TIMER(1);
 
 		ReductionContext context;
 		initReduceSamples(context);
 		//initVisualizeSamples();
 
-		for(int segment_id = 0;; segment_id++) {
-			uint counts = s_hblock_counts[hbid & (NUM_WARPS * 2 - 1)];
+		/*for(int segment_id = 0;; segment_id++) {
+			uint counts = s_rblock_counts[rbid & ACTIVE_RBLOCKS_MASK];
 			int frag_count = min(SEGMENT_SIZE, int(counts >> 16) - (segment_id << SEGMENT_SHIFT));
 			if(frag_count <= 0)
 				break;
 
-			loadSamples(hbid, segment_id);
+			loadSamples(rbid, segment_id);
 			UPDATE_TIMER(2);
 
 			//visualizeSamples(frag_count);
-			shadeAndReduceSamples(hbid, frag_count, context);
+			shadeAndReduceSamples(rbid, frag_count, context);
 			UPDATE_TIMER(3);
 
 #ifdef ALPHA_THRESHOLD
 			if(allInvocationsARB(context.out_trans < alpha_threshold))
 				break;
 #endif
-		}
+		}*/
 
-		uint bx = (hbid >> 1) & BLOCK_ROWS_MASK;
-		uint hby = (hbid & 1) + ((hbid >> (BLOCK_ROWS_SHIFT + 1)) << 1);
-		ivec2 pixel_pos = ivec2((LIX & 7) + (bx << BLOCK_SHIFT), ((LIX >> 3) & 3) + (hby << 2));
-		uint enc_color = finishReduceSamples(context);
-		outputPixel(pixel_pos, enc_color);
+#if WARP_SIZE == 64
+		uint rbx = rbid & BLOCK_ROWS_MASK;
+		uint rby = ((rbid >> (BLOCK_ROWS_SHIFT + 1)) << 1);
+#else
+		uint rbx = (rbid >> 1) & BLOCK_ROWS_MASK;
+		uint rby = (rbid & 1) + ((rbid >> (BLOCK_ROWS_SHIFT + 1)) << 1);
+#endif
+		ivec2 pixel_pos = ivec2((LIX & (RBLOCK_WIDTH - 1)) + (rbx << RBLOCK_WIDTH_SHIFT),
+								((LIX >> RBLOCK_WIDTH_SHIFT) & (RBLOCK_HEIGHT - 1)) + (rby << RBLOCK_HEIGHT_SHIFT));
+		//uint enc_color = finishReduceSamples(context);
+		//outputPixel(pixel_pos, enc_color);
 
 		//finishVisualizeSamples(pixel_pos);
-		//visualizeFragmentCounts(hbid, pixel_pos);
-		//visualizeTriangleCounts(hbid, pixel_pos);
+		//visualizeFragmentCounts(rbid, pixel_pos);
+		visualizeTriangleCounts(rbid, pixel_pos);
 		UPDATE_TIMER(4);
 		barrier();
 	}

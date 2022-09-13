@@ -269,6 +269,8 @@ void LucidRenderer::render(const Context &ctx) {
 	auto &cmds = ctx.device.cmdQueue();
 	PERF_GPU_SCOPE(cmds);
 
+	cmds.fullBarrier();
+
 	// TODO: second frame is broken
 	// TODO: minimize barriers
 	setupInputData(ctx).check();

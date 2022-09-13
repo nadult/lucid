@@ -600,11 +600,11 @@ void processLargeTris() {
 		}
 		barrier();
 		int large_quad_idx = s_quads_offset + int(LIX >> 1);
-		#if WARP_SIZE == 32
+#if WARP_SIZE == 32
 		dispatchLargeTriBalanced(large_quad_idx, int(LIX & 1), num_quads);
-		#else
+#else
 		dispatchLargeTriSimple(large_quad_idx, int(LIX & 1), num_quads);
-		#endif
+#endif
 	}
 	UPDATE_TIMER(5);
 }

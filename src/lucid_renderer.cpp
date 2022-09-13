@@ -13,6 +13,7 @@
 #include <fwk/vulkan/vulkan_device.h>
 #include <fwk/vulkan/vulkan_pipeline.h>
 #include <fwk/vulkan/vulkan_swap_chain.h>
+#include <fwk/vulkan/vulkan_instance.h>
 
 // TODO: opisać różnego rodzaju definicje/nazwy używane w kodzie
 
@@ -86,24 +87,34 @@
 LucidRenderer::LucidRenderer() = default;
 FWK_MOVABLE_CLASS_IMPL(LucidRenderer)
 
-void LucidRenderer::addShaderDefs(ShaderCompiler &compiler) {
+vector<Pair<string>> sharedShaderMacros(VulkanDevice &device) {
+	auto warp_size = device.physInfo().subgroup_props.subgroupSize;
+	return {{"WARP_SIZE", toString(warp_size)}, {"WARP_SHIFT", toString(log2(warp_size))}};
+}
+
+void LucidRenderer::addShaderDefs(VulkanDevice &device, ShaderCompiler &compiler) {
 	vector<Pair<string>> vsh_macros = {{"VERTEX_SHADER", "1"}};
 	vector<Pair<string>> fsh_macros = {{"FRAGMENT_SHADER", "1"}};
 	vector<Pair<string>> debug_macros = {{"DEBUG_ENABLED", ""}};
+	vector<Pair<string>> base_macros = sharedShaderMacros(device);
+	insertBack(vsh_macros, base_macros);
+	insertBack(fsh_macros, base_macros);
+	insertBack(debug_macros, base_macros);
 
 	compiler.add({"compose_vert", VShaderStage::vertex, "compose.glsl", vsh_macros});
 	compiler.add({"compose_frag", VShaderStage::fragment, "compose.glsl", fsh_macros});
 
-	compiler.add({"quad_setup", VShaderStage::compute, "quad_setup.glsl"});
-	compiler.add({"quad_setup_debug", VShaderStage::compute, "quad_setup.glsl", debug_macros});
-	compiler.add({"bin_dispatcher", VShaderStage::compute, "bin_dispatcher.glsl"});
-	compiler.add(
-		{"bin_dispatcher_debug", VShaderStage::compute, "bin_dispatcher.glsl", debug_macros});
+	auto add_debugable = [&](ZStr name, ZStr file_name) {
+		compiler.add({name, VShaderStage::compute, file_name, base_macros});
+		auto dbg_name = format("%_debug", name);
+		compiler.add({dbg_name, VShaderStage::compute, file_name, debug_macros});
+	};
 
-	compiler.add({"bin_categorizer", VShaderStage::compute, "bin_categorizer.glsl"});
-	compiler.add({"raster_low", VShaderStage::compute, "raster_low.glsl"});
-	compiler.add({"raster_low_debug", VShaderStage::compute, "raster_low.glsl", debug_macros});
-	compiler.add({"raster_high", VShaderStage::compute, "raster_high.glsl"});
+	add_debugable("quad_setup", "quad_setup.glsl");
+	add_debugable("bin_dispatcher", "bin_dispatcher.glsl");
+	compiler.add({"bin_categorizer", VShaderStage::compute, "bin_categorizer.glsl", base_macros});
+	add_debugable("raster_low", "raster_low.glsl");
+	add_debugable("raster_high", "raster_high.glsl");
 }
 
 static Ex<PVPipeline> makeComputePipeline(VulkanDevice &device, ShaderCompiler &compiler,

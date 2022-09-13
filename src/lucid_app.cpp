@@ -63,8 +63,8 @@ LucidApp::LucidApp(VWindowRef window, VDeviceRef device)
 	sc_setup.debug_info = true;
 #endif
 	m_shader_compiler.emplace(sc_setup);
-	SimpleRenderer::addShaderDefs(*m_shader_compiler);
-	LucidRenderer::addShaderDefs(*m_shader_compiler);
+	SimpleRenderer::addShaderDefs(*device, *m_shader_compiler);
+	LucidRenderer::addShaderDefs(*device, *m_shader_compiler);
 
 	if(perf::Manager::instance())
 		m_perf_analyzer.emplace();

@@ -106,9 +106,10 @@ struct SpecializationConstants {
 #define LID		gl_LocalInvocationID
 #define WGID	gl_WorkGroupID
 
-#define WARP_SIZE	32
-#define WARP_MASK	31
-#define WARP_SHIFT	5
+#if !defined(WARP_SIZE) || !defined(WARP_SHIFT)
+#error "WARP_SIZE and WARP_SHIFT must be defined"
+#endif
+#define WARP_MASK (WARP_SIZE - 1)
 
 bool renderOptSet(uint bit) {
 	return (RENDER_OPTIONS & bit) != 0u;
@@ -137,7 +138,5 @@ bool renderOptSet(uint bit) {
 #define STORAGE_QUAD_NORMAL_OFFSET	(MAX_VISIBLE_QUADS * 11)
 #define STORAGE_QUAD_TEXTURE_OFFSET	(MAX_VISIBLE_QUADS * 12)
 #endif
-
-
 
 #endif

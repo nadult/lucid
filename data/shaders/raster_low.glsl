@@ -45,17 +45,17 @@ DEBUG_SETUP(1, 11)
 
 #define BIN_MASK (BIN_SIZE - 1)
 
-#define RBLOCK_WIDTH		8
-#define RBLOCK_WIDTH_SHIFT	3
+#define RBLOCK_WIDTH 8
+#define RBLOCK_WIDTH_SHIFT 3
 
 #if WARP_SIZE == 32
-#define RBLOCK_HEIGHT		4
-#define RBLOCK_HEIGHT_SHIFT	2
-#define ACTIVE_RBLOCKS_MASK	(NUM_WARPS * 2 - 1)
+#define RBLOCK_HEIGHT 4
+#define RBLOCK_HEIGHT_SHIFT 2
+#define ACTIVE_RBLOCKS_MASK (NUM_WARPS * 2 - 1)
 #elif WARP_SIZE == 64
-#define RBLOCK_HEIGHT		8
-#define RBLOCK_HEIGHT_SHIFT	3
-#define ACTIVE_RBLOCKS_MASK	(NUM_WARPS - 1)
+#define RBLOCK_HEIGHT 8
+#define RBLOCK_HEIGHT_SHIFT 3
+#define ACTIVE_RBLOCKS_MASK (NUM_WARPS - 1)
 #else
 #error "Currently only 32 & 64 warp size is supported"
 #endif
@@ -593,7 +593,7 @@ void visualizeFragmentCounts(uint hbid, ivec2 pixel_pos) {
 }
 
 void visualizeTriangleCounts(uint rbid, ivec2 pixel_pos) {
-	uint count = s_block_tri_count[(WARP_SIZE == 64? rbid : rbid >> 1) & (NUM_WARPS - 1)];
+	uint count = s_block_tri_count[(WARP_SIZE == 64 ? rbid : rbid >> 1) & (NUM_WARPS - 1)];
 	count = s_block_row_tri_count[pixel_pos.y >> BLOCK_SHIFT];
 	//count = s_bin_quad_count * 2 + s_bin_tri_count;
 
@@ -708,7 +708,8 @@ void rasterBin(int bin_id) {
 		uint rby = (rbid & 1) + ((rbid >> (BLOCK_ROWS_SHIFT + 1)) << 1);
 #endif
 		ivec2 pixel_pos = ivec2((LIX & (RBLOCK_WIDTH - 1)) + (rbx << RBLOCK_WIDTH_SHIFT),
-								((LIX >> RBLOCK_WIDTH_SHIFT) & (RBLOCK_HEIGHT - 1)) + (rby << RBLOCK_HEIGHT_SHIFT));
+								((LIX >> RBLOCK_WIDTH_SHIFT) & (RBLOCK_HEIGHT - 1)) +
+									(rby << RBLOCK_HEIGHT_SHIFT));
 		//uint enc_color = finishReduceSamples(context);
 		//outputPixel(pixel_pos, enc_color);
 

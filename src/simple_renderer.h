@@ -13,7 +13,7 @@ class SimpleRenderer {
 	SimpleRenderer();
 	FWK_MOVABLE_CLASS(SimpleRenderer);
 
-	static void addShaderDefs(VulkanDevice&, ShaderCompiler &);
+	static void addShaderDefs(VulkanDevice &, ShaderCompiler &);
 
 	Ex<> exConstruct(VDeviceRef, ShaderCompiler &, const IRect &viewport, VColorAttachment);
 

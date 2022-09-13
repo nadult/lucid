@@ -11,9 +11,9 @@
 #include <fwk/io/file_system.h>
 #include <fwk/vulkan/vulkan_buffer.h>
 #include <fwk/vulkan/vulkan_device.h>
+#include <fwk/vulkan/vulkan_instance.h>
 #include <fwk/vulkan/vulkan_pipeline.h>
 #include <fwk/vulkan/vulkan_swap_chain.h>
-#include <fwk/vulkan/vulkan_instance.h>
 
 // TODO: opisać różnego rodzaju definicje/nazwy używane w kodzie
 

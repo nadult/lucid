@@ -113,7 +113,6 @@ void accumulateLargeTriCountsAcrossRows() {
 #endif
 }
 
-
 void computeQuadOffsets() {
 #if WARP_SIZE == 32
 	for(uint idx = LIX; idx < BIN_COUNT; idx += LSIZE) {
@@ -144,7 +143,7 @@ void computeQuadOffsets() {
 	}
 #else
 	// Slow version
-	if(LIX < BIN_COUNT_Y) { 
+	if(LIX < BIN_COUNT_Y) {
 		uint by = LIX;
 		int accum = 0;
 		for(uint bx = 0; bx < BIN_COUNT_X; bx++) {

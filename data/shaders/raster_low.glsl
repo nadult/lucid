@@ -656,8 +656,8 @@ void rasterBin(int bin_id) {
 	// Each block has 64 pixels, so we need 2 warps to process all pixels within a single block
 	for(uint rbid = LIX >> WARP_SHIFT; rbid < num_rblocks; rbid += NUM_WARPS) {
 		barrier();
-		/*if(WARP_SIZE == 64 || (rbid & NUM_WARPS) == 0) {
-			uint bid = WARP_SIZE == 64? rbid : (rbid & ~(NUM_WARPS - 1)) >> 1;
+		if(WARP_SIZE == 64 || (rbid & NUM_WARPS) == 0) {
+			uint bid = WARP_SIZE == 64 ? rbid : (rbid & ~(NUM_WARPS - 1)) >> 1;
 			generateBlocks(bid);
 			barrier();
 			finalizeSegments();
@@ -674,14 +674,14 @@ void rasterBin(int bin_id) {
 				//visualizeErrors(bid);
 				return;
 			}
-		}*/
+		}
 		UPDATE_TIMER(1);
 
 		ReductionContext context;
 		initReduceSamples(context);
 		//initVisualizeSamples();
 
-		/*for(int segment_id = 0;; segment_id++) {
+		for(int segment_id = 0;; segment_id++) {
 			uint counts = s_rblock_counts[rbid & ACTIVE_RBLOCKS_MASK];
 			int frag_count = min(SEGMENT_SIZE, int(counts >> 16) - (segment_id << SEGMENT_SHIFT));
 			if(frag_count <= 0)
@@ -698,7 +698,7 @@ void rasterBin(int bin_id) {
 			if(allInvocationsARB(context.out_trans < alpha_threshold))
 				break;
 #endif
-		}*/
+		}
 
 #if WARP_SIZE == 64
 		uint rbx = rbid & BLOCK_ROWS_MASK;
@@ -710,12 +710,12 @@ void rasterBin(int bin_id) {
 		ivec2 pixel_pos = ivec2((LIX & (RBLOCK_WIDTH - 1)) + (rbx << RBLOCK_WIDTH_SHIFT),
 								((LIX >> RBLOCK_WIDTH_SHIFT) & (RBLOCK_HEIGHT - 1)) +
 									(rby << RBLOCK_HEIGHT_SHIFT));
-		//uint enc_color = finishReduceSamples(context);
-		//outputPixel(pixel_pos, enc_color);
+		uint enc_color = finishReduceSamples(context);
+		outputPixel(pixel_pos, enc_color);
 
 		//finishVisualizeSamples(pixel_pos);
 		//visualizeFragmentCounts(rbid, pixel_pos);
-		visualizeTriangleCounts(rbid, pixel_pos);
+		//visualizeTriangleCounts(rbid, pixel_pos);
 		UPDATE_TIMER(4);
 		barrier();
 	}

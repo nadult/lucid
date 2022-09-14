@@ -77,7 +77,6 @@ void countSmallQuadBins(uint quad_idx) {
 
 void accumulateLargeTriCountsAcrossRows() {
 	// Accumulating large quad counts across rows
-#if WARP_SIZE == 32
 	for(uint by = LIX >> WARP_SHIFT; by < BIN_COUNT_Y; by += LSIZE / WARP_SIZE) {
 		int prev_accum = 0;
 		for(uint bx = LIX & WARP_MASK; bx < BIN_COUNT_X; bx += WARP_SIZE) {
@@ -88,8 +87,7 @@ void accumulateLargeTriCountsAcrossRows() {
 			prev_accum = subgroupShuffle(accum, WARP_MASK);
 		}
 	}
-#else
-	if(LIX < BIN_COUNT_Y) { // Slow version
+	/*if(LIX < BIN_COUNT_Y) { // Slow version
 		uint by = LIX;
 		int accum = 0;
 		for(uint bx = 0; bx < BIN_COUNT_X; bx++) {
@@ -97,8 +95,7 @@ void accumulateLargeTriCountsAcrossRows() {
 			accum += s_bins[idx];
 			s_bins[idx] = accum;
 		}
-	}
-#endif
+	}*/
 }
 
 ScanlineParams loadScanlineParamsBin(uint tri_idx, out int bsy, out int bey) {

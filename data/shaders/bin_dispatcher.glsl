@@ -113,7 +113,7 @@ void dispatchLargeTriSimple(int large_quad_idx, int second_tri, int num_quads) {
 //
 // Work balancing happens at each bin row. First we find out how many bins do we have
 // to write to and then we divide this work equally across all threads within a warp.
-// We do this by dividing those items into 32 segments and then assigning 1 segment
+// We do this by dividing those items into WARP_SIZE segments and then assigning 1 segment
 // to each thread.
 void dispatchLargeTriBalanced(int large_quad_idx, int second_tri, int num_quads) {
 	bool is_valid = large_quad_idx < num_quads;
@@ -148,11 +148,11 @@ void dispatchLargeTriBalanced(int large_quad_idx, int second_tri, int num_quads)
 			continue;
 
 		int sample_offset = inclusiveAdd(num_samples);
-		int warp_num_samples = subgroupShuffle(sample_offset, 31);
+		int warp_num_samples = subgroupShuffle(sample_offset, WARP_MASK);
 		sample_offset -= num_samples;
 
-		int warp_offset = int(LIX & ~31), thread_id = int(LIX & 31);
-		int segment_size = (warp_num_samples + 31) / 32;
+		int warp_offset = int(LIX & ~WARP_MASK), thread_id = int(LIX & WARP_MASK);
+		int segment_size = (warp_num_samples + WARP_MASK) / WARP_SIZE;
 		int segment_id = sample_offset / segment_size;
 		int segment_offset = sample_offset - segment_id * segment_size;
 		if(num_samples > 0) {
@@ -247,11 +247,7 @@ void dispatchLargeTris() {
 		}
 		barrier();
 		int large_quad_idx = s_quads_offset + int(LIX >> 1);
-#if WARP_SIZE == 32
 		dispatchLargeTriBalanced(large_quad_idx, int(LIX & 1), num_quads);
-#else
-		dispatchLargeTriSimple(large_quad_idx, int(LIX & 1), num_quads);
-#endif
 	}
 	UPDATE_TIMER(5);
 }

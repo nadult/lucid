@@ -9,8 +9,8 @@ struct ShaderDebugInfo;
 
 // TODO: better handling of phases
 // TODO: ability to change options without recreating renderer
-DEFINE_ENUM(LucidRenderOpt, debug_quad_setup, debug_bin_dispatcher, debug_raster, timers,
-			additive_blending, visualize_errors, alpha_threshold, bin_size_64);
+DEFINE_ENUM(LucidRenderOpt, debug_quad_setup, debug_bin_counter, debug_bin_dispatcher, debug_raster,
+			timers, additive_blending, visualize_errors, alpha_threshold, bin_size_64);
 using LucidRenderOpts = EnumFlags<LucidRenderOpt>;
 
 namespace shader {
@@ -61,7 +61,7 @@ class LucidRenderer {
 	Opts m_opts;
 
 	PVPipeline p_quad_setup;
-	PVPipeline p_bin_dispatcher, p_bin_categorizer;
+	PVPipeline p_bin_counter, p_bin_dispatcher, p_bin_categorizer;
 	PVPipeline p_raster_low, p_raster_high;
 	PVPipeline p_compose;
 

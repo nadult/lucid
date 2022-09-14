@@ -103,7 +103,7 @@ uint shadeSample(ivec2 pixel_pos, uint tri_idx, out float out_depth) {
 
 	vec4 color = (instance_flags & INST_HAS_COLOR) != 0 ?
 					 decodeRGBA8(g_instance_colors[instance_id]) :
-					   vec4(1.0);
+					 vec4(1.0);
 
 	if((instance_flags & INST_HAS_TEXTURE) != 0) {
 		vec2 tex0, tex1, tex2;

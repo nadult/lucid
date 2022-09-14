@@ -74,17 +74,21 @@ struct LucidInfo {
 
 	uint setup_timers[TIMERS_COUNT];
 	uint raster_timers[TIMERS_COUNT];
+	uint bin_counter_timers[TIMERS_COUNT];
 	uint bin_dispatcher_timers[TIMERS_COUNT];
 
 	uint num_fragments;
 	uint num_half_blocks;
 
+	// TODO: define MAX_DISPATCHES 128 ?
 	int dispatcher_task_counts[128];
+	int dispatcher_first_batch[2][128];
+	int dispatcher_num_batches[2][128];
 
-	int temp[128 + 60];
+	int temp[52];
 };
 
-#define LUCID_INFO_SIZE 384
+#define LUCID_INFO_SIZE 768
 
 // This structure keeps uniform data passed to Lucid shaders
 struct LucidConfig {

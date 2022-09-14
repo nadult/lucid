@@ -22,6 +22,7 @@ shared uint s_timers[TIMERS_COUNT];
 
 #define COMMIT_TIMERS(out_timers)                                                                  \
 	{                                                                                              \
+		barrier();                                                                                 \
 		if(LIX < TIMERS_COUNT)                                                                     \
 			atomicAdd(out_timers[LIX], s_timers[LIX]);                                             \
 	}

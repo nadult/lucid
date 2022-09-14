@@ -104,8 +104,6 @@ void LucidRenderer::addShaderDefs(VulkanDevice &device, ShaderCompiler &compiler
 	compiler.add({"compose_vert", VShaderStage::vertex, "compose.glsl", vsh_macros});
 	compiler.add({"compose_frag", VShaderStage::fragment, "compose.glsl", fsh_macros});
 
-	compiler.add({"bin_categorizer", VShaderStage::compute, "bin_categorizer.glsl", base_macros});
-
 	auto add_debugable = [&](ZStr name, ZStr file_name) {
 		compiler.add({name, VShaderStage::compute, file_name, base_macros});
 		auto dbg_name = format("%_debug", name);
@@ -113,7 +111,9 @@ void LucidRenderer::addShaderDefs(VulkanDevice &device, ShaderCompiler &compiler
 	};
 
 	add_debugable("quad_setup", "quad_setup.glsl");
+	add_debugable("bin_counter", "bin_counter.glsl");
 	add_debugable("bin_dispatcher", "bin_dispatcher.glsl");
+	compiler.add({"bin_categorizer", VShaderStage::compute, "bin_categorizer.glsl", base_macros});
 	add_debugable("raster_low", "raster_low.glsl");
 	add_debugable("raster_high", "raster_high.glsl");
 }
@@ -162,7 +162,7 @@ Ex<void> LucidRenderer::exConstruct(VulkanDevice &device, ShaderCompiler &compil
 	int bin_dispatcher_lsize = m_bin_size == 64 ? 512 : 1024;
 	consts.BIN_DISPATCHER_LSIZE = bin_dispatcher_lsize;
 	consts.BIN_DISPATCHER_LSHIFT = log2(bin_dispatcher_lsize);
-	consts.BIN_CATEGORIZER_LSIZE = m_bin_size == 64 ? 128 : 512;
+	consts.BIN_CATEGORIZER_LSIZE = 1024;
 
 	// TODO: this takes a lot of memory
 	// TODO: what should we do when quads won't fit?
@@ -212,17 +212,17 @@ Ex<void> LucidRenderer::exConstruct(VulkanDevice &device, ShaderCompiler &compil
 	if(m_opts & (Opt::debug_bin_dispatcher | Opt::debug_raster))
 		m_errors = EX_PASS(VulkanBuffer::create<u32>(device, 1024 * 1024, usage_copyable));
 
-	p_bin_categorizer = EX_PASS(makeComputePipeline(device, compiler, consts, "bin_categorizer"));
+	auto make_compute_pipe = [&](ZStr base_name, Opts debug_option) {
+		auto name = opts & debug_option ? format("%_debug", base_name) : string(base_name);
+		return makeComputePipeline(device, compiler, consts, name);
+	};
 
-	p_quad_setup = EX_PASS(
-		makeComputePipeline(device, compiler, consts,
-							opts & Opt::debug_quad_setup ? "quad_setup_debug" : "quad_setup"));
-	p_bin_dispatcher = EX_PASS(makeComputePipeline(
-		device, compiler, consts,
-		opts & Opt::debug_bin_dispatcher ? "bin_dispatcher_debug" : "bin_dispatcher"));
+	p_quad_setup = EX_PASS(make_compute_pipe("quad_setup", Opt::debug_quad_setup));
+	p_bin_dispatcher = EX_PASS(make_compute_pipe("bin_dispatcher", Opt::debug_bin_dispatcher));
+	p_bin_counter = EX_PASS(make_compute_pipe("bin_counter", Opt::debug_bin_counter));
+	p_bin_categorizer = EX_PASS(make_compute_pipe("bin_categorizer", none));
 
-	p_raster_low = EX_PASS(makeComputePipeline(
-		device, compiler, consts, opts & Opt::debug_raster ? "raster_low_debug" : "raster_low"));
+	p_raster_low = EX_PASS(make_compute_pipe("raster_low", Opt::debug_raster));
 	//p_raster_high = EX_PASS(makeComputePipeline(device, compiler, consts, "raster_high"));
 
 	if(opts & (Opt::debug_bin_dispatcher | Opt::debug_quad_setup | Opt::debug_raster)) {
@@ -453,10 +453,38 @@ void LucidRenderer::computeBins(const Context &ctx) {
 	auto &cmds = ctx.device.cmdQueue();
 	PERF_GPU_SCOPE(cmds);
 
-	cmds.bind(p_bin_dispatcher);
+	PERF_CHILD_SCOPE("counter phase");
+	cmds.barrier(VPipeStage::compute_shader, VPipeStage::draw_indirect | VPipeStage::compute_shader,
+				 VAccess::memory_write, VAccess::indirect_command_read | VAccess::memory_read);
+
+	cmds.bind(p_bin_counter);
 	auto ds = cmds.bindDS(0);
 	ds.set(0, m_info);
 	ds.set(1, VDescriptorType::uniform_buffer, m_config);
+	ds = cmds.bindDS(1);
+	ds.set(0, m_scratch_64, m_bin_quads, m_bin_tris, m_scratch_32, m_uvec4_storage);
+	if(m_opts & Opt::debug_bin_counter) {
+		ds.set(5, m_debug_buffer);
+		shaderDebugInitBuffer(cmds, m_debug_buffer);
+	}
+	cmds.dispatchComputeIndirect(m_info, LUCID_INFO_MEMBER_OFFSET(num_binning_dispatches));
+	if((m_opts & Opt::debug_bin_counter))
+		getDebugData(ctx, m_debug_buffer, "bin_counter_debug");
+
+	cmds.barrier(VPipeStage::compute_shader, VPipeStage::compute_shader, VAccess::memory_write,
+				 VAccess::memory_write | VAccess::memory_read);
+
+	PERF_SIBLING_SCOPE("categorizer phase");
+	cmds.bind(p_bin_categorizer);
+	ds = cmds.bindDS(1);
+	ds.set(0, m_compose_quads);
+	cmds.dispatchCompute({1, 1, 1});
+
+	PERF_SIBLING_SCOPE("dispatcher phase");
+	cmds.barrier(VPipeStage::compute_shader, VPipeStage::compute_shader, VAccess::memory_write,
+				 VAccess::memory_write | VAccess::memory_read);
+
+	cmds.bind(p_bin_dispatcher);
 	ds = cmds.bindDS(1);
 	ds.set(0, m_scratch_64, m_bin_quads, m_bin_tris, m_scratch_32, m_uvec4_storage);
 	if(m_opts & Opt::debug_bin_dispatcher) {
@@ -464,27 +492,9 @@ void LucidRenderer::computeBins(const Context &ctx) {
 		shaderDebugInitBuffer(cmds, m_debug_buffer);
 	}
 
-	PERF_CHILD_SCOPE("dispatcher phase");
-
-	cmds.barrier(VPipeStage::compute_shader, VPipeStage::draw_indirect, VAccess::memory_write,
-				 VAccess::indirect_command_read);
-
 	cmds.dispatchComputeIndirect(m_info, LUCID_INFO_MEMBER_OFFSET(num_binning_dispatches));
-	if(m_opts & Opt::debug_bin_dispatcher)
+	if((m_opts & Opt::debug_bin_dispatcher))
 		getDebugData(ctx, m_debug_buffer, "bin_dispatcher_debug");
-
-	//cmds.dispatchCompute({16, 1, 1});
-	//if(m_opts & Opt::debug_bin_dispatcher)
-	//	debugProgram(p_bin_dispatcher, "bin_dispatcher");
-
-	cmds.barrier(VPipeStage::compute_shader, VPipeStage::compute_shader, VAccess::memory_write,
-				 VAccess::memory_read | VAccess::memory_read);
-
-	PERF_SIBLING_SCOPE("categorizer phase");
-	cmds.bind(p_bin_categorizer);
-	ds = cmds.bindDS(1);
-	ds.set(0, m_compose_quads);
-	cmds.dispatchCompute({1, 1, 1});
 }
 
 void LucidRenderer::bindRaster(PVPipeline pipeline, const Context &ctx) {

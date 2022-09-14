@@ -195,8 +195,9 @@ shared uint s_sort_rcount[NUM_WARPS];
 void prepareSortTris() {
 	if(LIX < NUM_WARPS) {
 		uint count = s_block_tri_count[LIX];
-		// rcount: count rounded up to next power of 2, minimum: 32
-		s_sort_rcount[LIX] = max(32, (count & (count - 1)) == 0 ? count : (2 << findMSB(count)));
+		// rcount: count rounded up to next power of 2, minimum: WARP_SIZE
+		s_sort_rcount[LIX] =
+			max(WARP_SIZE, (count & (count - 1)) == 0 ? count : (2 << findMSB(count)));
 	}
 }
 
@@ -265,7 +266,7 @@ void sortTris(uint lbid, uint count, uint buf_offset) {
 // TODO: maybe process smaller amount of blocks at the same time?
 // smaller chance that it will leave cache
 void generateBlocks(uint bid) {
-	int lbid = int(LIX >> 5);
+	int lbid = int(LIX >> WARP_SHIFT);
 	bid += lbid;
 	uint by = bid >> BLOCK_ROWS_SHIFT, bx = bid & BLOCK_ROWS_MASK;
 
@@ -279,25 +280,41 @@ void generateBlocks(uint bid) {
 	{
 		uint bx_bits_shift = 24 + bx;
 		uint block_tri_count = 0;
-		uint thread_bit_mask = ~(0xffffffffu << (LIX & 31));
+#if WARP_SIZE == 32
+		uint thread_bit_mask = ~(~0u << gl_SubgroupInvocationID);
+#else
+		uvec2 thread_bit_mask = ~uvec2(~0u << gl_SubgroupInvocationID,
+									   ~0u << max(0, int(gl_SubgroupInvocationID) - 32));
+#endif
 
 		for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_SIZE) {
 			uint bx_bit = (g_scratch_64[src_offset_64 + i].x >> bx_bits_shift) & 1;
-			uint bit_mask = uint(subgroupBallot(bx_bit != 0).x); // TODO
+
+#if WARP_SIZE == 32
+			uint bit_mask = uint(subgroupBallot(bx_bit != 0).x);
 			if(bit_mask == 0)
 				continue;
-
 			uint warp_offset = bitCount(bit_mask & thread_bit_mask);
+			uint bit_count = bitCount(bit_mask);
+#else
+			uvec2 bit_mask = uvec2(subgroupBallot(bx_bit != 0).xy);
+			if(bit_mask.x == 0 && bit_mask.y == 0)
+				continue;
+			uint warp_offset =
+				bitCount(bit_mask.x & thread_bit_mask.x) + bitCount(bit_mask.y & thread_bit_mask.y);
+			uint bit_count = bitCount(bit_mask.x) + bitCount(bit_mask.y);
+#endif
+
 			if(bx_bit != 0) {
 				uint tri_offset =
 					(block_tri_count + warp_offset) & ((1 << MAX_BLOCK_TRIS_SHIFT) - 1);
 				if(tri_offset < MAX_BLOCK_TRIS)
 					s_buffer[buf_offset + tri_offset] = i;
 			}
-			block_tri_count += bitCount(bit_mask);
+			block_tri_count += bit_count;
 		}
 
-		if((LIX & 31) == 0) {
+		if((LIX & WARP_MASK) == 0) {
 			s_block_tri_count[lbid] = block_tri_count;
 			if(block_tri_count > MAX_BLOCK_TRIS)
 				atomicOr(s_raster_error, 1 << lbid);
@@ -307,6 +324,7 @@ void generateBlocks(uint bid) {
 			return;
 	}
 	prepareSortTris();
+	return;
 
 	uint dst_offset_64 = scratch64BlockTrisOffset(lbid);
 	tri_count = s_block_tri_count[lbid];
@@ -594,7 +612,7 @@ void visualizeFragmentCounts(uint hbid, ivec2 pixel_pos) {
 
 void visualizeTriangleCounts(uint rbid, ivec2 pixel_pos) {
 	uint count = s_block_tri_count[(WARP_SIZE == 64 ? rbid : rbid >> 1) & (NUM_WARPS - 1)];
-	count = s_block_row_tri_count[pixel_pos.y >> BLOCK_SHIFT];
+	//count = s_block_row_tri_count[pixel_pos.y >> BLOCK_SHIFT];
 	//count = s_bin_quad_count * 2 + s_bin_tri_count;
 
 	vec3 color;
@@ -657,7 +675,7 @@ void rasterBin(int bin_id) {
 	for(uint rbid = LIX >> WARP_SHIFT; rbid < num_rblocks; rbid += NUM_WARPS) {
 		barrier();
 		if(WARP_SIZE == 64 || (rbid & NUM_WARPS) == 0) {
-			uint bid = WARP_SIZE == 64 ? rbid : (rbid & ~(NUM_WARPS - 1)) >> 1;
+			uint bid = (rbid & ~(NUM_WARPS - 1)) >> (WARP_SIZE == 64 ? 0 : 1);
 			generateBlocks(bid);
 			barrier();
 			finalizeSegments();
@@ -681,7 +699,7 @@ void rasterBin(int bin_id) {
 		initReduceSamples(context);
 		//initVisualizeSamples();
 
-		for(int segment_id = 0;; segment_id++) {
+		/*for(int segment_id = 0;; segment_id++) {
 			uint counts = s_rblock_counts[rbid & ACTIVE_RBLOCKS_MASK];
 			int frag_count = min(SEGMENT_SIZE, int(counts >> 16) - (segment_id << SEGMENT_SHIFT));
 			if(frag_count <= 0)
@@ -698,7 +716,7 @@ void rasterBin(int bin_id) {
 			if(allInvocationsARB(context.out_trans < alpha_threshold))
 				break;
 #endif
-		}
+		}*/
 
 #if WARP_SIZE == 64
 		uint rbx = rbid & BLOCK_ROWS_MASK;
@@ -711,11 +729,11 @@ void rasterBin(int bin_id) {
 								((LIX >> RBLOCK_WIDTH_SHIFT) & (RBLOCK_HEIGHT - 1)) +
 									(rby << RBLOCK_HEIGHT_SHIFT));
 		uint enc_color = finishReduceSamples(context);
-		outputPixel(pixel_pos, enc_color);
+		//outputPixel(pixel_pos, enc_color);
 
 		//finishVisualizeSamples(pixel_pos);
 		//visualizeFragmentCounts(rbid, pixel_pos);
-		//visualizeTriangleCounts(rbid, pixel_pos);
+		visualizeTriangleCounts(rbid, pixel_pos);
 		UPDATE_TIMER(4);
 		barrier();
 	}

@@ -104,6 +104,8 @@ void LucidRenderer::addShaderDefs(VulkanDevice &device, ShaderCompiler &compiler
 	compiler.add({"compose_vert", VShaderStage::vertex, "compose.glsl", vsh_macros});
 	compiler.add({"compose_frag", VShaderStage::fragment, "compose.glsl", fsh_macros});
 
+	compiler.add({"bin_categorizer", VShaderStage::compute, "bin_categorizer.glsl", base_macros});
+
 	auto add_debugable = [&](ZStr name, ZStr file_name) {
 		compiler.add({name, VShaderStage::compute, file_name, base_macros});
 		auto dbg_name = format("%_debug", name);
@@ -112,7 +114,6 @@ void LucidRenderer::addShaderDefs(VulkanDevice &device, ShaderCompiler &compiler
 
 	add_debugable("quad_setup", "quad_setup.glsl");
 	add_debugable("bin_dispatcher", "bin_dispatcher.glsl");
-	compiler.add({"bin_categorizer", VShaderStage::compute, "bin_categorizer.glsl", base_macros});
 	add_debugable("raster_low", "raster_low.glsl");
 	add_debugable("raster_high", "raster_high.glsl");
 }

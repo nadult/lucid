@@ -28,8 +28,6 @@
 #include <fwk/vulkan/vulkan_swap_chain.h>
 #include <fwk/vulkan/vulkan_window.h>
 
-Ex<void> loadShaderPieces();
-
 FilePath mainPath() {
 	return platform == Platform::msvc ? FilePath::current().get() : executablePath().parent();
 }

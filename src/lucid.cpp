@@ -23,8 +23,10 @@ Ex<int> exMain(int argc, char **argv) {
 	// TODO: xml loading is still messy
 	Maybe<AnyConfig> config = LucidApp::loadConfig();
 	VInstanceSetup setup;
+#ifndef NDEBUG
 	setup.debug_levels = VDebugLevel::warning | VDebugLevel::error;
 	setup.debug_types = all<VDebugType>;
+#endif
 	auto window_flags = VWindowFlag::resizable | VWindowFlag::centered | VWindowFlag::allow_hidpi |
 						VWindowFlag::sleep_when_minimized;
 	uint multisampling = 1;

@@ -16,7 +16,7 @@ DEBUG_SETUP(1, 11)
 
 // NOTE: converting integer multiplications to shifts does not increase perf
 
-#define NUM_WARPS (LSIZE / 32)
+#define NUM_WARPS (LSIZE / WARP_SIZE)
 
 #define BUFFER_SIZE (LSIZE * 8)
 
@@ -702,7 +702,7 @@ void rasterBin(int bin_id) {
 
 #if WARP_SIZE == 64
 		uint rbx = rbid & BLOCK_ROWS_MASK;
-		uint rby = ((rbid >> (BLOCK_ROWS_SHIFT + 1)) << 1);
+		uint rby = rbid >> BLOCK_ROWS_SHIFT;
 #else
 		uint rbx = (rbid >> 1) & BLOCK_ROWS_MASK;
 		uint rby = (rbid & 1) + ((rbid >> (BLOCK_ROWS_SHIFT + 1)) << 1);

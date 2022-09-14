@@ -53,7 +53,7 @@ struct Viewport {
 struct LucidInfo {
 	int num_input_quads;
 	int num_visible_quads[2];
-	int num_estimated_quads[2];
+	int num_counted_quads[2];
 
 	int bin_level_counts[BIN_LEVELS_COUNT];
 

@@ -145,5 +145,8 @@
     <None Include="..\data\shaders\bin_counter.glsl">
       <Filter>shaders</Filter>
     </None>
+    <None Include="..\data\shaders\shared\compute_funcs.glsl">
+      <Filter>shaders\shared</Filter>
+    </None>
   </ItemGroup>
 </Project>

@@ -139,6 +139,7 @@
     <None Include="..\data\shaders\quad_setup.glsl" />
     <None Include="..\data\shaders\raster_high.glsl" />
     <None Include="..\data\shaders\raster_low.glsl" />
+    <None Include="..\data\shaders\shared\compute_funcs.glsl" />
     <None Include="..\data\shaders\shared\funcs.glsl" />
     <None Include="..\data\shaders\shared\definitions.glsl" />
     <None Include="..\data\shaders\shared\scanline.glsl" />

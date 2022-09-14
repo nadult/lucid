@@ -1,3 +1,4 @@
+#include "shared/compute_funcs.glsl"
 #include "shared/funcs.glsl"
 #include "shared/scanline.glsl"
 #include "shared/structures.glsl"
@@ -15,12 +16,12 @@
 #define LSIZE BIN_DISPATCHER_LSIZE
 #define LSHIFT BIN_DISPATCHER_LSHIFT
 
-#define SMALL_TASK_STEPS 4
-#define SMALL_TASK_SHIFT (LSHIFT + 2)
-#define SMALL_TASK_SIZE (LSIZE * SMALL_TASK_STEPS)
+#define SMALL_BATCH_STEPS 4
+#define SMALL_BATCH_SHIFT (LSHIFT + 2)
+#define SMALL_BATCH_SIZE (LSIZE * SMALL_BATCH_STEPS)
 
-#define LARGE_TASK_SHIFT (LSHIFT - 1)
-#define LARGE_TASK_SIZE (LSIZE / 2)
+#define LARGE_BATCH_SHIFT (LSHIFT - 1)
+#define LARGE_BATCH_SIZE (LSIZE / 2)
 
 layout(local_size_x = 1024, local_size_x_id = BIN_DISPATCHER_LSIZE_ID) in;
 
@@ -37,8 +38,8 @@ layout(std430, set = 1, binding = 3) restrict buffer buf4_ { int g_bin_batches[]
 layout(std430, set = 1, binding = 4) restrict readonly buffer buf6_ { uvec4 g_uvec4_storage[]; };
 DEBUG_SETUP(1, 5)
 
-#define MAX_SMALL_BATCHES (MAX_VISIBLE_QUADS / SMALL_TASK_SIZE + 256)
-#define MAX_LARGE_BATCHES (MAX_VISIBLE_QUADS / LARGE_TASK_SIZE + 256)
+#define MAX_SMALL_BATCHES (MAX_VISIBLE_QUADS / SMALL_BATCH_SIZE + 256)
+#define MAX_LARGE_BATCHES (MAX_VISIBLE_QUADS / LARGE_BATCH_SIZE + 256)
 
 #define SMALL_BATCHES(idx) g_bin_batches[(MAX_DISPATCHES * BIN_COUNT * 2) + idx]
 #define LARGE_BATCHES(idx) g_bin_batches[(MAX_DISPATCHES * BIN_COUNT * 2 + MAX_SMALL_BATCHES) + idx]
@@ -55,19 +56,6 @@ void scanlineStep(in out ScanlineParams params, out int bmin, out int bmax) {
 	// There can be holes between two tris, should we exploit this? Maybe it's not worth it?
 	bmin = int(xmin + 1.0) >> BIN_SHIFT;
 	bmax = int(xmax) >> BIN_SHIFT;
-}
-
-// Inclusive
-// TODO: make portable
-int prefixSum32(int accum) {
-	int temp;
-	uint thread_id = LIX & 31;
-	temp = subgroupShuffleUp(accum, 1), accum += thread_id >= 1 ? temp : 0;
-	temp = subgroupShuffleUp(accum, 2), accum += thread_id >= 2 ? temp : 0;
-	temp = subgroupShuffleUp(accum, 4), accum += thread_id >= 4 ? temp : 0;
-	temp = subgroupShuffleUp(accum, 8), accum += thread_id >= 8 ? temp : 0;
-	temp = subgroupShuffleUp(accum, 16), accum += thread_id >= 16 ? temp : 0;
-	return accum;
 }
 
 void dispatchQuad(int quad_idx) {
@@ -159,7 +147,7 @@ void dispatchLargeTriBalanced(int large_quad_idx, int second_tri, int num_quads)
 		if(allInvocationsARB(num_samples == 0))
 			continue;
 
-		int sample_offset = prefixSum32(num_samples);
+		int sample_offset = inclusiveAdd(num_samples);
 		int warp_num_samples = subgroupShuffle(sample_offset, 31);
 		sample_offset -= num_samples;
 
@@ -203,8 +191,8 @@ void dispatchLargeTriBalanced(int large_quad_idx, int second_tri, int num_quads)
 }
 
 shared int s_num_quads[2], s_quads_offset;
-shared int s_first_task[2], s_num_tasks[2];
-shared int s_num_finished_tasks[2];
+shared int s_first_batch[2], s_num_batches[2];
+shared int s_num_finished_batches[2];
 
 void dispatchSmallQuads() {
 	START_TIMER();
@@ -217,17 +205,17 @@ void dispatchSmallQuads() {
 	barrier();
 
 	int num_quads = s_num_quads[0];
-	while(s_num_tasks[0] > 0) {
+	while(s_num_batches[0] > 0) {
 		barrier();
 		if(LIX == 0) {
-			int task = s_first_task[0];
-			s_first_task[0] = SMALL_BATCHES(task);
-			s_num_tasks[0]--;
-			s_quads_offset = task << SMALL_TASK_SHIFT;
+			int batch = s_first_batch[0];
+			s_first_batch[0] = SMALL_BATCHES(batch);
+			s_num_batches[0]--;
+			s_quads_offset = batch << SMALL_BATCH_SHIFT;
 		}
 		barrier();
 		int quads_offset = s_quads_offset;
-		for(int s = 0; s < SMALL_TASK_STEPS; s++) {
+		for(int s = 0; s < SMALL_BATCH_STEPS; s++) {
 			int quad_idx = quads_offset + LSIZE * s + int(LIX);
 			if(quad_idx >= num_quads)
 				break;
@@ -249,13 +237,13 @@ void dispatchLargeTris() {
 	barrier();
 
 	int num_quads = s_num_quads[1];
-	while(s_num_tasks[1] > 0) {
+	while(s_num_batches[1] > 0) {
 		barrier();
 		if(LIX == 0) {
-			int task = s_first_task[1];
-			s_first_task[1] = LARGE_BATCHES(task);
-			s_num_tasks[1]--;
-			s_quads_offset = task << LARGE_TASK_SHIFT;
+			int batch = s_first_batch[1];
+			s_first_batch[1] = LARGE_BATCHES(batch);
+			s_num_batches[1]--;
+			s_quads_offset = batch << LARGE_BATCH_SHIFT;
 		}
 		barrier();
 		int large_quad_idx = s_quads_offset + int(LIX >> 1);
@@ -274,14 +262,14 @@ void main() {
 	if(LIX < 2) {
 		int num_quads = g_info.num_visible_quads[LIX];
 		s_num_quads[LIX] = num_quads;
-		s_first_task[LIX] = g_info.dispatcher_first_batch[LIX][WGID.x];
-		s_num_tasks[LIX] = g_info.dispatcher_num_batches[LIX][WGID.x];
+		s_first_batch[LIX] = g_info.dispatcher_first_batch[LIX][WGID.x];
+		s_num_batches[LIX] = g_info.dispatcher_num_batches[LIX][WGID.x];
 	}
 	barrier();
 
-	if(s_num_tasks[0] > 0)
+	if(s_num_batches[0] > 0)
 		dispatchSmallQuads();
-	if(s_num_tasks[1] > 0) {
+	if(s_num_batches[1] > 0) {
 		barrier();
 		dispatchLargeTris();
 	}

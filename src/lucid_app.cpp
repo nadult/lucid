@@ -194,6 +194,12 @@ Ex<void> LucidApp::updateRenderer() {
 	if(updateViewport())
 		do_update = true;
 
+	if(!do_update && m_last_time - m_last_shader_update_time > 0.5) {
+		m_last_shader_update_time = m_last_time;
+		if(m_shader_compiler->updateList())
+			do_update = true;
+	}
+
 	if(do_update) {
 		auto swap_chain = m_device->swapChain();
 		m_lucid_renderer.reset();
@@ -203,6 +209,7 @@ Ex<void> LucidApp::updateRenderer() {
 															  m_viewport, swap_chain->format()));
 		m_lucid_renderer = EX_PASS(construct<LucidRenderer>(
 			*m_device, *m_shader_compiler, swap_chain->format(), m_lucid_opts, m_viewport.size()));
+		m_last_shader_update_time = m_last_time;
 	}
 
 	return {};
@@ -531,11 +538,6 @@ void LucidApp::drawScene() {
 	auto frustum = cam.frustum();
 	auto draws = setup.scene->draws(frustum);
 	auto tex_pair = setup.scene->textureAtlasPair();
-	// TODO: filtering params
-	/*for(auto &tex : {tex_pair.first, tex_pair.second}) {
-		if(tex)
-			tex->setFiltering(m_filtering_params);
-	}*/
 
 	RenderContext ctx{*m_device,
 					  setup.render_config,

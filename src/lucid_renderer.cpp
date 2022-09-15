@@ -181,7 +181,7 @@ Ex<void> LucidRenderer::exConstruct(VulkanDevice &device, ShaderCompiler &compil
 	int uvec4_storage_size = max_visible_tris * 5 + max_visible_quads * 4; // 480MB ...
 	m_uvec4_storage = EX_PASS(
 		VulkanBuffer::create<int4>(device, uvec4_storage_size, usage | VBufferUsage::transfer_src));
-	m_uint_storage = EX_PASS(VulkanBuffer::create<u32>(device, max_visible_tris, usage));
+	m_normals_storage = EX_PASS(VulkanBuffer::create<u32>(device, max_visible_tris, usage));
 
 	uint scratch_32_size = 64 * 1024 * m_max_dispatches * sizeof(u32);
 	uint scratch_64_size = (128 * 1024) * m_max_dispatches * sizeof(u64);
@@ -430,7 +430,7 @@ void LucidRenderer::quadSetup(const Context &ctx) {
 	ds.set(1, VDescriptorType::uniform_buffer, m_config);
 	ds = cmds.bindDS(1);
 	ds.set(0, m_instances, ctx.quads_ib, ctx.verts.pos, ctx.verts.tex, ctx.verts.col, ctx.verts.nrm,
-		   m_scratch_64, m_uvec4_storage, m_uint_storage);
+		   m_scratch_64, m_uvec4_storage, m_normals_storage);
 	if(m_opts & Opt::debug_quad_setup) {
 		ds.set(9, m_debug_buffer);
 		shaderDebugInitBuffer(cmds, m_debug_buffer);
@@ -501,7 +501,7 @@ void LucidRenderer::bindRaster(PVPipeline pipeline, const Context &ctx) {
 
 	ds = cmds.bindDS(1);
 	ds.set(0, m_bin_quads, m_bin_tris, m_scratch_32, m_scratch_64, m_instance_colors,
-		   m_instance_uv_rects, m_uvec4_storage, m_uint_storage, m_raster_image);
+		   m_instance_uv_rects, m_uvec4_storage, m_normals_storage, m_raster_image);
 	// TODO: why this needs to be separate?
 	if(m_opts & Opt::debug_raster) {
 		ds.set(11, m_debug_buffer);

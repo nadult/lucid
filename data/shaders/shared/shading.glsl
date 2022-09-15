@@ -20,7 +20,7 @@ layout(std430, set = 1, binding = 3) restrict buffer buf3_ { uvec2 g_scratch_64[
 layout(std430, set = 1, binding = 4) readonly restrict buffer buf4_ { uint g_instance_colors[]; };
 layout(std430, set = 1, binding = 5) readonly restrict buffer buf5_ { vec4 g_instance_uv_rects[]; };
 layout(std430, set = 1, binding = 6) readonly restrict buffer buf6_ { uvec4 g_uvec4_storage[]; };
-layout(std430, set = 1, binding = 7) readonly restrict buffer buf7_ { uint g_uint_storage[]; };
+layout(std430, set = 1, binding = 7) readonly restrict buffer buf7_ { uint g_normals_storage[]; };
 layout(std430, set = 1, binding = 8) writeonly restrict buffer buf8_ { uint g_raster_image[]; };
 layout(set = 1, binding = 9) uniform sampler2D opaque_texture;
 layout(set = 1, binding = 10) uniform sampler2D transparent_texture;
@@ -144,7 +144,7 @@ uint shadeSample(ivec2 pixel_pos, uint tri_idx, out float out_depth) {
 		nrm2 -= nrm0;
 		normal = bary[0] * nrm1 + (bary[1] * nrm2 + nrm0);
 	} else {
-		normal = decodeNormalUint(g_uint_storage[tri_idx]);
+		normal = decodeNormalUint(g_normals_storage[tri_idx]);
 	}
 
 	float light_value = max(0.0, dot(-u_config.lighting.sun_dir.xyz, normal) * 0.7 + 0.3);

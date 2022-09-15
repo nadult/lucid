@@ -36,7 +36,7 @@ layout(std430, set = 1, binding = 4) readonly restrict buffer buf06_ { uint g_co
 layout(std430, set = 1, binding = 5) readonly restrict buffer buf07_ { uint g_normals[]; };
 layout(std430, set = 1, binding = 6) writeonly restrict buffer buf08_ { uint g_quad_aabbs[]; };
 layout(std430, set = 1, binding = 7) writeonly restrict buffer buf09_ { uvec4 g_uvec4_storage[]; };
-layout(std430, set = 1, binding = 8) writeonly restrict buffer buf10_ { uint g_uint_storage[]; };
+layout(std430, set = 1, binding = 8) writeonly restrict buffer buf10_ { uint g_normals_storage[]; };
 DEBUG_SETUP(1, 9)
 
 shared uint s_quad_aabbs[LSIZE];
@@ -272,7 +272,7 @@ void storeTri(int tri_idx, uint instance_flags_id, vec3 tri0, vec3 tri1, vec3 tr
 	normal *= multiplier;
 
 	if((instance_flags_id & INST_HAS_VERTEX_NORMALS) == 0)
-		g_uint_storage[tri_idx] = encodeNormalUint(normal);
+		g_normals_storage[tri_idx] = encodeNormalUint(normal);
 
 	vec3 edge0 = (tri0 - tri2) * multiplier;
 	vec3 edge1 = (tri1 - tri0) * multiplier;

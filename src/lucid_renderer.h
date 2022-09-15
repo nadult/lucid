@@ -74,7 +74,7 @@ class LucidRenderer {
 	VBufferSpan<u64> m_scratch_64;
 	VBufferSpan<u32> m_errors;
 	VBufferSpan<u32> m_bin_quads, m_bin_tris, m_raster_image;
-	VBufferSpan<u32> m_uint_storage;
+	VBufferSpan<u32> m_normals_storage;
 	VBufferSpan<int4> m_uvec4_storage;
 	VBufferSpan<u32> m_compose_quads;
 	VBufferSpan<u16> m_compose_ibuffer;

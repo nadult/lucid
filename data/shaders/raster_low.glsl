@@ -1,3 +1,4 @@
+#include "shared/compute_funcs.glsl"
 #include "shared/scanline.glsl"
 #include "shared/shading.glsl"
 #include "shared/timers.glsl"
@@ -17,6 +18,8 @@ DEBUG_SETUP(1, 11)
 // NOTE: converting integer multiplications to shifts does not increase perf
 
 #define NUM_WARPS (LSIZE / WARP_SIZE)
+#define NUM_WARPS_MASK (NUM_WARPS - 1)
+#define NUM_WARPS_SHIFT (LSHIFT - WARP_SHIFT)
 
 #define BUFFER_SIZE (LSIZE * 8)
 
@@ -32,10 +35,8 @@ DEBUG_SETUP(1, 11)
 #define MAX_SEGMENTS_SHIFT WARP_SHIFT
 #define MAX_SEGMENTS WARP_SIZE
 
-#undef BLOCK_SIZE
-#undef BLOCK_SHIFT
-
-// In this shader, we're using 8x8 blocks and 8x4 half blocks
+// In this shader, we're using 8x8 blocks and 8x4 half blocks; TODO: better documentation
+// TODO: move all docs to one place at the top of the shader
 #define BLOCK_SIZE 8
 #define BLOCK_SHIFT 3
 
@@ -112,7 +113,7 @@ void generateRowTris(uint tri_idx) {
 	int min_by = clamp(int(val0.w & 0xffff) - s_bin_pos.y, 0, BIN_MASK) >> BLOCK_SHIFT;
 	int max_by = clamp(int(val0.w >> 16) - s_bin_pos.y, 0, BIN_MASK) >> BLOCK_SHIFT;
 
-	vec2 start = vec2(s_bin_pos.x, s_bin_pos.y + min_by * 8);
+	vec2 start = vec2(s_bin_pos.x, s_bin_pos.y + min_by * BLOCK_SIZE);
 	ScanlineParams scan = loadScanlineParamsRow(val0, val1, start);
 
 	// TODO: is it worth it to make this loop more work-efficient?
@@ -324,12 +325,11 @@ void generateBlocks(uint bid) {
 			return;
 	}
 	prepareSortTris();
-	return;
 
 	uint dst_offset_64 = scratch64BlockTrisOffset(lbid);
 	tri_count = s_block_tri_count[lbid];
-	int startx = int(bx << 3);
-	vec2 block_pos = vec2(s_bin_pos + ivec2(bx << 3, by << 3));
+	int startx = int(bx << BLOCK_SHIFT);
+	vec2 block_pos = vec2(s_bin_pos + ivec2(bx << BLOCK_SHIFT, by << BLOCK_SHIFT));
 
 	for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_SIZE) {
 		uint row_idx = s_buffer[buf_offset + i];
@@ -383,8 +383,8 @@ void generateBlocks(uint bid) {
 	barrier();
 
 	// For 3 tris and less depth filter is enough, there is no need to sort
-	if(tri_count > 3)
-		sortTris(lbid, tri_count, buf_offset);
+	//if(tri_count > 3)
+	//sortTris(lbid, tri_count, buf_offset);
 
 	barrier();
 	groupMemoryBarrier();
@@ -400,51 +400,46 @@ void generateBlocks(uint bid) {
 		}
 #endif
 
-#define PREFIX_SUM_STEP(value, step)                                                               \
-	{                                                                                              \
-		uint temp = subgroupShuffleUp(value, step);                                                \
-		if((LIX & 31) >= step)                                                                     \
-			value += temp;                                                                         \
-	}
-
 	for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_SIZE) {
 		uint idx = s_buffer[buf_offset + i] & 0xff;
 		uint counts = g_scratch_64[dst_offset_64 + idx + MAX_BLOCK_TRIS].y;
 		uint num_frags1 = counts & 63, num_frags2 = (counts >> 6) & 63;
 		uint num_frags = num_frags1 | (num_frags2 << 12);
-
 		// Computing triangle-ordered sample offsets within each block
-		PREFIX_SUM_STEP(num_frags, 1);
-		PREFIX_SUM_STEP(num_frags, 2);
-		PREFIX_SUM_STEP(num_frags, 4);
-		PREFIX_SUM_STEP(num_frags, 8);
-		PREFIX_SUM_STEP(num_frags, 16);
+		num_frags = inclusiveAdd(num_frags);
 		s_buffer[buf_offset + i] = num_frags | (idx << 24);
 	}
 	barrier();
 
-	// Computing prefix sum across whole blocks (at most 8 * 32 elements)
-	if(LIX < 8 * NUM_WARPS) {
-		uint lbid = LIX >> 3, warp_idx = LIX & 7, warp_offset = warp_idx << 5;
+	// Computing prefix sum across whole blocks
+	if(LIX < NUM_WARPS * NUM_WARPS) {
+		uint lbid = LIX >> NUM_WARPS_SHIFT, warp_idx = LIX & NUM_WARPS_MASK;
+		uint warp_offset = warp_idx << WARP_SHIFT;
 		uint buf_offset = lbid << MAX_BLOCK_TRIS_SHIFT;
 		uint tri_count = s_block_tri_count[lbid];
 		uint value = 0;
 
 		if(warp_offset < tri_count) {
-			uint block_tri_idx = min(warp_offset + 31, tri_count - 1);
+			uint block_tri_idx = min(warp_offset + WARP_MASK, tri_count - 1);
 			value = s_buffer[buf_offset + block_tri_idx];
 		}
 		value = (value & 0xfff) | ((value & 0xfff000) << 4);
 		uint sum = value, temp;
-		temp = subgroupShuffleUp(sum, 1), sum += (warp_idx & 7) >= 1 ? temp : 0;
-		temp = subgroupShuffleUp(sum, 2), sum += (warp_idx & 7) >= 2 ? temp : 0;
-		temp = subgroupShuffleUp(sum, 4), sum += (warp_idx & 7) >= 4 ? temp : 0;
+		temp = subgroupShuffleUp(sum, 1), sum += warp_idx >= 1 ? temp : 0;
+		temp = subgroupShuffleUp(sum, 2), sum += warp_idx >= 2 ? temp : 0;
+#if NUM_WARPS > 4
+		temp = subgroupShuffleUp(sum, 4), sum += warp_idx >= 4 ? temp : 0;
+#endif
 
-		if(warp_idx == 7) {
+		if(warp_idx == NUM_WARPS_MASK) {
 			uint v0 = sum & 0xffff, v1 = sum >> 16;
 			updateStats(int(v0 + v1), int(tri_count * 2));
+#if WARP_SIZE == 32
 			s_rblock_counts[lbid * 2 + 0] = (v0 << 16) | tri_count;
 			s_rblock_counts[lbid * 2 + 1] = (v1 << 16) | tri_count;
+#else
+			s_rblock_counts[lbid] = ((v0 + v1) << 16) | tri_count;
+#endif
 		}
 
 		s_mini_buffer[LIX] = sum - value;
@@ -452,6 +447,7 @@ void generateBlocks(uint bid) {
 	barrier();
 	if(s_raster_error != 0)
 		return;
+	return;
 
 	// Storing triangle fragment offsets to scratch mem
 	// Also finding first triangle for each segment
@@ -604,14 +600,16 @@ void finishVisualizeSamples(ivec2 pixel_pos) {
 	outputPixel(pixel_pos, enc_col);
 }
 
-void visualizeFragmentCounts(uint hbid, ivec2 pixel_pos) {
-	uint count = s_rblock_counts[hbid & (NUM_WARPS * 2 - 1)] >> 16;
+void visualizeFragmentCounts(uint rbid, ivec2 pixel_pos) {
+	uint lrbid = rbid & (WARP_SIZE == 64 ? NUM_WARPS - 1 : NUM_WARPS * 2 - 1);
+	uint count = s_rblock_counts[lrbid] >> 16;
 	vec4 color = vec4(SATURATE(vec3(count) / 2048.0), 1.0);
 	outputPixel(pixel_pos, encodeRGBA8(color));
 }
 
 void visualizeTriangleCounts(uint rbid, ivec2 pixel_pos) {
-	uint count = s_block_tri_count[(WARP_SIZE == 64 ? rbid : rbid >> 1) & (NUM_WARPS - 1)];
+	uint lbid = (WARP_SIZE == 64 ? rbid : rbid >> 1) & (NUM_WARPS - 1);
+	uint count = s_block_tri_count[lbid];
 	//count = s_block_row_tri_count[pixel_pos.y >> BLOCK_SHIFT];
 	//count = s_bin_quad_count * 2 + s_bin_tri_count;
 
@@ -678,7 +676,7 @@ void rasterBin(int bin_id) {
 			uint bid = (rbid & ~(NUM_WARPS - 1)) >> (WARP_SIZE == 64 ? 0 : 1);
 			generateBlocks(bid);
 			barrier();
-			finalizeSegments();
+			//finalizeSegments();
 			barrier();
 			groupMemoryBarrier();
 
@@ -732,8 +730,8 @@ void rasterBin(int bin_id) {
 		//outputPixel(pixel_pos, enc_color);
 
 		//finishVisualizeSamples(pixel_pos);
-		//visualizeFragmentCounts(rbid, pixel_pos);
-		visualizeTriangleCounts(rbid, pixel_pos);
+		visualizeFragmentCounts(rbid, pixel_pos);
+		//visualizeTriangleCounts(rbid, pixel_pos);
 		UPDATE_TIMER(4);
 		barrier();
 	}

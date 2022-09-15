@@ -5,24 +5,37 @@
 
 #extension GL_KHR_shader_subgroup_shuffle_relative : require
 
+#define INCLUSIVE_ADD_STEP(step)                                                                   \
+	if(WARP_SIZE > step) {                                                                         \
+		temp = subgroupShuffleUp(accum, step);                                                     \
+		accum += gl_SubgroupInvocationID >= step ? temp : 0;                                       \
+	}
+
+// These functions are faster than subgroupInclusiveAdd...
 int inclusiveAdd(int accum) {
 	int temp;
-	uint thread_id = gl_SubgroupInvocationID;
-	temp = subgroupShuffleUp(accum, 1), accum += thread_id >= 1 ? temp : 0;
-	temp = subgroupShuffleUp(accum, 2), accum += thread_id >= 2 ? temp : 0;
-#if WARP_SIZE >= 8
-	temp = subgroupShuffleUp(accum, 4), accum += thread_id >= 4 ? temp : 0;
-#endif
-#if WARP_SIZE >= 16
-	temp = subgroupShuffleUp(accum, 8), accum += thread_id >= 8 ? temp : 0;
-#endif
-#if WARP_SIZE >= 32
-	temp = subgroupShuffleUp(accum, 16), accum += thread_id >= 16 ? temp : 0;
-#endif
-#if WARP_SIZE >= 64
-	temp = subgroupShuffleUp(accum, 32), accum += thread_id >= 32 ? temp : 0;
-#endif
+	INCLUSIVE_ADD_STEP(1);
+	INCLUSIVE_ADD_STEP(2);
+	INCLUSIVE_ADD_STEP(4);
+	INCLUSIVE_ADD_STEP(8);
+	INCLUSIVE_ADD_STEP(16);
+	INCLUSIVE_ADD_STEP(32);
+	INCLUSIVE_ADD_STEP(64);
 	return accum;
 }
+
+uint inclusiveAdd(uint accum) {
+	uint temp;
+	INCLUSIVE_ADD_STEP(1);
+	INCLUSIVE_ADD_STEP(2);
+	INCLUSIVE_ADD_STEP(4);
+	INCLUSIVE_ADD_STEP(8);
+	INCLUSIVE_ADD_STEP(16);
+	INCLUSIVE_ADD_STEP(32);
+	INCLUSIVE_ADD_STEP(64);
+	return accum;
+}
+
+#undef INCLUSIVE_ADD_STEP
 
 #endif

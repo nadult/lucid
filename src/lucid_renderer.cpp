@@ -140,7 +140,7 @@ Ex<void> LucidRenderer::exConstruct(VulkanDevice &device, ShaderCompiler &compil
 	// TODO: max dispatches should also depend on lsize
 	// https://tinyurl.com/o7s9ph3
 	m_max_dispatches = 128; //device. gl_info->vendor == GlVendor::intel ? 32 : 128;
-	DASSERT(m_max_dispatches <= sizeof(shader::LucidInfo::dispatcher_task_counts) / sizeof(u32));
+	DASSERT(m_max_dispatches <= LUCID_INFO_MAX_DISPATCHES);
 
 	m_opts = opts;
 	m_size = view_size;
@@ -397,11 +397,6 @@ Ex<> LucidRenderer::setupInputData(const Context &ctx) {
 	auto &cmds = ctx.device.cmdQueue();
 	PERF_GPU_SCOPE(cmds);
 
-	uint bin_counters_size = LUCID_INFO_SIZE + m_bin_count * 10;
-	auto info_usage = VBufferUsage::storage_buffer | VBufferUsage::transfer_src |
-					  VBufferUsage::transfer_dst | VBufferUsage::indirect_buffer;
-	auto config_usage = VBufferUsage::uniform_buffer | VBufferUsage::transfer_dst;
-	auto mem_usage = VMemoryUsage::device;
 	auto frame_index = cmds.frameIndex() % num_frames;
 	m_info = m_frame_info[frame_index];
 	cmds.fill(m_info.subSpan(0, LUCID_INFO_SIZE + m_bin_count * 6), 0);
@@ -414,7 +409,6 @@ Ex<> LucidRenderer::setupInputData(const Context &ctx) {
 	config.num_instances = m_num_instances;
 	config.enable_backface_culling = ctx.config.backface_culling;
 	config.instance_packet_size = m_instance_packet_size;
-	mem_usage = VMemoryUsage::frame;
 	m_config = m_frame_config[frame_index];
 	EXPECT(cmds.upload(m_config, cspan(&config, 1)));
 
@@ -758,11 +752,12 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 		{"promoted bins", format_percentage(num_promoted_bins, m_bin_count)},
 	};
 
-	// TODO: fix it
-	int num_bin_dispatcher_work_groups =
-		min(max(info.a_bin_dispatcher_work_groups), arraySize(info.dispatcher_task_counts));
-	string bin_dispatcher_info =
-		toString(span(info.dispatcher_task_counts, num_bin_dispatcher_work_groups));
+	vector<int> dispatcher_task_counts;
+	for(int i : intRange(info.dispatcher_num_batches[0])) {
+		int count = info.dispatcher_num_batches[0][i] + info.dispatcher_num_batches[1][i];
+		if(count > 0)
+			dispatcher_task_counts.emplace_back(count);
+	}
 
 	auto fragment_info = stdFormat("%.3f avg fragments / pixel\n%.3f avg fragments / hblock",
 								   double(info.num_fragments) / (m_size.x * m_size.y),
@@ -770,8 +765,8 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 
 	vector<StatsRow> basic_rows = {
 		{"input instances", formatLarge(m_num_instances)},
-		{"bin dispatcher work-groups", toString(num_bin_dispatcher_work_groups),
-		 bin_dispatcher_info},
+		{"bin dispatcher work-groups", toString(dispatcher_task_counts.size()),
+		 toString(dispatcher_task_counts)},
 		{"input quads", formatLarge(info.num_input_quads)},
 		{"visible quads", visible_info, visible_details},
 		{"rejected quads", rejected_info, rejection_details},

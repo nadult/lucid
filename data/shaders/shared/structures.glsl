@@ -46,6 +46,9 @@ struct Viewport {
 	float inv_far_plane;
 };
 
+#define LUCID_INFO_MAX_DISPATCHES 128
+#define LUCID_INFO_SIZE 640
+
 // This structure contains all the necessary counters, atomics, etc.
 // In shader code it's available as g_info; In the same SSBO just after
 // this structure some basic per-bin counters are also kept (g_counts)
@@ -61,9 +64,6 @@ struct LucidInfo {
 	uint a_small_bins, a_high_bins;
 	uint a_setup_work_groups;
 	uint a_dummy_counter;
-	int a_bin_dispatcher_work_groups[2];
-	int a_bin_dispatcher_items[2];
-	int a_bin_dispatcher_phase[2];
 
 	// Counters for indirect dispatch
 	uint num_binning_dispatches[3];
@@ -80,15 +80,11 @@ struct LucidInfo {
 	uint num_fragments;
 	uint num_half_blocks;
 
-	// TODO: define MAX_DISPATCHES 128 ?
-	int dispatcher_task_counts[128];
-	int dispatcher_first_batch[2][128];
-	int dispatcher_num_batches[2][128];
+	int dispatcher_first_batch[2][LUCID_INFO_MAX_DISPATCHES];
+	int dispatcher_num_batches[2][LUCID_INFO_MAX_DISPATCHES];
 
-	int temp[52];
+	int temp[58];
 };
-
-#define LUCID_INFO_SIZE 768
 
 // This structure keeps uniform data passed to Lucid shaders
 struct LucidConfig {

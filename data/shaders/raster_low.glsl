@@ -211,14 +211,12 @@ void prepareSortTris() {
 	}
 }
 
-#ifdef VENDOR_NVIDIA
 uint swap(uint x, int mask, uint dir) {
 	uint y = subgroupShuffleXor(x, mask);
 	return uint(x < y) == dir ? y : x;
 }
 uint bitExtract(uint value, int boffset) { return (value >> boffset) & 1; }
 uint xorBits(uint value, int bit0, int bit1) { return ((value >> bit0) ^ (value >> bit1)) & 1; }
-#endif
 
 void sortTris(uint lbid, uint count, uint buf_offset) {
 	uint lid = LIX & WARP_MASK;
@@ -226,7 +224,8 @@ void sortTris(uint lbid, uint count, uint buf_offset) {
 	for(uint i = lid + count; i < rcount; i += WARP_SIZE)
 		s_buffer[buf_offset + i] = 0xffffffff;
 
-#ifdef VENDOR_NVIDIA
+// TODO: fix it for 64
+#if WARP_SIZE == 32
 	for(uint i = lid; i < rcount; i += WARP_SIZE) {
 		uint value = s_buffer[buf_offset + i];
 		// TODO: register sort could be faster
@@ -258,7 +257,7 @@ void sortTris(uint lbid, uint count, uint buf_offset) {
 				}
 			}
 		}
-#ifdef VENDOR_NVIDIA
+#if WARP_SIZE == 32
 		for(uint i = lid; i < rcount; i += WARP_SIZE) {
 			uint bit = (i & k) == 0 ? 0 : 1;
 			uint value = s_buffer[buf_offset + i];
@@ -390,8 +389,8 @@ void generateBlocks(uint bid) {
 	barrier();
 
 	// For 3 tris and less depth filter is enough, there is no need to sort
-	//if(tri_count > 3)
-	//sortTris(lbid, tri_count, buf_offset);
+	if(tri_count > 3)
+		sortTris(lbid, tri_count, buf_offset);
 
 	barrier();
 	groupMemoryBarrier();
@@ -638,13 +637,26 @@ void loadSamples(uint rbid, int segment_id) {
 #endif
 }
 
-void shadeAndReduceSamples(uint hbid, uint sample_count, in out ReductionContext ctx) {
-	uint buf_offset = (LIX >> 5) << SEGMENT_SHIFT;
-	uint bx = (hbid >> 1) & BLOCK_ROWS_MASK;
-	uint hby = (hbid & 1) + ((hbid >> (BLOCK_ROWS_SHIFT + 1)) << 1);
-	uint mini_offset = LIX & ~31;
-	uint reduce_pixel_bit = 1u << (LIX & 31);
-	ivec2 half_block_pos = ivec2(bx << 3, hby << 2) + s_bin_pos;
+uvec2 rasterBlockPos(uint rbid) {
+#if WARP_SIZE == 64
+	uint rbx = rbid & BLOCK_ROWS_MASK;
+	uint rby = rbid >> BLOCK_ROWS_SHIFT;
+#else
+	uint rbx = (rbid >> 1) & BLOCK_ROWS_MASK;
+	uint rby = (rbid & 1) + ((rbid >> (BLOCK_ROWS_SHIFT + 1)) << 1);
+#endif
+	return uvec2(rbx, rby);
+}
+
+ivec2 rasterBlockPixelPos(uint rbid) {
+	return ivec2(rasterBlockPos(rbid) << uvec2(RBLOCK_WIDTH_SHIFT, RBLOCK_HEIGHT_SHIFT));
+}
+
+void shadeAndReduceSamples(uint rbid, uint sample_count, in out ReductionContext ctx) {
+	uint buf_offset = (LIX >> WARP_SHIFT) << SEGMENT_SHIFT;
+	uint mini_offset = LIX & ~WARP_MASK;
+	uint reduce_pixel_bit = 1u << (LIX & WARP_MASK);
+	ivec2 rblock_pos = rasterBlockPixelPos(rbid) + s_bin_pos;
 	vec3 out_color = decodeRGB10(ctx.out_color);
 
 	for(uint i = 0; i < sample_count; i += WARP_SIZE) {
@@ -656,7 +668,7 @@ void shadeAndReduceSamples(uint hbid, uint sample_count, in out ReductionContext
 			uint value = s_buffer[buf_offset + sample_id];
 			uint sample_pixel_id = value & 31;
 			uint tri_idx = value >> 8;
-			ivec2 pix_pos = half_block_pos + ivec2(sample_pixel_id & 7, sample_pixel_id >> 3);
+			ivec2 pix_pos = rblock_pos + ivec2(sample_pixel_id & 7, sample_pixel_id >> 3);
 			float sample_depth;
 			uint sample_color = shadeSample(pix_pos, tri_idx, sample_depth);
 			sample_s = uvec2(sample_color, floatBitsToUint(sample_depth));
@@ -773,8 +785,8 @@ void rasterBin(int bin_id) {
 		UPDATE_TIMER(1);
 
 		ReductionContext context;
-		//initReduceSamples(context);
-		initVisualizeSamples();
+		initReduceSamples(context);
+		//initVisualizeSamples();
 
 		for(int segment_id = 0;; segment_id++) {
 			uint counts = s_rblock_counts[rbid & ACTIVE_RBLOCKS_MASK];
@@ -785,8 +797,8 @@ void rasterBin(int bin_id) {
 			loadSamples(rbid, segment_id);
 			UPDATE_TIMER(2);
 
-			visualizeSamples(frag_count);
-			//shadeAndReduceSamples(rbid, frag_count, context);
+			//visualizeSamples(frag_count);
+			shadeAndReduceSamples(rbid, frag_count, context);
 			UPDATE_TIMER(3);
 
 #ifdef ALPHA_THRESHOLD
@@ -795,20 +807,13 @@ void rasterBin(int bin_id) {
 #endif
 		}
 
-#if WARP_SIZE == 64
-		uint rbx = rbid & BLOCK_ROWS_MASK;
-		uint rby = rbid >> BLOCK_ROWS_SHIFT;
-#else
-		uint rbx = (rbid >> 1) & BLOCK_ROWS_MASK;
-		uint rby = (rbid & 1) + ((rbid >> (BLOCK_ROWS_SHIFT + 1)) << 1);
-#endif
-		ivec2 pixel_pos = ivec2((LIX & (RBLOCK_WIDTH - 1)) + (rbx << RBLOCK_WIDTH_SHIFT),
-								((LIX >> RBLOCK_WIDTH_SHIFT) & (RBLOCK_HEIGHT - 1)) +
-									(rby << RBLOCK_HEIGHT_SHIFT));
+		ivec2 pixel_pos =
+			rasterBlockPixelPos(rbid) +
+			ivec2((LIX & (RBLOCK_WIDTH - 1)), ((LIX >> RBLOCK_WIDTH_SHIFT) & (RBLOCK_HEIGHT - 1)));
 		uint enc_color = finishReduceSamples(context);
-		//outputPixel(pixel_pos, enc_color);
+		outputPixel(pixel_pos, enc_color);
 
-		finishVisualizeSamples(pixel_pos);
+		//finishVisualizeSamples(pixel_pos);
 		//visualizeBlockCounts(rbid, pixel_pos);
 		UPDATE_TIMER(4);
 		barrier();

@@ -245,6 +245,24 @@ vec2 rectTexCoord(Rect rect, vec3 pos) {
 	return (rect.pos + rect.size * pos.xy + vec2(1.0, 1.0)) * 0.5;
 }
 
+vec3 gradientColor(uint value, uvec4 steps) {
+	vec3 color_a, color_b;
+	int step_id = 3;
+
+	for(int i = 0; i < 4; i++)
+		if(value < steps[i]) {
+			step_id = i;
+			break;
+		}
+
+	vec3 colors[4] = {vec3(1.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0), vec3(0.0, 0.0, 1.0),
+					  vec3(1.0, 1.0, 1.0)};
+	float base_step = step_id == 0 ? 0 : steps[step_id - 1];
+	vec3 base_color = step_id == 0 ? vec3(0) : colors[step_id - 1];
+	float t = float(value - base_step) / float(steps[step_id] - base_step);
+	return colors[step_id] * t + base_color * (1.0 - t);
+}
+
 // --------------------- Lighting functions -----------------------------------
 
 vec3 skyColor(float vertical_pos) {

@@ -279,43 +279,35 @@ void generateBlocks(uint bid) {
 	s_segments[LIX + LSIZE] = INVALID_SEGMENT;
 
 	{
-		uint bx_bits_shift = 24 + bx;
-		uint block_tri_count = 0;
-#if WARP_SIZE == 32
-		uint thread_bit_mask = ~(~0u << gl_SubgroupInvocationID);
-#else
-		uvec2 thread_bit_mask = ~uvec2(~0u << gl_SubgroupInvocationID,
-									   ~0u << max(0, int(gl_SubgroupInvocationID) - 32));
-#endif
-
-		for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_SIZE) {
+		uint bx_bits_shift = 24 + bx, block_tri_count = 0;
+		// In some cases on integrated AMD gpu atomic-based version is faster
+		for(uint i = gl_SubgroupInvocationID; i < tri_count; i += gl_SubgroupSize) {
 			uint bx_bit = (g_scratch_64[src_offset_64 + i].x >> bx_bits_shift) & 1;
 
 #if WARP_SIZE == 32
-			uint bit_mask = uint(subgroupBallot(bx_bit != 0).x);
+			uint bit_mask = subgroupBallot(bx_bit != 0).x;
 			if(bit_mask == 0)
 				continue;
-			uint warp_offset = bitCount(bit_mask & thread_bit_mask);
+			uint warp_offset = bitCount(bit_mask & gl_SubgroupLtMask.x);
 			uint bit_count = bitCount(bit_mask);
 #else
-			uvec2 bit_mask = uvec2(subgroupBallot(bx_bit != 0).xy);
+			uvec2 bit_mask = subgroupBallot(bx_bit != 0).xy;
 			if(bit_mask.x == 0 && bit_mask.y == 0)
 				continue;
-			uint warp_offset =
-				bitCount(bit_mask.x & thread_bit_mask.x) + bitCount(bit_mask.y & thread_bit_mask.y);
+			uint warp_offset = bitCount(bit_mask.x & gl_SubgroupLtMask.x) +
+							   bitCount(bit_mask.y & gl_SubgroupLtMask.y);
 			uint bit_count = bitCount(bit_mask.x) + bitCount(bit_mask.y);
 #endif
 
 			if(bx_bit != 0) {
-				uint tri_offset =
-					(block_tri_count + warp_offset) & ((1 << MAX_BLOCK_TRIS_SHIFT) - 1);
+				uint tri_offset = block_tri_count + warp_offset;
 				if(tri_offset < MAX_BLOCK_TRIS)
 					s_buffer[buf_offset + tri_offset] = i;
 			}
 			block_tri_count += bit_count;
 		}
 
-		if((LIX & WARP_MASK) == 0) {
+		if(gl_SubgroupInvocationID == 0) {
 			s_block_tri_count[lbid] = block_tri_count;
 			if(block_tri_count > MAX_BLOCK_TRIS)
 				atomicOr(s_raster_error, 1 << lbid);
@@ -600,28 +592,18 @@ void finishVisualizeSamples(ivec2 pixel_pos) {
 	outputPixel(pixel_pos, enc_col);
 }
 
-void visualizeFragmentCounts(uint rbid, ivec2 pixel_pos) {
+void visualizeBlockCounts(uint rbid, ivec2 pixel_pos) {
 	uint lrbid = rbid & (WARP_SIZE == 64 ? NUM_WARPS - 1 : NUM_WARPS * 2 - 1);
-	uint count = s_rblock_counts[lrbid] >> 16;
-	vec4 color = vec4(SATURATE(vec3(count) / 2048.0), 1.0);
-	outputPixel(pixel_pos, encodeRGBA8(color));
-}
-
-void visualizeTriangleCounts(uint rbid, ivec2 pixel_pos) {
 	uint lbid = (WARP_SIZE == 64 ? rbid : rbid >> 1) & (NUM_WARPS - 1);
-	uint count = s_block_tri_count[lbid];
-	//count = s_block_row_tri_count[pixel_pos.y >> BLOCK_SHIFT];
-	//count = s_bin_quad_count * 2 + s_bin_tri_count;
+	uint frag_count = (WARP_SIZE == 64 ? 1 : 2) * (s_rblock_counts[lrbid] >> 16);
+	uint tri_count = s_block_tri_count[lbid];
+	//tri_count = s_block_row_tri_count[pixel_pos.y >> BLOCK_SHIFT];
+	//tri_count = s_bin_quad_count * 2 + s_bin_tri_count;
 
 	vec3 color;
-	if(count == 0)
-		color = vec3(0);
-	else if(count < 16)
-		color = vec3(count + 16, 0, 0) / 32.0;
-	else if(count < 64)
-		color = vec3(count + 32, count + 32, 0) / 96.0;
-	else
-		color = vec3(0, count, 0.0) / 256.0;
+	color = gradientColor(frag_count, uvec4(64, 256, 1024, 4096));
+	//color = gradientColor(tri_count, uvec4(16, 32, 64, 256));
+
 	outputPixel(pixel_pos, encodeRGBA8(vec4(SATURATE(color), 1.0)));
 }
 
@@ -730,8 +712,7 @@ void rasterBin(int bin_id) {
 		//outputPixel(pixel_pos, enc_color);
 
 		//finishVisualizeSamples(pixel_pos);
-		visualizeFragmentCounts(rbid, pixel_pos);
-		//visualizeTriangleCounts(rbid, pixel_pos);
+		visualizeBlockCounts(rbid, pixel_pos);
 		UPDATE_TIMER(4);
 		barrier();
 	}

@@ -68,7 +68,7 @@ Ex<PVPipeline> SimpleRenderer::getPipeline(const RenderContext &ctx, bool opaque
 								wireframe ? VPolygonMode::line : VPolygonMode::fill,
 								mask(ctx.config.backface_culling, VCull::back));
 	if(!opaque) {
-		VBlendingMode additive_blend(VBlendFactor::one, VBlendFactor::one);
+		VBlendingMode additive_blend(VBlendFactor::src_alpha, VBlendFactor::one);
 		VBlendingMode normal_blend(VBlendFactor::src_alpha, VBlendFactor::one_minus_src_alpha);
 		setup.blending.attachments = {
 			{ctx.config.additive_blending ? additive_blend : normal_blend}};

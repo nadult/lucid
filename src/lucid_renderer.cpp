@@ -116,6 +116,14 @@ void LucidRenderer::addShaderDefs(VulkanDevice &device, ShaderCompiler &compiler
 	compiler.add({"bin_categorizer", VShaderStage::compute, "bin_categorizer.glsl", base_macros});
 	add_debugable("raster_low", "raster_low.glsl");
 	add_debugable("raster_high", "raster_high.glsl");
+
+	base_macros.emplace_back("ALPHA_THRESHOLD", "1");
+	add_debugable("raster_low_alpha_threshold", "raster_low.glsl");
+	add_debugable("raster_high_alpha_threshold", "raster_high.glsl");
+
+	base_macros.back().first = "ADDITIVE_BLENDING";
+	add_debugable("raster_low_additive_blend", "raster_low.glsl");
+	add_debugable("raster_high_additive_blend", "raster_high.glsl");
 }
 
 static Ex<PVPipeline> makeComputePipeline(VulkanDevice &device, ShaderCompiler &compiler,
@@ -222,8 +230,13 @@ Ex<void> LucidRenderer::exConstruct(VulkanDevice &device, ShaderCompiler &compil
 	p_bin_counter = EX_PASS(make_compute_pipe("bin_counter", Opt::debug_bin_counter));
 	p_bin_categorizer = EX_PASS(make_compute_pipe("bin_categorizer", none));
 
-	p_raster_low = EX_PASS(make_compute_pipe("raster_low", Opt::debug_raster));
-	//p_raster_high = EX_PASS(make_compute_pipe("raster_high", Opt::debug_raster));
+	auto raster_suffix = m_opts & Opt::additive_blending ? "_additive_blend" :
+						 m_opts & Opt::alpha_threshold	 ? "_alpha_threshold" :
+														   "";
+	p_raster_low =
+		EX_PASS(make_compute_pipe(format("raster_low%", raster_suffix), Opt::debug_raster));
+	//p_raster_high =
+	//EX_PASS(make_compute_pipe(format("raster_high%", raster_suffix), Opt::debug_raster));
 
 	if(opts & (Opt::debug_bin_dispatcher | Opt::debug_quad_setup | Opt::debug_raster |
 			   Opt::debug_bin_counter)) {

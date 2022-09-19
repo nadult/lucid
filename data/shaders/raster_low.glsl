@@ -654,8 +654,7 @@ ivec2 rasterBlockPixelPos(uint rbid) {
 
 void shadeAndReduceSamples(uint rbid, uint sample_count, in out ReductionContext ctx) {
 	uint buf_offset = (LIX >> WARP_SHIFT) << SEGMENT_SHIFT;
-	uint mini_offset = LIX & ~WARP_MASK;
-	uint reduce_pixel_bit = 1u << (LIX & WARP_MASK);
+	uint mini_offset = (LIX & ~WARP_MASK) + (WARP_SIZE == 64 ? LIX & 32 : 0);
 	ivec2 rblock_pos = rasterBlockPixelPos(rbid) + s_bin_pos;
 	vec3 out_color = decodeRGB10(ctx.out_color);
 
@@ -672,7 +671,12 @@ void shadeAndReduceSamples(uint rbid, uint sample_count, in out ReductionContext
 			float sample_depth;
 			uint sample_color = shadeSample(pix_pos, tri_idx, sample_depth);
 			sample_s = uvec2(sample_color, floatBitsToUint(sample_depth));
-			atomicOr(s_mini_buffer[mini_offset + sample_pixel_id], reduce_pixel_bit);
+#if WARP_SIZE == 32
+			atomicOr(s_mini_buffer[mini_offset + sample_pixel_id], gl_SubgroupEqMask.x);
+#else
+			const uint pixel_bit = gl_SubgroupEqMask.x | gl_SubgroupEqMask.y;
+			atomicOr(s_mini_buffer[mini_offset + sample_pixel_id], pixel_bit);
+#endif
 		}
 		memoryBarrierShared();
 
@@ -785,8 +789,11 @@ void rasterBin(int bin_id) {
 		UPDATE_TIMER(1);
 
 		ReductionContext context;
+#if WARP_SIZE == 32
 		initReduceSamples(context);
-		//initVisualizeSamples();
+#else
+		initVisualizeSamples();
+#endif
 
 		for(int segment_id = 0;; segment_id++) {
 			uint counts = s_rblock_counts[rbid & ACTIVE_RBLOCKS_MASK];
@@ -797,8 +804,11 @@ void rasterBin(int bin_id) {
 			loadSamples(rbid, segment_id);
 			UPDATE_TIMER(2);
 
-			//visualizeSamples(frag_count);
+#if WARP_SIZE == 32
 			shadeAndReduceSamples(rbid, frag_count, context);
+#else
+			visualizeSamples(frag_count);
+#endif
 			UPDATE_TIMER(3);
 
 #ifdef ALPHA_THRESHOLD
@@ -811,9 +821,12 @@ void rasterBin(int bin_id) {
 			rasterBlockPixelPos(rbid) +
 			ivec2((LIX & (RBLOCK_WIDTH - 1)), ((LIX >> RBLOCK_WIDTH_SHIFT) & (RBLOCK_HEIGHT - 1)));
 		uint enc_color = finishReduceSamples(context);
+#if WARP_SIZE == 32
 		outputPixel(pixel_pos, enc_color);
+#else
+		finishVisualizeSamples(pixel_pos);
+#endif
 
-		//finishVisualizeSamples(pixel_pos);
 		//visualizeBlockCounts(rbid, pixel_pos);
 		UPDATE_TIMER(4);
 		barrier();
@@ -850,6 +863,7 @@ void main() {
 		uint num_dispatches = min(s_promoted_bin_count, MAX_DISPATCHES / 2);
 		atomicMax(g_info.bin_level_dispatches[BIN_LEVEL_HIGH][0], num_dispatches);
 	}
+
 	COMMIT_TIMERS(g_info.raster_timers);
 	commitStats();
 }

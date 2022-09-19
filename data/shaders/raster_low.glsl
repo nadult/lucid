@@ -205,9 +205,9 @@ shared uint s_sort_rcount[NUM_WARPS];
 void prepareSortTris() {
 	if(LIX < NUM_WARPS) {
 		uint count = s_block_tri_count[LIX];
-		// rcount: count rounded up to next power of 2, minimum: WARP_SIZE
-		s_sort_rcount[LIX] =
-			max(WARP_SIZE, (count & (count - 1)) == 0 ? count : (2 << findMSB(count)));
+		// rcount: count rounded up to next power of 2; minimum: WARP_SIZE
+		uint rcount = max(WARP_SIZE, (count & (count - 1)) == 0 ? count : (2 << findMSB(count)));
+		s_sort_rcount[LIX] = rcount;
 	}
 }
 
@@ -395,7 +395,7 @@ void generateBlocks(uint bid) {
 	barrier();
 	groupMemoryBarrier();
 
-#ifdef SHADER_DEBUG
+#ifdef DEBUG_ENABLED
 	// Making sure that tris are properly ordered
 	if(tri_count > 3)
 		for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_SIZE) {

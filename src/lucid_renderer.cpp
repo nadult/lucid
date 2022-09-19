@@ -223,9 +223,10 @@ Ex<void> LucidRenderer::exConstruct(VulkanDevice &device, ShaderCompiler &compil
 	p_bin_categorizer = EX_PASS(make_compute_pipe("bin_categorizer", none));
 
 	p_raster_low = EX_PASS(make_compute_pipe("raster_low", Opt::debug_raster));
-	//p_raster_high = EX_PASS(makeComputePipeline(device, compiler, consts, "raster_high"));
+	//p_raster_high = EX_PASS(make_compute_pipe("raster_high", Opt::debug_raster));
 
-	if(opts & (Opt::debug_bin_dispatcher | Opt::debug_quad_setup | Opt::debug_raster)) {
+	if(opts & (Opt::debug_bin_dispatcher | Opt::debug_quad_setup | Opt::debug_raster |
+			   Opt::debug_bin_counter)) {
 		auto usage =
 			VBufferUsage::storage_buffer | VBufferUsage::transfer_dst | VBufferUsage::transfer_src;
 		auto mem_usage = VMemoryUsage::temporary;
@@ -502,7 +503,6 @@ void LucidRenderer::bindRaster(PVPipeline pipeline, const Context &ctx) {
 	ds = cmds.bindDS(1);
 	ds.set(0, m_bin_quads, m_bin_tris, m_scratch_32, m_scratch_64, m_instance_colors,
 		   m_instance_uv_rects, m_uvec4_storage, m_normals_storage, m_raster_image);
-	// TODO: why this needs to be separate?
 	if(m_opts & Opt::debug_raster) {
 		ds.set(11, m_debug_buffer);
 		shaderDebugInitBuffer(cmds, m_debug_buffer);
@@ -517,19 +517,13 @@ void LucidRenderer::rasterLow(const Context &ctx) {
 	auto &cmds = ctx.device.cmdQueue();
 	PERF_GPU_SCOPE(cmds);
 
-	cmds.barrier(VPipeStage::compute_shader, VPipeStage::draw_indirect, VAccess::memory_write,
-				 VAccess::indirect_command_read);
+	cmds.barrier(VPipeStage::compute_shader, VPipeStage::draw_indirect | VPipeStage::compute_shader,
+				 VAccess::memory_write, VAccess::indirect_command_read | VAccess::memory_read);
 	bindRaster(p_raster_low, ctx);
-	//if(m_opts & Opt::debug_raster)
-	//	shaderDebugUseBuffer(m_errors);
 	cmds.dispatchComputeIndirect(m_info,
 								 LUCID_INFO_MEMBER_OFFSET(bin_level_dispatches[BIN_LEVEL_LOW]));
-
 	if(m_opts & Opt::debug_raster)
 		getDebugData(ctx, m_debug_buffer, "raster_low_debug");
-	//cmds.dispatchCompute({64, 1, 1});
-	//if(m_opts & Opt::debug_raster)
-	//	debugProgram(p_raster_low, "raster_low");
 }
 
 /*void LucidRenderer::rasterHigh(const Context &ctx) {

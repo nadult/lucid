@@ -235,8 +235,8 @@ Ex<void> LucidRenderer::exConstruct(VulkanDevice &device, ShaderCompiler &compil
 														   "";
 	p_raster_low =
 		EX_PASS(make_compute_pipe(format("raster_low%", raster_suffix), Opt::debug_raster));
-	//p_raster_high =
-	//EX_PASS(make_compute_pipe(format("raster_high%", raster_suffix), Opt::debug_raster));
+	p_raster_high =
+		EX_PASS(make_compute_pipe(format("raster_high%", raster_suffix), Opt::debug_raster));
 
 	if(opts & (Opt::debug_bin_dispatcher | Opt::debug_quad_setup | Opt::debug_raster |
 			   Opt::debug_bin_counter)) {
@@ -310,7 +310,7 @@ void LucidRenderer::render(const Context &ctx) {
 	cmds.barrier(VPipeStage::compute_shader, VPipeStage::compute_shader, VAccess::memory_write,
 				 VAccess::memory_read | VAccess::memory_write);
 	rasterLow(ctx);
-	//rasterHigh(ctx);
+	rasterHigh(ctx);
 
 	cmds.barrier(VPipeStage::compute_shader, VPipeStage::all_graphics, VAccess::memory_write,
 				 VAccess::memory_read | VAccess::memory_write);
@@ -539,18 +539,17 @@ void LucidRenderer::rasterLow(const Context &ctx) {
 		getDebugData(ctx, m_debug_buffer, "raster_low_debug");
 }
 
-/*void LucidRenderer::rasterHigh(const Context &ctx) {
+void LucidRenderer::rasterHigh(const Context &ctx) {
 	auto &cmds = ctx.device.cmdQueue();
 	PERF_GPU_SCOPE(cmds);
-
+	cmds.barrier(VPipeStage::compute_shader, VPipeStage::draw_indirect | VPipeStage::compute_shader,
+				 VAccess::memory_write, VAccess::indirect_command_read | VAccess::memory_read);
 	bindRaster(p_raster_high, ctx);
+	cmds.dispatchComputeIndirect(m_info,
+								 LUCID_INFO_MEMBER_OFFSET(bin_level_dispatches[BIN_LEVEL_HIGH]));
 	if(m_opts & Opt::debug_raster)
-		shaderDebugUseBuffer(m_errors);
-	dispatchIndirect(LUCID_INFO_MEMBER_OFFSET(bin_level_dispatches[BIN_LEVEL_HIGH]));
-	if(m_opts & Opt::debug_raster)
-		debugProgram(p_raster_high, "raster_high");
-	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
-}*/
+		getDebugData(ctx, m_debug_buffer, "raster_high_debug");
+}
 
 void LucidRenderer::compose(const Context &ctx) {
 	auto &cmds = ctx.device.cmdQueue();

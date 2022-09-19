@@ -52,7 +52,7 @@ class LucidRenderer {
 	void computeBins(const Context &);
 	void bindRaster(PVPipeline, const Context &);
 	void rasterLow(const Context &);
-	//void rasterHigh(const Context &);
+	void rasterHigh(const Context &);
 	void compose(const Context &);
 
 	template <class T>

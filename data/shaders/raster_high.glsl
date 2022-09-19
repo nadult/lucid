@@ -1,6 +1,12 @@
+#include "shared/compute_funcs.glsl"
 #include "shared/scanline.glsl"
 #include "shared/shading.glsl"
 #include "shared/timers.glsl"
+
+#include "%shader_debug"
+DEBUG_SETUP(1, 11)
+
+#extension GL_KHR_shader_subgroup_ballot : require
 
 #define LSIZE 1024
 #define LSHIFT 10
@@ -106,20 +112,6 @@ void outputPixel(ivec2 pixel_pos, uint color) {
 	g_raster_image[s_bin_raster_offset + pixel_pos.x + (pixel_pos.y << BIN_SHIFT)] = color;
 }
 
-uint max32(uint value, int width) {
-	if(width >= 2)
-		value = max(value, shuffleXorNV(value, 1, 32));
-	if(width >= 4)
-		value = max(value, shuffleXorNV(value, 2, 32));
-	if(width >= 8)
-		value = max(value, shuffleXorNV(value, 4, 32));
-	if(width >= 16)
-		value = max(value, shuffleXorNV(value, 8, 32));
-	if(width >= 32)
-		value = max(value, shuffleXorNV(value, 16, 32));
-	return value;
-}
-
 void generateRowTris(uint tri_idx, int start_hby) {
 	uint scan_offset = STORAGE_TRI_SCAN_OFFSET + tri_idx * 2;
 	uvec4 val0 = g_uvec4_storage[scan_offset + 0];
@@ -127,12 +119,12 @@ void generateRowTris(uint tri_idx, int start_hby) {
 	int min_hby = clamp(int(val0.w & 0xffff) - s_bin_pos.y, 0, BIN_MASK) >> HBLOCK_HEIGHT_SHIFT;
 	int max_hby = clamp(int(val0.w >> 16) - s_bin_pos.y, 0, BIN_MASK) >> HBLOCK_HEIGHT_SHIFT;
 
-#if HBLOCK_ROWS_STEP < HBLOCK_ROWS
-	min_hby = max(start_hby, min_hby);
-	max_hby = min(start_hby + HBLOCK_ROWS_STEP_MASK, max_hby);
-	if(max_hby < min_hby)
-		return;
-#endif
+	if(HBLOCK_ROWS_STEP < HBLOCK_ROWS) {
+		min_hby = max(start_hby, min_hby);
+		max_hby = min(start_hby + HBLOCK_ROWS_STEP_MASK, max_hby);
+		if(max_hby < min_hby)
+			return;
+	}
 
 	vec2 start = vec2(s_bin_pos.x, s_bin_pos.y + min_hby * HBLOCK_HEIGHT);
 	ScanlineParams scan = loadScanlineParamsRow(val0, val1, start);
@@ -218,13 +210,13 @@ void processQuads(int start_hby) {
 	if(LIX < NUM_WARPS) {
 		uint hbx = LIX & HBLOCK_COLS_MASK;
 		int value = s_hblock_tri_counts[LIX], temp;
-		temp = shuffleUpNV(value, 1, HBLOCK_COLS), value += hbx >= 1 ? temp : 0;
+		temp = subgroupShuffleUp(value, 1), value += hbx >= 1 ? temp : 0;
 		if(HBLOCK_COLS >= 4)
-			temp = shuffleUpNV(value, 2, HBLOCK_COLS), value += hbx >= 2 ? temp : 0;
+			temp = subgroupShuffleUp(value, 2), value += hbx >= 2 ? temp : 0;
 		if(HBLOCK_COLS >= 8)
-			temp = shuffleUpNV(value, 4, HBLOCK_COLS), value += hbx >= 4 ? temp : 0;
+			temp = subgroupShuffleUp(value, 4), value += hbx >= 4 ? temp : 0;
 		s_hblock_tri_counts[LIX] = value;
-		uint max_value = max32(uint(value), NUM_WARPS);
+		uint max_value = subgroupMax_(uint(value), NUM_WARPS);
 		if(LIX == 0) {
 			s_hblock_max_tri_counts = max_value;
 			// rcount: count rounded up to next power of 2, minimum: 32
@@ -238,7 +230,7 @@ void processQuads(int start_hby) {
 							   max_value <= MAX_HBLOCK_TRIS0 * 4  ? 2 :
 							   max_value <= MAX_HBLOCK_TRIS0 * 8  ? 3 :
 							   max_value <= MAX_HBLOCK_TRIS0 * 16 ? 4 :
-																	  5;
+																	5;
 			uint group_size = 1 << group_shift;
 			s_hblock_group_shift = group_shift;
 			s_hblock_group_size = group_size;
@@ -248,9 +240,9 @@ void processQuads(int start_hby) {
 	}
 }
 
-#ifdef VENDOR_NVIDIA
+#if WARP_SIZE == 32
 uint swap(uint x, int mask, uint dir) {
-	uint y = shuffleXorNV(x, mask, 32);
+	uint y = subgroupShuffleXor(x, mask);
 	return uint(x < y) == dir ? y : x;
 }
 uint bitExtract(uint value, int boffset) { return (value >> boffset) & 1; }
@@ -262,7 +254,7 @@ void sortTris(uint lhbid, uint count, uint buf_offset, uint group_size, uint lid
 	for(uint i = lid + count; i < rcount; i += group_size)
 		s_buffer[buf_offset + i] = 0xffffffff;
 
-#ifdef VENDOR_NVIDIA
+#if WARP_SIZE == 32
 	for(uint i = lid; i < rcount; i += group_size) {
 		uint value = s_buffer[buf_offset + i];
 		// TODO: register sort could be faster
@@ -304,7 +296,7 @@ void sortTris(uint lhbid, uint count, uint buf_offset, uint group_size, uint lid
 			}
 			barrier();
 		}
-#ifdef VENDOR_NVIDIA
+#if WARP_SIZE == 32
 		for(uint i = lid; i < rcount; i += group_size) {
 			uint bit = (i & k) == 0 ? 0 : 1;
 			uint value = s_buffer[buf_offset + i];
@@ -347,7 +339,7 @@ void generateHBlocks(uint start_hbid) {
 		if(group_thread < WARP_SIZE) {
 			for(uint i = group_thread; i < tri_count; i += WARP_SIZE) {
 				uint bx_bit = (g_scratch_32[src_offset_32 + i] >> bx_bits_shift) & 1;
-				uint bit_mask = uint(ballotARB(bx_bit != 0));
+				uint bit_mask = uint(subgroupBallot(bx_bit != 0).x);
 				if(bit_mask == 0)
 					continue;
 
@@ -360,7 +352,7 @@ void generateHBlocks(uint start_hbid) {
 			}
 			if(group_thread == 0) {
 				if(s_hblock_tri_counts[lhbid] < int(block_tri_count))
-					RECORD(hbid, s_hblock_tri_counts[lhbid], block_tri_count, 0);
+					DEBUG_RECORD(hbid, s_hblock_tri_counts[lhbid], block_tri_count, 0);
 				s_hblock_tri_counts[lhbid] = int(block_tri_count);
 			}
 		}
@@ -399,7 +391,7 @@ void generateHBlocks(uint start_hbid) {
 		float depth = 0xffffe * SATURATE(inversesqrt(ray_pos + 1)); // 20 bits
 
 		if(num_frags == 0) // This means that bx_mask is invalid
-			RECORD(0, 0, 0, 0);
+			DEBUG_RECORD(0, 0, 0, 0);
 
 		g_scratch_64[dst_offset_64 + i] = uvec2(bits, tri_idx | (num_frags << 24));
 		s_buffer[buf_offset + i] = i | (uint(depth) << 12);
@@ -416,7 +408,7 @@ void generateHBlocks(uint start_hbid) {
 		uint value = s_buffer[buf_offset + i];
 		uint prev_value = i == 0 ? 0 : s_buffer[buf_offset + i - 1];
 		if(value <= prev_value)
-			RECORD(i, tri_count, prev_value, value);
+			DEBUG_RECORD(i, tri_count, prev_value, value);
 	}
 #endif
 
@@ -425,12 +417,7 @@ void generateHBlocks(uint start_hbid) {
 		uint num_frags = g_scratch_64[dst_offset_64 + hblock_tri_idx].y >> 24;
 
 		// Computing triangle-ordered sample offsets within each block
-		uint sum = num_frags, temp;
-		temp = shuffleUpNV(sum, 1, 32), sum += (LIX & 31) >= 1 ? temp : 0;
-		temp = shuffleUpNV(sum, 2, 32), sum += (LIX & 31) >= 2 ? temp : 0;
-		temp = shuffleUpNV(sum, 4, 32), sum += (LIX & 31) >= 4 ? temp : 0;
-		temp = shuffleUpNV(sum, 8, 32), sum += (LIX & 31) >= 8 ? temp : 0;
-		temp = shuffleUpNV(sum, 16, 32), sum += (LIX & 31) >= 16 ? temp : 0;
+		uint sum = inclusiveAdd(num_frags);
 		s_buffer[buf_offset + i] = (sum - num_frags) | (num_frags << 12) | (hblock_tri_idx << 20);
 	}
 	barrier();
@@ -458,15 +445,15 @@ void generateHBlocks(uint start_hbid) {
 		uint value = values[0] + values[1] + values[2] + values[3];
 		uint sum = value, temp;
 		if(true)
-			temp = shuffleUpNV(sum, 1, wgsize), sum += group_sub_idx >= 1 ? temp : 0;
+			temp = subgroupShuffleUp(sum, 1), sum += group_sub_idx >= 1 ? temp : 0;
 		if(wgsize >= 4)
-			temp = shuffleUpNV(sum, 2, wgsize), sum += group_sub_idx >= 2 ? temp : 0;
+			temp = subgroupShuffleUp(sum, 2), sum += group_sub_idx >= 2 ? temp : 0;
 		if(wgsize >= 8)
-			temp = shuffleUpNV(sum, 4, wgsize), sum += group_sub_idx >= 4 ? temp : 0;
+			temp = subgroupShuffleUp(sum, 4), sum += group_sub_idx >= 4 ? temp : 0;
 		if(wgsize >= 16)
-			temp = shuffleUpNV(sum, 8, wgsize), sum += group_sub_idx >= 8 ? temp : 0;
+			temp = subgroupShuffleUp(sum, 8), sum += group_sub_idx >= 8 ? temp : 0;
 		if(wgsize >= 32)
-			temp = shuffleUpNV(sum, 16, wgsize), sum += group_sub_idx >= 16 ? temp : 0;
+			temp = subgroupShuffleUp(sum, 16), sum += group_sub_idx >= 16 ? temp : 0;
 
 		if(group_sub_idx == wgmask) {
 			updateStats(int(sum), int(tri_count));
@@ -554,8 +541,8 @@ void loadSamples(uint hbid, int segment_id) {
 			if(i == 0 && tri_offset != 0)
 				tri_offset -= SEGMENT_SIZE;
 			uint tri_idx = tri_data.x & 0xffffff;
-			uvec4 countx = (tri_data.y >> uvec4(16, 20, 24, 28)) & 15;
-			uvec4 minx = (tri_data.y >> uvec4(0, 3, 6, 9)) & 7;
+			uvec4 countx = (uvec4(tri_data.y) >> uvec4(16, 20, 24, 28)) & 15;
+			uvec4 minx = (uvec4(tri_data.y) >> uvec4(0, 3, 6, 9)) & 7;
 			uint bits0 = uint((1 << countx[0]) - 1) << (minx[0] + 0);
 			uint bits1 = uint((1 << countx[1]) - 1) << (minx[1] + 8);
 			uint bits2 = uint((1 << countx[2]) - 1) << (minx[2] + 16);
@@ -584,8 +571,8 @@ void loadSamples(uint hbid, int segment_id) {
 
 			int minx = int((tri_data.y >> min_shift) & 7);
 			int countx = int((tri_data.y >> count_shift) & 15);
-			int prevx = countx + (shuffleUpNV(countx, 1, 4) & mask1);
-			prevx += (shuffleUpNV(prevx, 2, 4) & mask2);
+			int prevx = countx + (subgroupShuffleUp(countx, 1) & mask1);
+			prevx += (subgroupShuffleUp(prevx, 2) & mask2);
 			tri_offset += prevx - countx;
 			countx = min(countx, SEGMENT_SIZE - tri_offset);
 			if(tri_offset < 0)

@@ -388,7 +388,6 @@ void generateBlocks(uint bid) {
 	}
 	barrier();
 
-	// For 3 tris and less depth filter is enough, there is no need to sort
 	if(tri_count > 3)
 		sortTris(lbid, tri_count, buf_offset);
 
@@ -525,6 +524,7 @@ void generateBlocks(uint bid) {
 
 		uint tri_value = s_buffer[buf_offset + i];
 		uint block_tri_idx = tri_value >> 24;
+		tri_value &= 0xffffff;
 		tri_value =
 			(tri_value + s_mini_buffer[(lbid << NUM_WARPS_SHIFT) + (i >> WARP_SHIFT)]) - tri_offset;
 		uint seg_offset = tri_offset & (SEGMENT_SIZE - 1);
@@ -533,11 +533,10 @@ void generateBlocks(uint bid) {
 		if(seg_offset + tri_value > SEGMENT_SIZE)
 			seg_id++, first_seg = true;
 		seg_offset <<= 24;
-
 		if(first_seg && tri_value > 0)
 			s_segments[seg_block_offset + seg_id] = i | seg_offset;
 
-		uint tri_idx = g_scratch_64[src_offset_64 + block_tri_idx + MAX_BLOCK_TRIS].x;
+		uint tri_idx = g_scratch_64[src_offset_64 + block_tri_idx + MAX_BLOCK_TRIS].x & 0xffffff;
 		uvec2 tri_data = g_scratch_64[src_offset_64 + block_tri_idx];
 		g_scratch_32[dst_offset_32 + i] = tri_idx | seg_offset;
 		g_scratch_64[dst_offset_64 + i] = tri_data;
@@ -713,9 +712,32 @@ void visualizeBlockCounts(uint rbid, ivec2 pixel_pos) {
 	//tri_count = s_block_row_tri_count[pixel_pos.y >> BLOCK_SHIFT];
 	//tri_count = s_bin_quad_count * 2 + s_bin_tri_count;
 
+	/*uint seg_offset = lrbid << MAX_SEGMENTS_SHIFT;
+	tri_count = 0, frag_count = 0;
+	uint num_segments = 0;
+	for(uint i = 0; i < MAX_SEGMENTS; i++) {
+		uint segment = s_segments[seg_offset + i];
+		num_segments++;
+		if(segment == INVALID_SEGMENT)
+			break;
+		uint seg_tri_count = segment >> 16;
+		uint seg_first_tri = segment & 0xffff;
+
+		tri_count += seg_tri_count;
+		uint src_offset_64 = scratch64RasterBlockTrisOffset(lrbid) + seg_first_tri;
+		for(uint j = 0; j < seg_tri_count; j++) {
+			uvec2 tri_data = g_scratch_64[src_offset_64 + j];
+			uint count0 = tri_data.x >> 16, count1 = tri_data.y >> 16;
+			frag_count +=
+				(count0 & 15) + ((count0 >> 4) & 15) + ((count0 >> 8) & 15) + ((count0 >> 12) & 15);
+			frag_count +=
+				(count1 & 15) + ((count1 >> 4) & 15) + ((count1 >> 8) & 15) + ((count1 >> 12) & 15);
+		}
+	}*/
+
 	vec3 color;
 	color = gradientColor(frag_count, uvec4(64, 256, 1024, 4096));
-	//color = gradientColor(tri_count, uvec4(16, 32, 64, 256));
+	//color = gradientColor(tri_count, uvec4(16, 64, 256, 1024));
 
 	outputPixel(pixel_pos, encodeRGBA8(vec4(SATURATE(color), 1.0)));
 }

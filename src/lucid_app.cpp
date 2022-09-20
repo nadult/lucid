@@ -163,6 +163,7 @@ void LucidApp::selectSetup(int idx) {
 	m_cam_control.finishAnim();
 	m_lucid_opts.setIf(LucidRenderOpt::additive_blending, setup.render_config.additive_blending);
 	m_setup_idx = idx;
+	m_scene_frame_id = 0;
 }
 
 void LucidApp::switchView() {
@@ -210,6 +211,7 @@ Ex<void> LucidApp::updateRenderer() {
 		m_lucid_renderer = EX_PASS(construct<LucidRenderer>(
 			*m_device, *m_shader_compiler, swap_chain->format(), m_lucid_opts, m_viewport.size()));
 		m_last_shader_update_time = m_last_time;
+		m_scene_frame_id = 0;
 	}
 
 	return {};
@@ -564,6 +566,7 @@ void LucidApp::drawScene() {
 		m_simple_renderer->render(ctx, m_wireframe_mode).check();
 	if(m_rendering_mode != RenderingMode::simple)
 		m_lucid_renderer->render(ctx);
+	m_scene_frame_id++;
 }
 
 void LucidApp::draw2D() {
@@ -694,7 +697,9 @@ void LucidApp ::updatePerfStats() {
 		m_skip_frame_id = frames.back().frame_id + 1;
 		m_prev_setup_idx = m_setup_idx;
 	}
-	if(m_setup_idx != -1 && frames.back().frame_id > m_skip_frame_id)
+
+	// TODO: check for m_scene_frame_id is a hack; Rendering should work properly from first frame...
+	if(m_setup_idx != -1 && frames.back().frame_id > m_skip_frame_id && m_scene_frame_id > 4)
 		m_stats[m_setup_idx].emplace_back(frames.back());
 }
 

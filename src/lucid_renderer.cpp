@@ -571,20 +571,6 @@ void LucidRenderer::compose(const Context &ctx) {
 	cmds.setScissor(none);
 	cmds.drawIndexed(m_bin_counts.x * m_bin_counts.y * 6);
 
-	/*DASSERT(!ctx.out_fbo || ctx.out_fbo->size() == m_size);
-	glDrawBuffer(GL_BACK);
-	setupView(IRect(m_size), ctx.out_fbo);
-	glDisable(GL_BLEND);
-	glDisable(GL_DEPTH_TEST);
-	glDisable(GL_CULL_FACE);
-	glDepthMask(0);
-	p_compose.setFullscreenRect();
-	p_compose.use();
-	p_compose["bin_counts"] = m_bin_counts;
-	p_compose["screen_scale"] = float2(1.0) / float2(m_size);
-	m_raster_image->bindIndex(0);
-	m_compose_quads_vao->draw(PrimitiveType::triangles, m_bin_counts.x * m_bin_counts.y * 6);*/
-
 	cmds.endRenderPass();
 }
 

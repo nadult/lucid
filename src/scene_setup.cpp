@@ -94,7 +94,7 @@ FilePath mainPath();
 SceneSetup::SceneSetup(string name) : name(move(name)) {}
 SceneSetup::~SceneSetup() = default;
 
-BoxesSetup::BoxesSetup() : SceneSetup("#boxes") {}
+BoxesSetup::BoxesSetup() : SceneSetup("#boxes") { render_config.scene_opacity = 0.8; }
 
 void BoxesSetup::doMenu(VDeviceRef device) {
 	auto scene_dims = m_dims;
@@ -165,6 +165,9 @@ Ex<> LoadedSetup::updateScene(VDeviceRef device) {
 
 	if(isOneOf(name, "bunny", "hairball", "teapot"))
 		render_config.scene_opacity = 0.5;
+	else
+		render_config.scene_opacity = 0.8;
+
 	EXPECT(scene->updateRenderingData(*device));
 
 	auto box = scene->bounding_box;

@@ -96,4 +96,5 @@ class LucidApp {
 	bool m_gather_perf_stats = true;
 	int m_prev_setup_idx = -1;
 	int m_skip_frame_id = 0;
+	int m_scene_frame_id = 0;
 };

@@ -7,6 +7,13 @@
 #extension GL_ARB_shader_group_vote : require
 #extension GL_KHR_shader_subgroup_shuffle : require
 
+#if WARP_SIZE == 32
+#define WARP_BITMASK uint
+#else
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#define WARP_BITMASK uint64_t
+#endif
+
 coherent layout(std430, binding = 0) buffer lucid_info_ {
 	LucidInfo g_info;
 	int g_counts[];
@@ -175,8 +182,8 @@ void initReduceSamples(out ReductionContext ctx) {
 }
 
 bool reduceSample(inout ReductionContext ctx, inout vec3 out_color, uvec2 sample_s,
-				  uint pixel_bitmask) {
-	int j = findLSB(pixel_bitmask);
+				  WARP_BITMASK pixel_bitmask) {
+	int j = int(findLSB(pixel_bitmask));
 
 	while(anyInvocationARB(j != -1)) {
 		uvec2 value = subgroupShuffle(sample_s, j);
@@ -185,8 +192,8 @@ bool reduceSample(inout ReductionContext ctx, inout vec3 out_color, uvec2 sample
 
 		if(j == -1)
 			continue;
-		pixel_bitmask &= ~(1 << j);
-		j = findLSB(pixel_bitmask);
+		pixel_bitmask &= ~(WARP_BITMASK(1) << j);
+		j = int(findLSB(pixel_bitmask));
 
 		if(depth > ctx.prev_depths[0]) {
 			swap(color, ctx.prev_colors[0]);

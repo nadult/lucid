@@ -96,47 +96,61 @@ void LucidRenderer::addShaderDefs(VulkanDevice &device, ShaderCompiler &compiler
 	vector<Pair<string>> vsh_macros = {{"VERTEX_SHADER", "1"}};
 	vector<Pair<string>> fsh_macros = {{"FRAGMENT_SHADER", "1"}};
 	vector<Pair<string>> debug_macros = {{"DEBUG_ENABLED", ""}};
+	vector<Pair<string>> timers_macros = {{"TIMERS_ENABLED", ""}};
 	vector<Pair<string>> base_macros = sharedShaderMacros(device);
 	insertBack(vsh_macros, base_macros);
 	insertBack(fsh_macros, base_macros);
 	insertBack(debug_macros, base_macros);
+	insertBack(timers_macros, base_macros);
 
 	compiler.add({"compose_vert", VShaderStage::vertex, "compose.glsl", vsh_macros});
 	compiler.add({"compose_frag", VShaderStage::fragment, "compose.glsl", fsh_macros});
 
-	auto add_debugable = [&](ZStr name, ZStr file_name) {
+	auto add_defs = [&](ZStr name, ZStr file_name, bool debuggable = true,
+						bool with_timers = true) {
 		compiler.add({name, VShaderStage::compute, file_name, base_macros});
-		auto dbg_name = format("%_debug", name);
-		compiler.add({dbg_name, VShaderStage::compute, file_name, debug_macros});
+		if(debuggable) {
+			auto dbg_name = format("%_debug", name);
+			compiler.add({dbg_name, VShaderStage::compute, file_name, debug_macros});
+		}
+		if(with_timers) {
+			compiler.add(
+				{format("%_timers", name), VShaderStage::compute, file_name, timers_macros});
+		}
 	};
 
-	add_debugable("quad_setup", "quad_setup.glsl");
-	add_debugable("bin_counter", "bin_counter.glsl");
-	add_debugable("bin_dispatcher", "bin_dispatcher.glsl");
-	compiler.add({"bin_categorizer", VShaderStage::compute, "bin_categorizer.glsl", base_macros});
-	add_debugable("raster_low", "raster_low.glsl");
-	add_debugable("raster_high", "raster_high.glsl");
+	add_defs("quad_setup", "quad_setup.glsl");
+	add_defs("bin_counter", "bin_counter.glsl");
+	add_defs("bin_dispatcher", "bin_dispatcher.glsl");
+	add_defs("bin_categorizer", "bin_categorizer.glsl", false, false);
+	add_defs("raster_low", "raster_low.glsl");
+	add_defs("raster_high", "raster_high.glsl");
 
 	base_macros.emplace_back("ALPHA_THRESHOLD", "1");
-	add_debugable("raster_low_alpha_threshold", "raster_low.glsl");
-	add_debugable("raster_high_alpha_threshold", "raster_high.glsl");
+	add_defs("raster_low_alpha_threshold", "raster_low.glsl");
+	add_defs("raster_high_alpha_threshold", "raster_high.glsl");
 
 	base_macros.back().first = "ADDITIVE_BLENDING";
-	add_debugable("raster_low_additive_blend", "raster_low.glsl");
-	add_debugable("raster_high_additive_blend", "raster_high.glsl");
+	add_defs("raster_low_additive_blend", "raster_low.glsl");
+	add_defs("raster_high_additive_blend", "raster_high.glsl");
 }
 
 static Ex<PVPipeline> makeComputePipeline(VulkanDevice &device, ShaderCompiler &compiler,
 										  const shader::SpecializationConstants &consts,
 										  ZStr def_name) {
+	auto time = getTime();
 	VComputePipelineSetup setup;
 	setup.compute_module = EX_PASS(compiler.createShaderModule(device.ref(), def_name));
 	setup.spec_constants.emplace_back(consts, 0u);
-	return VulkanPipeline::create(device.ref(), setup);
+	auto result = VulkanPipeline::create(device.ref(), setup);
+	print("Compute pipeline '%': % ms\n", def_name, int((getTime() - time) * 1000));
+	return result;
 }
 
 Ex<void> LucidRenderer::exConstruct(VulkanDevice &device, ShaderCompiler &compiler,
 									VColorAttachment color_att, Opts opts, int2 view_size) {
+	print("Constructing LucidRenderer (flags:% res:%):\n", opts, view_size);
+	auto time = getTime();
 	m_bin_size = opts & Opt::bin_size_64 ? 64 : 32;
 	m_block_size = 8;
 
@@ -220,23 +234,28 @@ Ex<void> LucidRenderer::exConstruct(VulkanDevice &device, ShaderCompiler &compil
 	if(m_opts & (Opt::debug_bin_dispatcher | Opt::debug_raster))
 		m_errors = EX_PASS(VulkanBuffer::create<u32>(device, 1024 * 1024, usage_copyable));
 
-	auto make_compute_pipe = [&](ZStr base_name, Opts debug_option) {
-		auto name = opts & debug_option ? format("%_debug", base_name) : string(base_name);
+	auto make_compute_pipe = [&](string name, Opts debug_option, bool has_timers) {
+		if(opts & debug_option)
+			name = name + "_debug";
+		else if(has_timers)
+			name = name + "_timers";
 		return makeComputePipeline(device, compiler, consts, name);
 	};
 
-	p_quad_setup = EX_PASS(make_compute_pipe("quad_setup", Opt::debug_quad_setup));
-	p_bin_dispatcher = EX_PASS(make_compute_pipe("bin_dispatcher", Opt::debug_bin_dispatcher));
-	p_bin_counter = EX_PASS(make_compute_pipe("bin_counter", Opt::debug_bin_counter));
-	p_bin_categorizer = EX_PASS(make_compute_pipe("bin_categorizer", none));
+	bool has_timers = m_opts & Opt::timers;
+	p_quad_setup = EX_PASS(make_compute_pipe("quad_setup", Opt::debug_quad_setup, has_timers));
+	p_bin_dispatcher =
+		EX_PASS(make_compute_pipe("bin_dispatcher", Opt::debug_bin_dispatcher, has_timers));
+	p_bin_counter = EX_PASS(make_compute_pipe("bin_counter", Opt::debug_bin_counter, has_timers));
+	p_bin_categorizer = EX_PASS(make_compute_pipe("bin_categorizer", none, false));
 
 	auto raster_suffix = m_opts & Opt::additive_blending ? "_additive_blend" :
 						 m_opts & Opt::alpha_threshold	 ? "_alpha_threshold" :
 														   "";
-	p_raster_low =
-		EX_PASS(make_compute_pipe(format("raster_low%", raster_suffix), Opt::debug_raster));
-	p_raster_high =
-		EX_PASS(make_compute_pipe(format("raster_high%", raster_suffix), Opt::debug_raster));
+	p_raster_low = EX_PASS(
+		make_compute_pipe(format("raster_low%", raster_suffix), Opt::debug_raster, has_timers));
+	p_raster_high = EX_PASS(
+		make_compute_pipe(format("raster_high%", raster_suffix), Opt::debug_raster, has_timers));
 
 	if(opts & (Opt::debug_bin_dispatcher | Opt::debug_quad_setup | Opt::debug_raster |
 			   Opt::debug_bin_counter)) {
@@ -288,6 +307,7 @@ Ex<void> LucidRenderer::exConstruct(VulkanDevice &device, ShaderCompiler &compil
 			EX_PASS(VulkanBuffer::create(device, instance_data_size, instance_usage, mem_usage));
 	}
 
+	print("Total build time: % ms\n\n", int((getTime() - time) * 1000.0));
 	return {};
 }
 

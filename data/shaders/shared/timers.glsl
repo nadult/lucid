@@ -1,14 +1,18 @@
 #ifndef _TIMERS_GLSL_
 #define _TIMERS_GLSL_
 
-#include "structures.glsl"
+#include "definitions.glsl"
 
-#ifdef ENABLE_TIMERS
+#ifdef TIMERS_ENABLED
+
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#extension GL_ARB_shader_clock : require
+#extension GL_KHR_shader_subgroup_basic : require
 
 shared uint s_timers[TIMERS_COUNT];
 #define START_TIMER() uint64_t timer0_ = clockARB();
 #define UPDATE_TIMER(idx)                                                                          \
-	if((LIX & WARP_MASK) == 0) {                                                                   \
+	if((gl_LocalInvocationIndex & (gl_SubgroupSize - 1)) == 0) {                                   \
 		uint64_t timer = clockARB();                                                               \
 		atomicAdd(s_timers[idx], uint(timer - timer0_) >> 4);                                      \
 		timer0_ = timer;                                                                           \

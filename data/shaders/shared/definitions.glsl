@@ -93,14 +93,6 @@ struct SpecializationConstants {
 #define REJECTION_TYPE_FRUSTUM			2
 #define REJECTION_TYPE_BETWEEN_SAMPLES	3
 
-#define ROPT_DEBUG_BIN_DISPATCHER	0x01
-#define ROPT_DEBUG_RASTER			0x02
-#define ROPT_ENABLE_TIMERS			0x04
-#define ROPT_ADDITIVE_BLENDING		0x08
-#define ROPT_VISUALIZE_ERRORS		0x10
-#define ROPT_ALPHA_THRESHOLD		0x20
-#define ROPT_BIN_SIZE_64			0x40
-
 #ifndef __cplusplus
 #define LIX		gl_LocalInvocationIndex
 #define LID		gl_LocalInvocationID

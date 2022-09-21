@@ -23,11 +23,21 @@ class SimpleRenderer {
 	const IRect &viewport() const { return m_viewport; }
 
   private:
-	Ex<PVPipeline> getPipeline(const RenderContext &, bool opaque, bool wireframe) const;
+	struct PipeConfig {
+		FWK_ORDER_BY(PipeConfig, backface_culling, additive_blending, opaque, wireframe);
+
+		bool backface_culling;
+		bool additive_blending;
+		bool opaque;
+		bool wireframe;
+	};
+
+	Ex<PVPipeline> getPipeline(VulkanDevice &, const PipeConfig &);
 	const SceneMaterial &bindMaterial(const RenderContext &, int mat_id);
 	Ex<> renderPhase(const RenderContext &, VBufferSpan<shader::SimpleDrawCall>, bool opaque,
 					 bool wireframe);
 
+	HashMap<PipeConfig, PVPipeline> m_pipelines;
 	PVShaderModule m_frag_module, m_vert_module;
 	PVPipelineLayout m_pipeline_layout;
 	PVImageView m_depth_buffer;

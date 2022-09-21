@@ -53,30 +53,34 @@ Ex<void> SimpleRenderer::exConstruct(VDeviceRef device, ShaderCompiler &compiler
 	return {};
 }
 
-Ex<PVPipeline> SimpleRenderer::getPipeline(const RenderContext &ctx, bool opaque,
-										   bool wireframe) const {
+Ex<PVPipeline> SimpleRenderer::getPipeline(VulkanDevice &device, const PipeConfig &config) {
 	PERF_SCOPE();
 
-	VPipelineSetup setup;
-	setup.pipeline_layout = m_pipeline_layout;
-	setup.render_pass = m_render_pass;
-	setup.shader_modules = {{m_vert_module, m_frag_module}};
-	setup.depth = VDepthSetup(VDepthFlag::test | VDepthFlag::write);
-	VertexArray::getDefs(setup);
+	auto &ref = m_pipelines[config];
+	if(!ref) {
+		VPipelineSetup setup;
+		setup.pipeline_layout = m_pipeline_layout;
+		setup.render_pass = m_render_pass;
+		setup.shader_modules = {{m_vert_module, m_frag_module}};
+		setup.depth = VDepthSetup(VDepthFlag::test | VDepthFlag::write);
+		VertexArray::getDefs(setup);
 
-	setup.raster = VRasterSetup(VPrimitiveTopology::triangle_list,
-								wireframe ? VPolygonMode::line : VPolygonMode::fill,
-								mask(ctx.config.backface_culling, VCull::back));
-	if(!opaque) {
-		VBlendingMode additive_blend(VBlendFactor::src_alpha, VBlendFactor::one);
-		VBlendingMode normal_blend(VBlendFactor::src_alpha, VBlendFactor::one_minus_src_alpha);
-		setup.blending.attachments = {
-			{ctx.config.additive_blending ? additive_blend : normal_blend}};
-		setup.depth = {};
+		setup.raster = VRasterSetup(VPrimitiveTopology::triangle_list,
+									config.wireframe ? VPolygonMode::line : VPolygonMode::fill,
+									mask(config.backface_culling, VCull::back));
+		if(!config.opaque) {
+			VBlendingMode additive_blend(VBlendFactor::src_alpha, VBlendFactor::one);
+			VBlendingMode normal_blend(VBlendFactor::src_alpha, VBlendFactor::one_minus_src_alpha);
+			setup.blending.attachments = {
+				{config.additive_blending ? additive_blend : normal_blend}};
+			setup.depth = {};
+		}
+
+		// TODO: remove vulkan refs
+		ref = EX_PASS(VulkanPipeline::create(device.ref(), setup));
 	}
 
-	// TODO: remove refs
-	return VulkanPipeline::create(ctx.device.ref(), setup);
+	return ref;
 }
 
 Matrix3 normalMatrix(const Matrix4 &affine) {
@@ -90,7 +94,9 @@ Ex<> SimpleRenderer::renderPhase(const RenderContext &ctx,
 	auto &cmds = ctx.device.cmdQueue();
 	PERF_GPU_SCOPE(cmds);
 
-	auto pipeline = EX_PASS(getPipeline(ctx, opaque, wireframe));
+	PipeConfig pipe_config{ctx.config.backface_culling, ctx.config.additive_blending, opaque,
+						   wireframe};
+	auto pipeline = EX_PASS(getPipeline(ctx.device, pipe_config));
 	cmds.bind(pipeline);
 
 	auto sampler = ctx.device.getSampler(ctx.config.sampler_setup);

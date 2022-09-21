@@ -70,6 +70,10 @@ Ex<int> exMain(int argc, char **argv) {
 		VulkanWindow::create(instance, "Lucid rasterizer", IRect(0, 0, 1280, 720), window_flags));
 
 	VDeviceSetup dev_setup;
+	dev_setup.features.emplace();
+	dev_setup.features->shaderInt64 = VK_TRUE;
+	dev_setup.features->samplerAnisotropy = VK_TRUE;
+	dev_setup.features->fillModeNonSolid = VK_TRUE;
 	auto pref_device = instance->preferredDevice(window->surfaceHandle(), &dev_setup.queues);
 	if(!pref_device)
 		return ERROR("Couldn't find a suitable Vulkan device");

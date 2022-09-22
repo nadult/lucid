@@ -680,7 +680,7 @@ void shadeAndReduceSamples(uint rbid, uint sample_count, in out ReductionContext
 			atomicOr(s_mini_buffer[mini_offset + sample_pixel_id], pixel_bit);
 #endif
 		}
-		//memoryBarrierShared();
+		subgroupMemoryBarrierShared();
 
 #if WARP_SIZE == 32
 		uint pixel_bitmask = s_mini_buffer[LIX];

@@ -87,17 +87,27 @@
 LucidRenderer::LucidRenderer() = default;
 FWK_MOVABLE_CLASS_IMPL(LucidRenderer)
 
-vector<Pair<string>> sharedShaderMacros(VulkanDevice &device) {
+ShaderConfig getShaderConfig(VulkanDevice &device) {
+	ShaderConfig out;
+
 	auto warp_size = device.physInfo().subgroup_props.subgroupSize;
-	return {{"WARP_SIZE", toString(warp_size)}, {"WARP_SHIFT", toString(log2(warp_size))}};
+	auto &pinfo = device.physInfo();
+	out.predefined_macros.emplace_back("WARP_SIZE", toString(warp_size));
+	out.predefined_macros.emplace_back("WARP_SHIFT", toString(log2(warp_size)));
+	out.predefined_macros.emplace_back(format("VENDOR_%", toUpper(toString(pinfo.vendor_id))), "1");
+
+	out.build_name = format("%_%", pinfo.vendor_id, warp_size);
+
+	return out;
 }
 
-void LucidRenderer::addShaderDefs(VulkanDevice &device, ShaderCompiler &compiler) {
+void LucidRenderer::addShaderDefs(VulkanDevice &device, ShaderCompiler &compiler,
+								  const ShaderConfig &shader_config) {
 	vector<Pair<string>> vsh_macros = {{"VERTEX_SHADER", "1"}};
 	vector<Pair<string>> fsh_macros = {{"FRAGMENT_SHADER", "1"}};
 	vector<Pair<string>> debug_macros = {{"DEBUG_ENABLED", ""}};
 	vector<Pair<string>> timers_macros = {{"TIMERS_ENABLED", ""}};
-	vector<Pair<string>> base_macros = sharedShaderMacros(device);
+	auto base_macros = shader_config.predefined_macros;
 	insertBack(vsh_macros, base_macros);
 	insertBack(fsh_macros, base_macros);
 	insertBack(debug_macros, base_macros);

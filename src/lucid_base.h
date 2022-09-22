@@ -22,6 +22,13 @@ struct RenderConfig {
 	bool additive_blending = false;
 };
 
+struct ShaderConfig {
+	string build_name;
+	vector<Pair<string>> predefined_macros;
+};
+
+ShaderConfig getShaderConfig(VulkanDevice &);
+
 DEFINE_ENUM(DrawCallOpt, has_vertex_colors, has_vertex_tex_coords, has_vertex_normals, is_opaque,
 			tex_opaque, has_uv_rect, has_texture, has_inst_color);
 using DrawCallOpts = EnumFlags<DrawCallOpt>;

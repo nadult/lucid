@@ -33,7 +33,7 @@ class LucidRenderer {
 	LucidRenderer();
 	FWK_MOVABLE_CLASS(LucidRenderer)
 
-	static void addShaderDefs(VulkanDevice &, ShaderCompiler &);
+	static void addShaderDefs(VulkanDevice &, ShaderCompiler &, const ShaderConfig &);
 	Ex<void> exConstruct(VulkanDevice &, ShaderCompiler &, VColorAttachment, Opts, int2 view_size);
 
 	void render(const Context &);

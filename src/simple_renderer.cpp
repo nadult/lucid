@@ -20,10 +20,11 @@ FWK_MOVABLE_CLASS_IMPL(SimpleRenderer);
 
 vector<Pair<string>> sharedShaderMacros(VulkanDevice &);
 
-void SimpleRenderer::addShaderDefs(VulkanDevice &device, ShaderCompiler &compiler) {
+void SimpleRenderer::addShaderDefs(VulkanDevice &device, ShaderCompiler &compiler,
+								   const ShaderConfig &shader_config) {
 	vector<Pair<string>> vsh_macros = {{"VERTEX_SHADER", "1"}};
 	vector<Pair<string>> fsh_macros = {{"FRAGMENT_SHADER", "1"}};
-	auto shared_macros = sharedShaderMacros(device);
+	auto shared_macros = shader_config.predefined_macros;
 	insertBack(vsh_macros, shared_macros);
 	insertBack(fsh_macros, shared_macros);
 

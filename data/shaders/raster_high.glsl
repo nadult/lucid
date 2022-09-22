@@ -417,7 +417,7 @@ void generateHBlocks(uint start_hbid) {
 		uint num_frags = g_scratch_64[dst_offset_64 + hblock_tri_idx].y >> 24;
 
 		// Computing triangle-ordered sample offsets within each block
-		uint sum = inclusiveAdd(num_frags);
+		uint sum = subgroupInclusiveAddFast(num_frags);
 		s_buffer[buf_offset + i] = (sum - num_frags) | (num_frags << 12) | (hblock_tri_idx << 20);
 	}
 	barrier();
@@ -610,6 +610,8 @@ void shadeAndReduceSamples(uint hbid, uint sample_count, in out ReductionContext
 			sample_s = uvec2(sample_color, floatBitsToUint(sample_depth));
 			atomicOr(s_mini_buffer[mini_offset + sample_pixel_id], reduce_pixel_bit);
 		}
+
+		subgroupMemoryBarrierShared();
 
 		if(reduceSample(ctx, out_color, sample_s, s_mini_buffer[LIX]))
 			break;

@@ -20,17 +20,17 @@ shared int s_temp[BIN_COUNT / WARP_SIZE + 1], s_temp2[WARP_SIZE];
 void computeOffsets(const bool quads_mode) {
 	for(uint idx = LIX; idx < BIN_COUNT; idx += LSIZE) {
 		int value = quads_mode ? BIN_QUAD_COUNTS(idx) : BIN_TRI_COUNTS(idx);
-		int accum = inclusiveAdd(value);
+		int accum = subgroupInclusiveAddFast(value);
 		s_bins[idx] = accum - value;
 		if((idx & WARP_MASK) == WARP_MASK)
 			s_temp[idx >> WARP_SHIFT] = accum;
 	}
 	barrier();
 	if(LIX < BIN_COUNT / WARP_SIZE)
-		s_temp[LIX] = inclusiveAdd(s_temp[LIX]);
+		s_temp[LIX] = subgroupInclusiveAddFast(s_temp[LIX]);
 	barrier();
 	if(LIX < (BIN_COUNT / WARP_SIZE) / WARP_SIZE)
-		s_temp2[LIX] = inclusiveAdd(s_temp[(LIX << WARP_SHIFT) + WARP_MASK]);
+		s_temp2[LIX] = subgroupInclusiveAddFast(s_temp[(LIX << WARP_SHIFT) + WARP_MASK]);
 	barrier();
 	if(LIX < BIN_COUNT / WARP_SIZE && LIX >= WARP_SIZE)
 		s_temp[LIX] += s_temp2[int(LIX >> WARP_SHIFT) - 1];

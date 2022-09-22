@@ -82,7 +82,7 @@ void accumulateLargeTriCountsAcrossRows() {
 		for(uint bx = LIX & WARP_MASK; bx < BIN_COUNT_X; bx += WARP_SIZE) {
 			uint idx = bx + by * BIN_COUNT_X;
 			int value = s_bins[idx];
-			int accum = prev_accum + inclusiveAdd(value);
+			int accum = prev_accum + subgroupInclusiveAddFast(value);
 			s_bins[idx] = accum;
 			prev_accum = subgroupShuffle(accum, WARP_MASK);
 		}

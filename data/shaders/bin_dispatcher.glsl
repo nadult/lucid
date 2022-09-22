@@ -147,7 +147,7 @@ void dispatchLargeTriBalanced(int large_quad_idx, int second_tri, int num_quads)
 		if(allInvocationsARB(num_samples == 0))
 			continue;
 
-		int sample_offset = inclusiveAdd(num_samples);
+		int sample_offset = subgroupInclusiveAddFast(num_samples);
 		int warp_num_samples = subgroupShuffle(sample_offset, WARP_MASK);
 		sample_offset -= num_samples;
 

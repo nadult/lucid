@@ -224,8 +224,6 @@ void sortTris(uint lbid, uint count, uint buf_offset) {
 	for(uint i = lid + count; i < rcount; i += WARP_SIZE)
 		s_buffer[buf_offset + i] = 0xffffffff;
 
-// TODO: fix it for 64
-#if WARP_SIZE == 32
 	for(uint i = lid; i < rcount; i += WARP_SIZE) {
 		uint value = s_buffer[buf_offset + i];
 		// TODO: register sort could be faster
@@ -239,12 +237,17 @@ void sortTris(uint lbid, uint count, uint buf_offset) {
 		value = swap(value, 0x04, xorBits(lid, 4, 2));
 		value = swap(value, 0x02, xorBits(lid, 4, 1));
 		value = swap(value, 0x01, xorBits(lid, 4, 0));
+#if WARP_SIZE >= 64
+		value = swap(value, 0x10, xorBits(lid, 5, 4)); // K = 32
+		value = swap(value, 0x08, xorBits(lid, 5, 3));
+		value = swap(value, 0x04, xorBits(lid, 5, 2));
+		value = swap(value, 0x02, xorBits(lid, 5, 1));
+		value = swap(value, 0x01, xorBits(lid, 5, 0));
+#endif
 		s_buffer[buf_offset + i] = value;
 	}
-	int start_k = 32, end_j = 32;
-#else
-	int start_k = 2, end_j = 1;
-#endif
+	int start_k = WARP_SIZE, end_j = WARP_SIZE;
+
 	for(uint k = start_k; k <= rcount; k = 2 * k) {
 		for(uint j = k >> 1; j >= end_j; j = j >> 1) {
 			for(uint i = lid; i < rcount; i += WARP_SIZE * 2) {
@@ -257,10 +260,12 @@ void sortTris(uint lbid, uint count, uint buf_offset) {
 				}
 			}
 		}
-#if WARP_SIZE == 32
 		for(uint i = lid; i < rcount; i += WARP_SIZE) {
 			uint bit = (i & k) == 0 ? 0 : 1;
 			uint value = s_buffer[buf_offset + i];
+#if WARP_SIZE == 64
+			value = swap(value, 0x20, bit ^ bitExtract(lid, 5));
+#endif
 			value = swap(value, 0x10, bit ^ bitExtract(lid, 4));
 			value = swap(value, 0x08, bit ^ bitExtract(lid, 3));
 			value = swap(value, 0x04, bit ^ bitExtract(lid, 2));
@@ -268,7 +273,6 @@ void sortTris(uint lbid, uint count, uint buf_offset) {
 			value = swap(value, 0x01, bit ^ bitExtract(lid, 0));
 			s_buffer[buf_offset + i] = value;
 		}
-#endif
 	}
 }
 
@@ -415,7 +419,7 @@ void generateBlocks(uint bid) {
 		uint num_frags = counts;
 #endif
 		// Computing triangle-ordered sample offsets within each block
-		num_frags = inclusiveAdd(num_frags);
+		num_frags = subgroupInclusiveAddFast(num_frags);
 		s_buffer[buf_offset + i] = num_frags | (idx << 24);
 	}
 	barrier();

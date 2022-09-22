@@ -5,6 +5,9 @@
 
 #extension GL_KHR_shader_subgroup_shuffle_relative : require
 #extension GL_KHR_shader_subgroup_shuffle : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+
+#ifdef VENDOR_NVIDIA
 
 #define INCLUSIVE_ADD_STEP(step)                                                                   \
 	if(WARP_SIZE > step) {                                                                         \
@@ -12,8 +15,7 @@
 		accum += gl_SubgroupInvocationID >= step ? temp : 0;                                       \
 	}
 
-// These functions are faster than subgroupInclusiveAdd...
-int inclusiveAdd(int accum) {
+int subgroupInclusiveAddFast(int accum) {
 	int temp;
 	INCLUSIVE_ADD_STEP(1);
 	INCLUSIVE_ADD_STEP(2);
@@ -21,11 +23,10 @@ int inclusiveAdd(int accum) {
 	INCLUSIVE_ADD_STEP(8);
 	INCLUSIVE_ADD_STEP(16);
 	INCLUSIVE_ADD_STEP(32);
-	INCLUSIVE_ADD_STEP(64);
 	return accum;
 }
 
-uint inclusiveAdd(uint accum) {
+uint subgroupInclusiveAddFast(uint accum) {
 	uint temp;
 	INCLUSIVE_ADD_STEP(1);
 	INCLUSIVE_ADD_STEP(2);
@@ -33,9 +34,16 @@ uint inclusiveAdd(uint accum) {
 	INCLUSIVE_ADD_STEP(8);
 	INCLUSIVE_ADD_STEP(16);
 	INCLUSIVE_ADD_STEP(32);
-	INCLUSIVE_ADD_STEP(64);
 	return accum;
 }
+
+#undef INCLUSIVE_ADD_STEP
+
+#else
+
+#define subgroupInclusiveAddFast subgroupInclusiveAdd
+
+#endif
 
 uint subgroupMax_(uint value, int width) {
 	if(width >= 2)
@@ -52,7 +60,5 @@ uint subgroupMax_(uint value, int width) {
 		value = max(value, subgroupShuffleXor(value, 32));
 	return value;
 }
-
-#undef INCLUSIVE_ADD_STEP
 
 #endif

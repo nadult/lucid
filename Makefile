@@ -28,7 +28,7 @@ endif
 # --- List of source files ------------------------------------------------------------------------
 
 SRC         := lucid_app lucid_renderer simple_renderer scene scene_setup scene_convert \
-			   program shading texture_atlas wavefront_obj meshlet quad_generator
+			   shading texture_atlas wavefront_obj meshlet quad_generator
 PROGRAM_SRC := lucid
 ALL_SRC     := $(PROGRAM_SRC) $(SRC)
 

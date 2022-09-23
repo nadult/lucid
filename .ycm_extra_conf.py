@@ -12,12 +12,10 @@ flags = [
 ]
 
 def appendSystemPaths():
-    cpp_path = "/usr/include/c++/9"
-    if not os.path.isdir(cpp_path):
-        cpp_path = "/usr/include/c++/8"
-    if not os.path.isdir(cpp_path):
-        cpp_path = "/usr/include/c++/7"
-    #TODO: add more cases?
+    for idx in range(20, 6, -1):
+        cpp_path = "/usr/include/c++/" + str(idx)
+        if os.path.isdir(cpp_path):
+            break
     if not os.path.isdir(cpp_path):
         raise Exception("Cannot find libstdc++ headers")
 

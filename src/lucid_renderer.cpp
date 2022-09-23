@@ -800,6 +800,14 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 		{"fragments", formatLarge(info.num_fragments), fragment_info},
 	};
 
+	if(!allOf(info.temp, 0)) {
+		int last = arraySize(info.temp) - 1;
+		while(last > 0 && info.temp[last] == 0)
+			last--;
+		vector<int> temps = cspan(info.temp, last + 1);
+		basic_rows.emplace_back("temps", toString(temps));
+	}
+
 	// TODO: add better stats once rasterizer is working on all levels
 
 	if(setup_timers)

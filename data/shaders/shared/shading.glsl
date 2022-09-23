@@ -4,7 +4,7 @@
 #include "funcs.glsl"
 #include "structures.glsl"
 
-#extension GL_ARB_shader_group_vote : require
+#extension GL_KHR_shader_subgroup_vote : require
 #extension GL_KHR_shader_subgroup_shuffle : require
 
 #if WARP_SIZE == 32
@@ -185,7 +185,7 @@ bool reduceSample(inout ReductionContext ctx, inout vec3 out_color, uvec2 sample
 				  WARP_BITMASK pixel_bitmask) {
 	int j = int(findLSB(pixel_bitmask));
 
-	while(anyInvocationARB(j != -1)) {
+	while(subgroupAny(j != -1)) {
 		uvec2 value = subgroupShuffle(sample_s, j);
 		uint color = value.x;
 		float depth = uintBitsToFloat(value.y);

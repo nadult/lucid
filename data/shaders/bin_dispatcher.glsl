@@ -11,7 +11,7 @@
 
 #extension GL_KHR_shader_subgroup_shuffle : require
 #extension GL_KHR_shader_subgroup_shuffle_relative : require
-#extension GL_ARB_shader_group_vote : require
+#extension GL_KHR_shader_subgroup_vote : require
 
 #define LSIZE BIN_DISPATCHER_LSIZE
 #define LSHIFT BIN_DISPATCHER_LSHIFT
@@ -117,7 +117,7 @@ void dispatchLargeTriSimple(int large_quad_idx, int second_tri, int num_quads) {
 // to each thread.
 void dispatchLargeTriBalanced(int large_quad_idx, int second_tri, int num_quads) {
 	bool is_valid = large_quad_idx < num_quads;
-	if(allInvocationsARB(!is_valid))
+	if(subgroupAll(!is_valid))
 		return;
 
 	ScanlineParams params;
@@ -136,7 +136,7 @@ void dispatchLargeTriBalanced(int large_quad_idx, int second_tri, int num_quads)
 		}
 	}
 
-	for(int by = bsy; anyInvocationARB(by <= bey); by++) {
+	for(int by = bsy; subgroupAny(by <= bey); by++) {
 		int bmin = 0, bmax = -1;
 		if(by <= bey) {
 			scanlineStep(params, bmin, bmax);
@@ -144,7 +144,7 @@ void dispatchLargeTriBalanced(int large_quad_idx, int second_tri, int num_quads)
 		}
 
 		int num_samples = max(0, bmax - bmin + 1);
-		if(allInvocationsARB(num_samples == 0))
+		if(subgroupAll(num_samples == 0))
 			continue;
 
 		int sample_offset = subgroupInclusiveAddFast(num_samples);
@@ -169,7 +169,7 @@ void dispatchLargeTriBalanced(int large_quad_idx, int second_tri, int num_quads)
 		int base_bin_id = by * BIN_COUNT_X + bmin;
 
 		int i = 0;
-		while(anyInvocationARB(i < cur_num_samples)) {
+		while(subgroupAny(i < cur_num_samples)) {
 			uint cur_tri_idx = subgroupShuffle(tri_idx, cur_src_thread_id);
 			int cur_bin_id = subgroupShuffle(base_bin_id, cur_src_thread_id);
 			int cur_width = subgroupShuffle(num_samples, cur_src_thread_id);

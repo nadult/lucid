@@ -74,7 +74,6 @@ struct LucidInfo {
 
 	uint setup_timers[TIMERS_COUNT];
 	uint raster_timers[TIMERS_COUNT];
-	uint bin_counter_timers[TIMERS_COUNT];
 	uint bin_dispatcher_timers[TIMERS_COUNT];
 
 	uint num_fragments;
@@ -83,7 +82,7 @@ struct LucidInfo {
 	int dispatcher_first_batch[2][LUCID_INFO_MAX_DISPATCHES];
 	int dispatcher_num_batches[2][LUCID_INFO_MAX_DISPATCHES];
 
-	int temp[58];
+	int temp[66];
 };
 
 // This structure keeps uniform data passed to Lucid shaders

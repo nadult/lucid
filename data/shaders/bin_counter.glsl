@@ -219,7 +219,7 @@ void countLargeTris() {
 	}
 
 	barrier();
-	UPDATE_TIMER(3);
+	UPDATE_TIMER(1);
 
 	// Thread groups which didn't do any estimation can quit early:
 	// they won't participate in dispatching either
@@ -272,5 +272,5 @@ void main() {
 		g_info.dispatcher_num_batches[LIX][WGID.x] = s_num_batches[LIX];
 	}
 
-	COMMIT_TIMERS(g_info.bin_counter_timers);
+	COMMIT_TIMERS(g_info.bin_dispatcher_timers);
 }

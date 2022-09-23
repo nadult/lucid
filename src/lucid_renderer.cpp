@@ -754,9 +754,9 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 	auto setup_timers = processTimers(info.setup_timers, {"init & finish", "process input quads",
 														  "store tri data", "store quad data"});
 	auto bin_dispatcher_timers =
-		processTimers(info.bin_dispatcher_timers,
-					  {"estimate small quads", "compute small quad offsets", "dispatch small quads",
-					   "estimate large tris", "compute large tris offsets", "dispatch large tris"});
+		processTimers(info.bin_dispatcher_timers, {"count small quads", "count large tris",
+												   "dispatch small quads", "dispatch large tris"});
+
 	auto raster_timers =
 		processTimers(info.raster_timers, {"generate rows", "generate blocks", "load samples",
 										   "shade and reduce", "finish reduce"});

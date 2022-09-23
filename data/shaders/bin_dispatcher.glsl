@@ -249,7 +249,7 @@ void dispatchLargeTris() {
 		int large_quad_idx = s_quads_offset + int(LIX >> 1);
 		dispatchLargeTriBalanced(large_quad_idx, int(LIX & 1), num_quads);
 	}
-	UPDATE_TIMER(5);
+	UPDATE_TIMER(3);
 }
 
 void main() {

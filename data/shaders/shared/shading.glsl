@@ -240,7 +240,7 @@ bool reduceSample(inout ReductionContext ctx, inout vec3 out_color, uvec2 sample
 			ctx.out_trans *= 1.0 - cur_color.a;
 
 #ifdef ALPHA_THRESHOLD
-			if(allInvocationsARB(ctx.out_trans < alpha_threshold))
+			if(subgroupAll(ctx.out_trans < alpha_threshold))
 				finish = true;
 #endif
 #endif

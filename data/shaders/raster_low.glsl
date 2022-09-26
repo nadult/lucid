@@ -834,7 +834,7 @@ void rasterBin(int bin_id) {
 			UPDATE_TIMER(3);
 
 #ifdef ALPHA_THRESHOLD
-			if(allInvocationsARB(context.out_trans < alpha_threshold))
+			if(subgroupAll(context.out_trans < alpha_threshold))
 				break;
 #endif
 		}

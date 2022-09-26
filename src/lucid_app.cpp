@@ -182,7 +182,7 @@ void LucidApp::switchView() {
 }
 
 bool LucidApp::updateViewport() {
-	auto viewport = IRect(m_window->size());
+	auto viewport = IRect(m_device->swapChain()->size());
 	bool changed = m_viewport != viewport;
 	m_viewport = viewport;
 	if(changed)

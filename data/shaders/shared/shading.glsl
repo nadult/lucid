@@ -28,7 +28,7 @@ layout(std430, set = 1, binding = 4) readonly restrict buffer buf4_ { uint g_ins
 layout(std430, set = 1, binding = 5) readonly restrict buffer buf5_ { vec4 g_instance_uv_rects[]; };
 layout(std430, set = 1, binding = 6) readonly restrict buffer buf6_ { uvec4 g_uvec4_storage[]; };
 layout(std430, set = 1, binding = 7) readonly restrict buffer buf7_ { uint g_normals_storage[]; };
-layout(std430, set = 1, binding = 8) writeonly restrict buffer buf8_ { uint g_raster_image[]; };
+layout(set = 1, binding = 8, rgba8) uniform image2D g_raster_image;
 layout(set = 1, binding = 9) uniform sampler2D opaque_texture;
 layout(set = 1, binding = 10) uniform sampler2D transparent_texture;
 
@@ -249,7 +249,7 @@ bool reduceSample(inout ReductionContext ctx, inout vec3 out_color, uvec2 sample
 	return false;
 }
 
-uint finishReduceSamples(ReductionContext ctx) {
+vec4 finishReduceSamples(ReductionContext ctx) {
 	vec3 out_color = decodeRGB10(ctx.out_color);
 
 	for(int i = 2; i >= 0; i--)
@@ -265,7 +265,7 @@ uint finishReduceSamples(ReductionContext ctx) {
 		}
 
 	out_color += ctx.out_trans * u_config.background_color.xyz;
-	return encodeRGB8(SATURATE(out_color)); // TODO: 10 bit
+	return vec4(SATURATE(out_color), 1.0);
 }
 
 // Basic rasterization statistics

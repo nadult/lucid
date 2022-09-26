@@ -53,7 +53,6 @@ class LucidRenderer {
 	void bindRaster(PVPipeline, const Context &);
 	void rasterLow(const Context &);
 	void rasterHigh(const Context &);
-	void compose(const Context &);
 
 	template <class T>
 	Maybe<ShaderDebugInfo> getDebugData(const Context &, VBufferSpan<T>, Str title);
@@ -63,7 +62,6 @@ class LucidRenderer {
 	PVPipeline p_quad_setup;
 	PVPipeline p_bin_counter, p_bin_dispatcher, p_bin_categorizer;
 	PVPipeline p_raster_low, p_raster_high;
-	PVPipeline p_compose;
 
 	VBufferSpan<shader::LucidConfig> m_config;
 	VBufferSpan<u32> m_info;
@@ -73,11 +71,9 @@ class LucidRenderer {
 	VBufferSpan<u32> m_scratch_32;
 	VBufferSpan<u64> m_scratch_64;
 	VBufferSpan<u32> m_errors;
-	VBufferSpan<u32> m_bin_quads, m_bin_tris, m_raster_image;
+	VBufferSpan<u32> m_bin_quads, m_bin_tris;
 	VBufferSpan<u32> m_normals_storage;
 	VBufferSpan<int4> m_uvec4_storage;
-	VBufferSpan<u32> m_compose_quads;
-	VBufferSpan<u16> m_compose_ibuffer;
 
 	static constexpr int num_frames = 2;
 	VBufferSpan<> m_frame_instance_data[num_frames];
@@ -97,6 +93,4 @@ class LucidRenderer {
 	int2 m_size; // TODO: rename
 	int m_num_instances = 0, m_num_quads = 0;
 	int m_instance_packet_size = 0;
-
-	PVRenderPass m_render_pass;
 };

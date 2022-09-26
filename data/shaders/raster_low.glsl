@@ -108,9 +108,9 @@ shared int s_promoted_bin_count;
 // Only used when debugging
 shared uint s_vis_pixels[LSIZE];
 
-void outputPixel(ivec2 pixel_pos, uint color) {
+void outputPixel(ivec2 pixel_pos, vec4 color) {
 	//color = tintColor(color, vec3(0.2, 0.3, 0.4), 0.8);
-	g_raster_image[s_bin_raster_offset + pixel_pos.x + (pixel_pos.y << BIN_SHIFT)] = color;
+	imageStore(g_raster_image, s_bin_pos + pixel_pos, color);
 }
 
 void generateRowTris(uint tri_idx) {
@@ -660,7 +660,7 @@ void shadeAndReduceSamples(uint rbid, uint sample_count, in out ReductionContext
 	uint mini_offset =
 		WARP_SIZE == 64 ? (LIX & ~WARP_MASK) + ((LIX & 32) != 0 ? LSIZE : 0) : LIX & ~WARP_MASK;
 	ivec2 rblock_pos = rasterBlockPixelPos(rbid) + s_bin_pos;
-	vec3 out_color = decodeRGB10(ctx.out_color);
+	vec3 out_color = ctx.out_color;
 
 	for(uint i = 0; i < sample_count; i += WARP_SIZE) {
 		// TODO: we don't need s_mini_buffer here, we can use s_buffer, thus decreasing mini_buffer size
@@ -697,7 +697,7 @@ void shadeAndReduceSamples(uint rbid, uint sample_count, in out ReductionContext
 	}
 
 	// TODO: check if encode+decode for out_color is really needed (to save 2 regs)
-	ctx.out_color = encodeRGB10(SATURATE(out_color));
+	ctx.out_color = SATURATE(out_color);
 }
 
 void initVisualizeSamples() { s_vis_pixels[LIX] = 0; }
@@ -713,8 +713,7 @@ void visualizeSamples(uint sample_count) {
 void finishVisualizeSamples(ivec2 pixel_pos) {
 	uint pixel_id = (pixel_pos.x & (RBLOCK_WIDTH - 1)) + ((pixel_pos.y & (RBLOCK_HEIGHT - 1)) << 3);
 	vec3 color = vec3(s_vis_pixels[(LIX & ~WARP_MASK) + pixel_id]) / 32.0;
-	uint enc_col = encodeRGBA8(vec4(SATURATE(color), 1.0));
-	outputPixel(pixel_pos, enc_col);
+	outputPixel(pixel_pos, vec4(SATURATE(color), 1.0));
 }
 
 void visualizeBlockCounts(uint rbid, ivec2 pixel_pos) {
@@ -752,16 +751,16 @@ void visualizeBlockCounts(uint rbid, ivec2 pixel_pos) {
 	color = gradientColor(frag_count, uvec4(64, 256, 1024, 4096));
 	//color = gradientColor(tri_count, uvec4(16, 64, 256, 1024));
 
-	outputPixel(pixel_pos, encodeRGBA8(vec4(SATURATE(color), 1.0)));
+	outputPixel(pixel_pos, vec4(SATURATE(color), 1.0));
 }
 
 void visualizeErrors(uint bid) {
 	uint lbid = LIX >> 5;
 	bid += lbid;
 
-	uint color = 0xff000031;
+	vec4 color = vec4(0.2, 0, 0, 1.0);
 	if((s_raster_error & (1 << lbid)) != 0)
-		color += 0x64;
+		color.r += 0.3;
 
 	uint bx = bid & 7, by = bid >> 3;
 	ivec2 pixel_pos = ivec2((LIX & 7) + (bx << 3), ((LIX >> 3) & 3) + (by << 3));
@@ -849,8 +848,7 @@ void rasterBin(int bin_id) {
 		ivec2 pixel_pos =
 			rasterBlockPixelPos(rbid) +
 			ivec2((LIX & (RBLOCK_WIDTH - 1)), ((LIX >> RBLOCK_WIDTH_SHIFT) & (RBLOCK_HEIGHT - 1)));
-		uint enc_color = finishReduceSamples(context);
-		outputPixel(pixel_pos, enc_color);
+		outputPixel(pixel_pos, finishReduceSamples(context));
 
 		//finishVisualizeSamples(pixel_pos);
 		//visualizeBlockCounts(rbid, pixel_pos);

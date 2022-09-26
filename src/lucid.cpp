@@ -34,6 +34,9 @@ Ex<int> exMain(int argc, char **argv) {
 	// TODO: UI is configure for Unorm, shouldn't we use SRGB by default?
 	swap_chain_setup.preferred_formats = {{VK_FORMAT_B8G8R8A8_UNORM}};
 	swap_chain_setup.preferred_present_mode = VPresentMode::immediate;
+	swap_chain_setup.usage =
+		VImageUsage::color_att | VImageUsage::storage | VImageUsage::transfer_dst;
+	swap_chain_setup.initial_layout = VImageLayout::general;
 
 	for(int n = 1; n < argc; n++) {
 		string argument = argv[n];

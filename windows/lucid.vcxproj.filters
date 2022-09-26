@@ -127,9 +127,6 @@
     <None Include="..\data\shaders\bin_dispatcher.glsl">
       <Filter>shaders</Filter>
     </None>
-    <None Include="..\data\shaders\compose.glsl">
-      <Filter>shaders</Filter>
-    </None>
     <None Include="..\data\shaders\quad_setup.glsl">
       <Filter>shaders</Filter>
     </None>

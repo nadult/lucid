@@ -107,9 +107,10 @@ shared int s_raster_error;
 // Only used when debugging
 shared uint s_vis_pixels[LSIZE];
 
-void outputPixel(ivec2 pixel_pos, uint color) {
+void outputPixel(ivec2 pixel_pos, vec4 color) {
 	//color = tintColor(color, vec3(0.2, 0.3, 0.4), 0.8);
-	g_raster_image[s_bin_raster_offset + pixel_pos.x + (pixel_pos.y << BIN_SHIFT)] = color;
+	//g_raster_image[s_bin_raster_offset + pixel_pos.x + (pixel_pos.y << BIN_SHIFT)] = color;
+	// TODO
 }
 
 void generateRowTris(uint tri_idx, int start_hby) {
@@ -593,7 +594,7 @@ void shadeAndReduceSamples(uint hbid, uint sample_count, in out ReductionContext
 	uint mini_offset = LIX & ~31;
 	uint reduce_pixel_bit = 1u << (LIX & 31);
 	ivec2 half_block_pos = ivec2(hbx << HBLOCK_WIDTH_SHIFT, hby << HBLOCK_HEIGHT_SHIFT) + s_bin_pos;
-	vec3 out_color = decodeRGB10(ctx.out_color);
+	vec3 out_color = ctx.out_color;
 
 	for(uint i = 0; i < sample_count; i += WARP_SIZE) {
 		// TODO: we don't need s_mini_buffer here, we can use s_buffer, thus decreasing mini_buffer size
@@ -618,7 +619,7 @@ void shadeAndReduceSamples(uint hbid, uint sample_count, in out ReductionContext
 	}
 
 	// TODO: check if encode+decode for out_color is really needed (to save 2 regs)
-	ctx.out_color = encodeRGB10(SATURATE(out_color));
+	ctx.out_color = SATURATE(out_color);
 }
 
 ivec2 computePixelPos(uint hbid) {
@@ -640,8 +641,7 @@ void visualizeSamples(uint sample_count) {
 void finishVisualizeSamples(ivec2 pixel_pos) {
 	uint pixel_id = (pixel_pos.x & 7) + ((pixel_pos.y & 3) << 3);
 	vec3 color = vec3(s_vis_pixels[(LIX & ~31) + pixel_id]) / 64.0;
-	uint enc_col = encodeRGBA8(vec4(SATURATE(color), 1.0));
-	outputPixel(pixel_pos, enc_col);
+	outputPixel(pixel_pos, vec4(SATURATE(color), 1.0));
 }
 
 void visualizeAllSamples(uint hbid) {
@@ -672,7 +672,7 @@ void visualizeFragmentCounts(uint hbid, ivec2 pixel_pos) {
 	vec4 color = vec4(SATURATE(vec3(count) / 4096.0), 1.0);
 	if(count > SEGMENT_SIZE * MAX_SEGMENTS)
 		color.gb *= 0.25;
-	outputPixel(pixel_pos, encodeRGBA8(color));
+	outputPixel(pixel_pos, color);
 }
 
 void visualizeTriangleCounts(uint hbid, ivec2 pixel_pos) {
@@ -681,7 +681,7 @@ void visualizeTriangleCounts(uint hbid, ivec2 pixel_pos) {
 	//count = s_bin_quad_count / 16;
 
 	vec3 color = vec3(count) / 512.0;
-	outputPixel(pixel_pos, encodeRGBA8(vec4(SATURATE(color), 1.0)));
+	outputPixel(pixel_pos, vec4(SATURATE(color), 1.0));
 }
 
 void visualizeErrors(uint hbid) {
@@ -695,7 +695,7 @@ void visualizeErrors(uint hbid) {
 			color += 0x40;
 	}
 
-	outputPixel(computePixelPos(hbid), color);
+	outputPixel(computePixelPos(hbid), decodeRGBA8(color));
 }
 
 void rasterBin(int bin_id) {
@@ -768,8 +768,7 @@ void rasterBin(int bin_id) {
 		}
 
 		ivec2 pixel_pos = computePixelPos(hbid);
-		uint enc_color = finishReduceSamples(context);
-		outputPixel(pixel_pos, enc_color);
+		outputPixel(pixel_pos, finishReduceSamples(context));
 
 		//visualizeFragmentCounts(hbid, pixel_pos);
 		//visualizeTriangleCounts(hbid, pixel_pos);

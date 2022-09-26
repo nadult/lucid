@@ -11,6 +11,7 @@
 #include <fwk/io/file_system.h>
 #include <fwk/vulkan/vulkan_buffer.h>
 #include <fwk/vulkan/vulkan_device.h>
+#include <fwk/vulkan/vulkan_image.h>
 #include <fwk/vulkan/vulkan_instance.h>
 #include <fwk/vulkan/vulkan_pipeline.h>
 #include <fwk/vulkan/vulkan_swap_chain.h>
@@ -103,18 +104,11 @@ ShaderConfig getShaderConfig(VulkanDevice &device) {
 
 void LucidRenderer::addShaderDefs(VulkanDevice &device, ShaderCompiler &compiler,
 								  const ShaderConfig &shader_config) {
-	vector<Pair<string>> vsh_macros = {{"VERTEX_SHADER", "1"}};
-	vector<Pair<string>> fsh_macros = {{"FRAGMENT_SHADER", "1"}};
 	vector<Pair<string>> debug_macros = {{"DEBUG_ENABLED", ""}};
 	vector<Pair<string>> timers_macros = {{"TIMERS_ENABLED", ""}};
 	auto base_macros = shader_config.predefined_macros;
-	insertBack(vsh_macros, base_macros);
-	insertBack(fsh_macros, base_macros);
 	insertBack(debug_macros, base_macros);
 	insertBack(timers_macros, base_macros);
-
-	compiler.add({"compose_vert", VShaderStage::vertex, "compose.glsl", vsh_macros});
-	compiler.add({"compose_frag", VShaderStage::fragment, "compose.glsl", fsh_macros});
 
 	auto add_defs = [&](ZStr name, ZStr file_name, bool debuggable = true,
 						bool with_timers = true) {
@@ -171,7 +165,10 @@ Ex<void> LucidRenderer::exConstruct(VulkanDevice &device, ShaderCompiler &compil
 	// TODO: properly get number of compute units (use opencl?)
 	// TODO: max dispatches should also depend on lsize
 	// https://tinyurl.com/o7s9ph3
-	m_max_dispatches = 128; //device. gl_info->vendor == GlVendor::intel ? 32 : 128;
+	auto phys_info = device.physInfo();
+	m_max_dispatches = 128;
+	if(phys_info.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU)
+		m_max_dispatches = 64;
 	DASSERT(m_max_dispatches <= LUCID_INFO_MAX_DISPATCHES);
 
 	m_opts = opts;
@@ -223,24 +220,6 @@ Ex<void> LucidRenderer::exConstruct(VulkanDevice &device, ShaderCompiler &compil
 	m_scratch_32 = EX_PASS(VulkanBuffer::create(device, scratch_32_size, usage));
 	m_scratch_64 =
 		EX_PASS(VulkanBuffer::create(device, scratch_64_size, usage | VBufferUsage::transfer_src));
-	m_raster_image =
-		EX_PASS(VulkanBuffer::create<u32>(device, m_bin_count * square(m_bin_size), usage));
-	m_compose_quads = EX_PASS(VulkanBuffer::create<u32>(
-		device, m_bin_count * 4,
-		VBufferUsage::vertex_buffer | VBufferUsage::storage_buffer | VBufferUsage::transfer_dst));
-
-	vector<u16> indices(m_bin_count * 6);
-	DASSERT(m_bin_count * 4 * 4 <= 64 * 1024);
-	for(int i = 0; i < m_bin_count; i++) {
-		int offsets[6] = {0, 1, 2, 0, 2, 3};
-		for(int j = 0; j < 6; j++) {
-			int value = offsets[j] + i * 4;
-			indices[i * 6 + j] = offsets[j] + i * 4;
-		}
-	}
-	m_compose_ibuffer = EX_PASS(VulkanBuffer::createAndUpload(
-		device, indices, VBufferUsage::index_buffer | VBufferUsage::transfer_dst));
-
 	if(m_opts & (Opt::debug_bin_dispatcher | Opt::debug_raster))
 		m_errors = EX_PASS(VulkanBuffer::create<u32>(device, 1024 * 1024, usage_copyable));
 
@@ -286,20 +265,6 @@ Ex<void> LucidRenderer::exConstruct(VulkanDevice &device, ShaderCompiler &compil
 	if(auto disas = p_raster_high.getDisassembly())
 		saveFile("temp/raster_high.asm", *disas).ignore();*/
 
-	color_att.sync = VColorSyncStd::clear;
-	m_render_pass = device.getRenderPass({color_att});
-
-	VPipelineSetup compose_setup;
-	auto device_ref = device.ref();
-	compose_setup.shader_modules = {
-		{EX_PASS(compiler.createShaderModule(device_ref, "compose_vert")),
-		 EX_PASS(compiler.createShaderModule(device_ref, "compose_frag"))}};
-	compose_setup.render_pass = m_render_pass;
-	compose_setup.vertex_attribs = {vertexAttrib<uint>(0, 0)};
-	compose_setup.vertex_bindings = {vertexBinding<uint>(0)};
-	compose_setup.spec_constants.emplace_back(consts, 0u);
-	p_compose = EX_PASS(VulkanPipeline::create(device_ref, compose_setup));
-
 	uint bin_counters_size = LUCID_INFO_SIZE + m_bin_count * 10;
 	for(int i : intRange(num_frames)) {
 		auto instance_usage = VBufferUsage::storage_buffer | VBufferUsage::transfer_dst;
@@ -340,12 +305,7 @@ void LucidRenderer::render(const Context &ctx) {
 	cmds.barrier(VPipeStage::compute_shader, VPipeStage::compute_shader, VAccess::memory_write,
 				 VAccess::memory_read | VAccess::memory_write);
 	rasterLow(ctx);
-	rasterHigh(ctx);
-
-	cmds.barrier(VPipeStage::compute_shader, VPipeStage::all_graphics, VAccess::memory_write,
-				 VAccess::memory_read | VAccess::memory_write);
-
-	compose(ctx);
+	//rasterHigh(ctx);
 
 	cmds.barrier(VPipeStage::compute_shader, VPipeStage::transfer, VAccess::memory_write,
 				 VAccess::transfer_read);
@@ -514,8 +474,6 @@ void LucidRenderer::computeBins(const Context &ctx) {
 
 	PERF_SIBLING_SCOPE("categorizer phase");
 	cmds.bind(p_bin_categorizer);
-	ds = cmds.bindDS(1);
-	ds.set(0, m_compose_quads);
 	cmds.dispatchCompute({1, 1, 1});
 
 	PERF_SIBLING_SCOPE("dispatcher phase");
@@ -545,7 +503,12 @@ void LucidRenderer::bindRaster(PVPipeline pipeline, const Context &ctx) {
 
 	ds = cmds.bindDS(1);
 	ds.set(0, m_bin_quads, m_bin_tris, m_scratch_32, m_scratch_64, m_instance_colors,
-		   m_instance_uv_rects, m_uvec4_storage, m_normals_storage, m_raster_image);
+		   m_instance_uv_rects, m_uvec4_storage, m_normals_storage);
+
+	auto swap_chain = ctx.device.swapChain();
+	auto raster_image = swap_chain->acquiredImage();
+	ds.setStorageImage(8, raster_image, VImageLayout::general);
+
 	if(m_opts & Opt::debug_raster) {
 		ds.set(11, m_debug_buffer);
 		shaderDebugInitBuffer(cmds, m_debug_buffer);
@@ -579,29 +542,6 @@ void LucidRenderer::rasterHigh(const Context &ctx) {
 								 LUCID_INFO_MEMBER_OFFSET(bin_level_dispatches[BIN_LEVEL_HIGH]));
 	if(m_opts & Opt::debug_raster)
 		getDebugData(ctx, m_debug_buffer, "raster_high_debug");
-}
-
-void LucidRenderer::compose(const Context &ctx) {
-	auto &cmds = ctx.device.cmdQueue();
-	PERF_GPU_SCOPE(cmds);
-
-	cmds.barrier(VPipeStage::all_commands, VPipeStage::all_commands, VAccess::memory_write,
-				 VAccess::memory_read | VAccess::memory_write);
-
-	auto swap_chain = ctx.device.swapChain();
-	auto framebuffer = ctx.device.getFramebuffer({swap_chain->acquiredImage()});
-	cmds.beginRenderPass(framebuffer, m_render_pass, none, {FColor(0.0, 0.0, 0.2)});
-
-	cmds.bind(p_compose);
-	auto ds = cmds.bindDS(0);
-	ds.set(0, m_raster_image);
-	cmds.bindVertices(0, m_compose_quads);
-	cmds.bindIndices(m_compose_ibuffer);
-	cmds.setViewport(IRect(m_size));
-	cmds.setScissor(none);
-	cmds.drawIndexed(m_bin_counts.x * m_bin_counts.y * 6);
-
-	cmds.endRenderPass();
 }
 
 static vector<StatsRow> processTimers(CSpan<uint> timers, CSpan<Str> names) {

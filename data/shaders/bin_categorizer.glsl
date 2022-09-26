@@ -10,7 +10,6 @@ coherent layout(std430, set = 0, binding = 0) buffer lucid_info_ {
 	int g_counts[];
 };
 layout(binding = 1) uniform lucid_config_ { LucidConfig u_config; };
-layout(std430, set = 1, binding = 0) buffer buf0_ { uint g_compose_quads[]; };
 
 shared int s_bin_level_counts[BIN_LEVELS_COUNT];
 shared int s_bins[BIN_COUNT];
@@ -72,13 +71,6 @@ void main() {
 			int id = atomicAdd(s_bin_level_counts[BIN_LEVEL_HIGH], 1);
 			HIGH_LEVEL_BINS(id) = int(i);
 		}
-
-		uint bin_id = i << 16;
-		uint mask = num_tris == 0 ? 0 : 0xffffffff;
-		g_compose_quads[i * 4 + 0] = mask & (bin_id);
-		g_compose_quads[i * 4 + 1] = mask & (bin_id + (BIN_SIZE << 8));
-		g_compose_quads[i * 4 + 2] = mask & (bin_id + BIN_SIZE + (BIN_SIZE << 8));
-		g_compose_quads[i * 4 + 3] = mask & (bin_id + BIN_SIZE);
 	}
 
 	barrier();

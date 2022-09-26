@@ -44,7 +44,9 @@ void VertexArray::getDefs(VPipelineSetup &setup) {
 
 PVRenderPass guiRenderPass(VDeviceRef device) {
 	auto sc_format = device->swapChain()->format();
-	return device->getRenderPass({{sc_format, 1, VColorSyncStd::present}});
+	auto color_sync = VColorSync(VLoadOp::load, VStoreOp::store, VImageLayout::general,
+								 VImageLayout::present_src);
+	return device->getRenderPass({{sc_format, 1, color_sync}});
 }
 
 LucidApp::LucidApp(VWindowRef window, VDeviceRef device)
@@ -532,6 +534,21 @@ bool LucidApp::tick(float time_diff) {
 	return result;
 }
 
+void LucidApp::clearScreen(const RenderContext &ctx) {
+	auto &cmds = m_device->cmdQueue();
+	PERF_GPU_SCOPE(cmds);
+	auto swap_chain = m_device->swapChain();
+	auto sc_format = swap_chain->format();
+	auto color_sync =
+		VColorSync(VLoadOp::clear, VStoreOp::store, VImageLayout::undefined, VImageLayout::general);
+	auto rpass = m_device->getRenderPass({{sc_format, 1, color_sync}});
+	auto framebuffer = ctx.device.getFramebuffer({swap_chain->acquiredImage()});
+	cmds.beginRenderPass(framebuffer, rpass, none, {ctx.config.background_color});
+	cmds.endRenderPass();
+	cmds.barrier(VPipeStage::all_graphics, VPipeStage::all_graphics, VAccess::color_att_write,
+				 VAccess::memory_read);
+}
+
 void LucidApp::drawScene() {
 	auto &cmds = m_device->cmdQueue();
 	PERF_GPU_SCOPE(cmds);
@@ -564,6 +581,7 @@ void LucidApp::drawScene() {
 		for(auto &dc : ctx.dcs)
 			dc.opts &= ~DrawCallOpt::is_opaque;
 
+	clearScreen(ctx);
 	if(m_rendering_mode != RenderingMode::lucid)
 		m_simple_renderer->render(ctx, m_wireframe_mode).check();
 	if(m_rendering_mode != RenderingMode::simple)

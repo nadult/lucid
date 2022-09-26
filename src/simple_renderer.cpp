@@ -41,7 +41,8 @@ Ex<void> SimpleRenderer::exConstruct(VDeviceRef device, ShaderCompiler &compiler
 	// TODO: :we need to transition depth_buffer format too
 
 	VDepthAttachment depth_att(depth_format, 1, defaultLayout(depth_format));
-	color_att.sync = VColorSyncStd::clear;
+	color_att.sync =
+		VColorSync(VLoadOp::load, VStoreOp::store, VImageLayout::general, VImageLayout::general);
 	depth_att.sync = VDepthSync(VLoadOp::clear, VStoreOp::store, VImageLayout::undefined,
 								defaultLayout(depth_format));
 	m_render_pass = device->getRenderPass({color_att}, depth_att);
@@ -175,11 +176,13 @@ Ex<> SimpleRenderer::render(const RenderContext &ctx, bool wireframe) {
 	cmds.bindIndices(ctx.tris_ib);
 
 	auto swap_chain = ctx.device.swapChain();
+	auto swap_image = swap_chain->acquiredImage()->image();
+
 	auto framebuffer = ctx.device.getFramebuffer({swap_chain->acquiredImage()}, m_depth_buffer);
 	cmds.fullBarrier();
 
 	cmds.beginRenderPass(framebuffer, m_render_pass, none,
-						 {FColor(0.0, 0.2, 0.0), VClearDepthStencil(1.0)});
+						 {FColor(ColorId::magneta), VClearDepthStencil(1.0)});
 
 	if(num_opaque > 0)
 		EXPECT(renderPhase(ctx, simple_dc_buf, true, wireframe));

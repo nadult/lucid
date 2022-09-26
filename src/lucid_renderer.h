@@ -28,7 +28,6 @@ class LucidRenderer {
 	static constexpr int max_width = 2560, max_height = 2048;
 	static constexpr int max_instances = 64 * 1024;
 	static constexpr int max_instance_quads = 1024;
-	static constexpr int max_visible_quads = 2 * 1024 * 1024;
 
 	LucidRenderer();
 	FWK_MOVABLE_CLASS(LucidRenderer)

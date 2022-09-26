@@ -167,8 +167,11 @@ Ex<void> LucidRenderer::exConstruct(VulkanDevice &device, ShaderCompiler &compil
 	// https://tinyurl.com/o7s9ph3
 	auto phys_info = device.physInfo();
 	m_max_dispatches = 128;
-	if(phys_info.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU)
+	uint max_visible_quads = 2 * 1024 * 1024;
+	if(phys_info.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU) {
 		m_max_dispatches = 64;
+		max_visible_quads = 256 * 1024;
+	}
 	DASSERT(m_max_dispatches <= LUCID_INFO_MAX_DISPATCHES);
 
 	m_opts = opts;
@@ -305,7 +308,7 @@ void LucidRenderer::render(const Context &ctx) {
 	cmds.barrier(VPipeStage::compute_shader, VPipeStage::compute_shader, VAccess::memory_write,
 				 VAccess::memory_read | VAccess::memory_write);
 	rasterLow(ctx);
-	//rasterHigh(ctx);
+	rasterHigh(ctx);
 
 	cmds.barrier(VPipeStage::compute_shader, VPipeStage::transfer, VAccess::memory_write,
 				 VAccess::transfer_read);

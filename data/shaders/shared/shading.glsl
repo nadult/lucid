@@ -35,6 +35,13 @@ layout(set = 1, binding = 10) uniform sampler2D transparent_texture;
 // TODO: separate opaque and transparent objects, draw opaque objects first to texture
 // then read it and use depth to optimize drawing
 
+shared ivec2 s_bin_pos;
+
+void outputPixel(ivec2 pixel_pos, vec4 color) {
+	//color = tintColor(color, vec3(0.2, 0.3, 0.4), 0.8);
+	imageStore(g_raster_image, s_bin_pos + pixel_pos, color);
+}
+
 const float alpha_threshold = 1.0 / 128.0;
 
 void getTriangleParams(uint tri_idx, out vec3 depth_eq, out vec2 bary_params, out vec3 edge0,

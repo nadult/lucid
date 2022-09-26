@@ -81,10 +81,9 @@ uint scratch64HBlockTrisOffset(uint lhbid) {
 }
 
 shared int s_num_scratch_tris;
-shared int s_num_bins, s_bin_id, s_bin_raster_offset;
+shared int s_num_bins, s_bin_id;
 shared uint s_bin_quad_count, s_bin_quad_offset;
 shared uint s_bin_tri_count, s_bin_tri_offset;
-shared ivec2 s_bin_pos;
 
 shared uint s_hblock_row_tri_counts[HBLOCK_ROWS];
 shared int s_hblock_tri_counts[NUM_WARPS];
@@ -106,12 +105,6 @@ shared int s_raster_error;
 
 // Only used when debugging
 shared uint s_vis_pixels[LSIZE];
-
-void outputPixel(ivec2 pixel_pos, vec4 color) {
-	//color = tintColor(color, vec3(0.2, 0.3, 0.4), 0.8);
-	//g_raster_image[s_bin_raster_offset + pixel_pos.x + (pixel_pos.y << BIN_SHIFT)] = color;
-	// TODO
-}
 
 void generateRowTris(uint tri_idx, int start_hby) {
 	uint scan_offset = STORAGE_TRI_SCAN_OFFSET + tri_idx * 2;
@@ -594,7 +587,7 @@ void shadeAndReduceSamples(uint hbid, uint sample_count, in out ReductionContext
 	uint mini_offset = LIX & ~31;
 	uint reduce_pixel_bit = 1u << (LIX & 31);
 	ivec2 half_block_pos = ivec2(hbx << HBLOCK_WIDTH_SHIFT, hby << HBLOCK_HEIGHT_SHIFT) + s_bin_pos;
-	vec3 out_color = ctx.out_color;
+	vec3 out_color = decodeRGB10(ctx.out_color);
 
 	for(uint i = 0; i < sample_count; i += WARP_SIZE) {
 		// TODO: we don't need s_mini_buffer here, we can use s_buffer, thus decreasing mini_buffer size
@@ -619,7 +612,7 @@ void shadeAndReduceSamples(uint hbid, uint sample_count, in out ReductionContext
 	}
 
 	// TODO: check if encode+decode for out_color is really needed (to save 2 regs)
-	ctx.out_color = SATURATE(out_color);
+	ctx.out_color = encodeRGB10(SATURATE(out_color));
 }
 
 ivec2 computePixelPos(uint hbid) {
@@ -782,7 +775,6 @@ int loadNextBin() {
 	if(LIX == 0) {
 		uint bin_idx = atomicAdd(g_info.a_high_bins, 1);
 		s_bin_id = bin_idx < s_num_bins ? HIGH_LEVEL_BINS(bin_idx) : -1;
-		s_bin_raster_offset = s_bin_id << (BIN_SHIFT * 2);
 	}
 	barrier();
 	return s_bin_id;

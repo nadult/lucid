@@ -301,7 +301,6 @@ void LucidRenderer::render(const Context &ctx) {
 	uploadInstances(ctx).check();
 	quadSetup(ctx);
 	computeBins(ctx);
-	bindRaster(ctx);
 	rasterLow(ctx);
 	rasterHigh(ctx);
 
@@ -494,10 +493,10 @@ void LucidRenderer::computeBins(const Context &ctx) {
 		getDebugData(ctx, m_debug_buffer, "bin_dispatcher_debug");
 }
 
-void LucidRenderer::bindRaster(const Context &ctx) {
+void LucidRenderer::bindRaster(PVPipeline pipeline, const Context &ctx) {
 	auto &cmds = ctx.device.cmdQueue();
 
-	cmds.bind(p_raster_low);
+	cmds.bind(pipeline);
 	auto ds = cmds.bindDS(0);
 	ds.set(0, m_info);
 	ds.set(1, VDescriptorType::uniform_buffer, m_config);
@@ -509,7 +508,6 @@ void LucidRenderer::bindRaster(const Context &ctx) {
 	auto swap_chain = ctx.device.swapChain();
 	auto raster_image = swap_chain->acquiredImage();
 	ds.setStorageImage(8, raster_image, VImageLayout::general);
-
 	if(m_opts & Opt::debug_raster) {
 		ds.set(11, m_debug_buffer);
 		shaderDebugInitBuffer(cmds, m_debug_buffer);
@@ -527,7 +525,7 @@ void LucidRenderer::rasterLow(const Context &ctx) {
 	cmds.barrier(VPipeStage::compute_shader, VPipeStage::draw_indirect | VPipeStage::compute_shader,
 				 VAccess::shader_write, VAccess::indirect_command_read | VAccess::shader_read);
 
-	cmds.bind(p_raster_low);
+	bindRaster(p_raster_low, ctx);
 	cmds.dispatchComputeIndirect(m_info,
 								 LUCID_INFO_MEMBER_OFFSET(bin_level_dispatches[BIN_LEVEL_LOW]));
 	if(m_opts & Opt::debug_raster)
@@ -540,7 +538,7 @@ void LucidRenderer::rasterHigh(const Context &ctx) {
 	cmds.barrier(VPipeStage::compute_shader, VPipeStage::draw_indirect | VPipeStage::compute_shader,
 				 VAccess::shader_write, VAccess::indirect_command_read | VAccess::shader_read);
 
-	cmds.bind(p_raster_low);
+	bindRaster(p_raster_high, ctx);
 	cmds.dispatchComputeIndirect(m_info,
 								 LUCID_INFO_MEMBER_OFFSET(bin_level_dispatches[BIN_LEVEL_HIGH]));
 	if(m_opts & Opt::debug_raster)

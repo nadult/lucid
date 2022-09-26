@@ -49,7 +49,7 @@ class LucidRenderer {
 	Ex<> setupInputData(const Context &);
 	void quadSetup(const Context &);
 	void computeBins(const Context &);
-	void bindRaster(const Context &);
+	void bindRaster(PVPipeline, const Context &);
 	void rasterLow(const Context &);
 	void rasterHigh(const Context &);
 

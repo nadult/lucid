@@ -299,18 +299,13 @@ void LucidRenderer::render(const Context &ctx) {
 	// TODO: minimize barriers
 	setupInputData(ctx).check();
 	uploadInstances(ctx).check();
-	cmds.barrier(VPipeStage::transfer, VPipeStage::compute_shader, VAccess::transfer_write,
-				 VAccess::memory_read | VAccess::memory_write);
 	quadSetup(ctx);
-	cmds.barrier(VPipeStage::compute_shader, VPipeStage::compute_shader, VAccess::memory_write,
-				 VAccess::memory_read | VAccess::memory_write);
 	computeBins(ctx);
-	cmds.barrier(VPipeStage::compute_shader, VPipeStage::compute_shader, VAccess::memory_write,
-				 VAccess::memory_read | VAccess::memory_write);
+	bindRaster(ctx);
 	rasterLow(ctx);
 	rasterHigh(ctx);
 
-	cmds.barrier(VPipeStage::compute_shader, VPipeStage::transfer, VAccess::memory_write,
+	cmds.barrier(VPipeStage::compute_shader, VPipeStage::transfer, VAccess::shader_write,
 				 VAccess::transfer_read);
 	if(auto result = cmds.download(m_info, "info", 16); result && *result) {
 		m_last_info = move(*result);
@@ -443,6 +438,9 @@ void LucidRenderer::quadSetup(const Context &ctx) {
 		shaderDebugInitBuffer(cmds, m_debug_buffer);
 	}
 
+	cmds.barrier(VPipeStage::transfer, VPipeStage::compute_shader, VAccess::transfer_write,
+				 VAccess::shader_read);
+
 	int num_workgroups = (m_num_instances + m_instance_packet_size - 1) / m_instance_packet_size;
 	cmds.dispatchCompute({num_workgroups, 1, 1});
 
@@ -455,8 +453,8 @@ void LucidRenderer::computeBins(const Context &ctx) {
 	PERF_GPU_SCOPE(cmds);
 
 	PERF_CHILD_SCOPE("counter phase");
-	cmds.barrier(VPipeStage::compute_shader, VPipeStage::draw_indirect | VPipeStage::compute_shader,
-				 VAccess::memory_write, VAccess::indirect_command_read | VAccess::memory_read);
+	cmds.barrier(VPipeStage::compute_shader, VPipeStage::compute_shader | VPipeStage::draw_indirect,
+				 VAccess::shader_write, VAccess::shader_read | VAccess::indirect_command_read);
 
 	cmds.bind(p_bin_counter);
 	auto ds = cmds.bindDS(0);
@@ -472,16 +470,16 @@ void LucidRenderer::computeBins(const Context &ctx) {
 	if((m_opts & Opt::debug_bin_counter))
 		getDebugData(ctx, m_debug_buffer, "bin_counter_debug");
 
-	cmds.barrier(VPipeStage::compute_shader, VPipeStage::compute_shader, VAccess::memory_write,
-				 VAccess::memory_write | VAccess::memory_read);
+	cmds.barrier(VPipeStage::compute_shader, VPipeStage::compute_shader, VAccess::shader_write,
+				 VAccess::shader_read);
 
 	PERF_SIBLING_SCOPE("categorizer phase");
 	cmds.bind(p_bin_categorizer);
 	cmds.dispatchCompute({1, 1, 1});
 
 	PERF_SIBLING_SCOPE("dispatcher phase");
-	cmds.barrier(VPipeStage::compute_shader, VPipeStage::compute_shader, VAccess::memory_write,
-				 VAccess::memory_write | VAccess::memory_read);
+	cmds.barrier(VPipeStage::compute_shader, VPipeStage::compute_shader, VAccess::shader_write,
+				 VAccess::shader_read);
 
 	cmds.bind(p_bin_dispatcher);
 	ds = cmds.bindDS(1);
@@ -496,10 +494,10 @@ void LucidRenderer::computeBins(const Context &ctx) {
 		getDebugData(ctx, m_debug_buffer, "bin_dispatcher_debug");
 }
 
-void LucidRenderer::bindRaster(PVPipeline pipeline, const Context &ctx) {
+void LucidRenderer::bindRaster(const Context &ctx) {
 	auto &cmds = ctx.device.cmdQueue();
 
-	cmds.bind(pipeline);
+	cmds.bind(p_raster_low);
 	auto ds = cmds.bindDS(0);
 	ds.set(0, m_info);
 	ds.set(1, VDescriptorType::uniform_buffer, m_config);
@@ -527,8 +525,9 @@ void LucidRenderer::rasterLow(const Context &ctx) {
 	PERF_GPU_SCOPE(cmds);
 
 	cmds.barrier(VPipeStage::compute_shader, VPipeStage::draw_indirect | VPipeStage::compute_shader,
-				 VAccess::memory_write, VAccess::indirect_command_read | VAccess::memory_read);
-	bindRaster(p_raster_low, ctx);
+				 VAccess::shader_write, VAccess::indirect_command_read | VAccess::shader_read);
+
+	cmds.bind(p_raster_low);
 	cmds.dispatchComputeIndirect(m_info,
 								 LUCID_INFO_MEMBER_OFFSET(bin_level_dispatches[BIN_LEVEL_LOW]));
 	if(m_opts & Opt::debug_raster)
@@ -539,8 +538,9 @@ void LucidRenderer::rasterHigh(const Context &ctx) {
 	auto &cmds = ctx.device.cmdQueue();
 	PERF_GPU_SCOPE(cmds);
 	cmds.barrier(VPipeStage::compute_shader, VPipeStage::draw_indirect | VPipeStage::compute_shader,
-				 VAccess::memory_write, VAccess::indirect_command_read | VAccess::memory_read);
-	bindRaster(p_raster_high, ctx);
+				 VAccess::shader_write, VAccess::indirect_command_read | VAccess::shader_read);
+
+	cmds.bind(p_raster_low);
 	cmds.dispatchComputeIndirect(m_info,
 								 LUCID_INFO_MEMBER_OFFSET(bin_level_dispatches[BIN_LEVEL_HIGH]));
 	if(m_opts & Opt::debug_raster)

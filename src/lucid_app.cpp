@@ -663,7 +663,7 @@ vector<LucidApp::StatPoint> LucidApp::selectPerfPoints() const {
 	auto &exec_tree = manager->execTree();
 
 	array<ZStr, 3> selection[] = {
-		{"total", "LucidRenderer::render", ""},
+		{"lucid", "LucidRenderer::render", ""},
 		{"setup", "LucidRenderer::quadSetup", ""},
 		{"bins", "LucidRenderer::computeBins", ""},
 		{"raster_low", "LucidRenderer::rasterLow", ""},
@@ -785,6 +785,9 @@ void LucidApp::printPerfStats() {
 	vector<ZStr> column_names = transform(points, [](auto &point) { return point.short_name; });
 	vector<ZStr> row_names;
 	vector<vector<string>> rows;
+	int lucid_id = indexOf(column_names, "lucid");
+	int simple_id = indexOf(column_names, "simple");
+	column_names.emplace_back("ratio");
 
 	for(int i : intRange(m_setups)) {
 		if(!m_stats[i])
@@ -793,6 +796,7 @@ void LucidApp::printPerfStats() {
 		perf::Analyzer::FrameRange range;
 		m_perf_analyzer->computeRange(range, m_stats[i]);
 
+		int lucid_value = 0, simple_value = 0;
 		vector<string> row;
 		for(auto &point : points) {
 			auto &stat = range.rows[point.exec_id];
@@ -800,11 +804,21 @@ void LucidApp::printPerfStats() {
 				row.emplace_back();
 				continue;
 			}
-			row.emplace_back(stdFormat("%d", (int)round(stat.gpu_min / 1000.0)));
+			int value = (int)round(stat.gpu_min / 1000.0);
+			if(row.size() == lucid_id)
+				lucid_value = value;
+			else if(row.size() == simple_id)
+				simple_value = value;
+			row.emplace_back(stdFormat("%d", value));
 		}
 
 		if(allOf(row, ""))
 			continue;
+
+		string ratio;
+		if(lucid_value != 0 && simple_value != 0)
+			ratio = stdFormat("%.2f", double(lucid_value) / simple_value);
+		row.emplace_back(ratio);
 
 		row_names.emplace_back(m_setups[i]->name);
 		rows.emplace_back(row);

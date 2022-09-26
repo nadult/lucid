@@ -654,7 +654,7 @@ void shadeAndReduceSamples(uint rbid, uint sample_count, in out ReductionContext
 	uint mini_offset =
 		WARP_SIZE == 64 ? (LIX & ~WARP_MASK) + ((LIX & 32) != 0 ? LSIZE : 0) : LIX & ~WARP_MASK;
 	ivec2 rblock_pos = rasterBlockPixelPos(rbid) + s_bin_pos;
-	vec3 out_color = decodeRGB10(ctx.out_color);
+	vec3 out_color = ctx.out_color;
 
 	for(uint i = 0; i < sample_count; i += WARP_SIZE) {
 		// TODO: we don't need s_mini_buffer here, we can use s_buffer, thus decreasing mini_buffer size
@@ -691,7 +691,7 @@ void shadeAndReduceSamples(uint rbid, uint sample_count, in out ReductionContext
 	}
 
 	// TODO: check if encode+decode for out_color is really needed (to save 2 regs)
-	ctx.out_color = encodeRGB10(SATURATE(out_color));
+	ctx.out_color = SATURATE(out_color);
 }
 
 void initVisualizeSamples() { s_vis_pixels[LIX] = 0; }

@@ -174,7 +174,7 @@ struct ReductionContext {
 #endif
 	uvec3 prev_colors;
 	float out_trans;
-	uint out_color;
+	vec3 out_color;
 };
 
 void initReduceSamples(out ReductionContext ctx) {
@@ -184,7 +184,7 @@ void initReduceSamples(out ReductionContext ctx) {
 	ctx.prev_depths = vec3(999999999.0);
 #endif
 	ctx.prev_colors = uvec3(0);
-	ctx.out_color = 0;
+	ctx.out_color = vec3(0.0);
 	ctx.out_trans = 1.0;
 }
 
@@ -257,7 +257,7 @@ bool reduceSample(inout ReductionContext ctx, inout vec3 out_color, uvec2 sample
 }
 
 vec4 finishReduceSamples(ReductionContext ctx) {
-	vec3 out_color = decodeRGB10(ctx.out_color);
+	vec3 out_color = ctx.out_color;
 
 	for(int i = 2; i >= 0; i--)
 		if(ctx.prev_colors[i] != 0) {

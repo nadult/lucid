@@ -46,8 +46,8 @@ struct Viewport {
 	float inv_far_plane;
 };
 
-#define LUCID_INFO_MAX_DISPATCHES 128
-#define LUCID_INFO_SIZE 640
+#define LUCID_INFO_MAX_DISPATCHES 256
+#define LUCID_INFO_SIZE (128 + 4 * LUCID_INFO_MAX_DISPATCHES)
 
 // This structure contains all the necessary counters, atomics, etc.
 // In shader code it's available as g_info; In the same SSBO just after

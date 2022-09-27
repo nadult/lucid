@@ -166,12 +166,10 @@ Ex<void> LucidRenderer::exConstruct(VulkanDevice &device, ShaderCompiler &compil
 	// TODO: max dispatches should also depend on lsize
 	// https://tinyurl.com/o7s9ph3
 	auto phys_info = device.physInfo();
-	m_max_dispatches = 128;
-	uint max_visible_quads = 2 * 1024 * 1024;
-	if(phys_info.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU) {
-		m_max_dispatches = 64;
-		max_visible_quads = 256 * 1024;
-	}
+	auto mem_size_mb = phys_info.deviceLocalMemorySize() / (1024 * 1024);
+	m_max_dispatches = mem_size_mb >= 4000 ? 256 : mem_size_mb >= 2000 ? 128 : 64;
+	uint max_visible_quads = mem_size_mb * 1024;
+
 	DASSERT(m_max_dispatches <= LUCID_INFO_MAX_DISPATCHES);
 
 	m_opts = opts;
@@ -216,7 +214,7 @@ Ex<void> LucidRenderer::exConstruct(VulkanDevice &device, ShaderCompiler &compil
 	m_normals_storage = EX_PASS(VulkanBuffer::create<u32>(device, max_visible_tris, usage));
 
 	uint scratch_32_size = 64 * 1024 * m_max_dispatches * sizeof(u32);
-	uint scratch_64_size = (128 * 1024) * m_max_dispatches * sizeof(u64);
+	uint scratch_64_size = (256 * 1024) * m_max_dispatches * sizeof(u64);
 	scratch_64_size = max<uint>(scratch_64_size, max_visible_quads * sizeof(u32));
 
 	// TODO: control size of scratch mem
@@ -241,9 +239,9 @@ Ex<void> LucidRenderer::exConstruct(VulkanDevice &device, ShaderCompiler &compil
 	p_bin_counter = EX_PASS(make_compute_pipe("bin_counter", Opt::debug_bin_counter, has_timers));
 	p_bin_categorizer = EX_PASS(make_compute_pipe("bin_categorizer", none, false));
 
-	auto raster_suffix = m_opts & Opt::additive_blending ? "_additive_blend" :
-						 m_opts & Opt::alpha_threshold	 ? "_alpha_threshold" :
-														   "";
+	auto raster_suffix = m_opts & Opt::additive_blending ? "_additive_blend"
+						 : m_opts & Opt::alpha_threshold ? "_alpha_threshold"
+														 : "";
 	p_raster_low = EX_PASS(
 		make_compute_pipe(format("raster_low%", raster_suffix), Opt::debug_raster, has_timers));
 	p_raster_high = EX_PASS(

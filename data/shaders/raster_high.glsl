@@ -607,8 +607,12 @@ void shadeAndReduceSamples(uint hbid, uint sample_count, in out ReductionContext
 
 		subgroupMemoryBarrierShared();
 
+#if WARP_SIZE == 32
 		if(reduceSample(ctx, out_color, sample_s, s_mini_buffer[LIX]))
 			break;
+#else
+		// TODO
+#endif
 	}
 
 	// TODO: check if encode+decode for out_color is really needed (to save 2 regs)

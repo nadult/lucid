@@ -10,8 +10,7 @@
 #if WARP_SIZE == 32
 #define WARP_BITMASK uint
 #else
-#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
-#define WARP_BITMASK uint64_t
+#define WARP_BITMASK uvec2
 #endif
 
 coherent layout(std430, binding = 0) buffer lucid_info_ {
@@ -190,17 +189,25 @@ void initReduceSamples(out ReductionContext ctx) {
 
 bool reduceSample(inout ReductionContext ctx, inout vec3 out_color, uvec2 sample_s,
 				  WARP_BITMASK pixel_bitmask) {
-	int j = int(findLSB(pixel_bitmask));
+#if WARP_SIZE == 32
+	int num_samples = bitCount(pixel_bitmask);
+#else
+	int num_samples = bitCount(pixel_bitmask.x) + bitCount(pixel_bitmask.y);
+#endif
 
-	while(subgroupAny(j != -1)) {
-		uvec2 value = subgroupShuffle(sample_s, j);
+	while(subgroupAny(num_samples-- > 0)) {
+#if WARP_SIZE == 32
+		int bit = int(findLSB(pixel_bitmask));
+		pixel_bitmask &= ~(1u << bit);
+#else
+		int sub_index = pixel_bitmask.x == 0? 1 : 0;
+		int bit = findLSB(pixel_bitmask[sub_index]);
+		pixel_bitmask[sub_index] &= ~(1u << bit);
+		bit += sub_index << 5;
+#endif
+		uvec2 value = subgroupShuffle(sample_s, bit);
 		uint color = value.x;
 		float depth = uintBitsToFloat(value.y);
-
-		if(j == -1)
-			continue;
-		pixel_bitmask &= ~(WARP_BITMASK(1) << j);
-		j = int(findLSB(pixel_bitmask));
 
 		if(depth > ctx.prev_depths[0]) {
 			swap(color, ctx.prev_colors[0]);
@@ -230,7 +237,6 @@ bool reduceSample(inout ReductionContext ctx, inout vec3 out_color, uvec2 sample
 		ctx.prev_depths[1] = ctx.prev_depths[0];
 		ctx.prev_depths[0] = depth;
 
-		bool finish = false;
 		if(ctx.prev_colors[2] != 0) {
 			vec4 cur_color = decodeRGBA8(ctx.prev_colors[2]);
 #ifdef ADDITIVE_BLENDING
@@ -241,7 +247,7 @@ bool reduceSample(inout ReductionContext ctx, inout vec3 out_color, uvec2 sample
 
 #ifdef ALPHA_THRESHOLD
 			if(subgroupAll(ctx.out_trans < alpha_threshold))
-				finish = true;
+				num_samples = 0;
 #endif
 #endif
 		}
@@ -249,8 +255,6 @@ bool reduceSample(inout ReductionContext ctx, inout vec3 out_color, uvec2 sample
 		ctx.prev_colors[2] = ctx.prev_colors[1];
 		ctx.prev_colors[1] = ctx.prev_colors[0];
 		ctx.prev_colors[0] = color;
-		if(finish)
-			return true;
 	}
 
 	return false;

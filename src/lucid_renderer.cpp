@@ -302,7 +302,7 @@ void LucidRenderer::render(const Context &ctx) {
 	quadSetup(ctx);
 	computeBins(ctx);
 	rasterLow(ctx);
-	rasterHigh(ctx);
+	//rasterHigh(ctx);
 
 	cmds.barrier(VPipeStage::compute_shader, VPipeStage::transfer, VAccess::shader_write,
 				 VAccess::transfer_read);

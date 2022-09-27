@@ -683,8 +683,7 @@ void shadeAndReduceSamples(uint rbid, uint sample_count, in out ReductionContext
 #if WARP_SIZE == 32
 		uint pixel_bitmask = s_mini_buffer[LIX];
 #else
-		uint64_t pixel_bitmask =
-			uint64_t(s_mini_buffer[LIX]) | (uint64_t(s_mini_buffer[LIX + LSIZE]) << 32);
+		uvec2 pixel_bitmask = uvec2(s_mini_buffer[LIX], s_mini_buffer[LIX + LSIZE]);
 #endif
 		if(reduceSample(ctx, out_color, sample_s, pixel_bitmask))
 			break;

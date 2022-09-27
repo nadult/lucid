@@ -195,19 +195,23 @@ bool reduceSample(inout ReductionContext ctx, inout vec3 out_color, uvec2 sample
 	int num_samples = bitCount(pixel_bitmask.x) + bitCount(pixel_bitmask.y);
 #endif
 
-	while(subgroupAny(num_samples-- > 0)) {
+	while(subgroupAny(num_samples > 0)) {
 #if WARP_SIZE == 32
 		int bit = int(findLSB(pixel_bitmask));
-		pixel_bitmask &= ~(1u << bit);
+		pixel_bitmask = ~(1u << bit);
 #else
-		int sub_index = pixel_bitmask.x == 0? 1 : 0;
-		int bit = findLSB(pixel_bitmask[sub_index]);
-		pixel_bitmask[sub_index] &= ~(1u << bit);
-		bit += sub_index << 5;
+		int bitmask_index = pixel_bitmask.x == 0? 1 : 0;
+		int bit = findLSB(pixel_bitmask[bitmask_index]);
+		pixel_bitmask[bitmask_index] &= ~(1u << bit);
+		bit += bitmask_index << 5;
 #endif
 		uvec2 value = subgroupShuffle(sample_s, bit);
 		uint color = value.x;
 		float depth = uintBitsToFloat(value.y);
+
+		if(num_samples <= 0)
+			continue;
+		num_samples--;
 
 		if(depth > ctx.prev_depths[0]) {
 			swap(color, ctx.prev_colors[0]);

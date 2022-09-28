@@ -84,7 +84,7 @@ class LucidRenderer {
 	bool m_last_info_updated = false;
 
 	int m_bin_size, m_block_size;
-	int m_max_dispatches;
+	int m_max_dispatches, m_max_visible_quads;
 
 	int2 m_bin_counts;
 	int m_bin_count;

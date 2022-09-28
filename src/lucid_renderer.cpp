@@ -168,8 +168,8 @@ Ex<void> LucidRenderer::exConstruct(VulkanDevice &device, ShaderCompiler &compil
 	auto phys_info = device.physInfo();
 	auto mem_size_mb = phys_info.deviceLocalMemorySize() / (1024 * 1024);
 	m_max_dispatches = mem_size_mb >= 4000 ? 256 : mem_size_mb >= 2000 ? 128 : 64;
-	uint max_visible_quads = mem_size_mb * 1024;
-
+	uint max_visible_quads = min(1024ull * 1024 * 1024 / 224, mem_size_mb * 1024);
+	m_max_visible_quads = max_visible_quads;
 	DASSERT(m_max_dispatches <= LUCID_INFO_MAX_DISPATCHES);
 
 	m_opts = opts;
@@ -239,9 +239,9 @@ Ex<void> LucidRenderer::exConstruct(VulkanDevice &device, ShaderCompiler &compil
 	p_bin_counter = EX_PASS(make_compute_pipe("bin_counter", Opt::debug_bin_counter, has_timers));
 	p_bin_categorizer = EX_PASS(make_compute_pipe("bin_categorizer", none, false));
 
-	auto raster_suffix = m_opts & Opt::additive_blending ? "_additive_blend"
-						 : m_opts & Opt::alpha_threshold ? "_alpha_threshold"
-														 : "";
+	auto raster_suffix = m_opts & Opt::additive_blending ? "_additive_blend" :
+						 m_opts & Opt::alpha_threshold	 ? "_alpha_threshold" :
+														   "";
 	p_raster_low = EX_PASS(
 		make_compute_pipe(format("raster_low%", raster_suffix), Opt::debug_raster, has_timers));
 	p_raster_high = EX_PASS(
@@ -747,6 +747,9 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 		basic_rows.emplace_back("temps", toString(temps));
 	}
 
+	vector<StatsRow> limit_rows = {{"max visible quads", formatLarge(m_max_visible_quads)},
+								   {"max_dispatches", formatLarge(m_max_dispatches)}};
+
 	// TODO: add better stats once rasterizer is working on all levels
 
 	if(setup_timers)
@@ -758,6 +761,7 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 
 	out.emplace_back(move(bin_level_rows), "Bins categorized by quad density levels:", 130);
 	out.emplace_back(move(basic_rows), "", 130);
+	out.emplace_back(move(limit_rows), "LucidRenderer limits", 130);
 
 	return out;
 }

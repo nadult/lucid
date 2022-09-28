@@ -54,7 +54,7 @@ LucidApp::LucidApp(VWindowRef window, VDeviceRef device)
 	  m_gui(device, window, m_gui_render_pass, {GuiStyleMode::mini}),
 	  m_cam_control(Plane3F(float3(0, 1, 0), 0.0f)), m_lighting(SceneLighting::makeDefault()) {
 
-	//m_device->memory().setLogging(true);
+	//m_device->memory().setLogging(true, false);
 	ShaderCompilerSetup sc_setup;
 	auto shader_config = getShaderConfig(*device);
 	sc_setup.vulkan_version = device->version();
@@ -719,7 +719,7 @@ void LucidApp ::updatePerfStats() {
 	}
 
 	// TODO: check for m_scene_frame_id is a hack; Rendering should work properly from first frame...
-	if(m_setup_idx != -1 && frames.back().frame_id > m_skip_frame_id && m_scene_frame_id > 4)
+	if(m_setup_idx != -1 && frames.back().frame_id > m_skip_frame_id && m_scene_frame_id > 5)
 		m_stats[m_setup_idx].emplace_back(frames.back());
 }
 

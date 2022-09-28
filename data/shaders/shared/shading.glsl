@@ -198,9 +198,9 @@ bool reduceSample(inout ReductionContext ctx, inout vec3 out_color, uvec2 sample
 	while(subgroupAny(num_samples > 0)) {
 #if WARP_SIZE == 32
 		int bit = int(findLSB(pixel_bitmask));
-		pixel_bitmask = ~(1u << bit);
+		pixel_bitmask &= ~(1u << bit);
 #else
-		int bitmask_index = pixel_bitmask.x == 0? 1 : 0;
+		int bitmask_index = pixel_bitmask.x == 0 ? 1 : 0;
 		int bit = findLSB(pixel_bitmask[bitmask_index]);
 		pixel_bitmask[bitmask_index] &= ~(1u << bit);
 		bit += bitmask_index << 5;

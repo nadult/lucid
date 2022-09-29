@@ -386,7 +386,7 @@ void generateBlocks(uint bid) {
 	}
 	barrier();
 
-	if(tri_count > 3)
+	if(tri_count > RC_COLOR_SIZE)
 		sortTris(lbid, tri_count, buf_offset);
 
 	barrier();

@@ -137,6 +137,10 @@ void LucidRenderer::addShaderDefs(VulkanDevice &device, ShaderCompiler &compiler
 	base_macros.back().first = "ADDITIVE_BLENDING";
 	add_defs("raster_low_additive_blend", "raster_low.glsl");
 	add_defs("raster_high_additive_blend", "raster_high.glsl");
+
+	base_macros.back().first = "VISUALIZE_ERRORS";
+	add_defs("raster_low_vis_errors", "raster_low.glsl");
+	add_defs("raster_high_vis_errors", "raster_high.glsl");
 }
 
 static Ex<PVPipeline> makeComputePipeline(VulkanDevice &device, ShaderCompiler &compiler,
@@ -239,7 +243,8 @@ Ex<void> LucidRenderer::exConstruct(VulkanDevice &device, ShaderCompiler &compil
 	p_bin_counter = EX_PASS(make_compute_pipe("bin_counter", Opt::debug_bin_counter, has_timers));
 	p_bin_categorizer = EX_PASS(make_compute_pipe("bin_categorizer", none, false));
 
-	auto raster_suffix = m_opts & Opt::additive_blending ? "_additive_blend" :
+	auto raster_suffix = m_opts & Opt::visualize_errors	 ? "_vis_errors" :
+						 m_opts & Opt::additive_blending ? "_additive_blend" :
 						 m_opts & Opt::alpha_threshold	 ? "_alpha_threshold" :
 														   "";
 	p_raster_low = EX_PASS(
@@ -300,7 +305,7 @@ void LucidRenderer::render(const Context &ctx) {
 	quadSetup(ctx);
 	computeBins(ctx);
 	rasterLow(ctx);
-	//rasterHigh(ctx);
+	rasterHigh(ctx);
 
 	cmds.barrier(VPipeStage::compute_shader, VPipeStage::transfer, VAccess::shader_write,
 				 VAccess::transfer_read);

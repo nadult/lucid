@@ -173,8 +173,23 @@ uint shadeSample(ivec2 pixel_pos, uint tri_idx, out float out_depth) {
 #endif
 
 struct ReductionContext {
+// FFS: for some reason vectors produce faster code than arrays on integrated AMDs
+#if RC_DEPTH_SIZE == 3
+	vec3 prev_depths;
+#elif RC_DEPTH_SIZE == 4
+	vec4 prev_depths;
+#else
 	float prev_depths[RC_DEPTH_SIZE];
+#endif
+
+#if RC_COLOR_SIZE == 3
+	uvec3 prev_colors;
+#elif RC_COLOR_SIZE == 4
+	uvec4 prev_colors;
+#else
 	uint prev_colors[RC_COLOR_SIZE];
+#endif
+
 	float out_trans;
 	vec3 out_color;
 };

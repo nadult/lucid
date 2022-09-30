@@ -2,6 +2,7 @@
 
 #include "lucid_base.h"
 #include <fwk/gfx/color.h>
+#include <fwk/gfx/shader_compiler.h>
 
 namespace fwk {
 struct ShaderDebugInfo;
@@ -33,6 +34,7 @@ class LucidRenderer {
 	FWK_MOVABLE_CLASS(LucidRenderer)
 
 	static void addShaderDefs(VulkanDevice &, ShaderCompiler &, const ShaderConfig &);
+	CSpan<ShaderDefId> shaderDefIds() const { return m_shader_def_ids; }
 	Ex<void> exConstruct(VulkanDevice &, ShaderCompiler &, VColorAttachment, Opts, int2 view_size);
 
 	void render(const Context &);
@@ -58,6 +60,7 @@ class LucidRenderer {
 
 	Opts m_opts;
 
+	vector<ShaderDefId> m_shader_def_ids;
 	PVPipeline p_quad_setup;
 	PVPipeline p_bin_counter, p_bin_dispatcher, p_bin_categorizer;
 	PVPipeline p_raster_low, p_raster_high;

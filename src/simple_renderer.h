@@ -2,6 +2,7 @@
 
 #include "lucid_base.h"
 #include <fwk/gfx/color.h>
+#include <fwk/gfx/shader_compiler.h>
 #include <fwk/math/box.h>
 
 namespace shader {
@@ -14,12 +15,11 @@ class SimpleRenderer {
 	FWK_MOVABLE_CLASS(SimpleRenderer);
 
 	static void addShaderDefs(VulkanDevice &, ShaderCompiler &, const ShaderConfig &);
-
+	CSpan<ShaderDefId> shaderDefIds() const { return m_shader_def_ids; }
 	Ex<> exConstruct(VDeviceRef, ShaderCompiler &, const IRect &viewport, VColorAttachment);
 
 	// TODO: wireframe to config
 	Ex<> render(const RenderContext &, bool wireframe);
-
 	const IRect &viewport() const { return m_viewport; }
 
   private:
@@ -37,6 +37,7 @@ class SimpleRenderer {
 	Ex<> renderPhase(const RenderContext &, VBufferSpan<shader::SimpleDrawCall>, bool opaque,
 					 bool wireframe);
 
+	vector<ShaderDefId> m_shader_def_ids;
 	HashMap<PipeConfig, PVPipeline> m_pipelines;
 	PVShaderModule m_frag_module, m_vert_module;
 	PVPipelineLayout m_pipeline_layout;

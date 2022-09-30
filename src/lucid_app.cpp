@@ -201,7 +201,14 @@ Ex<void> LucidApp::updateRenderer() {
 
 	if(!do_update && m_last_time - m_last_shader_update_time > 0.5) {
 		m_last_shader_update_time = m_last_time;
-		if(m_shader_compiler->updateList())
+		auto update_list = m_shader_compiler->updateList();
+		vector<ShaderDefId> used_shaders;
+		if(m_simple_renderer)
+			used_shaders = m_simple_renderer->shaderDefIds();
+		if(m_lucid_renderer)
+			insertBack(used_shaders, m_lucid_renderer->shaderDefIds());
+		makeSortedUnique(used_shaders);
+		if(setIntersection(used_shaders, update_list))
 			do_update = true;
 	}
 

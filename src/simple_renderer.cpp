@@ -48,8 +48,13 @@ Ex<void> SimpleRenderer::exConstruct(VDeviceRef device, ShaderCompiler &compiler
 	m_render_pass = device->getRenderPass({color_att}, depth_att);
 
 	m_viewport = viewport;
-	m_frag_module = EX_PASS(compiler.createShaderModule(device, "simple_frag"));
-	m_vert_module = EX_PASS(compiler.createShaderModule(device, "simple_vert"));
+
+	auto frag_id = *compiler.find("simple_frag");
+	auto vert_id = *compiler.find("simple_vert");
+	m_shader_def_ids = {frag_id, vert_id};
+
+	m_frag_module = EX_PASS(compiler.createShaderModule(device, frag_id));
+	m_vert_module = EX_PASS(compiler.createShaderModule(device, vert_id));
 	m_pipeline_layout = device->getPipelineLayout({m_frag_module, m_vert_module});
 
 	return {};

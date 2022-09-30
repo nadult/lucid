@@ -143,18 +143,6 @@ void LucidRenderer::addShaderDefs(VulkanDevice &device, ShaderCompiler &compiler
 	add_defs("raster_high_vis_errors", "raster_high.glsl");
 }
 
-static Ex<PVPipeline> makeComputePipeline(VulkanDevice &device, ShaderCompiler &compiler,
-										  const shader::SpecializationConstants &consts,
-										  ZStr def_name) {
-	auto time = getTime();
-	VComputePipelineSetup setup;
-	setup.compute_module = EX_PASS(compiler.createShaderModule(device.ref(), def_name));
-	setup.spec_constants.emplace_back(consts, 0u);
-	auto result = VulkanPipeline::create(device.ref(), setup);
-	print("Compute pipeline '%': % ms\n", def_name, int((getTime() - time) * 1000));
-	return result;
-}
-
 Ex<void> LucidRenderer::exConstruct(VulkanDevice &device, ShaderCompiler &compiler,
 									VColorAttachment color_att, Opts opts, int2 view_size) {
 	print("Constructing LucidRenderer (flags:% res:%):\n", opts, view_size);
@@ -228,12 +216,22 @@ Ex<void> LucidRenderer::exConstruct(VulkanDevice &device, ShaderCompiler &compil
 	if(m_opts & (Opt::debug_bin_dispatcher | Opt::debug_raster))
 		m_errors = EX_PASS(VulkanBuffer::create<u32>(device, 1024 * 1024, usage_copyable));
 
-	auto make_compute_pipe = [&](string name, Opts debug_option, bool has_timers) {
+	auto make_compute_pipe = [&](string name, Opts debug_option,
+								 bool has_timers) -> Ex<PVPipeline> {
 		if(opts & debug_option)
 			name = name + "_debug";
 		else if(has_timers)
 			name = name + "_timers";
-		return makeComputePipeline(device, compiler, consts, name);
+
+		auto time = getTime();
+		VComputePipelineSetup setup;
+		auto def_id = *compiler.find(name);
+		m_shader_def_ids.emplace_back(def_id);
+		setup.compute_module = EX_PASS(compiler.createShaderModule(device.ref(), def_id));
+		setup.spec_constants.emplace_back(consts, 0u);
+		auto result = VulkanPipeline::create(device.ref(), setup);
+		print("Compute pipeline '%': % ms\n", name, int((getTime() - time) * 1000));
+		return result;
 	};
 
 	bool has_timers = m_opts & Opt::timers;

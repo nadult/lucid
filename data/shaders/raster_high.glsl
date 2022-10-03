@@ -1,4 +1,5 @@
 #include "shared/compute_funcs.glsl"
+#include "shared/raster.glsl"
 #include "shared/scanline.glsl"
 #include "shared/shading.glsl"
 #include "shared/timers.glsl"
@@ -35,34 +36,9 @@ DEBUG_SETUP(1, 11)
 #define MAX_SEGMENTS_SHIFT 6
 #define MAX_SEGMENTS 64
 
-#define RBLOCK_WIDTH 8
-#define RBLOCK_WIDTH_SHIFT 3
-
-#if WARP_SIZE == 32
-#define RBLOCK_HEIGHT 4
-#define RBLOCK_HEIGHT_SHIFT 2
-#define RBLOCK_COUNT (NUM_WARPS * 2)
-#elif WARP_SIZE == 64
-#define RBLOCK_HEIGHT 8
-#define RBLOCK_HEIGHT_SHIFT 3
-#define RBLOCK_COUNT NUM_WARPS
-#else
-#error "Currently only 32 & 64 warp size is supported"
-#endif
-
-#define RBLOCK_ROWS (BIN_SIZE / RBLOCK_HEIGHT)
-#define RBLOCK_ROWS_SHIFT (BIN_SHIFT - RBLOCK_HEIGHT_SHIFT)
-#define RBLOCK_ROWS_MASK (RBLOCK_ROWS - 1)
-
-#define RBLOCK_COLS (BIN_SIZE / RBLOCK_WIDTH)
-#define RBLOCK_COLS_SHIFT (BIN_SHIFT - RBLOCK_WIDTH_SHIFT)
-#define RBLOCK_COLS_MASK (RBLOCK_COLS - 1)
-
 // Number of rows which can be processed with given amount of warps
 #define RBLOCK_ROWS_STEP (NUM_WARPS / RBLOCK_COLS)
 #define RBLOCK_ROWS_STEP_MASK (RBLOCK_ROWS_STEP - 1)
-
-#define BIN_MASK (BIN_SIZE - 1)
 
 layout(local_size_x = LSIZE) in;
 
@@ -137,29 +113,8 @@ void generateRowTris(uint tri_idx, int start_hby) {
 
 	// TODO: is it worth it to make this loop more work-efficient?
 	for(int hby = min_hby; hby <= max_hby; hby++) {
-#define SCAN_STEP(id)                                                                              \
-	int min##id = int(max(max(scan.min[0], scan.min[1]), max(scan.min[2], 0.0)));                  \
-	int max##id = int(min(min(scan.max[0], scan.max[1]), min(scan.max[2], BIN_SIZE))) - 1;         \
-	if(min##id > max##id)                                                                          \
-		min##id = BIN_MASK, max##id = 0;                                                           \
-	scan.min += scan.step, scan.max += scan.step;
-
-#define BX_MASK_ROW(id)                                                                            \
-	((((1 << RBLOCK_COLS) - 1) << (min##id >> RBLOCK_WIDTH_SHIFT)) &                               \
-	 (((1 << RBLOCK_COLS) - 1) >> (RBLOCK_COLS_MASK - (max##id >> RBLOCK_WIDTH_SHIFT))))
-		SCAN_STEP(0);
-		SCAN_STEP(1);
-		SCAN_STEP(2);
-		SCAN_STEP(3);
-
-		const int shift1 = BIN_SHIFT * 1, shift2 = BIN_SHIFT * 2, shift3 = BIN_SHIFT * 3;
-		uint bx_mask = BX_MASK_ROW(0) | BX_MASK_ROW(1) | BX_MASK_ROW(2) | BX_MASK_ROW(3);
-		uint min_bits = (min0 << 0) | (min1 << shift1) | (min2 << shift2) | (min3 << shift3);
-		uint max_bits = (max0 << 0) | (max1 << shift1) | (max2 << shift2) | (max3 << shift3);
-
-#undef BX_MASK_ROW
-#undef SCAN_STEP
-
+		uvec3 bits = rasterBinStep(scan);
+		uint bx_mask = bits.z;
 		if(bx_mask == 0)
 			continue;
 
@@ -177,7 +132,7 @@ void generateRowTris(uint tri_idx, int start_hby) {
 		}
 		uint roffset = row_tri_idx + currentRBlockRow(hby) * MAX_RBLOCK_ROW_TRIS;
 		g_scratch_32[dst_offset_32 + roffset] = tri_idx | (bx_mask << 24);
-		g_scratch_64[dst_offset_64 + roffset] = uvec2(min_bits, max_bits);
+		g_scratch_64[dst_offset_64 + roffset] = bits.xy;
 	}
 }
 
@@ -372,9 +327,8 @@ void generateHBlocks(uint start_rbid) {
 		uint tri_idx = g_scratch_32[src_offset_32 + row_tri_idx] & 0xffffff;
 		uvec2 tri_info = g_scratch_64[src_offset_64 + row_tri_idx];
 
-		const ivec4 bin_shifts = ivec4(0, BIN_SHIFT, BIN_SHIFT * 2, BIN_SHIFT * 3);
-		ivec4 xmin = max(((ivec4(tri_info.x) >> bin_shifts) & BIN_MASK) - startx, 0);
-		ivec4 xmax = min(((ivec4(tri_info.y) >> bin_shifts) & BIN_MASK) - startx, 7);
+		ivec4 xmin = max(((ivec4(tri_info.x) >> ivec4(0, 6, 12, 18)) & BIN_MASK) - startx, 0);
+		ivec4 xmax = min(((ivec4(tri_info.y) >> ivec4(0, 6, 12, 18)) & BIN_MASK) - startx, 7);
 		ivec4 count = max(xmax - xmin + 1, 0);
 		vec4 cpx = vec4(xmin * 2 + count) * count;
 		vec4 cpy = vec4(1.0, 3.0, 5.0, 7.0) * count;

@@ -141,6 +141,7 @@
     <None Include="..\data\shaders\shared\compute_funcs.glsl" />
     <None Include="..\data\shaders\shared\funcs.glsl" />
     <None Include="..\data\shaders\shared\definitions.glsl" />
+    <None Include="..\data\shaders\shared\raster.glsl" />
     <None Include="..\data\shaders\shared\scanline.glsl" />
     <None Include="..\data\shaders\shared\shading.glsl" />
     <None Include="..\data\shaders\shared\structures.glsl" />

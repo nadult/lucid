@@ -4,6 +4,7 @@
 #include "compute_funcs.glsl"
 #include "funcs.glsl"
 #include "scanline.glsl"
+#include "shading.glsl"
 #include "structures.glsl"
 
 #define BIN_MASK (BIN_SIZE - 1)
@@ -66,6 +67,29 @@ uvec3 rasterBinStep(inout ScanlineParams scan) {
 	return uvec3(min_bits, max_bits, bx_mask);
 }
 
+uint rasterBlock(uint tri_mins, uint tri_maxs, int startx, out uint num_frags, inout vec2 cpos) {
+	ivec4 xmin = max(((ivec4(tri_mins) >> ivec4(0, 6, 12, 18)) & BIN_MASK) - startx, 0);
+	ivec4 xmax = min(((ivec4(tri_maxs) >> ivec4(0, 6, 12, 18)) & BIN_MASK) - startx, 7);
+	ivec4 count = max(xmax - xmin + 1, 0);
+	vec4 cpx = vec4(xmin * 2 + count) * count;
+	vec4 cpy = vec4(1.0, 3.0, 5.0, 7.0) * count;
+	cpos += vec2(cpx[0] + cpx[1] + cpx[2] + cpx[3], cpy[0] + cpy[1] + cpy[2] + cpy[3]);
+	num_frags = count[0] + count[1] + count[2] + count[3];
+	uint min_bits =
+		(xmin[0] & 7) | ((xmin[1] & 7) << 3) | ((xmin[2] & 7) << 6) | ((xmin[3] & 7) << 9);
+	uint count_bits = (count[0] << 16) | (count[1] << 20) | (count[2] << 24) | (count[3] << 28);
+	return min_bits | count_bits;
+}
+
+uint rasterBlockDepth(vec2 cpos, uint tri_idx) {
+	uint depth_offset = STORAGE_TRI_DEPTH_OFFSET + tri_idx;
+	vec3 depth_eq = uintBitsToFloat(g_uvec4_storage[depth_offset].xyz);
+	float ray_pos = depth_eq.x * cpos.x + (depth_eq.y * cpos.y + depth_eq.z);
+	float depth = 0xffffe * SATURATE(inversesqrt(ray_pos + 1)); // 20 bits
+	return uint(depth);
+}
+
+// TODO: this is only used in raster_low; Can we simplify it and use it n both versions?
 uvec2 rasterBlockPos(uint rbid) {
 #if WARP_SIZE == 64
 	uint rbx = rbid & BLOCK_ROWS_MASK;

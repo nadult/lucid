@@ -355,31 +355,15 @@ void generateRBlocks(uint start_rbid) {
 		uint tri_idx = g_scratch_32[src_offset_32 + row_tri_idx] & 0xffffff;
 		uvec2 tri_info = g_scratch_64[src_offset_64 + row_tri_idx];
 
-		ivec4 xmin = max(((ivec4(tri_info.x) >> ivec4(0, 6, 12, 18)) & BIN_MASK) - startx, 0);
-		ivec4 xmax = min(((ivec4(tri_info.y) >> ivec4(0, 6, 12, 18)) & BIN_MASK) - startx, 7);
-		ivec4 count = max(xmax - xmin + 1, 0);
-		vec4 cpx = vec4(xmin * 2 + count) * count;
-		vec4 cpy = vec4(1.0, 3.0, 5.0, 7.0) * count;
-		vec2 cpos = vec2(cpx[0] + cpx[1] + cpx[2] + cpx[3], cpy[0] + cpy[1] + cpy[2] + cpy[3]);
-		uint num_frags = count[0] + count[1] + count[2] + count[3];
-		uint min_bits =
-			(xmin[0] & 7) | ((xmin[1] & 7) << 3) | ((xmin[2] & 7) << 6) | ((xmin[3] & 7) << 9);
-		uint count_bits = (count[0] << 16) | (count[1] << 20) | (count[2] << 24) | (count[3] << 28);
-		uint bits = min_bits | count_bits;
-
-		cpos *= 0.5 / float(num_frags);
-		cpos += block_pos;
-
-		uint depth_offset = STORAGE_TRI_DEPTH_OFFSET + tri_idx;
-		vec3 depth_eq = uintBitsToFloat(g_uvec4_storage[depth_offset].xyz);
-		float ray_pos = depth_eq.x * cpos.x + (depth_eq.y * cpos.y + depth_eq.z);
-		float depth = 0xffffe * SATURATE(inversesqrt(ray_pos + 1)); // 20 bits
-
+		vec2 cpos = vec2(0, 0);
+		uint num_frags;
+		uint bits = rasterBlock(tri_info.x, tri_info.y, startx, num_frags, cpos);
+		uint depth = rasterBlockDepth(cpos * (0.5 / float(num_frags)) + block_pos, tri_idx);
 		if(num_frags == 0) // This means that bx_mask is invalid
 			DEBUG_RECORD(0, 0, 0, 0);
 
 		g_scratch_64[dst_offset_64 + i] = uvec2(bits, tri_idx | (num_frags << 24));
-		s_buffer[buf_offset + i] = i | (uint(depth) << 12);
+		s_buffer[buf_offset + i] = i | (depth << 12);
 	}
 	barrier();
 
@@ -677,6 +661,13 @@ void visualizeErrors(uint rbid) {
 	//outputPixel(computePixelPos(rbid), decodeRGBA8(color));
 }
 
+ivec2 computePixelPos(uint rbid) {
+	uint rbx = rbid & RBLOCK_COLS_MASK, rby = rbid >> RBLOCK_COLS_SHIFT;
+	return ivec2((LIX & (RBLOCK_WIDTH - 1)) + (rbx << RBLOCK_WIDTH_SHIFT),
+				 ((LIX >> RBLOCK_WIDTH_SHIFT) & (RBLOCK_HEIGHT - 1)) +
+					 (rby << RBLOCK_HEIGHT_SHIFT));
+}
+
 void rasterBin(int bin_id) {
 	START_TIMER();
 	if(LIX < RBLOCK_ROWS) {
@@ -725,10 +716,10 @@ void rasterBin(int bin_id) {
 		UPDATE_TIMER(1);
 
 		//visualizeAllSamples(rbid);
-		//ReductionContext context;
-		//initReduceSamples(context);
+		/*ReductionContext context;
+		initReduceSamples(context);
 
-		/*for(int segment_id = 0;; segment_id++) {
+		for(int segment_id = 0;; segment_id++) {
 			int frag_count = int(s_rblock_frag_counts[rbid & (NUM_WARPS - 1)]);
 			frag_count = min(SEGMENT_SIZE, frag_count - (segment_id << SEGMENT_SHIFT));
 			if(frag_count <= 0)
@@ -746,12 +737,8 @@ void rasterBin(int bin_id) {
 #endif
 		}*/
 
-		ivec2 pixel_pos =
-			rasterBlockPixelPos(rbid) +
-			ivec2((LIX & (RBLOCK_WIDTH - 1)), ((LIX >> RBLOCK_WIDTH_SHIFT) & (RBLOCK_HEIGHT - 1)));
+		ivec2 pixel_pos = computePixelPos(rbid);
 		//outputPixel(pixel_pos, finishReduceSamples(context));
-
-		//visualizeFragmentCounts(rbid, pixel_pos);
 		visualizeBlockCounts(rbid, pixel_pos);
 		UPDATE_TIMER(4);
 

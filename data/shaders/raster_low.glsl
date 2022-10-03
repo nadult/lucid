@@ -287,32 +287,11 @@ void generateBlocks(uint bid) {
 		uvec2 num_frags;
 		vec2 cpos = vec2(0);
 
-#define PROCESS_4_ROWS(e)                                                                          \
-	{                                                                                              \
-		ivec4 xmin = max(((ivec4(tri_mins.e) >> ivec4(0, 6, 12, 18)) & BIN_MASK) - startx, 0);     \
-		ivec4 xmax = min(((ivec4(tri_maxs.e) >> ivec4(0, 6, 12, 18)) & BIN_MASK) - startx, 7);     \
-		ivec4 count = max(xmax - xmin + 1, 0);                                                     \
-		vec4 cpx = vec4(xmin * 2 + count) * count;                                                 \
-		vec4 cpy = vec4(1.0, 3.0, 5.0, 7.0) * count;                                               \
-		cpos += vec2(cpx[0] + cpx[1] + cpx[2] + cpx[3], cpy[0] + cpy[1] + cpy[2] + cpy[3]);        \
-		num_frags.e = count[0] + count[1] + count[2] + count[3];                                   \
-		uint min_bits =                                                                            \
-			(xmin[0] & 7) | ((xmin[1] & 7) << 3) | ((xmin[2] & 7) << 6) | ((xmin[3] & 7) << 9);    \
-		uint count_bits =                                                                          \
-			(count[0] << 16) | (count[1] << 20) | (count[2] << 24) | (count[3] << 28);             \
-		bits.e = min_bits | count_bits;                                                            \
-	}
-
-		PROCESS_4_ROWS(x);
-		PROCESS_4_ROWS(y);
+		bits.x = rasterBlock(tri_mins.x, tri_maxs.x, startx, num_frags.x, cpos);
+		bits.y = rasterBlock(tri_mins.y, tri_maxs.y, startx, num_frags.y, cpos);
 
 		uint num_all_frags = num_frags.x + num_frags.y;
-		cpos = cpos * (0.5 / float(num_all_frags)) + block_pos;
-
-		uint depth_offset = STORAGE_TRI_DEPTH_OFFSET + tri_idx;
-		vec3 depth_eq = uintBitsToFloat(g_uvec4_storage[depth_offset].xyz);
-		float ray_pos = depth_eq.x * cpos.x + (depth_eq.y * cpos.y + depth_eq.z);
-		float depth = 0xffffe * SATURATE(inversesqrt(ray_pos + 1)); // 20 bits
+		uint depth = rasterBlockDepth(cpos * (0.5 / float(num_all_frags)) + block_pos, tri_idx);
 
 		if(num_all_frags == 0) // This means that bx_mask is invalid
 			DEBUG_RECORD(0, 0, 0, 0);
@@ -323,7 +302,7 @@ void generateBlocks(uint bid) {
 		g_scratch_64[dst_offset_64 + i + MAX_BLOCK_TRIS] = uvec2(tri_idx, counts);
 
 		// 12 bits for tile-tri index, 20 bits for depth
-		s_buffer[buf_offset + i] = i | (uint(depth) << 12);
+		s_buffer[buf_offset + i] = i | (depth << 12);
 	}
 	barrier();
 

@@ -575,21 +575,6 @@ void loadSamples(uint rbid, int segment_id) {
 #endif
 }
 
-uvec2 rasterBlockPos(uint rbid) {
-#if WARP_SIZE == 64
-	uint rbx = rbid & BLOCK_ROWS_MASK;
-	uint rby = rbid >> BLOCK_ROWS_SHIFT;
-#else
-	uint rbx = (rbid >> 1) & BLOCK_ROWS_MASK;
-	uint rby = (rbid & 1) + ((rbid >> (BLOCK_ROWS_SHIFT + 1)) << 1);
-#endif
-	return uvec2(rbx, rby);
-}
-
-ivec2 rasterBlockPixelPos(uint rbid) {
-	return ivec2(rasterBlockPos(rbid) << uvec2(RBLOCK_WIDTH_SHIFT, RBLOCK_HEIGHT_SHIFT));
-}
-
 void shadeAndReduceSamples(uint rbid, uint sample_count, in out ReductionContext ctx) {
 	uint buf_offset = (LIX >> WARP_SHIFT) << SEGMENT_SHIFT;
 	uint mini_offset =

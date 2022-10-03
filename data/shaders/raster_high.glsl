@@ -177,13 +177,13 @@ void processQuads(int start_rby) {
 	// Note: these are only estimates; very good estimates, but in some cases a single
 	// triangle can have wide holes between pixels (because middle pixels don't hit pixel centers)
 	if(LIX < NUM_WARPS) {
-		uint hbx = LIX & RBLOCK_COLS_MASK;
+		uint rbx = LIX & RBLOCK_COLS_MASK;
 		int value = s_rblock_tri_counts[LIX], temp;
-		temp = subgroupShuffleUp(value, 1), value += hbx >= 1 ? temp : 0;
+		temp = subgroupShuffleUp(value, 1), value += rbx >= 1 ? temp : 0;
 		if(RBLOCK_COLS >= 4)
-			temp = subgroupShuffleUp(value, 2), value += hbx >= 2 ? temp : 0;
+			temp = subgroupShuffleUp(value, 2), value += rbx >= 2 ? temp : 0;
 		if(RBLOCK_COLS >= 8)
-			temp = subgroupShuffleUp(value, 4), value += hbx >= 4 ? temp : 0;
+			temp = subgroupShuffleUp(value, 4), value += rbx >= 4 ? temp : 0;
 		s_rblock_tri_counts[LIX] = value;
 		uint max_value = subgroupMax_(uint(value), NUM_WARPS);
 		if(LIX == 0) {
@@ -209,14 +209,12 @@ void processQuads(int start_rby) {
 	}
 }
 
-#if WARP_SIZE == 32
 uint swap(uint x, int mask, uint dir) {
 	uint y = subgroupShuffleXor(x, mask);
 	return uint(x < y) == dir ? y : x;
 }
 uint bitExtract(uint value, int boffset) { return (value >> boffset) & 1; }
 uint xorBits(uint value, int bit0, int bit1) { return ((value >> bit0) ^ (value >> bit1)) & 1; }
-#endif
 
 void sortTris(uint lrbid, uint count, uint buf_offset, uint group_size, uint lid) {
 	uint rcount = s_max_sort_rcount;
@@ -292,7 +290,7 @@ void generateRBlocks(uint start_rbid) {
 	// TODO: better names for indices
 	uint group_rbid = LIX >> (WARP_SHIFT + group_shift);
 	uint rbid = start_rbid + group_rbid;
-	uint rby = rbid >> RBLOCK_COLS_SHIFT, hbx = rbid & RBLOCK_COLS_MASK;
+	uint rby = rbid >> RBLOCK_COLS_SHIFT, rbx = rbid & RBLOCK_COLS_MASK;
 	uint lrbid = rbid & (NUM_WARPS - 1);
 	uint tri_count = s_rblock_row_tri_counts[rby];
 	uint buf_offset = group_rbid << (MAX_RBLOCK_TRIS0_SHIFT + group_shift);
@@ -301,24 +299,42 @@ void generateRBlocks(uint start_rbid) {
 	uint src_offset_64 = scratch64RBlockRowTrisOffset(rby);
 
 	{
-		uint bx_bits_shift = 24 + hbx;
+		uint bx_bits_shift = 24 + rbx;
 		uint thread_bit_mask = ~(0xffffffffu << (LIX & WARP_MASK));
 		uint block_tri_count = 0;
+		uint max_block_tris = MAX_RBLOCK_TRIS0 << group_shift;
 
 		if(group_thread < WARP_SIZE) {
 			for(uint i = group_thread; i < tri_count; i += WARP_SIZE) {
+#if RBLOCK_HEIGHT == 8
+				uint bx_bit = (g_scratch_64[src_offset_64 + i].x >> bx_bits_shift) & 1;
+#else
 				uint bx_bit = (g_scratch_32[src_offset_32 + i] >> bx_bits_shift) & 1;
-				uint bit_mask = uint(subgroupBallot(bx_bit != 0).x);
+#endif
+
+#if WARP_SIZE == 32
+				uint bit_mask = subgroupBallot(bx_bit != 0).x;
 				if(bit_mask == 0)
 					continue;
+				uint warp_offset = bitCount(bit_mask & gl_SubgroupLtMask.x);
+				uint bit_count = bitCount(bit_mask);
+#else
+				uvec2 bit_mask = subgroupBallot(bx_bit != 0).xy;
+				if(bit_mask.x == 0 && bit_mask.y == 0)
+					continue;
+				uint warp_offset = bitCount(bit_mask.x & gl_SubgroupLtMask.x) +
+								   bitCount(bit_mask.y & gl_SubgroupLtMask.y);
+				uint bit_count = bitCount(bit_mask.x) + bitCount(bit_mask.y);
+#endif
 
-				uint warp_offset = bitCount(bit_mask & thread_bit_mask);
 				if(bx_bit != 0) {
 					uint tri_offset = block_tri_count + warp_offset;
-					s_buffer[buf_offset + tri_offset] = i;
+					if(tri_offset < max_block_tris)
+						s_buffer[buf_offset + tri_offset] = i;
 				}
-				block_tri_count += bitCount(bit_mask);
+				block_tri_count += bit_count;
 			}
+
 			if(group_thread == 0) {
 				if(s_rblock_tri_counts[lrbid] < int(block_tri_count))
 					DEBUG_RECORD(rbid, s_rblock_tri_counts[lrbid], block_tri_count, 0);
@@ -327,11 +343,12 @@ void generateRBlocks(uint start_rbid) {
 		}
 		barrier();
 	}
+	return;
 
 	uint dst_offset_64 = scratch64HBlockTrisOffset(lrbid);
 	tri_count = s_rblock_tri_counts[lrbid];
-	int startx = int(hbx << 3);
-	vec2 block_pos = vec2(hbx << RBLOCK_WIDTH_SHIFT, rby << RBLOCK_HEIGHT_SHIFT) + vec2(s_bin_pos);
+	int startx = int(rbx << RBLOCK_WIDTH_SHIFT);
+	vec2 block_pos = vec2(rbx << RBLOCK_WIDTH_SHIFT, rby << RBLOCK_HEIGHT_SHIFT) + vec2(s_bin_pos);
 
 	for(uint i = group_thread; i < tri_count; i += group_size) {
 		uint row_tri_idx = s_buffer[buf_offset + i];
@@ -556,11 +573,11 @@ void loadSamples(uint rbid, int segment_id) {
 
 void shadeAndReduceSamples(uint rbid, uint sample_count, in out ReductionContext ctx) {
 	uint buf_offset = (LIX >> 5) << SEGMENT_SHIFT;
-	uint hbx = rbid & RBLOCK_COLS_MASK;
+	uint rbx = rbid & RBLOCK_COLS_MASK;
 	uint rby = rbid >> RBLOCK_COLS_SHIFT;
 	uint mini_offset = LIX & ~31;
 	uint reduce_pixel_bit = 1u << (LIX & 31);
-	ivec2 half_block_pos = ivec2(hbx << RBLOCK_WIDTH_SHIFT, rby << RBLOCK_HEIGHT_SHIFT) + s_bin_pos;
+	ivec2 half_block_pos = ivec2(rbx << RBLOCK_WIDTH_SHIFT, rby << RBLOCK_HEIGHT_SHIFT) + s_bin_pos;
 	vec3 out_color = ctx.out_color;
 
 	for(uint i = 0; i < sample_count; i += WARP_SIZE) {
@@ -686,15 +703,15 @@ void rasterBin(int bin_id) {
 		s_segments[LIX] = INVALID_SEGMENT;
 		s_segments[LSIZE + LIX] = INVALID_SEGMENT;
 
-		/*if(s_raster_error == 0) {
+		if(s_raster_error == 0) {
 			int step = NUM_WARPS >> s_rblock_group_shift;
 			for(int i = 0; i < s_rblock_group_size; i++)
 				generateRBlocks(start_rby * RBLOCK_COLS + step * i);
 		}
 		groupMemoryBarrier();
 		barrier();
-		finalizeSegments();
-		barrier();*/
+		//finalizeSegments();
+		barrier();
 
 		int rbid = start_rby * RBLOCK_COLS + int(LIX >> WARP_SHIFT);
 		if(s_raster_error != 0) {

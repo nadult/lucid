@@ -542,15 +542,19 @@ void loadSamples(uint rbid, int segment_id) {
 	uint segment_data = s_segments[seg_group_offset + segment_id];
 	uint tri_count = segment_data >> 16, first_tri = segment_data & 0xffff;
 	uint src_offset_64 = scratch64RBlockTrisOffset(lrbid) + first_tri;
-	uint buf_offset = (LIX >> 5) << SEGMENT_SHIFT;
+#if RBLOCK_HEIGHT == 8
+	uint src_offset_32 = scratch32RBlockTrisOffset(lrbid) + first_tri;
+#endif
+	uint buf_offset = (LIX >> WARP_SHIFT) << SEGMENT_SHIFT;
 
-	if(tri_count >= 32) {
+	if(tri_count >= 32 && RBLOCK_HEIGHT == 4) {
 		for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_SIZE) {
 			uvec2 tri_data = g_scratch_64[src_offset_64 + i];
 			int tri_offset = int(tri_data.x >> 24);
 			if(i == 0 && tri_offset != 0)
 				tri_offset -= SEGMENT_SIZE;
 			uint tri_idx = tri_data.x & 0xffffff;
+
 			uvec4 countx = (uvec4(tri_data.y) >> uvec4(16, 20, 24, 28)) & 15;
 			uvec4 minx = (uvec4(tri_data.y) >> uvec4(0, 3, 6, 9)) & 7;
 			uint bits0 = uint((1 << countx[0]) - 1) << (minx[0] + 0);
@@ -569,31 +573,55 @@ void loadSamples(uint rbid, int segment_id) {
 			}
 		}
 	} else {
-		int y = int(LIX & 3), count_shift = 16 + (y << 2), min_shift = (y << 1) + y;
-		int mask1 = y >= 1 ? ~0 : 0, mask2 = y >= 2 ? ~0 : 0;
+		int y = int(LIX & (RBLOCK_HEIGHT - 1)), count_shift = 16 + (y & 3) * 4,
+			min_shift = (y & 3) * 3; // TODO: min_shift the same as count_shift
+		int mask1 = y >= 1 ? ~0 : 0, mask2 = y >= 2 ? ~0 : 0, mask3 = y >= 4 ? ~0 : 0;
 
-		for(uint i = (LIX & WARP_MASK) >> 2; i < tri_count; i += WARP_SIZE / 4) {
+		for(uint i = (LIX & WARP_MASK) >> RBLOCK_HEIGHT_SHIFT; i < tri_count;
+			i += WARP_SIZE / RBLOCK_HEIGHT) {
+#if RBLOCK_HEIGHT == 8
+			uint tri_data = g_scratch_64[src_offset_64 + i][y >> 2];
+			uint tri_info = g_scratch_32[src_offset_32 + i];
+			int tri_offset = int(tri_info >> 24);
+			if(i == 0 && tri_offset != 0)
+				tri_offset -= SEGMENT_SIZE;
+			uint tri_idx = tri_info & 0xffffff;
+			int minx = int((tri_data >> min_shift) & 7);
+			int countx = int((tri_data >> count_shift) & 15);
+#else
 			uvec2 tri_data = g_scratch_64[src_offset_64 + i];
 			int tri_offset = int(tri_data.x >> 24);
 			if(i == 0 && tri_offset != 0)
 				tri_offset -= SEGMENT_SIZE;
 			uint tri_idx = tri_data.x & 0xffffff;
-
 			int minx = int((tri_data.y >> min_shift) & 7);
 			int countx = int((tri_data.y >> count_shift) & 15);
+#endif
+
 			int prevx = countx + (subgroupShuffleUp(countx, 1) & mask1);
 			prevx += (subgroupShuffleUp(prevx, 2) & mask2);
+#if RBLOCK_HEIGHT == 8
+			prevx += (subgroupShuffleUp(prevx, 4) & mask3);
+#endif
+
 			tri_offset += prevx - countx;
 			countx = min(countx, SEGMENT_SIZE - tri_offset);
 			if(tri_offset < 0)
 				countx += tri_offset, minx -= tri_offset, tri_offset = 0;
 
 			uint pixel_id = (y << 3) | minx;
-			uint value = pixel_id | (tri_idx << 5);
+			uint value = pixel_id | (tri_idx << 8);
 			for(int j = 0; j < countx; j++)
 				s_buffer[buf_offset + tri_offset++] = value++;
 		}
 	}
+}
+
+ivec2 computePixelPos(uint rbid) {
+	uint rbx = rbid & RBLOCK_COLS_MASK, rby = rbid >> RBLOCK_COLS_SHIFT;
+	return ivec2((LIX & (RBLOCK_WIDTH - 1)) + (rbx << RBLOCK_WIDTH_SHIFT),
+				 ((LIX >> RBLOCK_WIDTH_SHIFT) & (RBLOCK_HEIGHT - 1)) +
+					 (rby << RBLOCK_HEIGHT_SHIFT));
 }
 
 void shadeAndReduceSamples(uint rbid, uint sample_count, in out ReductionContext ctx) {
@@ -648,7 +676,7 @@ void visualizeSamples(uint sample_count) {
 void finishVisualizeSamples(ivec2 pixel_pos) {
 	uint pixel_id = (pixel_pos.x & (RBLOCK_WIDTH - 1)) +
 					((pixel_pos.y & (RBLOCK_HEIGHT - 1)) << RBLOCK_WIDTH_SHIFT);
-	vec3 color = vec3(s_vis_pixels[(LIX & ~WARP_MASK) + pixel_id]) / 64.0;
+	vec3 color = vec3(s_vis_pixels[(LIX & ~WARP_MASK) + pixel_id]) / 32.0;
 	outputPixel(pixel_pos, vec4(SATURATE(color), 1.0));
 }
 
@@ -702,13 +730,6 @@ void visualizeErrors(uint rbid) {
 	//outputPixel(computePixelPos(rbid), decodeRGBA8(color));
 }
 
-ivec2 computePixelPos(uint rbid) {
-	uint rbx = rbid & RBLOCK_COLS_MASK, rby = rbid >> RBLOCK_COLS_SHIFT;
-	return ivec2((LIX & (RBLOCK_WIDTH - 1)) + (rbx << RBLOCK_WIDTH_SHIFT),
-				 ((LIX >> RBLOCK_WIDTH_SHIFT) & (RBLOCK_HEIGHT - 1)) +
-					 (rby << RBLOCK_HEIGHT_SHIFT));
-}
-
 void rasterBin(int bin_id) {
 	START_TIMER();
 	if(LIX < RBLOCK_ROWS) {
@@ -757,8 +778,9 @@ void rasterBin(int bin_id) {
 		UPDATE_TIMER(1);
 
 		//visualizeAllSamples(rbid);
-		/*ReductionContext context;
-		initReduceSamples(context);
+		//ReductionContext context;
+		//initReduceSamples(context);
+		initVisualizeSamples();
 
 		for(int segment_id = 0;; segment_id++) {
 			int frag_count = int(s_rblock_frag_counts[rbid & (NUM_WARPS - 1)]);
@@ -769,18 +791,20 @@ void rasterBin(int bin_id) {
 			loadSamples(rbid, segment_id);
 			UPDATE_TIMER(2);
 
-			shadeAndReduceSamples(rbid, frag_count, context);
+			//shadeAndReduceSamples(rbid, frag_count, context);
+			visualizeSamples(frag_count);
 			UPDATE_TIMER(3);
 
 #ifdef ALPHA_THRESHOLD
 			if(subgroupAll(context.out_trans < alpha_threshold))
 				break;
 #endif
-		}*/
+		}
 
 		ivec2 pixel_pos = computePixelPos(rbid);
+		finishVisualizeSamples(pixel_pos);
 		//outputPixel(pixel_pos, finishReduceSamples(context));
-		visualizeBlockCounts(rbid, pixel_pos);
+		//visualizeBlockCounts(rbid, pixel_pos);
 		UPDATE_TIMER(4);
 
 		barrier();

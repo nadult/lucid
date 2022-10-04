@@ -48,7 +48,9 @@ layout(local_size_x = LSIZE) in;
 #define WORKGROUP_64_SCRATCH_SIZE (256 * 1024)
 #define WORKGROUP_64_SCRATCH_SHIFT 18
 
-uint currentRBlockRow(uint rby) { return BIN_SIZE == 64 ? rby & RBLOCK_ROWS_STEP_MASK : rby; }
+uint currentRBlockRow(uint rby) {
+	return LSIZE < BIN_SIZE * BIN_SIZE ? rby & RBLOCK_ROWS_STEP_MASK : rby;
+}
 
 uint scratch32RBlockRowTrisOffset(uint rby) {
 	return (gl_WorkGroupID.x << WORKGROUP_32_SCRATCH_SHIFT) +
@@ -227,10 +229,9 @@ void sortTris(uint lrbid, uint count, uint buf_offset, uint group_size, uint lid
 	for(uint i = lid + count; i < rcount; i += group_size)
 		s_buffer[buf_offset + i] = 0xffffffff;
 
-#if WARP_SIZE == 32
 	for(uint i = lid; i < rcount; i += group_size) {
 		uint value = s_buffer[buf_offset + i];
-		// TODO: register sort could be faster
+		// TODO: register sort could be faster?
 		value = swap(value, 0x01, xorBits(lid, 1, 0)); // K = 2
 		value = swap(value, 0x02, xorBits(lid, 2, 1)); // K = 4
 		value = swap(value, 0x01, xorBits(lid, 2, 0));
@@ -251,9 +252,6 @@ void sortTris(uint lrbid, uint count, uint buf_offset, uint group_size, uint lid
 		s_buffer[buf_offset + i] = value;
 	}
 	int start_k = group_size >= 64 ? 64 : 32, end_j = 32;
-#else
-	int start_k = 2, end_j = 1;
-#endif
 	barrier();
 
 	for(uint k = start_k; k <= rcount; k = 2 * k) {
@@ -269,7 +267,6 @@ void sortTris(uint lrbid, uint count, uint buf_offset, uint group_size, uint lid
 			}
 			barrier();
 		}
-#if WARP_SIZE == 32
 		for(uint i = lid; i < rcount; i += group_size) {
 			uint bit = (i & k) == 0 ? 0 : 1;
 			uint value = s_buffer[buf_offset + i];
@@ -281,7 +278,6 @@ void sortTris(uint lrbid, uint count, uint buf_offset, uint group_size, uint lid
 			s_buffer[buf_offset + i] = value;
 		}
 		barrier();
-#endif
 	}
 }
 

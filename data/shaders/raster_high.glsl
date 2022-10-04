@@ -1,19 +1,10 @@
-#include "shared/compute_funcs.glsl"
-#include "shared/raster.glsl"
-#include "shared/scanline.glsl"
-#include "shared/shading.glsl"
-#include "shared/timers.glsl"
-
-#include "%shader_debug"
-DEBUG_SETUP(1, 11)
-
-#extension GL_KHR_shader_subgroup_ballot : require
-
 #define LSIZE 1024
 #define LSHIFT 10
 
-#define NUM_WARPS (LSIZE / WARP_SIZE)
-#define BUFFER_SIZE (LSIZE * 8)
+#include "shared/raster.glsl"
+
+#include "%shader_debug"
+DEBUG_SETUP(1, 11)
 
 // Basic maximum value of tris per rblock
 #define MAX_RBLOCK_TRIS0 (8 * WARP_SIZE)
@@ -28,10 +19,6 @@ DEBUG_SETUP(1, 11)
 
 #define MAX_RBLOCK_ROW_TRIS 16384
 #define MAX_RBLOCK_ROW_TRIS_SHIFT 14
-
-#define SEGMENT_SIZE 256
-#define SEGMENT_SHIFT 8
-#define INVALID_SEGMENT 0xffff
 
 #define MAX_SEGMENTS_SHIFT 6
 #define MAX_SEGMENTS 64
@@ -89,10 +76,6 @@ shared uint s_rblock_max_tri_counts;
 shared uint s_rblock_group_size;
 shared uint s_rblock_group_shift;
 shared uint s_max_sort_rcount;
-
-shared uint s_buffer[BUFFER_SIZE + 1];
-shared uint s_mini_buffer[LSIZE * (WARP_SIZE == 64 ? 2 : 1)];
-shared uint s_segments[LSIZE * (WARP_SIZE == 64 ? 1 : 2)];
 
 shared int s_raster_error;
 

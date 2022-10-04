@@ -1,16 +1,34 @@
 #ifndef _RASTER_GLSL_
 #define _RASTER_GLSL_
 
+// TODO: better documentation
+// TODO: move all docs to one place at the top of the shader
+// TODO: properly handling scenes with too many visible triangles / quads
+// TODO: bug when pipeline takes 800ms to finish: when closing app, cannot destroy vk objects which are in use
+// TODO: add synthetic test: 256 planes one after another
+// TODO: cleanup in the beginning (group definitions)
+// NOTE: converting integer multiplications to shifts does not increase perf
+
 #include "compute_funcs.glsl"
 #include "funcs.glsl"
 #include "scanline.glsl"
 #include "shading.glsl"
 #include "structures.glsl"
+#include "timers.glsl"
+
+#extension GL_KHR_shader_subgroup_ballot : require
+#extension GL_KHR_shader_subgroup_shuffle_relative : require
+
+#ifndef LSIZE
+#error "LSIZE should be defined before including raster.glsl"
+#endif
+
+#define NUM_WARPS (LSIZE / WARP_SIZE)
+#define NUM_WARPS_MASK (NUM_WARPS - 1)
+#define NUM_WARPS_SHIFT (LSHIFT - WARP_SHIFT)
 
 #define BIN_MASK (BIN_SIZE - 1)
 
-// In this shader, we're using 8x8 blocks and 8x4 half blocks; TODO: better documentation
-// TODO: move all docs to one place at the top of the shader
 #define BLOCK_SIZE 8
 #define BLOCK_SHIFT 3
 
@@ -40,6 +58,14 @@
 #define RBLOCK_COLS (BIN_SIZE / RBLOCK_WIDTH)
 #define RBLOCK_COLS_SHIFT (BIN_SHIFT - RBLOCK_WIDTH_SHIFT)
 #define RBLOCK_COLS_MASK (RBLOCK_COLS - 1)
+
+#define SEGMENT_SIZE 256
+#define SEGMENT_SHIFT 8
+#define INVALID_SEGMENT 0xffff
+
+shared uint s_buffer[LSIZE * 8 + 1];
+shared uint s_mini_buffer[LSIZE * (WARP_SIZE == 64 ? 2 : 1)];
+shared uint s_segments[LSIZE * (WARP_SIZE == 64 ? 1 : 2)];
 
 uvec3 rasterBinStep(inout ScanlineParams scan) {
 #define SCAN_STEP(id)                                                                              \

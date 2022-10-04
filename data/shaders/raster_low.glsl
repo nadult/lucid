@@ -1,37 +1,14 @@
-#include "shared/compute_funcs.glsl"
+#define LSIZE 256
+#define LSHIFT 8
+
 #include "shared/raster.glsl"
-#include "shared/scanline.glsl"
-#include "shared/shading.glsl"
-#include "shared/timers.glsl"
 
 #include "%shader_debug"
 DEBUG_SETUP(1, 11)
 
-#extension GL_KHR_shader_subgroup_ballot : require
-#extension GL_KHR_shader_subgroup_shuffle_relative : require
-
-#define LSIZE 256
-#define LSHIFT 8
-
-// TODO: add synthetic test: 256 planes one after another
-// TODO: cleanup in the beginning (group definitions)
-
-// NOTE: converting integer multiplications to shifts does not increase perf
-
-#define NUM_WARPS (LSIZE / WARP_SIZE)
-#define NUM_WARPS_MASK (NUM_WARPS - 1)
-#define NUM_WARPS_SHIFT (LSHIFT - WARP_SHIFT)
-
-#define BUFFER_SIZE (LSIZE * 8)
-
 #define MAX_BLOCK_ROW_TRIS 1024 // TODO: detect overflow
 #define MAX_BLOCK_TRIS 256
 #define MAX_BLOCK_TRIS_SHIFT 8
-
-#define SEGMENT_SIZE 256
-#define SEGMENT_SHIFT 8
-
-#define INVALID_SEGMENT 0xffff
 
 #define MAX_SEGMENTS_SHIFT WARP_SHIFT
 #define MAX_SEGMENTS WARP_SIZE
@@ -71,10 +48,6 @@ shared uint s_bin_tri_count, s_bin_tri_offset;
 shared uint s_block_row_tri_count[BLOCK_ROWS];
 shared uint s_block_tri_count[NUM_WARPS];
 shared uint s_rblock_counts[NUM_WARPS * 2];
-
-shared uint s_buffer[BUFFER_SIZE + 1];
-shared uint s_mini_buffer[LSIZE * (WARP_SIZE == 64 ? 2 : 1)];
-shared uint s_segments[LSIZE * (WARP_SIZE == 64 ? 1 : 2)];
 
 shared int s_raster_error;
 shared int s_promoted_bin_count;

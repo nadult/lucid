@@ -475,7 +475,7 @@ void LucidRenderer::computeBins(const Context &ctx) {
 
 	PERF_SIBLING_SCOPE("categorizer phase");
 	cmds.bind(p_bin_categorizer);
-	cmds.dispatchCompute({1, 1, 1});
+	cmds.dispatchCompute({2, 1, 1});
 
 	PERF_SIBLING_SCOPE("dispatcher phase");
 	cmds.barrier(VPipeStage::compute_shader, VPipeStage::compute_shader, VAccess::shader_write,

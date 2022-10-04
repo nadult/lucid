@@ -11,11 +11,9 @@ coherent layout(std430, set = 0, binding = 0) buffer lucid_info_ {
 };
 layout(binding = 1) uniform lucid_config_ { LucidConfig u_config; };
 
-shared int s_bin_level_counts[BIN_LEVELS_COUNT];
 shared int s_bins[BIN_COUNT];
 shared int s_temp[BIN_COUNT / WARP_SIZE + 1], s_temp2[WARP_SIZE];
 
-// TODO: we could run it in a separate kernel during categorization (independent tasks)
 void computeOffsets(const bool quads_mode) {
 	for(uint idx = LIX; idx < BIN_COUNT; idx += LSIZE) {
 		int value = quads_mode ? BIN_QUAD_COUNTS(idx) : BIN_TRI_COUNTS(idx);
@@ -49,13 +47,12 @@ void computeOffsets(const bool quads_mode) {
 	}
 }
 
-void main() {
+shared int s_bin_level_counts[BIN_LEVELS_COUNT];
+
+void categorizeBins() {
 	if(LIX < BIN_LEVELS_COUNT)
 		s_bin_level_counts[LIX] = 0;
-	computeOffsets(true);
 	barrier();
-	computeOffsets(false);
-
 	for(uint i = LIX; i < BIN_COUNT; i += LSIZE) {
 		int num_quads = BIN_QUAD_COUNTS(i);
 		int num_tris = BIN_TRI_COUNTS(i) + num_quads * 2;
@@ -71,14 +68,27 @@ void main() {
 			int id = atomicAdd(s_bin_level_counts[BIN_LEVEL_HIGH], 1);
 			HIGH_LEVEL_BINS(id) = int(i);
 		}
-	}
 
-	barrier();
-	if(LIX < BIN_LEVELS_COUNT) {
-		g_info.bin_level_counts[LIX] = s_bin_level_counts[LIX];
-		int max_dispatches = MAX_DISPATCHES >> (LIX == BIN_LEVEL_HIGH ? 1 : 0);
-		g_info.bin_level_dispatches[LIX][0] = min(s_bin_level_counts[LIX], max_dispatches);
-		g_info.bin_level_dispatches[LIX][1] = 1;
-		g_info.bin_level_dispatches[LIX][2] = 1;
+		barrier();
+		if(LIX < BIN_LEVELS_COUNT) {
+			g_info.bin_level_counts[LIX] = s_bin_level_counts[LIX];
+			int max_dispatches = MAX_DISPATCHES >> (LIX == BIN_LEVEL_HIGH ? 1 : 0);
+			g_info.bin_level_dispatches[LIX][0] = min(s_bin_level_counts[LIX], max_dispatches);
+			g_info.bin_level_dispatches[LIX][1] = 1;
+			g_info.bin_level_dispatches[LIX][2] = 1;
+		}
 	}
+}
+
+void computeOffsets() {
+	computeOffsets(true);
+	barrier();
+	computeOffsets(false);
+}
+
+void main() {
+	if(WGID.x == 0)
+		computeOffsets();
+	else
+		categorizeBins();
 }

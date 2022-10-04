@@ -79,9 +79,6 @@ shared uint s_max_sort_rcount;
 
 shared int s_raster_error;
 
-// Only used when debugging
-shared uint s_vis_pixels[LSIZE];
-
 void generateRowTris(uint tri_idx, int start_rby) {
 	uint scan_offset = STORAGE_TRI_SCAN_OFFSET + tri_idx * 2;
 	uvec4 val0 = g_uvec4_storage[scan_offset + 0];
@@ -595,68 +592,6 @@ void loadSamples(uint rbid, int segment_id) {
 	}
 }
 
-void shadeAndReduceSamples(uint rbid, uint sample_count, in out ReductionContext ctx) {
-	uint buf_offset = (LIX >> WARP_SHIFT) << SEGMENT_SHIFT;
-	uint mini_offset =
-		WARP_SIZE == 64 ? (LIX & ~WARP_MASK) + ((LIX & 32) != 0 ? LSIZE : 0) : LIX & ~WARP_MASK;
-	// TODO: make it work the same way as in raster_low? maybe it's better to change in raster_low ?
-	ivec2 rblock_pos = (rasterBlockPos(rbid) << rasterBlockShift()) + s_bin_pos;
-	vec3 out_color = ctx.out_color;
-
-	for(uint i = 0; i < sample_count; i += WARP_SIZE) {
-		// TODO: we don't need s_mini_buffer here, we can use s_buffer, thus decreasing mini_buffer size
-		s_mini_buffer[LIX] = 0;
-		if(WARP_SIZE == 64)
-			s_mini_buffer[LSIZE + LIX] = 0;
-		uvec2 sample_s;
-		uint sample_id = i + (LIX & WARP_MASK);
-		if(sample_id < sample_count) {
-			uint value = s_buffer[buf_offset + sample_id];
-			uint sample_pixel_id = value & WARP_MASK;
-			uint tri_idx = value >> 8;
-			ivec2 pix_pos = rblock_pos + ivec2(sample_pixel_id & 7, sample_pixel_id >> 3);
-			float sample_depth;
-			uint sample_color = shadeSample(pix_pos, tri_idx, sample_depth);
-			sample_s = uvec2(sample_color, floatBitsToUint(sample_depth));
-#if WARP_SIZE == 32
-			atomicOr(s_mini_buffer[mini_offset + sample_pixel_id], gl_SubgroupEqMask.x);
-#else
-			const uint pixel_bit = gl_SubgroupEqMask.x | gl_SubgroupEqMask.y;
-			atomicOr(s_mini_buffer[mini_offset + sample_pixel_id], pixel_bit);
-#endif
-		}
-		subgroupMemoryBarrierShared();
-
-#if WARP_SIZE == 32
-		uint pixel_bitmask = s_mini_buffer[LIX];
-#else
-		uvec2 pixel_bitmask = uvec2(s_mini_buffer[LIX], s_mini_buffer[LIX + LSIZE]);
-#endif
-		if(reduceSample(ctx, out_color, sample_s, pixel_bitmask))
-			break;
-	}
-
-	// TODO: check if encode+decode for out_color is really needed (to save 2 regs)
-	ctx.out_color = SATURATE(out_color);
-}
-
-void initVisualizeSamples() { s_vis_pixels[LIX] = 0; }
-
-void visualizeSamples(uint sample_count) {
-	uint buf_offset = (LIX >> WARP_SHIFT) << SEGMENT_SHIFT;
-	for(uint i = LIX & WARP_MASK; i < sample_count; i += WARP_SIZE) {
-		uint pixel_id = s_buffer[buf_offset + i] & WARP_MASK;
-		atomicAdd(s_vis_pixels[(LIX & ~WARP_MASK) + pixel_id], 1);
-	}
-}
-
-void finishVisualizeSamples(ivec2 pixel_pos) {
-	uint pixel_id = (pixel_pos.x & (RBLOCK_WIDTH - 1)) +
-					((pixel_pos.y & (RBLOCK_HEIGHT - 1)) << RBLOCK_WIDTH_SHIFT);
-	vec3 color = vec3(s_vis_pixels[(LIX & ~WARP_MASK) + pixel_id]) / 32.0;
-	outputPixel(pixel_pos, vec4(SATURATE(color), 1.0));
-}
-
 void visualizeBlockCounts(uint rbid, ivec2 pixel_pos) {
 	uint lrbid = rbid & (WARP_SIZE == 64 ? NUM_WARPS - 1 : NUM_WARPS * 2 - 1);
 	uint frag_count = s_rblock_frag_counts[rbid & (NUM_WARPS - 1)];
@@ -716,10 +651,7 @@ void rasterBin(int bin_id) {
 		groupMemoryBarrier();
 		barrier();
 		UPDATE_TIMER(0);
-		s_segments[LIX] = INVALID_SEGMENT;
-#if WARP_SIZE == 32
-		s_segments[LSIZE + LIX] = INVALID_SEGMENT;
-#endif
+		clearSegments();
 
 		if(s_raster_error == 0) {
 			int step = NUM_WARPS >> s_rblock_group_shift;

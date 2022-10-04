@@ -72,6 +72,13 @@ shared uint s_buffer[LSIZE * 8 + 1];
 shared uint s_mini_buffer[LSIZE * (WARP_SIZE == 64 ? 2 : 1)];
 shared uint s_segments[LSIZE * (WARP_SIZE == 64 ? 1 : 2)];
 
+void clearSegments() {
+	s_segments[LIX] = INVALID_SEGMENT;
+#if WARP_SIZE == 32
+	s_segments[LIX + LSIZE] = INVALID_SEGMENT;
+#endif
+}
+
 uvec3 rasterBinStep(inout ScanlineParams scan) {
 #define SCAN_STEP(id)                                                                              \
 	int min##id = int(max(max(scan.min[0], scan.min[1]), max(scan.min[2], 0.0)));                  \
@@ -138,6 +145,74 @@ ivec2 rasterBlockPixelPos(uint rbid) {
 	ivec2 pix_pos =
 		ivec2(LIX & (RBLOCK_WIDTH - 1), (LIX >> RBLOCK_WIDTH_SHIFT) & (RBLOCK_HEIGHT - 1));
 	return (rasterBlockPos(rbid) << rasterBlockShift()) + pix_pos;
+}
+
+void shadeAndReduceSamples(uint rbid, uint sample_count, in out ReductionContext ctx) {
+	uint buf_offset = (LIX >> WARP_SHIFT) << SEGMENT_SHIFT;
+	uint mini_offset =
+		WARP_SIZE == 64 ? (LIX & ~WARP_MASK) + ((LIX & 32) != 0 ? LSIZE : 0) : LIX & ~WARP_MASK;
+	// TODO: make it work the same way as in raster_low? maybe it's better to change in raster_low ?
+	ivec2 rblock_pos = (rasterBlockPos(rbid) << rasterBlockShift()) + s_bin_pos;
+	vec3 out_color = ctx.out_color;
+
+	for(uint i = 0; i < sample_count; i += WARP_SIZE) {
+		// TODO: we don't need s_mini_buffer here, we can use s_buffer, thus decreasing mini_buffer size
+		s_mini_buffer[LIX] = 0;
+		if(WARP_SIZE == 64)
+			s_mini_buffer[LSIZE + LIX] = 0;
+		uvec2 sample_s;
+		uint sample_id = i + (LIX & WARP_MASK);
+		if(sample_id < sample_count) {
+			uint value = s_buffer[buf_offset + sample_id];
+			uint sample_pixel_id = value & WARP_MASK;
+			uint tri_idx = value >> 8;
+			ivec2 pix_pos = rblock_pos + ivec2(sample_pixel_id & 7, sample_pixel_id >> 3);
+			float sample_depth;
+			uint sample_color = shadeSample(pix_pos, tri_idx, sample_depth);
+			sample_s = uvec2(sample_color, floatBitsToUint(sample_depth));
+#if WARP_SIZE == 32
+			atomicOr(s_mini_buffer[mini_offset + sample_pixel_id], gl_SubgroupEqMask.x);
+#else
+			const uint pixel_bit = gl_SubgroupEqMask.x | gl_SubgroupEqMask.y;
+			atomicOr(s_mini_buffer[mini_offset + sample_pixel_id], pixel_bit);
+#endif
+		}
+		subgroupMemoryBarrierShared();
+
+#if WARP_SIZE == 32
+		uint pixel_bitmask = s_mini_buffer[LIX];
+#else
+		uvec2 pixel_bitmask = uvec2(s_mini_buffer[LIX], s_mini_buffer[LIX + LSIZE]);
+#endif
+		if(reduceSample(ctx, out_color, sample_s, pixel_bitmask))
+			break;
+	}
+
+	// TODO: check if encode+decode for out_color is really needed (to save 2 regs)
+	ctx.out_color = SATURATE(out_color);
+}
+
+// ------------------------------------------------------------------------------------------------
+// -------------------- Helper visualization functions --------------------------------------------
+
+// Only used when debugging
+shared uint s_vis_pixels[LSIZE];
+
+void initVisualizeSamples() { s_vis_pixels[LIX] = 0; }
+
+void visualizeSamples(uint sample_count) {
+	uint buf_offset = (LIX >> WARP_SHIFT) << SEGMENT_SHIFT;
+	for(uint i = LIX & WARP_MASK; i < sample_count; i += WARP_SIZE) {
+		uint pixel_id = s_buffer[buf_offset + i] & WARP_MASK;
+		atomicAdd(s_vis_pixels[(LIX & ~WARP_MASK) + pixel_id], 1);
+	}
+}
+
+void finishVisualizeSamples(ivec2 pixel_pos) {
+	uint pixel_id = (pixel_pos.x & (RBLOCK_WIDTH - 1)) +
+					((pixel_pos.y & (RBLOCK_HEIGHT - 1)) << RBLOCK_WIDTH_SHIFT);
+	vec3 color = vec3(s_vis_pixels[(LIX & ~WARP_MASK) + pixel_id]) / 32.0;
+	outputPixel(pixel_pos, vec4(SATURATE(color), 1.0));
 }
 
 #endif

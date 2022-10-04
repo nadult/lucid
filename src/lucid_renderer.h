@@ -8,10 +8,9 @@ namespace fwk {
 struct ShaderDebugInfo;
 }
 
-// TODO: better handling of phases
-// TODO: ability to change options without recreating renderer
 DEFINE_ENUM(LucidRenderOpt, debug_quad_setup, debug_bin_counter, debug_bin_dispatcher, debug_raster,
-			timers, additive_blending, visualize_errors, alpha_threshold, bin_size_64);
+			timers, additive_blending, visualize_errors, alpha_threshold);
+
 using LucidRenderOpts = EnumFlags<LucidRenderOpt>;
 
 namespace shader {

@@ -16,7 +16,20 @@
 #include <fwk/vulkan/vulkan_pipeline.h>
 #include <fwk/vulkan/vulkan_swap_chain.h>
 
+// TODO: why on desktop AMD on windows some shaders work 2-3x slower? balancedDispatcher & rasterizers
+// TODO: rename WARP to SUBGROUP ?
+// TODO: better stats (than num_half_blocks)
+// TODO: ability to change options without recreating renderer
+// TODO: re-enable bin_64 support?
 // TODO: opisać różnego rodzaju definicje/nazwy używane w kodzie
+// Hairball breaks when zoomed in; glitches on hairball in some cases...
+// Cały czas są jakieś dziwne błędy przy 1 i 2 klatce renderingu (też jak się zmienia rozdziałkę)
+// Nie tylko dziwne rzeczy się wyświetlają, ale są też błędy w tri offsetach w dispatcherze
+// TODO: opcja rekonstrukcji ucid renderera, żeby nie trzeba było tworzyć od nowa buforów
+// TODO: properly handling cases with more visible quads than is allowed
+// Raz się zdarzyło, że na teapocie były jakieś dziwne glitche na NVIDII, po włączeniu wcześniej kilku dużych scen
+// TODO: maybe it would be possible to remove some code from quad_setup, because we use 3D rasterization ?
+// TODO: better way to stora data in scratch memory? we could do it in more optimal way in some cases (_32 instead of _64)
 
 // TODO: dużo specyficznych przypadków do obsłużenia:
 // - clipping: może zaimplementować dodatkowe passy do obsługi clipowanych trójkątów ?
@@ -147,7 +160,7 @@ Ex<void> LucidRenderer::exConstruct(VulkanDevice &device, ShaderCompiler &compil
 									VColorAttachment color_att, Opts opts, int2 view_size) {
 	print("Constructing LucidRenderer (flags:% res:%):\n", opts, view_size);
 	auto time = getTime();
-	m_bin_size = opts & Opt::bin_size_64 ? 64 : 32;
+	m_bin_size = 32; //opts & Opt::bin_size_64 ? 64 : 32;
 	m_block_size = 8;
 
 	m_bin_counts = (view_size + int2(m_bin_size - 1)) / m_bin_size;
@@ -206,7 +219,7 @@ Ex<void> LucidRenderer::exConstruct(VulkanDevice &device, ShaderCompiler &compil
 	m_normals_storage = EX_PASS(VulkanBuffer::create<u32>(device, max_visible_tris, usage));
 
 	uint scratch_32_size = 64 * 1024 * m_max_dispatches * sizeof(u32);
-	uint scratch_64_size = (256 * 1024) * m_max_dispatches * sizeof(u64);
+	uint scratch_64_size = (128 * 1024) * m_max_dispatches * sizeof(u64);
 	scratch_64_size = max<uint>(scratch_64_size, max_visible_quads * sizeof(u32));
 
 	// TODO: control size of scratch mem
@@ -258,17 +271,6 @@ Ex<void> LucidRenderer::exConstruct(VulkanDevice &device, ShaderCompiler &compil
 		m_debug_buffer = EX_PASS(VulkanBuffer::create<u32>(device, 1024 * 1024, usage, mem_usage));
 	}
 
-	// TODO: disassemble spirv
-	/*mkdirRecursive("temp").ignore();
-	if(auto disas = p_quad_setup.getDisassembly())
-		saveFile("temp/quad_setup.asm", *disas).ignore();
-	if(auto disas = p_bin_dispatcher.getDisassembly())
-		saveFile("temp/bin_dispatcher.asm", *disas).ignore();
-	if(auto disas = p_raster_low.getDisassembly())
-		saveFile("temp/raster_low.asm", *disas).ignore();
-	if(auto disas = p_raster_high.getDisassembly())
-		saveFile("temp/raster_high.asm", *disas).ignore();*/
-
 	uint bin_counters_size = LUCID_INFO_SIZE + m_bin_count * 10;
 	for(int i : intRange(num_frames)) {
 		auto instance_usage = VBufferUsage::storage_buffer | VBufferUsage::transfer_dst;
@@ -297,7 +299,6 @@ void LucidRenderer::render(const Context &ctx) {
 	cmds.fullBarrier();
 
 	// TODO: second frame is broken
-	// TODO: minimize barriers
 	setupInputData(ctx).check();
 	uploadInstances(ctx).check();
 	quadSetup(ctx);

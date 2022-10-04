@@ -261,7 +261,6 @@ void generateBlocks(uint bid) {
 			DEBUG_RECORD(0, 0, 0, 0);
 		uint counts =
 			WARP_SIZE == 64 ? num_frags.x + num_frags.y : num_frags.x | (num_frags.y << 6);
-		// TODO: change order
 		g_scratch_64[dst_offset_64 + i] = bits;
 		g_scratch_64[dst_offset_64 + i + MAX_BLOCK_TRIS] = uvec2(tri_idx, counts);
 

@@ -531,7 +531,7 @@ void shadeAndReduceSamples(uint rbid, uint sample_count, in out ReductionContext
 	uint buf_offset = (LIX >> WARP_SHIFT) << SEGMENT_SHIFT;
 	uint mini_offset =
 		WARP_SIZE == 64 ? (LIX & ~WARP_MASK) + ((LIX & 32) != 0 ? LSIZE : 0) : LIX & ~WARP_MASK;
-	ivec2 rblock_pos = rasterBlockPixelPos(rbid) + s_bin_pos;
+	ivec2 rblock_pos = (rasterBlockPos(rbid) << rasterBlockShift()) + s_bin_pos;
 	vec3 out_color = ctx.out_color;
 
 	for(uint i = 0; i < sample_count; i += WARP_SIZE) {
@@ -716,11 +716,8 @@ void rasterBin(int bin_id) {
 #endif
 		}
 
-		ivec2 pixel_pos =
-			rasterBlockPixelPos(rbid) +
-			ivec2((LIX & (RBLOCK_WIDTH - 1)), ((LIX >> RBLOCK_WIDTH_SHIFT) & (RBLOCK_HEIGHT - 1)));
+		ivec2 pixel_pos = rasterBlockPixelPos(rbid);
 		outputPixel(pixel_pos, finishReduceSamples(context));
-
 		//finishVisualizeSamples(pixel_pos);
 		//visualizeBlockCounts(rbid, pixel_pos);
 		UPDATE_TIMER(4);

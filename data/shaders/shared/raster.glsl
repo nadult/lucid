@@ -116,7 +116,7 @@ uint rasterBlockDepth(vec2 cpos, uint tri_idx) {
 }
 
 // TODO: this is only used in raster_low; Can we simplify it and use it n both versions?
-uvec2 rasterBlockPos(uint rbid) {
+ivec2 rasterBlockPos(uint rbid) {
 #if WARP_SIZE == 64
 	uint rbx = rbid & BLOCK_ROWS_MASK;
 	uint rby = rbid >> BLOCK_ROWS_SHIFT;
@@ -124,11 +124,15 @@ uvec2 rasterBlockPos(uint rbid) {
 	uint rbx = (rbid >> 1) & BLOCK_ROWS_MASK;
 	uint rby = (rbid & 1) + ((rbid >> (BLOCK_ROWS_SHIFT + 1)) << 1);
 #endif
-	return uvec2(rbx, rby);
+	return ivec2(rbx, rby);
 }
 
+uvec2 rasterBlockShift() { return uvec2(RBLOCK_WIDTH_SHIFT, RBLOCK_HEIGHT_SHIFT); }
+
 ivec2 rasterBlockPixelPos(uint rbid) {
-	return ivec2(rasterBlockPos(rbid) << uvec2(RBLOCK_WIDTH_SHIFT, RBLOCK_HEIGHT_SHIFT));
+	ivec2 pix_pos =
+		ivec2(LIX & (RBLOCK_WIDTH - 1), (LIX >> RBLOCK_WIDTH_SHIFT) & (RBLOCK_HEIGHT - 1));
+	return (rasterBlockPos(rbid) << rasterBlockShift()) + pix_pos;
 }
 
 #endif

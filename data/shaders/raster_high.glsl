@@ -275,16 +275,17 @@ void generateRBlocks(uint start_rbid) {
 	// TODO: better names for indices
 	uint group_rbid = LIX >> (WARP_SHIFT + group_shift);
 	uint rbid = start_rbid + group_rbid;
-	uint rby = rbid >> RBLOCK_COLS_SHIFT, rbx = rbid & RBLOCK_COLS_MASK;
+
+	uvec2 rblock_pos = rasterBlockPos(rbid);
 	uint lrbid = rbid & (NUM_WARPS - 1);
-	uint tri_count = s_rblock_row_tri_counts[rby];
+	uint tri_count = s_rblock_row_tri_counts[rblock_pos.y];
 	uint buf_offset = group_rbid << (MAX_RBLOCK_TRIS0_SHIFT + group_shift);
 
-	uint src_offset_32 = scratch32RBlockRowTrisOffset(rby);
-	uint src_offset_64 = scratch64RBlockRowTrisOffset(rby);
+	uint src_offset_32 = scratch32RBlockRowTrisOffset(rblock_pos.y);
+	uint src_offset_64 = scratch64RBlockRowTrisOffset(rblock_pos.y);
 
 	{
-		uint bx_bits_shift = 24 + rbx;
+		uint bx_bits_shift = 24 + rblock_pos.x;
 		uint thread_bit_mask = ~(0xffffffffu << (LIX & WARP_MASK));
 		uint block_tri_count = 0;
 		uint max_block_tris = MAX_RBLOCK_TRIS0 << group_shift;
@@ -334,8 +335,8 @@ void generateRBlocks(uint start_rbid) {
 	uint dst_offset_32 = scratch32RBlockTrisOffset(lrbid);
 #endif
 	tri_count = s_rblock_tri_counts[lrbid];
-	int startx = int(rbx << RBLOCK_WIDTH_SHIFT);
-	vec2 block_pos = vec2(rbx << RBLOCK_WIDTH_SHIFT, rby << RBLOCK_HEIGHT_SHIFT) + vec2(s_bin_pos);
+	int startx = int(rblock_pos.x << RBLOCK_WIDTH_SHIFT);
+	vec2 block_pos = vec2(rblock_pos << rasterBlockShift()) + vec2(s_bin_pos);
 
 	for(uint i = group_thread; i < tri_count; i += group_size) {
 		uint row_tri_idx = s_buffer[buf_offset + i];
@@ -594,20 +595,12 @@ void loadSamples(uint rbid, int segment_id) {
 	}
 }
 
-ivec2 computePixelPos(uint rbid) {
-	uint rbx = rbid & RBLOCK_COLS_MASK, rby = rbid >> RBLOCK_COLS_SHIFT;
-	return ivec2((LIX & (RBLOCK_WIDTH - 1)) + (rbx << RBLOCK_WIDTH_SHIFT),
-				 ((LIX >> RBLOCK_WIDTH_SHIFT) & (RBLOCK_HEIGHT - 1)) +
-					 (rby << RBLOCK_HEIGHT_SHIFT));
-}
-
 void shadeAndReduceSamples(uint rbid, uint sample_count, in out ReductionContext ctx) {
 	uint buf_offset = (LIX >> WARP_SHIFT) << SEGMENT_SHIFT;
 	uint mini_offset =
 		WARP_SIZE == 64 ? (LIX & ~WARP_MASK) + ((LIX & 32) != 0 ? LSIZE : 0) : LIX & ~WARP_MASK;
 	// TODO: make it work the same way as in raster_low? maybe it's better to change in raster_low ?
-	uint rbx = rbid & RBLOCK_COLS_MASK, rby = rbid >> RBLOCK_COLS_SHIFT;
-	ivec2 rblock_pos = ivec2(rbx << RBLOCK_WIDTH_SHIFT, rby << RBLOCK_HEIGHT_SHIFT) + s_bin_pos;
+	ivec2 rblock_pos = (rasterBlockPos(rbid) << rasterBlockShift()) + s_bin_pos;
 	vec3 out_color = ctx.out_color;
 
 	for(uint i = 0; i < sample_count; i += WARP_SIZE) {
@@ -787,7 +780,7 @@ void rasterBin(int bin_id) {
 #endif
 		}
 
-		ivec2 pixel_pos = computePixelPos(rbid);
+		ivec2 pixel_pos = rasterBlockPixelPos(rbid);
 		outputPixel(pixel_pos, finishReduceSamples(context));
 		//finishVisualizeSamples(pixel_pos);
 		//visualizeBlockCounts(rbid, pixel_pos);

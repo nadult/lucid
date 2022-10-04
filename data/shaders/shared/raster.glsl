@@ -16,6 +16,11 @@
 #include "structures.glsl"
 #include "timers.glsl"
 
+// TODO: improve docs
+// Block: 8x8 pixels
+// Half-block: 8x4 pixels
+// Render-block: depends on warp size: 32: half-block, 64: block
+
 #extension GL_KHR_shader_subgroup_ballot : require
 #extension GL_KHR_shader_subgroup_shuffle_relative : require
 

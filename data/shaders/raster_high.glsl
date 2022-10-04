@@ -195,7 +195,7 @@ void processQuads(int start_rby) {
 			s_rblock_group_shift = group_shift;
 			s_rblock_group_size = group_size;
 			if(group_size > MAX_GROUP_SIZE)
-				s_raster_error = 0xffffffff; // TODO: better reporting
+				atomicOr(s_raster_error, 0xffffffff);
 		}
 	}
 }
@@ -693,21 +693,6 @@ void visualizeBlockCounts(uint rbid, ivec2 pixel_pos) {
 	outputPixel(pixel_pos, vec4(SATURATE(color), 1.0));
 }
 
-// TODO: fixme
-void visualizeErrors(uint rbid) {
-	uint lrbid = rbid & (NUM_WARPS - 1);
-	uint color = 0xff000000;
-	if(s_raster_error != 0)
-		color += 0xff;
-	else {
-		color += 0x30;
-		if(s_rblock_tri_counts[lrbid] > MAX_RBLOCK_TRIS)
-			color += 0x40;
-	}
-
-	//outputPixel(computePixelPos(rbid), decodeRGBA8(color));
-}
-
 void rasterBin(int bin_id) {
 	START_TIMER();
 	if(LIX < RBLOCK_ROWS) {
@@ -748,7 +733,7 @@ void rasterBin(int bin_id) {
 
 		int rbid = start_rby * RBLOCK_COLS + int(LIX >> WARP_SHIFT);
 		if(s_raster_error != 0) {
-			visualizeErrors(rbid);
+			outputPixel(rasterBlockPixelPos(rbid), vec4(1.0, 0.0, 0.0, 0.0));
 			barrier();
 			if(LIX == 0)
 				s_raster_error = 0;

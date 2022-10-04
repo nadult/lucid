@@ -625,20 +625,6 @@ void visualizeBlockCounts(uint rbid, ivec2 pixel_pos) {
 	outputPixel(pixel_pos, vec4(SATURATE(color), 1.0));
 }
 
-void visualizeErrors(uint bid) {
-	uint lbid = LIX >> 5;
-	bid += lbid;
-
-	vec4 color = vec4(0.2, 0, 0, 1.0);
-	if((s_raster_error & (1 << lbid)) != 0)
-		color.r += 0.3;
-
-	uint bx = bid & 7, by = bid >> 3;
-	ivec2 pixel_pos = ivec2((LIX & 7) + (bx << 3), ((LIX >> 3) & 3) + (by << 3));
-	outputPixel(pixel_pos, color);
-	outputPixel(pixel_pos + ivec2(0, 4), color);
-}
-
 void rasterBin(int bin_id) {
 	START_TIMER();
 
@@ -687,7 +673,6 @@ void rasterBin(int bin_id) {
 					HIGH_LEVEL_BINS(id) = int(bin_id);
 					s_promoted_bin_count = max(s_promoted_bin_count, id + 1);
 				}
-				//visualizeErrors(bid);
 				return;
 			}
 		}

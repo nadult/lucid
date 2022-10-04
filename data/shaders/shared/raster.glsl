@@ -76,7 +76,7 @@ uint rasterBlock(uint tri_mins, uint tri_maxs, int startx, out uint num_frags, i
 	cpos += vec2(cpx[0] + cpx[1] + cpx[2] + cpx[3], cpy[0] + cpy[1] + cpy[2] + cpy[3]);
 	num_frags = count[0] + count[1] + count[2] + count[3];
 	uint min_bits =
-		(xmin[0] & 7) | ((xmin[1] & 7) << 3) | ((xmin[2] & 7) << 6) | ((xmin[3] & 7) << 9);
+		(xmin[0] & 7) | ((xmin[1] & 7) << 4) | ((xmin[2] & 7) << 8) | ((xmin[3] & 7) << 12);
 	uint count_bits = (count[0] << 16) | (count[1] << 20) | (count[2] << 24) | (count[3] << 28);
 	return min_bits | count_bits;
 }

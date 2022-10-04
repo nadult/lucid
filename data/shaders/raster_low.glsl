@@ -491,7 +491,7 @@ void loadSamples(uint rbid, int segment_id) {
 	uint src_offset_64 = scratch64RasterBlockTrisOffset(lrbid) + first_tri;
 	uint buf_offset = (LIX >> 5) << SEGMENT_SHIFT;
 
-	int y = int(LIX & 3), count_shift = 16 + (y << 2), min_shift = (y << 1) + y;
+	int y = int(LIX & 3), row_shift = (y & 3) * 4;
 	int mask1 = y >= 1 ? ~0 : 0, mask2 = y >= 2 ? ~0 : 0;
 
 	for(uint i = (LIX & WARP_MASK) >> 2; i < tri_count; i += WARP_SIZE / 4) {
@@ -501,8 +501,8 @@ void loadSamples(uint rbid, int segment_id) {
 			tri_offset -= SEGMENT_SIZE;
 		uint tri_idx = tri_data.x & 0xffffff;
 
-		int minx = int((tri_data.y >> min_shift) & 7);
-		int countx = int((tri_data.y >> count_shift) & 15);
+		uint row_data = tri_data.y >> row_shift;
+		int minx = int(row_data & 15), countx = int((row_data >> 16) & 15);
 		int prevx = countx + (subgroupShuffleUp(countx, 1) & mask1);
 		prevx += (subgroupShuffleUp(prevx, 2) & mask2);
 		tri_offset += prevx - countx;
@@ -524,7 +524,7 @@ void loadSamples(uint rbid, int segment_id) {
 	uint src_offset_64 = scratch64RasterBlockTrisOffset(lrbid) + first_tri;
 	uint buf_offset = (LIX >> 6) << SEGMENT_SHIFT;
 
-	int y = int(LIX & 7), count_shift = 16 + (y & 3) * 4, min_shift = (y & 3) * 3;
+	int y = int(LIX & 7), row_shift = (y & 3) * 4;
 	int mask1 = y >= 1 ? ~0 : 0, mask2 = y >= 2 ? ~0 : 0, mask3 = y >= 4 ? ~0 : 0;
 
 	for(uint i = (LIX & WARP_MASK) >> 3; i < tri_count; i += WARP_SIZE / 8) {
@@ -535,8 +535,8 @@ void loadSamples(uint rbid, int segment_id) {
 			tri_offset -= SEGMENT_SIZE;
 		uint tri_idx = tri_info & 0xffffff;
 
-		int minx = int((tri_data >> min_shift) & 7);
-		int countx = int((tri_data >> count_shift) & 15);
+		uint row_data = tri_data >> row_shift;
+		int minx = int(row_data & 15), countx = int((row_data >> 16) & 15);
 		int prevx = countx + (subgroupShuffleUp(countx, 1) & mask1);
 		prevx += (subgroupShuffleUp(prevx, 2) & mask2);
 		prevx += (subgroupShuffleUp(prevx, 4) & mask3);

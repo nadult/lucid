@@ -552,7 +552,7 @@ void loadSamples(uint rbid, int segment_id) {
 			uint tri_idx = tri_data.x & 0xffffff;
 
 			uvec4 countx = (uvec4(tri_data.y) >> uvec4(16, 20, 24, 28)) & 15;
-			uvec4 minx = (uvec4(tri_data.y) >> uvec4(0, 3, 6, 9)) & 7;
+			uvec4 minx = (uvec4(tri_data.y) >> uvec4(0, 4, 8, 12)) & 15;
 			uint bits0 = uint((1 << countx[0]) - 1) << (minx[0] + 0);
 			uint bits1 = uint((1 << countx[1]) - 1) << (minx[1] + 8);
 			uint bits2 = uint((1 << countx[2]) - 1) << (minx[2] + 16);
@@ -569,8 +569,7 @@ void loadSamples(uint rbid, int segment_id) {
 			}
 		}
 	} else {
-		int y = int(LIX & (RBLOCK_HEIGHT - 1)), count_shift = 16 + (y & 3) * 4,
-			min_shift = (y & 3) * 3; // TODO: min_shift the same as count_shift
+		int y = int(LIX & (RBLOCK_HEIGHT - 1)), row_shift = (y & 3) * 4;
 		int mask1 = y >= 1 ? ~0 : 0, mask2 = y >= 2 ? ~0 : 0, mask3 = y >= 4 ? ~0 : 0;
 
 		for(uint i = (LIX & WARP_MASK) >> RBLOCK_HEIGHT_SHIFT; i < tri_count;
@@ -582,18 +581,17 @@ void loadSamples(uint rbid, int segment_id) {
 			if(i == 0 && tri_offset != 0)
 				tri_offset -= SEGMENT_SIZE;
 			uint tri_idx = tri_info & 0xffffff;
-			int minx = int((tri_data >> min_shift) & 7);
-			int countx = int((tri_data >> count_shift) & 15);
+			uint row_data = tri_data >> row_shift;
 #else
 			uvec2 tri_data = g_scratch_64[src_offset_64 + i];
 			int tri_offset = int(tri_data.x >> 24);
 			if(i == 0 && tri_offset != 0)
 				tri_offset -= SEGMENT_SIZE;
 			uint tri_idx = tri_data.x & 0xffffff;
-			int minx = int((tri_data.y >> min_shift) & 7);
-			int countx = int((tri_data.y >> count_shift) & 15);
+			uint row_data = tri_data.y >> row_shift;
 #endif
 
+			int minx = int(row_data & 7), countx = int((row_data >> 16) & 15);
 			int prevx = countx + (subgroupShuffleUp(countx, 1) & mask1);
 			prevx += (subgroupShuffleUp(prevx, 2) & mask2);
 #if RBLOCK_HEIGHT == 8
@@ -681,29 +679,6 @@ void finishVisualizeSamples(ivec2 pixel_pos) {
 					((pixel_pos.y & (RBLOCK_HEIGHT - 1)) << RBLOCK_WIDTH_SHIFT);
 	vec3 color = vec3(s_vis_pixels[(LIX & ~WARP_MASK) + pixel_id]) / 32.0;
 	outputPixel(pixel_pos, vec4(SATURATE(color), 1.0));
-}
-
-void visualizeAllSamples(uint rbid, ivec2 pixel_pos) {
-	uint lrbid = rbid & (NUM_WARPS - 1);
-	uint tri_count = s_rblock_tri_counts[lrbid];
-	uint src_offset_64 = scratch64RBlockTrisOffset(lrbid);
-
-	int y = int(LIX & 3);
-	uint count_shift = 16 + (y << 2), min_shift = (y << 1) + y;
-	uint buf_offset = (LIX >> 5) << SEGMENT_SHIFT;
-
-	s_vis_pixels[LIX] = 0;
-
-	for(uint i = (LIX & WARP_MASK) >> 2; i < tri_count; i += WARP_SIZE / 4) {
-		uvec2 tri_data = g_scratch_64[src_offset_64 + i];
-		int minx = int((tri_data.y >> min_shift) & 7);
-		int countx = int((tri_data.y >> count_shift) & 15);
-		uint pixel_id = (y << 3) | minx;
-		for(int j = 0; j < countx; j++)
-			atomicAdd(s_vis_pixels[(LIX & ~31) | (pixel_id + j)], 1);
-	}
-
-	finishVisualizeSamples(pixel_pos);
 }
 
 void visualizeBlockCounts(uint rbid, ivec2 pixel_pos) {
@@ -806,7 +781,6 @@ void rasterBin(int bin_id) {
 		}
 		UPDATE_TIMER(1);
 
-		//visualizeAllSamples(rbid);
 		ReductionContext context;
 		initReduceSamples(context);
 		//initVisualizeSamples();

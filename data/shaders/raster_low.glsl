@@ -6,7 +6,7 @@
 #include "%shader_debug"
 DEBUG_SETUP(1, 11)
 
-#define MAX_BLOCK_ROW_TRIS 1024 // TODO: detect overflow
+#define MAX_BLOCK_ROW_TRIS 1024
 #define MAX_BLOCK_TRIS 256
 #define MAX_BLOCK_TRIS_SHIFT 8
 
@@ -324,13 +324,17 @@ void generateBlocks(uint bid) {
 		if(warp_idx == NUM_WARPS_MASK) {
 #if WARP_SIZE == 32
 			uint v0 = sum & 0xffff, v1 = sum >> 16;
+			uint max_segs = (max(v0, v1) + SEGMENT_SIZE - 1) >> SEGMENT_SHIFT;
 			updateStats(int(v0 + v1), int(tri_count * 2));
 			s_rblock_counts[lbid * 2 + 0] = (v0 << 16) | tri_count;
 			s_rblock_counts[lbid * 2 + 1] = (v1 << 16) | tri_count;
 #else
+			uint max_segs = (sum + SEGMENT_SIZE - 1) >> SEGMENT_SHIFT;
 			s_rblock_counts[lbid] = (sum << 16) | tri_count;
 			updateStats(int(sum), int(tri_count * 2));
 #endif
+			if(max_segs > MAX_SEGMENTS)
+				atomicOr(s_raster_error, 0xffffffff);
 		}
 
 		s_mini_buffer[LIX] = sum - value;
@@ -431,6 +435,8 @@ void finalizeSegments() {
 		uint counts = s_rblock_counts[rbid];
 		uint num_segments = ((counts >> 16) + SEGMENT_SIZE - 1) >> SEGMENT_SHIFT;
 		uint tri_count = counts & 0xffff;
+		if(num_segments > MAX_SEGMENTS)
+			DEBUG_RECORD(num_segments, MAX_SEGMENTS, 0, 0);
 
 		for(uint seg_id = LIX & 15; seg_id < num_segments; seg_id += 16) {
 			uint cur_value = s_segments[seg_group_offset + seg_id];
@@ -592,10 +598,6 @@ void rasterBin(int bin_id) {
 			uint bid = (rbid & ~(NUM_WARPS - 1)) >> (WARP_SIZE == 64 ? 0 : 1);
 			generateBlocks(bid);
 			barrier();
-			finalizeSegments();
-			barrier();
-			groupMemoryBarrier();
-
 			// raster_low errors are not visualized, but propagated to high
 			if(s_raster_error != 0) {
 				if(LIX == 0) {
@@ -605,6 +607,9 @@ void rasterBin(int bin_id) {
 				}
 				return;
 			}
+			finalizeSegments();
+			groupMemoryBarrier();
+			barrier();
 		}
 		UPDATE_TIMER(1);
 

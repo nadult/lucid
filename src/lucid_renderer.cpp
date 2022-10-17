@@ -30,6 +30,10 @@
 // Raz się zdarzyło, że na teapocie były jakieś dziwne glitche na NVIDII, po włączeniu wcześniej kilku dużych scen
 // TODO: maybe it would be possible to remove some code from quad_setup, because we use 3D rasterization ?
 // TODO: better way to stora data in scratch memory? we could do it in more optimal way in some cases (_32 instead of _64)
+// TODO: problem z renderingiem hairballa na AMD desktop
+// TODO: raz zdarzył się crash przy przełączeniu sceny z powrplant na san miguel
+// TODO: debug_record się odpala w raster_high w linii 323
+// TODO: zjebane teksturki w chestnut_tree01 jak sie poprzelacza pomiedzy scenami; w trybie debug...
 
 // TODO: dużo specyficznych przypadków do obsłużenia:
 // - clipping: może zaimplementować dodatkowe passy do obsługi clipowanych trójkątów ?

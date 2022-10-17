@@ -326,8 +326,9 @@ void generateBlocks(uint bid) {
 			uint v0 = sum & 0xffff, v1 = sum >> 16;
 			uint max_segs = (max(v0, v1) + SEGMENT_SIZE - 1) >> SEGMENT_SHIFT;
 			updateStats(int(v0 + v1), int(tri_count * 2));
-			s_rblock_counts[lbid * 2 + 0] = (v0 << 16) | tri_count;
-			s_rblock_counts[lbid * 2 + 1] = (v1 << 16) | tri_count;
+			uint lrbid = blockIdToRaster(lbid);
+			s_rblock_counts[lrbid] = (v0 << 16) | tri_count;
+			s_rblock_counts[lrbid + RBLOCK_COLS] = (v1 << 16) | tri_count;
 #else
 			uint max_segs = (sum + SEGMENT_SIZE - 1) >> SEGMENT_SHIFT;
 			s_rblock_counts[lbid] = (sum << 16) | tri_count;
@@ -348,10 +349,12 @@ void generateBlocks(uint bid) {
 
 #if WARP_SIZE == 32
 	src_offset_64 = dst_offset_64;
-	dst_offset_64 = scratch64RasterBlockTrisOffset(lbid << 1);
-
-	uint seg_block1_offset = lbid << (MAX_SEGMENTS_SHIFT + 1);
-	uint seg_block2_offset = seg_block1_offset + MAX_SEGMENTS;
+	uint lrbid0 = blockIdToRaster(lbid);
+	uint lrbid1 = lrbid0 + RBLOCK_COLS;
+	uint dst_offset_64_0 = scratch64RasterBlockTrisOffset(lrbid0);
+	uint dst_offset_64_1 = scratch64RasterBlockTrisOffset(lrbid1);
+	uint seg_block1_offset = lrbid0 << MAX_SEGMENTS_SHIFT;
+	uint seg_block2_offset = lrbid1 << MAX_SEGMENTS_SHIFT;
 	for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_SIZE) {
 		uint tri_offset = 0;
 		if(i > 0) {
@@ -390,8 +393,8 @@ void generateBlocks(uint bid) {
 
 		uint tri_idx = g_scratch_64[src_offset_64 + block_tri_idx + MAX_BLOCK_TRIS].x;
 		uvec2 tri_data = g_scratch_64[src_offset_64 + block_tri_idx];
-		g_scratch_64[dst_offset_64 + i] = uvec2(tri_idx | seg_offset0, tri_data.x);
-		g_scratch_64[dst_offset_64 + i + MAX_BLOCK_TRIS] = uvec2(tri_idx | seg_offset1, tri_data.y);
+		g_scratch_64[dst_offset_64_0 + i] = uvec2(tri_idx | seg_offset0, tri_data.x);
+		g_scratch_64[dst_offset_64_1 + i] = uvec2(tri_idx | seg_offset1, tri_data.y);
 	}
 #else
 	src_offset_64 = dst_offset_64;
@@ -525,8 +528,7 @@ void loadSamples(uint rbid, int segment_id) {
 }
 
 void visualizeBlockCounts(uint rbid, ivec2 pixel_pos) {
-	uint lrbid = rbid & (WARP_SIZE == 64 ? NUM_WARPS - 1 : NUM_WARPS * 2 - 1);
-	uint lbid = (WARP_SIZE == 64 ? rbid : rbid >> 1) & (NUM_WARPS - 1);
+	uint lrbid = rbid & (RBLOCK_COUNT - 1), lbid = blockIdFromRaster(lrbid);
 	uint frag_count = (WARP_SIZE == 64 ? 1 : 2) * (s_rblock_counts[lrbid] >> 16);
 	uint tri_count = s_block_tri_count[lbid];
 	//tri_count = s_block_row_tri_count[pixel_pos.y >> BLOCK_SHIFT];

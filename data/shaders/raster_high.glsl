@@ -167,11 +167,13 @@ void processQuads(int start_rby) {
 	if(LIX < NUM_WARPS) {
 		uint rbx = LIX & RBLOCK_COLS_MASK;
 		int value = s_rblock_tri_counts[LIX], temp;
-		temp = subgroupShuffleUp(value, 1), value += rbx >= 1 ? temp : 0;
+		if(RBLOCK_COLS >= 2)
+			temp = subgroupShuffleUp(value, 1), value += rbx >= 1 ? temp : 0;
 		if(RBLOCK_COLS >= 4)
 			temp = subgroupShuffleUp(value, 2), value += rbx >= 2 ? temp : 0;
 		if(RBLOCK_COLS >= 8)
 			temp = subgroupShuffleUp(value, 4), value += rbx >= 4 ? temp : 0;
+		subgroupMemoryBarrierShared();
 		s_rblock_tri_counts[LIX] = value;
 		uint max_value = subgroupMax_(uint(value), NUM_WARPS);
 		if(LIX == 0) {
@@ -283,7 +285,6 @@ void generateRBlocks(uint start_rbid) {
 
 	{
 		uint bx_bits_shift = 24 + rblock_pos.x;
-		uint thread_bit_mask = ~(0xffffffffu << (LIX & WARP_MASK));
 		uint block_tri_count = 0;
 		uint max_block_tris = MAX_RBLOCK_TRIS0 << group_shift;
 
@@ -320,7 +321,7 @@ void generateRBlocks(uint start_rbid) {
 
 			if(group_thread == 0) {
 				if(s_rblock_tri_counts[lrbid] < int(block_tri_count))
-					DEBUG_RECORD(rbid, s_rblock_tri_counts[lrbid], block_tri_count, 0);
+					DEBUG_RECORD(s_rblock_tri_counts[lrbid], block_tri_count, 0, tri_count);
 				s_rblock_tri_counts[lrbid] = int(block_tri_count);
 			}
 		}

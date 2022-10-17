@@ -521,6 +521,7 @@ void loadSamples(uint rbid, int segment_id) {
 			s_buffer[buf_offset + tri_offset++] = value++;
 	}
 #endif
+	subgroupMemoryBarrierShared();
 }
 
 void visualizeBlockCounts(uint rbid, ivec2 pixel_pos) {

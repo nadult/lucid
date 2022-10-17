@@ -5,16 +5,20 @@
 
 #ifdef TIMERS_ENABLED
 
-#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 #extension GL_ARB_shader_clock : require
 #extension GL_KHR_shader_subgroup_basic : require
 
 shared uint s_timers[TIMERS_COUNT];
-#define START_TIMER() uint64_t timer0_ = clockARB();
+#define START_TIMER() uvec2 timer0_ = clock2x32ARB();
+// TODO: for now we're just ignoring high bits; Maybe we shouldn't do that?
 #define UPDATE_TIMER(idx)                                                                          \
-	if((gl_LocalInvocationIndex & (gl_SubgroupSize - 1)) == 0) {                                   \
-		uint64_t timer = clockARB();                                                               \
-		atomicAdd(s_timers[idx], uint(timer - timer0_) >> 4);                                      \
+	if(gl_SubgroupInvocationID == 0) {                                                             \
+		uvec2 timer = clock2x32ARB();                                                              \
+		uint low = timer.x - timer0_.x;                                                            \
+		uint high = timer.y - timer0_.y;                                                           \
+		if(low > timer.x)                                                                          \
+			high--;                                                                                \
+		atomicAdd(s_timers[idx], uint(low) >> 4);                                                  \
 		timer0_ = timer;                                                                           \
 	}
 

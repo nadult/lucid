@@ -10,12 +10,13 @@ DEBUG_SETUP(1, 11)
 #define MAX_RBLOCK_TRIS0 (8 * WARP_SIZE)
 #define MAX_RBLOCK_TRIS0_SHIFT (WARP_SHIFT + 3)
 
+#define MAX_GROUP_SIZE 16
+#define MAX_GROUP_SHIFT 4
+
 // Actual max value of tris per rblock,
 // assuming using multiple warps per rblock in generateRBlocks
-#define MAX_RBLOCK_TRIS 4096
-#define MAX_RBLOCK_TRIS_SHIFT 12
-
-#define MAX_GROUP_SIZE 16
+#define MAX_RBLOCK_TRIS (MAX_RBLOCK_TRIS0 * MAX_GROUP_SIZE)
+#define MAX_RBLOCK_TRIS_SHIFT (MAX_RBLOCK_TRIS0_SHIFT + MAX_GROUP_SHIFT)
 
 #define MAX_RBLOCK_ROW_TRIS 16384
 #define MAX_RBLOCK_ROW_TRIS_SHIFT 14
@@ -362,14 +363,12 @@ void generateRBlocks(uint start_rbid) {
 		if(num_frags == 0) // This means that bx_mask is invalid
 			DEBUG_RECORD(0, 0, 0, 0);
 		uint depth = rasterBlockDepth(cpos * (0.5 / float(num_frags)) + block_pos, tri_idx);
-		s_buffer[buf_offset + i] = i | (depth << 12);
+		s_buffer[buf_offset + i] = i | (RBLOCK_HEIGHT == 8 ? (depth >> 1) << 13 : depth << 12);
 	}
 	barrier();
-
-	sortTris(lrbid, tri_count, buf_offset, group_size, group_thread);
-
-	barrier();
 	groupMemoryBarrier();
+	sortTris(lrbid, tri_count, buf_offset, group_size, group_thread);
+	barrier();
 
 #ifdef SHADER_DEBUG
 	for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_SIZE) {
@@ -378,10 +377,11 @@ void generateRBlocks(uint start_rbid) {
 		if(value <= prev_value)
 			DEBUG_RECORD(i, tri_count, prev_value, value);
 	}
+	barrier();
 #endif
 
 	for(uint i = group_thread; i < tri_count; i += group_size) {
-		uint rblock_tri_idx = s_buffer[buf_offset + i] & 0xfff;
+		uint rblock_tri_idx = s_buffer[buf_offset + i] & (RBLOCK_HEIGHT == 8 ? 0x1fff : 0xfff);
 #if RBLOCK_HEIGHT == 8
 		uint num_frags = g_scratch_32[dst_offset_32 + rblock_tri_idx] >> 24;
 #else
@@ -390,12 +390,12 @@ void generateRBlocks(uint start_rbid) {
 
 		// Computing triangle-ordered sample offsets within each block
 		uint sum = subgroupInclusiveAddFast(num_frags);
-		s_buffer[buf_offset + i] = (sum - num_frags) | (num_frags << 12) | (rblock_tri_idx << 20);
+		s_buffer[buf_offset + i] = (sum - num_frags) | (num_frags << 12) | (rblock_tri_idx << 19);
 	}
 	barrier();
 
 	// Computing prefix sum across whole render-blocks. We're processing 4 elements
-	// at a time, so that we can fit with 4096 tris/hblock (128 warps).
+	// at a time, so that we can fit with MAX_RBLOCK_TRIS tris/hblock (128 warps).
 	if(LIX < 2 * NUM_WARPS) {
 		uint wgsize = 2 << group_shift, wgmask = wgsize - 1;
 		uint group_rbid = LIX >> (1 + group_shift), group_sub_idx = LIX & wgmask;
@@ -409,7 +409,7 @@ void generateRBlocks(uint start_rbid) {
 			if(warp_offset < tri_count) {
 				uint rblock_tri_idx = min(warp_offset + WARP_MASK, tri_count - 1);
 				uint last = s_buffer[buf_offset + rblock_tri_idx];
-				values[j] = (last & 0xfff) + ((last >> 12) & 0xff);
+				values[j] = (last & 0xfff) + ((last >> 12) & 0x7f);
 			}
 			warp_offset += WARP_SIZE;
 		}
@@ -451,8 +451,8 @@ void generateRBlocks(uint start_rbid) {
 	uint stored_idx = 0;
 	for(uint i = group_thread; i < tri_count; i += group_size) {
 		uint current = s_buffer[buf_offset + i];
-		uint tri_value = (current >> 12) & 255;
-		uint rblock_tri_idx = current >> 20;
+		uint tri_value = (current >> 12) & 0x7f;
+		uint rblock_tri_idx = current >> 19;
 
 		uint mini_offset = group_rbid << (3 + group_shift);
 		uint tri_offset = (current & 0xfff) + s_mini_buffer[mini_offset + (i >> WARP_SHIFT)];
@@ -463,7 +463,7 @@ void generateRBlocks(uint start_rbid) {
 		if(seg_offset + tri_value > SEGMENT_SIZE)
 			seg_id++, first_seg = true;
 		if(seg_id >= MAX_SEGMENTS) {
-			atomicOr(s_raster_error, 1 << lrbid);
+			atomicOr(s_raster_error, 0xffffffff);
 			break;
 		}
 		seg_offset <<= 24;
@@ -482,6 +482,8 @@ void generateRBlocks(uint start_rbid) {
 #endif
 	}
 	barrier();
+	if(s_raster_error != 0)
+		return;
 
 	// Reordering hblock-tris in scratch
 	stored_idx = 0;
@@ -501,6 +503,8 @@ void finalizeSegments() {
 	uint tri_count = s_rblock_tri_counts[lrbid];
 	uint num_segments = (s_rblock_frag_counts[lrbid] + SEGMENT_SIZE - 1) >> SEGMENT_SHIFT;
 	// TODO: make sure that num_segments <= MAX_SEGMENTS
+	if(num_segments > MAX_SEGMENTS)
+		DEBUG_RECORD(num_segments, MAX_SEGMENTS, 0, 0);
 
 	for(uint seg_id = LIX & WARP_MASK; seg_id < num_segments; seg_id += WARP_SIZE) {
 		uint cur_value = s_segments[seg_group_offset + seg_id];

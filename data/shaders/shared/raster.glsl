@@ -224,7 +224,7 @@ void visualizeSamples(uint sample_count) {
 void finishVisualizeSamples(ivec2 pixel_pos) {
 	uint pixel_id = (pixel_pos.x & (RBLOCK_WIDTH - 1)) +
 					((pixel_pos.y & (RBLOCK_HEIGHT - 1)) << RBLOCK_WIDTH_SHIFT);
-	vec3 color = vec3(s_vis_pixels[(LIX & ~WARP_MASK) + pixel_id]) / 32.0;
+	vec3 color = vec3(s_vis_pixels[(LIX & ~WARP_MASK) + pixel_id]) / 128.0;
 	outputPixel(pixel_pos, vec4(SATURATE(color), 1.0));
 }
 

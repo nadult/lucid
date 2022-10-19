@@ -160,6 +160,86 @@ ivec2 rasterBlockPixelPos(uint rbid) {
 	return (rasterBlockPos(rbid) << rasterBlockShift()) + pix_pos;
 }
 
+void loadSamples(uint lrbid, int segment_id, uint src_offset_32, uint src_offset_64,
+				 bool high_mode) {
+	uint seg_group_offset = lrbid << MAX_SEGMENTS_SHIFT;
+	uint segment_data = s_segments[seg_group_offset + segment_id];
+	uint tri_count = segment_data >> 16, first_tri = segment_data & 0xffff;
+	src_offset_32 += first_tri;
+	src_offset_64 += first_tri;
+	uint buf_offset = (LIX >> WARP_SHIFT) << SEGMENT_SHIFT;
+
+	// TODO: this also helps on raster_low; Let's share the code!
+	if(high_mode && tri_count >= 32 && RBLOCK_HEIGHT == 4) {
+		for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_SIZE) {
+			uvec2 tri_data = g_scratch_64[src_offset_64 + i];
+			int tri_offset = int(tri_data.x >> 24);
+			if(i == 0 && tri_offset != 0)
+				tri_offset -= SEGMENT_SIZE;
+			uint tri_idx = tri_data.x & 0xffffff;
+
+			uvec4 countx = (uvec4(tri_data.y) >> uvec4(16, 20, 24, 28)) & 15;
+			uvec4 minx = (uvec4(tri_data.y) >> uvec4(0, 4, 8, 12)) & 15;
+			uint bits0 = uint((1 << countx[0]) - 1) << (minx[0] + 0);
+			uint bits1 = uint((1 << countx[1]) - 1) << (minx[1] + 8);
+			uint bits2 = uint((1 << countx[2]) - 1) << (minx[2] + 16);
+			uint bits3 = uint((1 << countx[3]) - 1) << (minx[3] + 24);
+
+			uint bits = bits0 | bits1 | bits2 | bits3;
+			tri_idx <<= 8;
+			while(bits != 0 && tri_offset < SEGMENT_SIZE) {
+				uint pixel_id = findLSB(bits);
+				bits &= ~(1u << pixel_id);
+				if(tri_offset >= 0)
+					s_buffer[buf_offset + tri_offset] = pixel_id | tri_idx;
+				tri_offset++;
+			}
+		}
+	} else {
+		int y = int(LIX & (RBLOCK_HEIGHT - 1)), row_shift = (y & 3) * 4;
+		int mask1 = y >= 1 ? ~0 : 0, mask2 = y >= 2 ? ~0 : 0, mask3 = y >= 4 ? ~0 : 0;
+
+		for(uint i = (LIX & WARP_MASK) >> RBLOCK_HEIGHT_SHIFT; i < tri_count;
+			i += WARP_SIZE / RBLOCK_HEIGHT) {
+
+#if RBLOCK_HEIGHT == 8
+			uint tri_data = g_scratch_64[src_offset_64 + i][y >> 2];
+			uint tri_info = g_scratch_32[src_offset_32 + i];
+			int tri_offset = int(tri_info >> 24);
+			if(i == 0 && tri_offset != 0)
+				tri_offset -= SEGMENT_SIZE;
+			uint tri_idx = tri_info & 0xffffff;
+			uint row_data = tri_data >> row_shift;
+#else
+			uvec2 tri_data = g_scratch_64[src_offset_64 + i];
+			int tri_offset = int(tri_data.x >> 24);
+			if(i == 0 && tri_offset != 0)
+				tri_offset -= SEGMENT_SIZE;
+			uint tri_idx = tri_data.x & 0xffffff;
+			uint row_data = tri_data.y >> row_shift;
+#endif
+
+			int minx = int(row_data & 7), countx = int((row_data >> 16) & 15);
+			int prevx = countx + (subgroupShuffleUp(countx, 1) & mask1);
+			prevx += (subgroupShuffleUp(prevx, 2) & mask2);
+#if RBLOCK_HEIGHT == 8
+			prevx += (subgroupShuffleUp(prevx, 4) & mask3);
+#endif
+
+			tri_offset += prevx - countx;
+			countx = min(countx, SEGMENT_SIZE - tri_offset);
+			if(tri_offset < 0)
+				countx += tri_offset, minx -= tri_offset, tri_offset = 0;
+
+			uint pixel_id = (y << 3) | minx;
+			uint value = pixel_id | (tri_idx << 8);
+			for(int j = 0; j < countx; j++)
+				s_buffer[buf_offset + tri_offset++] = value++;
+		}
+	}
+	subgroupMemoryBarrierShared();
+}
+
 void shadeAndReduceSamples(uint rbid, uint sample_count, in out ReductionContext ctx) {
 	uint buf_offset = (LIX >> WARP_SHIFT) << SEGMENT_SHIFT;
 	uint mini_offset =
@@ -224,7 +304,8 @@ void visualizeSamples(uint sample_count) {
 void finishVisualizeSamples(ivec2 pixel_pos) {
 	uint pixel_id = (pixel_pos.x & (RBLOCK_WIDTH - 1)) +
 					((pixel_pos.y & (RBLOCK_HEIGHT - 1)) << RBLOCK_WIDTH_SHIFT);
-	vec3 color = vec3(s_vis_pixels[(LIX & ~WARP_MASK) + pixel_id]) / 128.0;
+	uint value = s_vis_pixels[(LIX & ~WARP_MASK) + pixel_id];
+	vec3 color = gradientColor(value, uvec4(16, 64, 256, 1024));
 	outputPixel(pixel_pos, vec4(SATURATE(color), 1.0));
 }
 

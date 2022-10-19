@@ -1,6 +1,9 @@
 #define LSIZE 256
 #define LSHIFT 8
 
+#define MAX_SEGMENTS_SHIFT WARP_SHIFT
+#define MAX_SEGMENTS WARP_SIZE
+
 #include "shared/raster.glsl"
 
 #include "%shader_debug"
@@ -9,9 +12,6 @@ DEBUG_SETUP(1, 11)
 #define MAX_BLOCK_ROW_TRIS 1024
 #define MAX_BLOCK_TRIS 256
 #define MAX_BLOCK_TRIS_SHIFT 8
-
-#define MAX_SEGMENTS_SHIFT WARP_SHIFT
-#define MAX_SEGMENTS WARP_SIZE
 
 layout(local_size_x = LSIZE) in;
 
@@ -454,54 +454,9 @@ void finalizeSegments() {
 
 void loadSamples(uint rbid, int segment_id) {
 	uint lrbid = rbid & (RBLOCK_COUNT - 1);
-	uint seg_group_offset = lrbid << MAX_SEGMENTS_SHIFT;
-	uint segment_data = s_segments[seg_group_offset + segment_id];
-	uint tri_count = segment_data >> 16, first_tri = segment_data & 0xffff;
-	uint src_offset_32 = scratch32RasterBlockTrisOffset(lrbid) + first_tri;
-	uint src_offset_64 = scratch64RasterBlockTrisOffset(lrbid) + first_tri;
-	uint buf_offset = (LIX >> WARP_SHIFT) << SEGMENT_SHIFT;
-
-	int y = int(LIX & (RBLOCK_HEIGHT - 1)), row_shift = (y & 3) * 4;
-	int mask1 = y >= 1 ? ~0 : 0, mask2 = y >= 2 ? ~0 : 0, mask3 = y >= 4 ? ~0 : 0;
-
-	for(uint i = (LIX & WARP_MASK) >> RBLOCK_HEIGHT_SHIFT; i < tri_count;
-		i += WARP_SIZE / RBLOCK_HEIGHT) {
-
-#if WARP_SIZE == 32
-		uvec2 tri_data = g_scratch_64[src_offset_64 + i];
-		int tri_offset = int(tri_data.x >> 24);
-		if(i == 0 && tri_offset != 0)
-			tri_offset -= SEGMENT_SIZE;
-		uint tri_idx = tri_data.x & 0xffffff;
-		uint row_data = tri_data.y >> row_shift;
-#else
-		uint tri_data = g_scratch_64[src_offset_64 + i][y >> 2];
-		uint tri_info = g_scratch_32[src_offset_32 + i];
-		int tri_offset = int(tri_info >> 24);
-		if(i == 0 && tri_offset != 0)
-			tri_offset -= SEGMENT_SIZE;
-		uint tri_idx = tri_info & 0xffffff;
-		uint row_data = tri_data >> row_shift;
-#endif
-
-		int minx = int(row_data & 15), countx = int((row_data >> 16) & 15);
-		int prevx = countx + (subgroupShuffleUp(countx, 1) & mask1);
-		prevx += subgroupShuffleUp(prevx, 2) & mask2;
-		if(RBLOCK_HEIGHT >= 8)
-			prevx += subgroupShuffleUp(prevx, 4) & mask3;
-
-		tri_offset += prevx - countx;
-		countx = min(countx, SEGMENT_SIZE - tri_offset);
-		if(tri_offset < 0)
-			countx += tri_offset, minx -= tri_offset, tri_offset = 0;
-
-		uint pixel_id = (y << 3) | minx;
-		uint value = pixel_id | (tri_idx << 8);
-		for(int j = 0; j < countx; j++)
-			s_buffer[buf_offset + tri_offset++] = value++;
-	}
-
-	subgroupMemoryBarrierShared();
+	uint src_offset_32 = scratch32RasterBlockTrisOffset(lrbid);
+	uint src_offset_64 = scratch64RasterBlockTrisOffset(lrbid);
+	loadSamples(lrbid, segment_id, src_offset_32, src_offset_64, false);
 }
 
 void visualizeBlockCounts(uint rbid, ivec2 pixel_pos) {

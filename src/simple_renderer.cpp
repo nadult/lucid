@@ -80,7 +80,7 @@ Ex<PVPipeline> SimpleRenderer::getPipeline(VulkanDevice &device, const PipeConfi
 			VBlendingMode normal_blend(VBlendFactor::src_alpha, VBlendFactor::one_minus_src_alpha);
 			setup.blending.attachments = {
 				{config.additive_blending ? additive_blend : normal_blend}};
-			setup.depth = {};
+			setup.depth = VDepthSetup(VDepthFlag::test);
 		}
 
 		// TODO: remove vulkan refs
@@ -184,8 +184,6 @@ Ex<> SimpleRenderer::render(const RenderContext &ctx, bool wireframe) {
 	auto swap_image = swap_chain->acquiredImage()->image();
 
 	auto framebuffer = ctx.device.getFramebuffer({swap_chain->acquiredImage()}, m_depth_buffer);
-	cmds.fullBarrier();
-
 	cmds.beginRenderPass(framebuffer, m_render_pass, none,
 						 {FColor(ColorId::magneta), VClearDepthStencil(1.0)});
 

@@ -114,71 +114,6 @@ void prepareSortTris() {
 	}
 }
 
-uint swap(uint x, int mask, uint dir) {
-	uint y = subgroupShuffleXor(x, mask);
-	return uint(x < y) == dir ? y : x;
-}
-uint bitExtract(uint value, int boffset) { return (value >> boffset) & 1; }
-uint xorBits(uint value, int bit0, int bit1) { return ((value >> bit0) ^ (value >> bit1)) & 1; }
-
-void sortTris(uint lbid, uint count, uint buf_offset) {
-	uint lid = LIX & WARP_MASK;
-	uint rcount = s_sort_rcount[lbid];
-	for(uint i = lid + count; i < rcount; i += WARP_SIZE)
-		s_buffer[buf_offset + i] = 0xffffffff;
-
-	for(uint i = lid; i < rcount; i += WARP_SIZE) {
-		uint value = s_buffer[buf_offset + i];
-		// TODO: register sort could be faster
-		value = swap(value, 0x01, xorBits(lid, 1, 0)); // K = 2
-		value = swap(value, 0x02, xorBits(lid, 2, 1)); // K = 4
-		value = swap(value, 0x01, xorBits(lid, 2, 0));
-		value = swap(value, 0x04, xorBits(lid, 3, 2)); // K = 8
-		value = swap(value, 0x02, xorBits(lid, 3, 1));
-		value = swap(value, 0x01, xorBits(lid, 3, 0));
-		value = swap(value, 0x08, xorBits(lid, 4, 3)); // K = 16
-		value = swap(value, 0x04, xorBits(lid, 4, 2));
-		value = swap(value, 0x02, xorBits(lid, 4, 1));
-		value = swap(value, 0x01, xorBits(lid, 4, 0));
-#if WARP_SIZE >= 64
-		value = swap(value, 0x10, xorBits(lid, 5, 4)); // K = 32
-		value = swap(value, 0x08, xorBits(lid, 5, 3));
-		value = swap(value, 0x04, xorBits(lid, 5, 2));
-		value = swap(value, 0x02, xorBits(lid, 5, 1));
-		value = swap(value, 0x01, xorBits(lid, 5, 0));
-#endif
-		s_buffer[buf_offset + i] = value;
-	}
-	int start_k = WARP_SIZE, end_j = WARP_SIZE;
-
-	for(uint k = start_k; k <= rcount; k = 2 * k) {
-		for(uint j = k >> 1; j >= end_j; j = j >> 1) {
-			for(uint i = lid; i < rcount; i += WARP_SIZE * 2) {
-				uint idx = (i & j) != 0 ? i + WARP_SIZE - j : i;
-				uint lvalue = s_buffer[buf_offset + idx];
-				uint rvalue = s_buffer[buf_offset + idx + j];
-				if(((idx & k) != 0) == (lvalue.x < rvalue.x)) {
-					s_buffer[buf_offset + idx] = rvalue;
-					s_buffer[buf_offset + idx + j] = lvalue;
-				}
-			}
-		}
-		for(uint i = lid; i < rcount; i += WARP_SIZE) {
-			uint bit = (i & k) == 0 ? 0 : 1;
-			uint value = s_buffer[buf_offset + i];
-#if WARP_SIZE == 64
-			value = swap(value, 0x20, bit ^ bitExtract(lid, 5));
-#endif
-			value = swap(value, 0x10, bit ^ bitExtract(lid, 4));
-			value = swap(value, 0x08, bit ^ bitExtract(lid, 3));
-			value = swap(value, 0x04, bit ^ bitExtract(lid, 2));
-			value = swap(value, 0x02, bit ^ bitExtract(lid, 1));
-			value = swap(value, 0x01, bit ^ bitExtract(lid, 0));
-			s_buffer[buf_offset + i] = value;
-		}
-	}
-}
-
 // TODO: maybe process smaller amount of blocks at the same time?
 // smaller chance that it will leave cache
 void generateBlocks(uint bid) {
@@ -268,7 +203,8 @@ void generateBlocks(uint bid) {
 	barrier();
 
 	if(tri_count > RC_COLOR_SIZE)
-		sortTris(lbid, tri_count, buf_offset);
+		sortBuffer(lbid, tri_count, s_sort_rcount[lbid], buf_offset, WARP_SIZE, LIX & WARP_MASK,
+				   false);
 
 	barrier();
 	groupMemoryBarrier();

@@ -160,6 +160,76 @@ ivec2 rasterBlockPixelPos(uint rbid) {
 	return (rasterBlockPos(rbid) << rasterBlockShift()) + pix_pos;
 }
 
+uint swap(uint x, int mask, bool dir) {
+	uint y = subgroupShuffleXor(x, mask);
+	return (x < y) == dir ? y : x;
+}
+bool bitExtract(uint value, int boffset) { return ((value >> boffset) & 1) != 0; }
+
+void sortBuffer(uint lrbid, uint count, uint rcount, uint buf_offset, uint group_size, uint lid,
+				bool with_barriers) {
+	for(uint i = lid + count; i < rcount; i += group_size)
+		s_buffer[buf_offset + i] = 0xffffffff;
+
+	bool bit0 = ((lid >> 0) & 1) != 0, bit1 = ((lid >> 1) & 1) != 0;
+	bool bit2 = ((lid >> 2) & 1) != 0, bit3 = ((lid >> 3) & 1) != 0;
+	bool bit4 = ((lid >> 4) & 1) != 0, bit5 = ((lid >> 5) & 1) != 0;
+
+	for(uint i = lid; i < rcount; i += group_size) {
+		uint value = s_buffer[buf_offset + i];
+		// TODO: register sort could be faster?
+		value = swap(value, 0x01, bit1 != bit0); // K = 2
+		value = swap(value, 0x02, bit2 != bit1); // K = 4
+		value = swap(value, 0x01, bit2 != bit0);
+		value = swap(value, 0x04, bit3 != bit2); // K = 8
+		value = swap(value, 0x02, bit3 != bit1);
+		value = swap(value, 0x01, bit3 != bit0);
+		value = swap(value, 0x08, bit4 != bit3); // K = 16
+		value = swap(value, 0x04, bit4 != bit2);
+		value = swap(value, 0x02, bit4 != bit1);
+		value = swap(value, 0x01, bit4 != bit0);
+		if(group_size >= 64) {
+			value = swap(value, 0x10, bit5 != bit4); // K = 32
+			value = swap(value, 0x08, bit5 != bit3);
+			value = swap(value, 0x04, bit5 != bit2);
+			value = swap(value, 0x02, bit5 != bit1);
+			value = swap(value, 0x01, bit5 != bit0);
+		}
+		s_buffer[buf_offset + i] = value;
+	}
+	int start_k = group_size >= 64 ? 64 : 32, end_j = 32;
+	if(with_barriers)
+		barrier();
+
+	for(uint k = start_k; k <= rcount; k = 2 * k) {
+		for(uint j = k >> 1; j >= end_j; j = j >> 1) {
+			for(uint i = lid; i < rcount; i += group_size * 2) {
+				uint idx = (i & j) != 0 ? i + group_size - j : i;
+				uint lvalue = s_buffer[buf_offset + idx];
+				uint rvalue = s_buffer[buf_offset + idx + j];
+				if(((idx & k) != 0) == (lvalue.x < rvalue.x)) {
+					s_buffer[buf_offset + idx] = rvalue;
+					s_buffer[buf_offset + idx + j] = lvalue;
+				}
+			}
+			if(with_barriers)
+				barrier();
+		}
+		for(uint i = lid; i < rcount; i += group_size) {
+			bool bit = (i & k) != 0;
+			uint value = s_buffer[buf_offset + i];
+			value = swap(value, 0x10, bit != bitExtract(lid, 4));
+			value = swap(value, 0x08, bit != bitExtract(lid, 3));
+			value = swap(value, 0x04, bit != bitExtract(lid, 2));
+			value = swap(value, 0x02, bit != bitExtract(lid, 1));
+			value = swap(value, 0x01, bit != bitExtract(lid, 0));
+			s_buffer[buf_offset + i] = value;
+		}
+		if(with_barriers)
+			barrier();
+	}
+}
+
 void loadSamples(uint lrbid, int segment_id, uint src_offset_32, uint src_offset_64,
 				 bool high_mode) {
 	uint seg_group_offset = lrbid << MAX_SEGMENTS_SHIFT;

@@ -198,70 +198,6 @@ void processQuads(int start_rby) {
 	}
 }
 
-uint swap(uint x, int mask, uint dir) {
-	uint y = subgroupShuffleXor(x, mask);
-	return uint(x < y) == dir ? y : x;
-}
-uint bitExtract(uint value, int boffset) { return (value >> boffset) & 1; }
-uint xorBits(uint value, int bit0, int bit1) { return ((value >> bit0) ^ (value >> bit1)) & 1; }
-
-void sortTris(uint lrbid, uint count, uint buf_offset, uint group_size, uint lid) {
-	uint rcount = s_max_sort_rcount;
-	for(uint i = lid + count; i < rcount; i += group_size)
-		s_buffer[buf_offset + i] = 0xffffffff;
-
-	for(uint i = lid; i < rcount; i += group_size) {
-		uint value = s_buffer[buf_offset + i];
-		// TODO: register sort could be faster?
-		value = swap(value, 0x01, xorBits(lid, 1, 0)); // K = 2
-		value = swap(value, 0x02, xorBits(lid, 2, 1)); // K = 4
-		value = swap(value, 0x01, xorBits(lid, 2, 0));
-		value = swap(value, 0x04, xorBits(lid, 3, 2)); // K = 8
-		value = swap(value, 0x02, xorBits(lid, 3, 1));
-		value = swap(value, 0x01, xorBits(lid, 3, 0));
-		value = swap(value, 0x08, xorBits(lid, 4, 3)); // K = 16
-		value = swap(value, 0x04, xorBits(lid, 4, 2));
-		value = swap(value, 0x02, xorBits(lid, 4, 1));
-		value = swap(value, 0x01, xorBits(lid, 4, 0));
-		if(group_size >= 64) {
-			value = swap(value, 0x10, xorBits(lid, 5, 4)); // K = 32
-			value = swap(value, 0x08, xorBits(lid, 5, 3));
-			value = swap(value, 0x04, xorBits(lid, 5, 2));
-			value = swap(value, 0x02, xorBits(lid, 5, 1));
-			value = swap(value, 0x01, xorBits(lid, 5, 0));
-		}
-		s_buffer[buf_offset + i] = value;
-	}
-	int start_k = group_size >= 64 ? 64 : 32, end_j = 32;
-	barrier();
-
-	for(uint k = start_k; k <= rcount; k = 2 * k) {
-		for(uint j = k >> 1; j >= end_j; j = j >> 1) {
-			for(uint i = lid; i < rcount; i += group_size * 2) {
-				uint idx = (i & j) != 0 ? i + group_size - j : i;
-				uint lvalue = s_buffer[buf_offset + idx];
-				uint rvalue = s_buffer[buf_offset + idx + j];
-				if(((idx & k) != 0) == (lvalue.x < rvalue.x)) {
-					s_buffer[buf_offset + idx] = rvalue;
-					s_buffer[buf_offset + idx + j] = lvalue;
-				}
-			}
-			barrier();
-		}
-		for(uint i = lid; i < rcount; i += group_size) {
-			uint bit = (i & k) == 0 ? 0 : 1;
-			uint value = s_buffer[buf_offset + i];
-			value = swap(value, 0x10, bit ^ bitExtract(lid, 4));
-			value = swap(value, 0x08, bit ^ bitExtract(lid, 3));
-			value = swap(value, 0x04, bit ^ bitExtract(lid, 2));
-			value = swap(value, 0x02, bit ^ bitExtract(lid, 1));
-			value = swap(value, 0x01, bit ^ bitExtract(lid, 0));
-			s_buffer[buf_offset + i] = value;
-		}
-		barrier();
-	}
-}
-
 // TODO: maybe process smaller amount of blocks at the same time?
 // smaller chance that it will leave cache
 void generateRBlocks(uint start_rbid) {
@@ -365,10 +301,10 @@ void generateRBlocks(uint start_rbid) {
 	}
 	barrier();
 	groupMemoryBarrier();
-	sortTris(lrbid, tri_count, buf_offset, group_size, group_thread);
+	sortBuffer(lrbid, tri_count, s_max_sort_rcount, buf_offset, group_size, group_thread, true);
 	barrier();
 
-#ifdef SHADER_DEBUG
+#ifdef DEBUG_ENABLED
 	for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_SIZE) {
 		uint value = s_buffer[buf_offset + i];
 		uint prev_value = i == 0 ? 0 : s_buffer[buf_offset + i - 1];

@@ -18,7 +18,7 @@
 #include <fwk/vulkan/vulkan_window.h>
 
 Ex<int> exMain(int argc, char **argv) {
-	IRect window_rect(int2(1200, 700));
+	IRect window_rect = IRect({1280, 720}) + int2(32, 32);
 
 	// TODO: xml loading is still messy
 	Maybe<AnyConfig> config = LucidApp::loadConfig();
@@ -69,8 +69,8 @@ Ex<int> exMain(int argc, char **argv) {
 			window_flags |= VWindowFlag::maximized;
 	}
 
-	auto window = EX_PASS(
-		VulkanWindow::create(instance, "Lucid rasterizer", IRect(0, 0, 1280, 720), window_flags));
+	auto window =
+		EX_PASS(VulkanWindow::create(instance, "Lucid rasterizer", window_rect, window_flags));
 
 	VDeviceSetup dev_setup;
 	dev_setup.features.emplace();

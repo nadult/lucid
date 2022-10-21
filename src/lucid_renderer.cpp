@@ -33,6 +33,7 @@
 // TODO: raz zdarzył się crash przy przełączeniu sceny z powrplant na san miguel
 // TODO: zjebane teksturki w chestnut_tree01 jak sie poprzelacza pomiedzy scenami; w trybie debug...
 // TODO: jakies dziwne bugi a AMD jak sie wlaczy timery? problemy z mazaniem po pamięci?
+// TODO: crash przy zmianie rozdziałki kilka razy
 
 // TODO: dużo specyficznych przypadków do obsłużenia:
 // - clipping: może zaimplementować dodatkowe passy do obsługi clipowanych trójkątów ?

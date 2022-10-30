@@ -221,66 +221,20 @@ void generateRBlocks(uint start_rbid) {
 	uint src_offset_32 = scratch32RBlockRowTrisOffset(rblock_pos.y);
 	uint src_offset_64 = scratch64RBlockRowTrisOffset(rblock_pos.y);
 
-	{
-		uint bx_bits_shift = 24 + rblock_pos.x;
-		uint block_tri_count = 0;
-		uint max_block_tris = MAX_RBLOCK_TRIS0 << group_shift;
-
-		// TODO: process single triangle only once?
-		// Even if we are working on more than 1 block at a time?
-		if(group_size > WARP_SIZE) {
-			for(uint i = group_thread; i < tri_count; i += group_size) {
+	// Filling s_buffer with tri indices
+	uint bx_bits_shift = 24 + rblock_pos.x;
+	for(uint i = group_thread; i < tri_count; i += group_size) {
 #if RBLOCK_HEIGHT == 8
-				uint bx_bit = (g_scratch_64[src_offset_64 + i].x >> bx_bits_shift) & 1;
+		uint bx_bit = (g_scratch_64[src_offset_64 + i].x >> bx_bits_shift) & 1;
 #else
-				uint bx_bit = (g_scratch_32[src_offset_32 + i] >> bx_bits_shift) & 1;
+		uint bx_bit = (g_scratch_32[src_offset_32 + i] >> bx_bits_shift) & 1;
 #endif
-				if(bx_bit != 0) {
-					uint tri_offset = atomicAdd(s_rblock_tri_counts[lrbid], 1);
-					if(tri_offset < max_block_tris)
-						s_buffer[buf_offset + tri_offset] = i;
-				}
-			}
-		} else {
-			for(uint i = group_thread; i < tri_count; i += WARP_SIZE) {
-#if RBLOCK_HEIGHT == 8
-				uint bx_bit = (g_scratch_64[src_offset_64 + i].x >> bx_bits_shift) & 1;
-#else
-				uint bx_bit = (g_scratch_32[src_offset_32 + i] >> bx_bits_shift) & 1;
-#endif
-
-#if WARP_SIZE == 32
-				uint bit_mask = subgroupBallot(bx_bit != 0).x;
-				if(bit_mask == 0)
-					continue;
-				uint warp_offset = bitCount(bit_mask & gl_SubgroupLtMask.x);
-				uint bit_count = bitCount(bit_mask);
-#else
-				uvec2 bit_mask = subgroupBallot(bx_bit != 0).xy;
-				if(bit_mask.x == 0 && bit_mask.y == 0)
-					continue;
-				uint warp_offset = bitCount(bit_mask.x & gl_SubgroupLtMask.x) +
-								   bitCount(bit_mask.y & gl_SubgroupLtMask.y);
-				uint bit_count = bitCount(bit_mask.x) + bitCount(bit_mask.y);
-#endif
-
-				if(bx_bit != 0) {
-					uint tri_offset = block_tri_count + warp_offset;
-					if(tri_offset < max_block_tris)
-						s_buffer[buf_offset + tri_offset] = i;
-				}
-				block_tri_count += bit_count;
-			}
-
-			if(group_thread == 0) {
-				if(s_rblock_tri_counts_estimate[lrbid] < int(block_tri_count))
-					DEBUG_RECORD(s_rblock_tri_counts_estimate[lrbid], block_tri_count, 0,
-								 tri_count);
-				s_rblock_tri_counts[lrbid] = int(block_tri_count);
-			}
+		if(bx_bit != 0) {
+			uint tri_offset = atomicAdd(s_rblock_tri_counts[lrbid], 1);
+			s_buffer[buf_offset + tri_offset] = i;
 		}
-		barrier();
 	}
+	barrier();
 
 	uint dst_offset_64 = scratch64RBlockTrisOffset(lrbid);
 #if RBLOCK_HEIGHT == 8

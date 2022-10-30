@@ -65,6 +65,7 @@ shared uint s_bin_quad_count, s_bin_quad_offset;
 shared uint s_bin_tri_count, s_bin_tri_offset;
 
 shared uint s_rblock_row_tri_counts[RBLOCK_ROWS];
+shared int s_rblock_tri_counts_estimate[NUM_WARPS];
 shared int s_rblock_tri_counts[NUM_WARPS];
 shared uint s_rblock_frag_counts[NUM_WARPS];
 
@@ -114,9 +115,9 @@ void generateRowTris(uint tri_idx, int start_rby) {
 		uint rbid_row = currentRBlockRow(rby) << RBLOCK_COLS_SHIFT;
 		uint min_rbid = findLSB(bx_mask), max_rbid = findMSB(bx_mask) + 1;
 		// Accumulation is done at the end of processBlocks
-		atomicAdd(s_rblock_tri_counts[rbid_row + min_rbid], 1);
+		atomicAdd(s_rblock_tri_counts_estimate[rbid_row + min_rbid], 1);
 		if(max_rbid < RBLOCK_COLS)
-			atomicAdd(s_rblock_tri_counts[rbid_row + max_rbid], -1);
+			atomicAdd(s_rblock_tri_counts_estimate[rbid_row + max_rbid], -1);
 
 		uint row_tri_idx = atomicAdd(s_rblock_row_tri_counts[rby], 1);
 		if(row_tri_idx >= MAX_RBLOCK_ROW_TRIS) {
@@ -141,8 +142,10 @@ void generateRowTris(uint tri_idx, int start_rby) {
 void processQuads(int start_rby) {
 	if(LIX == 0)
 		s_num_scratch_tris = 0;
-	if(LIX < NUM_WARPS)
+	if(LIX < NUM_WARPS) {
+		s_rblock_tri_counts_estimate[LIX] = 0;
 		s_rblock_tri_counts[LIX] = 0;
+	}
 	barrier();
 
 	for(uint i = LIX >> 1; i < s_bin_quad_count; i += LSIZE / 2) {
@@ -165,7 +168,7 @@ void processQuads(int start_rby) {
 	// triangle can have wide holes between pixels (because middle pixels don't hit pixel centers)
 	if(LIX < NUM_WARPS) {
 		uint rbx = LIX & RBLOCK_COLS_MASK;
-		int value = s_rblock_tri_counts[LIX], temp;
+		int value = s_rblock_tri_counts_estimate[LIX], temp;
 		if(RBLOCK_COLS >= 2)
 			temp = subgroupShuffleUp(value, 1), value += rbx >= 1 ? temp : 0;
 		if(RBLOCK_COLS >= 4)
@@ -173,7 +176,7 @@ void processQuads(int start_rby) {
 		if(RBLOCK_COLS >= 8)
 			temp = subgroupShuffleUp(value, 4), value += rbx >= 4 ? temp : 0;
 		subgroupMemoryBarrierShared();
-		s_rblock_tri_counts[LIX] = value;
+		s_rblock_tri_counts_estimate[LIX] = value;
 		uint max_value = subgroupMax_(uint(value), NUM_WARPS);
 		if(LIX == 0) {
 			s_rblock_max_tri_counts = max_value;
@@ -223,7 +226,22 @@ void generateRBlocks(uint start_rbid) {
 		uint block_tri_count = 0;
 		uint max_block_tris = MAX_RBLOCK_TRIS0 << group_shift;
 
-		if(group_thread < WARP_SIZE) {
+		// TODO: process single triangle only once?
+		// Even if we are working on more than 1 block at a time?
+		if(group_size > WARP_SIZE) {
+			for(uint i = group_thread; i < tri_count; i += group_size) {
+#if RBLOCK_HEIGHT == 8
+				uint bx_bit = (g_scratch_64[src_offset_64 + i].x >> bx_bits_shift) & 1;
+#else
+				uint bx_bit = (g_scratch_32[src_offset_32 + i] >> bx_bits_shift) & 1;
+#endif
+				if(bx_bit != 0) {
+					uint tri_offset = atomicAdd(s_rblock_tri_counts[lrbid], 1);
+					if(tri_offset < max_block_tris)
+						s_buffer[buf_offset + tri_offset] = i;
+				}
+			}
+		} else {
 			for(uint i = group_thread; i < tri_count; i += WARP_SIZE) {
 #if RBLOCK_HEIGHT == 8
 				uint bx_bit = (g_scratch_64[src_offset_64 + i].x >> bx_bits_shift) & 1;
@@ -255,8 +273,9 @@ void generateRBlocks(uint start_rbid) {
 			}
 
 			if(group_thread == 0) {
-				if(s_rblock_tri_counts[lrbid] < int(block_tri_count))
-					DEBUG_RECORD(s_rblock_tri_counts[lrbid], block_tri_count, 0, tri_count);
+				if(s_rblock_tri_counts_estimate[lrbid] < int(block_tri_count))
+					DEBUG_RECORD(s_rblock_tri_counts_estimate[lrbid], block_tri_count, 0,
+								 tri_count);
 				s_rblock_tri_counts[lrbid] = int(block_tri_count);
 			}
 		}

@@ -34,6 +34,7 @@
 // TODO: zjebane teksturki w chestnut_tree01 jak sie poprzelacza pomiedzy scenami; w trybie debug...
 // TODO: jakies dziwne bugi a AMD jak sie wlaczy timery? problemy z mazaniem po pamięci?
 // TODO: crash przy zmianie rozdziałki kilka razy
+// TODO: coś się pierdzieli na NVIDII też, jak się załaduje kilka scen w tym duże i jest włączona visualizacja błędów
 
 // TODO: dużo specyficznych przypadków do obsłużenia:
 // - clipping: może zaimplementować dodatkowe passy do obsługi clipowanych trójkątów ?

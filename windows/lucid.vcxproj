@@ -67,7 +67,7 @@
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>sdl2.lib;freetype.lib;libpng16.lib;bz2.lib;zlib.lib;opengl32.lib;vulkan-1.lib;shaderc_shared.lib;setupapi.lib;version.lib;winmm.lib;dbghelp.lib;Imm32.lib;dwrite.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>sdl2.lib;freetype.lib;libpng16.lib;bz2.lib;zlib.lib;vulkan-1.lib;shaderc_shared.lib;setupapi.lib;version.lib;winmm.lib;dbghelp.lib;Imm32.lib;dwrite.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <Manifest>
       <EnableDpiAwareness>PerMonitorHighDPIAware</EnableDpiAwareness>
@@ -89,7 +89,7 @@
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>sdl2.lib;freetype.lib;libpng16.lib;bz2.lib;zlib.lib;opengl32.lib;vulkan-1.lib;shaderc_shared.lib;setupapi.lib;version.lib;winmm.lib;dbghelp.lib;Imm32.lib;dwrite.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>sdl2.lib;freetype.lib;libpng16.lib;bz2.lib;zlib.lib;vulkan-1.lib;shaderc_shared.lib;setupapi.lib;version.lib;winmm.lib;dbghelp.lib;Imm32.lib;dwrite.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <Manifest>
       <EnableDpiAwareness>PerMonitorHighDPIAware</EnableDpiAwareness>

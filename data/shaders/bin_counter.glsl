@@ -11,7 +11,6 @@
 
 #extension GL_KHR_shader_subgroup_shuffle : require
 #extension GL_KHR_shader_subgroup_shuffle_relative : require
-#extension GL_ARB_shader_group_vote : require
 
 #define LSIZE BIN_DISPATCHER_LSIZE
 #define LSHIFT BIN_DISPATCHER_LSHIFT

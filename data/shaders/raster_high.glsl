@@ -65,7 +65,6 @@ shared uint s_bin_quad_count, s_bin_quad_offset;
 shared uint s_bin_tri_count, s_bin_tri_offset;
 
 shared uint s_rblock_row_tri_counts[RBLOCK_ROWS];
-shared int s_rblock_tri_counts_estimate[NUM_WARPS];
 shared int s_rblock_tri_counts[NUM_WARPS];
 shared uint s_rblock_frag_counts[NUM_WARPS];
 
@@ -115,9 +114,9 @@ void generateRowTris(uint tri_idx, int start_rby) {
 		uint rbid_row = currentRBlockRow(rby) << RBLOCK_COLS_SHIFT;
 		uint min_rbid = findLSB(bx_mask), max_rbid = findMSB(bx_mask) + 1;
 		// Accumulation is done at the end of processBlocks
-		atomicAdd(s_rblock_tri_counts_estimate[rbid_row + min_rbid], 1);
+		atomicAdd(s_rblock_tri_counts[rbid_row + min_rbid], 1);
 		if(max_rbid < RBLOCK_COLS)
-			atomicAdd(s_rblock_tri_counts_estimate[rbid_row + max_rbid], -1);
+			atomicAdd(s_rblock_tri_counts[rbid_row + max_rbid], -1);
 
 		uint row_tri_idx = atomicAdd(s_rblock_row_tri_counts[rby], 1);
 		if(row_tri_idx >= MAX_RBLOCK_ROW_TRIS) {
@@ -142,10 +141,8 @@ void generateRowTris(uint tri_idx, int start_rby) {
 void processQuads(int start_rby) {
 	if(LIX == 0)
 		s_num_scratch_tris = 0;
-	if(LIX < NUM_WARPS) {
-		s_rblock_tri_counts_estimate[LIX] = 0;
+	if(LIX < NUM_WARPS)
 		s_rblock_tri_counts[LIX] = 0;
-	}
 	barrier();
 
 	for(uint i = LIX >> 1; i < s_bin_quad_count; i += LSIZE / 2) {
@@ -168,7 +165,7 @@ void processQuads(int start_rby) {
 	// triangle can have wide holes between pixels (because middle pixels don't hit pixel centers)
 	if(LIX < NUM_WARPS) {
 		uint rbx = LIX & RBLOCK_COLS_MASK;
-		int value = s_rblock_tri_counts_estimate[LIX], temp;
+		int value = s_rblock_tri_counts[LIX], temp;
 		if(RBLOCK_COLS >= 2)
 			temp = subgroupShuffleUp(value, 1), value += rbx >= 1 ? temp : 0;
 		if(RBLOCK_COLS >= 4)
@@ -176,7 +173,7 @@ void processQuads(int start_rby) {
 		if(RBLOCK_COLS >= 8)
 			temp = subgroupShuffleUp(value, 4), value += rbx >= 4 ? temp : 0;
 		subgroupMemoryBarrierShared();
-		s_rblock_tri_counts_estimate[LIX] = value;
+		s_rblock_tri_counts[LIX] = 0;
 		uint max_value = subgroupMax_(uint(value), NUM_WARPS);
 		if(LIX == 0) {
 			s_rblock_max_tri_counts = max_value;

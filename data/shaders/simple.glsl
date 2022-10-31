@@ -46,7 +46,7 @@ void main() {
 		normalWS = v_normalWS;
 	} else {
 		// Flat shading if no normal data is available
-		normalWS = normalize(cross(dFdx(v_posWS), dFdy(v_posWS)));
+		normalWS = normalize(cross(dFdy(v_posWS), dFdx(v_posWS)));
 	}
 
 	vec4 color = simple_dc.material_color * v_color;

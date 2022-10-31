@@ -65,19 +65,9 @@
 #define RBLOCK_COLS_MASK (RBLOCK_COLS - 1)
 
 #define SEGMENT_SIZE 256
-#define SEGMENT_SHIFT 8
-#define INVALID_SEGMENT 0xffff
 
 shared uint s_buffer[LSIZE * 8 + 1];
 shared uint s_mini_buffer[LSIZE * (WARP_SIZE == 64 ? 2 : 1)];
-shared uint s_segments[LSIZE * (WARP_SIZE == 64 ? 1 : 2)];
-
-void clearSegments() {
-	s_segments[LIX] = INVALID_SEGMENT;
-#if WARP_SIZE == 32
-	s_segments[LIX + LSIZE] = INVALID_SEGMENT;
-#endif
-}
 
 uvec3 rasterBinStep(inout ScanlineParams scan) {
 #define SCAN_STEP(id)                                                                              \
@@ -230,22 +220,20 @@ void sortBuffer(uint lrbid, uint count, uint rcount, uint buf_offset, uint group
 	}
 }
 
-void loadSamples(uint lrbid, int segment_id, uint src_offset_32, uint src_offset_64,
-				 bool high_mode) {
-	uint seg_group_offset = lrbid << MAX_SEGMENTS_SHIFT;
-	uint segment_data = s_segments[seg_group_offset + segment_id];
-	uint tri_count = segment_data >> 16, first_tri = segment_data & 0xffff;
-	src_offset_32 += first_tri;
-	src_offset_64 += first_tri;
-	uint buf_offset = (LIX >> WARP_SHIFT) << SEGMENT_SHIFT;
+void loadSamples(uint lrbid, inout uint cur_tri_idx, int segment_id, uint tri_count,
+				 uint src_offset_32, uint src_offset_64, bool high_mode) {
+	uint buf_offset = (LIX >> WARP_SHIFT) * SEGMENT_SIZE;
 
 	// TODO: this also helps on raster_low; Let's share the code!
 	if(high_mode && tri_count >= 32 && RBLOCK_HEIGHT == 4) {
-		for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_SIZE) {
+		uint i = cur_tri_idx == 0 ? LIX & WARP_MASK : cur_tri_idx;
+		for(; i < tri_count; i += WARP_SIZE) {
 			uvec2 tri_data = g_scratch_64[src_offset_64 + i];
-			int tri_offset = int(tri_data.x >> 24);
-			if(i == 0 && tri_offset != 0)
-				tri_offset -= SEGMENT_SIZE;
+			uint tri_offset_data = g_scratch_32[src_offset_32 + i];
+			int tri_offset = int(tri_offset_data & 0xffffff) - int(segment_id) * SEGMENT_SIZE;
+			// How is it possible that it works for tris which are shared by two segments?
+			if(tri_offset >= SEGMENT_SIZE)
+				break;
 			uint tri_idx = tri_data.x & 0xffffff;
 
 			uvec4 countx = (uvec4(tri_data.y) >> uvec4(16, 20, 24, 28)) & 15;
@@ -265,12 +253,13 @@ void loadSamples(uint lrbid, int segment_id, uint src_offset_32, uint src_offset
 				tri_offset++;
 			}
 		}
+		cur_tri_idx = i;
 	} else {
 		int y = int(LIX & (RBLOCK_HEIGHT - 1)), row_shift = (y & 3) * 4;
 		int mask1 = y >= 1 ? ~0 : 0, mask2 = y >= 2 ? ~0 : 0, mask3 = y >= 4 ? ~0 : 0;
 
-		for(uint i = (LIX & WARP_MASK) >> RBLOCK_HEIGHT_SHIFT; i < tri_count;
-			i += WARP_SIZE / RBLOCK_HEIGHT) {
+		uint i = cur_tri_idx == 0 ? (LIX & WARP_MASK) >> RBLOCK_HEIGHT_SHIFT : cur_tri_idx;
+		for(; i < tri_count; i += WARP_SIZE / RBLOCK_HEIGHT) {
 
 #if RBLOCK_HEIGHT == 8
 			uint tri_data = g_scratch_64[src_offset_64 + i][y >> 2];
@@ -282,9 +271,12 @@ void loadSamples(uint lrbid, int segment_id, uint src_offset_32, uint src_offset
 			uint row_data = tri_data >> row_shift;
 #else
 			uvec2 tri_data = g_scratch_64[src_offset_64 + i];
-			int tri_offset = int(tri_data.x >> 24);
-			if(i == 0 && tri_offset != 0)
-				tri_offset -= SEGMENT_SIZE;
+			uint tri_offset_data = g_scratch_32[src_offset_32 + i];
+			int tri_offset = int(tri_offset_data & 0xffffff) - int(segment_id) * SEGMENT_SIZE;
+			if(tri_offset >= SEGMENT_SIZE)
+				break;
+			//bool last_segment_tri = (tri_offset_data & 0x1000000) != 0 && i == cur_tri_idx;
+
 			uint tri_idx = tri_data.x & 0xffffff;
 			uint row_data = tri_data.y >> row_shift;
 #endif
@@ -305,13 +297,17 @@ void loadSamples(uint lrbid, int segment_id, uint src_offset_32, uint src_offset
 			uint value = pixel_id | (tri_idx << 8);
 			for(int j = 0; j < countx; j++)
 				s_buffer[buf_offset + tri_offset++] = value++;
+
+			//if(last_segment_tri)
+			//	break;
 		}
+		cur_tri_idx = i;
 	}
 	subgroupMemoryBarrierShared();
 }
 
 void shadeAndReduceSamples(uint rbid, uint sample_count, in out ReductionContext ctx) {
-	uint buf_offset = (LIX >> WARP_SHIFT) << SEGMENT_SHIFT;
+	uint buf_offset = (LIX >> WARP_SHIFT) * SEGMENT_SIZE;
 	uint mini_offset =
 		WARP_SIZE == 64 ? (LIX & ~WARP_MASK) + ((LIX & 32) != 0 ? LSIZE : 0) : LIX & ~WARP_MASK;
 	// TODO: make it work the same way as in raster_low? maybe it's better to change in raster_low ?
@@ -364,7 +360,7 @@ shared uint s_vis_pixels[LSIZE];
 void initVisualizeSamples() { s_vis_pixels[LIX] = 0; }
 
 void visualizeSamples(uint sample_count) {
-	uint buf_offset = (LIX >> WARP_SHIFT) << SEGMENT_SHIFT;
+	uint buf_offset = (LIX >> WARP_SHIFT) * SEGMENT_SIZE;
 	for(uint i = LIX & WARP_MASK; i < sample_count; i += WARP_SIZE) {
 		uint pixel_id = s_buffer[buf_offset + i] & WARP_MASK;
 		atomicAdd(s_vis_pixels[(LIX & ~WARP_MASK) + pixel_id], 1);

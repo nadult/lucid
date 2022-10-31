@@ -223,7 +223,7 @@ Ex<void> LucidRenderer::exConstruct(VulkanDevice &device, ShaderCompiler &compil
 		VulkanBuffer::create<int4>(device, uvec4_storage_size, usage | VBufferUsage::transfer_src));
 	m_normals_storage = EX_PASS(VulkanBuffer::create<u32>(device, max_visible_tris, usage));
 
-	uint scratch_32_size = 64 * 1024 * m_max_dispatches * sizeof(u32);
+	uint scratch_32_size = 128 * 1024 * m_max_dispatches * sizeof(u32);
 	uint scratch_64_size = (128 * 1024) * m_max_dispatches * sizeof(u64);
 	scratch_64_size = max<uint>(scratch_64_size, max_visible_quads * sizeof(u32));
 

@@ -347,10 +347,12 @@ void generateRBlocks(uint start_rbid) {
 	uint stored_idx = 0;
 	for(uint i = group_thread; i < tri_count; i += group_size) {
 		uint current = s_buffer[buf_offset + i];
+		uint tri_value = (current >> 12) & 0x7f;
 		uint rblock_tri_idx = current >> 19;
 
 		uint mini_offset = group_rbid << (3 + group_shift);
 		uint tri_offset = (current & 0xfff) + s_mini_buffer[mini_offset + (i >> WARP_SHIFT)];
+		bool overlap_seg = (tri_offset & (SEGMENT_SIZE - 1)) + tri_value > SEGMENT_SIZE;
 
 		// Moze warto by by³o procesowac 8 rzedów na raz?
 		// Mniej do sortowania by by³o? Ale niektóre trók¹ty maj¹ tylko jeden rz¹d...
@@ -364,7 +366,7 @@ void generateRBlocks(uint start_rbid) {
 		uvec2 tri_data = g_scratch_64[dst_offset_64 + rblock_tri_idx];
 		uint tri_idx = tri_data.y & 0xffffff;
 		stored_tris[stored_idx++] = uvec2(tri_idx, tri_data.x); // 4 wolne bity...
-		s_buffer[buf_offset + i] = tri_offset;
+		s_buffer[buf_offset + i] = tri_offset | (overlap_seg ? 0x80000000 : 0);
 #endif
 	}
 	barrier();

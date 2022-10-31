@@ -289,15 +289,23 @@ void generateBlocks(uint bid) {
 			tri_offset += s_mini_buffer[(lbid << NUM_WARPS_SHIFT) + (prev >> WARP_SHIFT)];
 		}
 
-		uint block_tri_idx = s_buffer[buf_offset + i] >> 24;
+		uint tri_value = s_buffer[buf_offset + i];
+		uint block_tri_idx = tri_value >> 24;
+		tri_value = (tri_value & 0xfff) | ((tri_value & 0xfff000) << 4);
+		tri_value =
+			(tri_value + s_mini_buffer[(lbid << NUM_WARPS_SHIFT) + (i >> WARP_SHIFT)]) - tri_offset;
+
 		uint tri_offset0 = tri_offset & 0xffff, tri_offset1 = tri_offset >> 16;
+		uint tri_value0 = tri_value & 0xffff, tri_value1 = tri_value >> 16;
+		bool overlap_seg0 = (tri_offset0 & (SEGMENT_SIZE - 1)) + tri_value0 > SEGMENT_SIZE;
+		bool overlap_seg1 = (tri_offset1 & (SEGMENT_SIZE - 1)) + tri_value1 > SEGMENT_SIZE;
 
 		uint tri_idx = g_scratch_64[src_offset_64 + block_tri_idx + MAX_BLOCK_TRIS].x;
 		uvec2 tri_data = g_scratch_64[src_offset_64 + block_tri_idx];
 		g_scratch_64[dst_offset_64_0 + i] = uvec2(tri_idx, tri_data.x);
 		g_scratch_64[dst_offset_64_1 + i] = uvec2(tri_idx, tri_data.y);
-		g_scratch_32[dst_offset_32_0 + i] = tri_offset0;
-		g_scratch_32[dst_offset_32_1 + i] = tri_offset1;
+		g_scratch_32[dst_offset_32_0 + i] = tri_offset0 | (overlap_seg0 ? 0x80000000 : 0);
+		g_scratch_32[dst_offset_32_1 + i] = tri_offset1 | (overlap_seg1 ? 0x80000000 : 0);
 	}
 #else
 	src_offset_64 = dst_offset_64;

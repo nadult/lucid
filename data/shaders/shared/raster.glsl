@@ -224,7 +224,6 @@ void loadSamples(uint lrbid, inout uint cur_tri_idx, int segment_id, uint tri_co
 				 uint src_offset_32, uint src_offset_64, bool high_mode) {
 	uint buf_offset = (LIX >> WARP_SHIFT) * SEGMENT_SIZE;
 
-	// TODO: this also helps on raster_low; Let's share the code!
 	if(high_mode && tri_count >= 32 && RBLOCK_HEIGHT == 4) {
 		uint i = cur_tri_idx == 0 ? LIX & WARP_MASK : cur_tri_idx;
 		for(; i < tri_count; i += WARP_SIZE) {
@@ -252,6 +251,9 @@ void loadSamples(uint lrbid, inout uint cur_tri_idx, int segment_id, uint tri_co
 					s_buffer[buf_offset + tri_offset] = pixel_id | tri_idx;
 				tri_offset++;
 			}
+
+			if((tri_offset_data & 0x80000000) != 0 && i > cur_tri_idx)
+				break;
 		}
 		cur_tri_idx = i;
 	} else {
@@ -260,7 +262,6 @@ void loadSamples(uint lrbid, inout uint cur_tri_idx, int segment_id, uint tri_co
 
 		uint i = cur_tri_idx == 0 ? (LIX & WARP_MASK) >> RBLOCK_HEIGHT_SHIFT : cur_tri_idx;
 		for(; i < tri_count; i += WARP_SIZE / RBLOCK_HEIGHT) {
-
 #if RBLOCK_HEIGHT == 8
 			uint tri_data = g_scratch_64[src_offset_64 + i][y >> 2];
 			uint tri_info = g_scratch_32[src_offset_32 + i];
@@ -275,7 +276,6 @@ void loadSamples(uint lrbid, inout uint cur_tri_idx, int segment_id, uint tri_co
 			int tri_offset = int(tri_offset_data & 0xffffff) - int(segment_id) * SEGMENT_SIZE;
 			if(tri_offset >= SEGMENT_SIZE)
 				break;
-			//bool last_segment_tri = (tri_offset_data & 0x1000000) != 0 && i == cur_tri_idx;
 
 			uint tri_idx = tri_data.x & 0xffffff;
 			uint row_data = tri_data.y >> row_shift;
@@ -298,8 +298,8 @@ void loadSamples(uint lrbid, inout uint cur_tri_idx, int segment_id, uint tri_co
 			for(int j = 0; j < countx; j++)
 				s_buffer[buf_offset + tri_offset++] = value++;
 
-			//if(last_segment_tri)
-			//	break;
+			if((tri_offset_data & 0x80000000) != 0 && i > cur_tri_idx)
+				break;
 		}
 		cur_tri_idx = i;
 	}

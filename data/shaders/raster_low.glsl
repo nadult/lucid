@@ -373,7 +373,7 @@ void rasterBin(int bin_id) {
 	barrier();
 	processQuads();
 	groupMemoryBarrier();
-	barrier();
+	barrier(); // TODO: stall (7%, conference)
 	UPDATE_TIMER(0);
 
 	const int num_rblocks = (BIN_SIZE / RBLOCK_WIDTH) * (BIN_SIZE / RBLOCK_HEIGHT);
@@ -400,7 +400,7 @@ void rasterBin(int bin_id) {
 				return;
 			}
 			groupMemoryBarrier();
-			barrier();
+			barrier(); // TODO: stall (2.5%, conference)
 		}
 		UPDATE_TIMER(1);
 
@@ -433,7 +433,7 @@ void rasterBin(int bin_id) {
 		//finishVisualizeSamples(pixel_pos);
 		//visualizeBlockCounts(rbid, pixel_pos);
 		UPDATE_TIMER(4);
-		barrier();
+		barrier(); // TODO: stall (10.5%, conference)
 	}
 }
 

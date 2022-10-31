@@ -211,7 +211,7 @@ void initReduceSamples(out ReductionContext ctx) {
 bool reduceSample(inout ReductionContext ctx, inout vec3 out_color, uvec2 sample_s,
 				  WARP_BITMASK pixel_bitmask) {
 #if WARP_SIZE == 32
-	int num_samples = bitCount(pixel_bitmask);
+	int num_samples = bitCount(pixel_bitmask); // TODO: stall (2.75%, conference)
 #else
 	int num_samples = bitCount(pixel_bitmask.x) + bitCount(pixel_bitmask.y);
 #endif

@@ -156,7 +156,7 @@ void processQuads(int start_rby) {
 	}
 	for(uint i = LIX; i < s_bin_tri_count; i += LSIZE)
 		generateRowTris(g_bin_tris[s_bin_tri_offset + i], start_rby);
-	barrier();
+	barrier(); // TODO: stall (2%)
 
 	// Accumulating per hblock-counts for each hblock-row
 	// Note: these are only estimates; very good estimates, but in some cases a single
@@ -476,7 +476,7 @@ void rasterBin(int bin_id) {
 		//visualizeBlockCounts(rbid, pixel_pos);
 		UPDATE_TIMER(4);
 
-		barrier();
+		barrier(); // TODO: large stall here (9%)
 	}
 }
 

@@ -13,27 +13,19 @@ DEBUG_SETUP(1, 11)
 layout(local_size_x = LSIZE) in;
 
 // TODO: too much mem used
-#define WORKGROUP_64_SCRATCH_SIZE (64 * 1024)
-#define WORKGROUP_64_SCRATCH_SHIFT 16
-
-#define WORKGROUP_32_SCRATCH_SIZE (64 * 1024)
-#define WORKGROUP_32_SCRATCH_SHIFT 16
+#define WORKGROUP_SCRATCH_SIZE (64 * 1024)
+#define WORKGROUP_SCRATCH_SHIFT 16
 
 uint scratch64BlockRowTrisOffset(uint by) {
-	return (gl_WorkGroupID.x << WORKGROUP_64_SCRATCH_SHIFT) + by * (MAX_BLOCK_ROW_TRIS * 2);
+	return (gl_WorkGroupID.x << WORKGROUP_SCRATCH_SHIFT) + by * (MAX_BLOCK_ROW_TRIS * 2);
 }
 
 uint scratch64BlockTrisOffset(uint bid) {
-	return (gl_WorkGroupID.x << WORKGROUP_64_SCRATCH_SHIFT) + 32 * 1024 +
-		   bid * (MAX_BLOCK_TRIS * 2);
+	return (gl_WorkGroupID.x << WORKGROUP_SCRATCH_SHIFT) + 32 * 1024 + bid * (MAX_BLOCK_TRIS * 2);
 }
 
-uint scratch64RasterBlockTrisOffset(uint rbid) {
-	return (gl_WorkGroupID.x << WORKGROUP_64_SCRATCH_SHIFT) + 48 * 1024 + rbid * MAX_BLOCK_TRIS;
-}
-
-uint scratch32RasterBlockTrisOffset(uint rbid) {
-	return (gl_WorkGroupID.x << WORKGROUP_32_SCRATCH_SHIFT) + rbid * MAX_BLOCK_TRIS;
+uint scratchRasterBlockTrisOffset(uint rbid) {
+	return (gl_WorkGroupID.x << WORKGROUP_SCRATCH_SHIFT) + 48 * 1024 + rbid * MAX_BLOCK_TRIS;
 }
 
 shared int s_num_bins, s_bin_id;
@@ -276,10 +268,8 @@ void generateBlocks(uint bid) {
 	src_offset_64 = dst_offset_64;
 	uint lrbid0 = blockIdToRaster(lbid);
 	uint lrbid1 = lrbid0 + RBLOCK_COLS;
-	uint dst_offset_64_0 = scratch64RasterBlockTrisOffset(lrbid0);
-	uint dst_offset_64_1 = scratch64RasterBlockTrisOffset(lrbid1);
-	uint dst_offset_32_0 = scratch32RasterBlockTrisOffset(lrbid0);
-	uint dst_offset_32_1 = scratch32RasterBlockTrisOffset(lrbid1);
+	uint dst_offset0 = scratchRasterBlockTrisOffset(lrbid0);
+	uint dst_offset1 = scratchRasterBlockTrisOffset(lrbid1);
 	for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_SIZE) {
 		uint tri_offset = 0;
 		if(i > 0) {
@@ -296,21 +286,17 @@ void generateBlocks(uint bid) {
 			(tri_value + s_mini_buffer[(lbid << NUM_WARPS_SHIFT) + (i >> WARP_SHIFT)]) - tri_offset;
 
 		uint tri_offset0 = tri_offset & 0xffff, tri_offset1 = tri_offset >> 16;
-		uint tri_value0 = tri_value & 0xffff, tri_value1 = tri_value >> 16;
-		bool overlap_seg0 = (tri_offset0 & (SEGMENT_SIZE - 1)) + tri_value0 > SEGMENT_SIZE;
-		bool overlap_seg1 = (tri_offset1 & (SEGMENT_SIZE - 1)) + tri_value1 > SEGMENT_SIZE;
 
 		uint tri_idx = g_scratch_64[src_offset_64 + block_tri_idx + MAX_BLOCK_TRIS].x;
 		uvec2 tri_data = g_scratch_64[src_offset_64 + block_tri_idx];
-		g_scratch_64[dst_offset_64_0 + i] = uvec2(tri_idx, tri_data.x);
-		g_scratch_64[dst_offset_64_1 + i] = uvec2(tri_idx, tri_data.y);
-		g_scratch_32[dst_offset_32_0 + i] = tri_offset0 | (overlap_seg0 ? 0x80000000 : 0);
-		g_scratch_32[dst_offset_32_1 + i] = tri_offset1 | (overlap_seg1 ? 0x80000000 : 0);
+		g_scratch_64[dst_offset0 + i] = uvec2(tri_idx, tri_data.x);
+		g_scratch_64[dst_offset1 + i] = uvec2(tri_idx, tri_data.y);
+		g_scratch_32[dst_offset0 + i] = tri_offset0;
+		g_scratch_32[dst_offset1 + i] = tri_offset1;
 	}
 #else
 	src_offset_64 = dst_offset_64;
-	dst_offset_64 = scratch64RasterBlockTrisOffset(lbid);
-	uint dst_offset_32 = scratch32RasterBlockTrisOffset(lbid);
+	uint dst_offset = scratchRasterBlockTrisOffset(lbid);
 
 	for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_SIZE) {
 		uint tri_offset = 0;
@@ -325,18 +311,10 @@ void generateBlocks(uint bid) {
 		uint tri_idx = g_scratch_64[src_offset_64 + block_tri_idx + MAX_BLOCK_TRIS].x & 0xffffff;
 		uvec2 tri_data = g_scratch_64[src_offset_64 + block_tri_idx];
 		// TODO: FIT tri_offset
-		g_scratch_32[dst_offset_32 + i] = tri_idx | tri_offset << 24;
-		g_scratch_64[dst_offset_64 + i] = tri_data;
+		g_scratch_32[dst_offset + i] = tri_idx | tri_offset << 24;
+		g_scratch_64[dst_offset + i] = tri_data;
 	}
 #endif
-}
-
-void loadSamples(uint rbid, inout uint cur_tri_idx, int segment_id) {
-	uint lrbid = rbid & (RBLOCK_COUNT - 1);
-	uint src_offset_32 = scratch32RasterBlockTrisOffset(lrbid);
-	uint src_offset_64 = scratch64RasterBlockTrisOffset(lrbid);
-	uint tri_count = s_rblock_counts[lrbid] & 0xffff;
-	loadSamples(lrbid, cur_tri_idx, segment_id, tri_count, src_offset_32, src_offset_64, false);
 }
 
 void visualizeBlockCounts(uint rbid, ivec2 pixel_pos) {
@@ -415,7 +393,9 @@ void rasterBin(int bin_id) {
 			if(frag_count <= 0)
 				break;
 
-			loadSamples(rbid, cur_tri_idx, segment_id);
+			uint lrbid = rbid & (RBLOCK_COUNT - 1);
+			uint src_offset = scratchRasterBlockTrisOffset(lrbid);
+			loadSamples(lrbid, cur_tri_idx, segment_id, counts, src_offset);
 			UPDATE_TIMER(2);
 
 			shadeAndReduceSamples(rbid, frag_count, context);

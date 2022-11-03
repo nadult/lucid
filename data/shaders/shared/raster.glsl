@@ -67,7 +67,7 @@
 #define SEGMENT_SIZE 256
 
 shared uint s_buffer[LSIZE * 8 + 1];
-shared uint s_mini_buffer[LSIZE * (WARP_SIZE == 64 ? 2 : 1)];
+shared uint s_mini_buffer[LSIZE * 2];
 
 uvec3 rasterBinStep(inout ScanlineParams scan) {
 #define SCAN_STEP(id)                                                                              \
@@ -220,29 +220,35 @@ void sortBuffer(uint lrbid, uint count, uint rcount, uint buf_offset, uint group
 	}
 }
 
-void loadSamples(uint lrbid, inout uint cur_tri_idx, int segment_id, uint tri_count,
-				 uint src_offset_32, uint src_offset_64, bool high_mode) {
-	uint buf_offset = (LIX >> WARP_SHIFT) * SEGMENT_SIZE;
+uint blockRowsToBits(uint rows) {
+	uvec4 countx = (uvec4(rows) >> uvec4(16, 20, 24, 28)) & 15;
+	uvec4 minx = (uvec4(rows) >> uvec4(0, 4, 8, 12)) & 15;
+	uint bits0 = uint((1 << countx[0]) - 1) << (minx[0] + 0);
+	uint bits1 = uint((1 << countx[1]) - 1) << (minx[1] + 8);
+	uint bits2 = uint((1 << countx[2]) - 1) << (minx[2] + 16);
+	uint bits3 = uint((1 << countx[3]) - 1) << (minx[3] + 24);
+	return bits0 | bits1 | bits2 | bits3;
+}
 
-	if(high_mode && tri_count >= 32 && RBLOCK_HEIGHT == 4) {
+void loadSamples(uint lrbid, inout uint cur_tri_idx, int segment_id, uint rblock_counts,
+				 uint src_offset) {
+	uint tri_count = rblock_counts & 0xffff;
+	uint frag_count = rblock_counts >> 16;
+
+	uint buf_offset = (LIX >> WARP_SHIFT) * SEGMENT_SIZE;
+	int segment_offset = int(segment_id) * SEGMENT_SIZE;
+	bool high_density = frag_count < (tri_count << 3); // TODO: move out
+
+	if(high_density) {
 		uint i = cur_tri_idx == 0 ? LIX & WARP_MASK : cur_tri_idx;
 		for(; i < tri_count; i += WARP_SIZE) {
-			uvec2 tri_data = g_scratch_64[src_offset_64 + i];
-			uint tri_offset_data = g_scratch_32[src_offset_32 + i];
-			int tri_offset = int(tri_offset_data & 0xffffff) - int(segment_id) * SEGMENT_SIZE;
+			uvec2 tri_data = g_scratch_64[src_offset + i];
+			int tri_offset = int(g_scratch_32[src_offset + i] & 0xffffff) - segment_offset;
 			// How is it possible that it works for tris which are shared by two segments?
 			if(tri_offset >= SEGMENT_SIZE)
 				break;
 			uint tri_idx = tri_data.x & 0xffffff;
-
-			uvec4 countx = (uvec4(tri_data.y) >> uvec4(16, 20, 24, 28)) & 15;
-			uvec4 minx = (uvec4(tri_data.y) >> uvec4(0, 4, 8, 12)) & 15;
-			uint bits0 = uint((1 << countx[0]) - 1) << (minx[0] + 0);
-			uint bits1 = uint((1 << countx[1]) - 1) << (minx[1] + 8);
-			uint bits2 = uint((1 << countx[2]) - 1) << (minx[2] + 16);
-			uint bits3 = uint((1 << countx[3]) - 1) << (minx[3] + 24);
-
-			uint bits = bits0 | bits1 | bits2 | bits3;
+			uint bits = blockRowsToBits(tri_data.y);
 			tri_idx <<= 8;
 			while(bits != 0 && tri_offset < SEGMENT_SIZE) {
 				uint pixel_id = findLSB(bits);
@@ -252,7 +258,7 @@ void loadSamples(uint lrbid, inout uint cur_tri_idx, int segment_id, uint tri_co
 				tri_offset++;
 			}
 
-			if((tri_offset_data & 0x80000000) != 0 && i > cur_tri_idx)
+			if(tri_offset > SEGMENT_SIZE)
 				break;
 		}
 		cur_tri_idx = i;
@@ -263,16 +269,16 @@ void loadSamples(uint lrbid, inout uint cur_tri_idx, int segment_id, uint tri_co
 		uint i = cur_tri_idx == 0 ? (LIX & WARP_MASK) >> RBLOCK_HEIGHT_SHIFT : cur_tri_idx;
 		for(; i < tri_count; i += WARP_SIZE / RBLOCK_HEIGHT) {
 #if RBLOCK_HEIGHT == 8
-			uint tri_data = g_scratch_64[src_offset_64 + i][y >> 2];
-			uint tri_info = g_scratch_32[src_offset_32 + i];
+			uint tri_data = g_scratch_64[src_offset + i][y >> 2];
+			uint tri_info = g_scratch_32[src_offset + i];
 			int tri_offset = int(tri_info >> 24);
 			if(i == 0 && tri_offset != 0)
 				tri_offset -= SEGMENT_SIZE;
 			uint tri_idx = tri_info & 0xffffff;
 			uint row_data = tri_data >> row_shift;
 #else
-			uvec2 tri_data = g_scratch_64[src_offset_64 + i];
-			uint tri_offset_data = g_scratch_32[src_offset_32 + i];
+			uvec2 tri_data = g_scratch_64[src_offset + i];
+			uint tri_offset_data = g_scratch_32[src_offset + i];
 			int tri_offset = int(tri_offset_data & 0xffffff) - int(segment_id) * SEGMENT_SIZE;
 			if(tri_offset >= SEGMENT_SIZE)
 				break;
@@ -298,7 +304,7 @@ void loadSamples(uint lrbid, inout uint cur_tri_idx, int segment_id, uint tri_co
 			for(int j = 0; j < countx; j++)
 				s_buffer[buf_offset + tri_offset++] = value++;
 
-			if((tri_offset_data & 0x80000000) != 0 && i > cur_tri_idx)
+			if(tri_offset > SEGMENT_SIZE)
 				break;
 		}
 		cur_tri_idx = i;

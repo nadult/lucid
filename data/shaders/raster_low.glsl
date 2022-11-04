@@ -84,22 +84,10 @@ void processQuads() {
 		generateRowTris(g_bin_tris[s_bin_tri_offset + i]);
 }
 
-shared uint s_sort_rcount[NUM_WARPS];
-
-void prepareSortTris() {
-	if(LIX < NUM_WARPS) {
-		uint count = s_block_tri_count[LIX];
-		// rcount: count rounded up to next power of 2; minimum: WARP_SIZE
-		uint rcount = max(WARP_SIZE, (count & (count - 1)) == 0 ? count : (2 << findMSB(count)));
-		s_sort_rcount[LIX] = rcount;
-	}
-}
-
 // TODO: maybe process smaller amount of blocks at the same time?
 // smaller chance that it will leave cache
 void generateBlocks(uint bid) {
 	int lbid = int(LIX >> WARP_SHIFT);
-	bid += lbid;
 	uint by = bid >> BLOCK_ROWS_SHIFT, bx = bid & BLOCK_ROWS_MASK;
 
 	uint src_offset_64 = scratch64BlockRowTrisOffset(by);
@@ -141,11 +129,10 @@ void generateBlocks(uint bid) {
 			if(block_tri_count > MAX_BLOCK_TRIS)
 				atomicOr(s_raster_error, 1 << lbid);
 		}
-		barrier();
+		subgroupMemoryBarrierShared();
 		if(s_raster_error != 0)
 			return;
 	}
-	prepareSortTris();
 
 	uint dst_offset_64 = scratch64BlockTrisOffset(lbid);
 	tri_count = s_block_tri_count[lbid];
@@ -180,14 +167,15 @@ void generateBlocks(uint bid) {
 		// 12 bits for tile-tri index, 20 bits for depth
 		s_buffer[buf_offset + i] = i | (depth << 12);
 	}
-	barrier();
+	subgroupMemoryBarrier();
 
-	if(tri_count > RC_COLOR_SIZE)
-		sortBuffer(lbid, tri_count, s_sort_rcount[lbid], buf_offset, WARP_SIZE, LIX & WARP_MASK,
-				   false);
-
-	barrier();
-	groupMemoryBarrier();
+	if(tri_count > RC_COLOR_SIZE) {
+		// rcount: count rounded up to next power of 2; minimum: WARP_SIZE
+		uint rcount = max(
+			WARP_SIZE, (tri_count & (tri_count - 1)) == 0 ? tri_count : (2 << findMSB(tri_count)));
+		sortBuffer(lbid, tri_count, rcount, buf_offset, WARP_SIZE, LIX & WARP_MASK, false);
+	}
+	subgroupMemoryBarrierShared();
 
 #ifdef DEBUG_ENABLED
 	// Making sure that tris are properly ordered
@@ -213,14 +201,12 @@ void generateBlocks(uint bid) {
 		num_frags = subgroupInclusiveAddFast(num_frags);
 		s_buffer[buf_offset + i] = num_frags | (idx << 24);
 	}
-	barrier();
+	subgroupMemoryBarrierShared();
 
 	// Computing prefix sum across whole blocks
-	if(LIX < NUM_WARPS * NUM_WARPS) {
-		uint lbid = LIX >> NUM_WARPS_SHIFT, warp_idx = LIX & NUM_WARPS_MASK;
+	if(gl_SubgroupInvocationID < NUM_WARPS) {
+		uint warp_idx = gl_SubgroupInvocationID;
 		uint warp_offset = warp_idx << WARP_SHIFT;
-		uint buf_offset = lbid << MAX_BLOCK_TRIS_SHIFT;
-		uint tri_count = s_block_tri_count[lbid];
 		uint value = 0;
 
 		if(warp_offset < tri_count) {
@@ -250,7 +236,7 @@ void generateBlocks(uint bid) {
 
 		s_buffer[mini_offset + LIX] = sum - value;
 	}
-	barrier();
+	subgroupMemoryBarrierShared();
 
 	// Storing triangle fragment offsets to scratch mem
 	// Also finding first triangle for each segment
@@ -267,7 +253,7 @@ void generateBlocks(uint bid) {
 			uint prev = i - 1;
 			tri_offset = s_buffer[buf_offset + prev] & 0xffffff;
 			tri_offset = (tri_offset & 0xfff) | ((tri_offset & 0xfff000) << 4);
-			tri_offset += s_buffer[mini_offset + (lbid << NUM_WARPS_SHIFT) + (prev >> WARP_SHIFT)];
+			tri_offset += s_buffer[mini_offset + (lbid << WARP_SHIFT) + (prev >> WARP_SHIFT)];
 		}
 
 		uint block_tri_idx = s_buffer[buf_offset + i] >> 24;
@@ -291,7 +277,7 @@ void generateBlocks(uint bid) {
 		if(i > 0) {
 			uint prev = i - 1;
 			tri_offset = s_buffer[buf_offset + prev] & 0xffffff;
-			tri_offset += s_buffer[mini_offset + (lbid << NUM_WARPS_SHIFT) + (prev >> WARP_SHIFT)];
+			tri_offset += s_buffer[mini_offset + (lbid << WARP_SHIFT) + (prev >> WARP_SHIFT)];
 		}
 		uint tri_value = s_buffer[buf_offset + i];
 		uint block_tri_idx = tri_value >> 24;
@@ -341,28 +327,24 @@ void rasterBin(int bin_id) {
 	barrier(); // TODO: stall (7%, conference)
 	UPDATE_TIMER(0);
 
-	const int num_rblocks = (BIN_SIZE / RBLOCK_WIDTH) * (BIN_SIZE / RBLOCK_HEIGHT);
-	for(uint rbid = LIX >> WARP_SHIFT; rbid < num_rblocks; rbid += NUM_WARPS) {
-		barrier();
-		if(WARP_SIZE == 64 || (rbid & NUM_WARPS) == 0) {
-			uint bid = (rbid & ~(NUM_WARPS - 1)) >> (WARP_SIZE == 64 ? 0 : 1);
-			generateBlocks(bid);
-			barrier();
-			// raster_low errors are not visualized, but propagated to high
-			if(s_raster_error != 0) {
-				if(LIX == 0) {
-					int id = atomicAdd(g_info.bin_level_counts[BIN_LEVEL_HIGH], 1);
-					HIGH_LEVEL_BINS(id) = int(bin_id);
-					s_promoted_bin_count = max(s_promoted_bin_count, id + 1);
-				}
-				return;
-			}
-			groupMemoryBarrier();
-			barrier(); // TODO: stall (2.5%, conference)
+	const int num_blocks = (BIN_SIZE / BLOCK_SIZE) * (BIN_SIZE / BLOCK_SIZE);
+	for(uint bid = LIX >> WARP_SHIFT; bid < num_blocks; bid += NUM_WARPS)
+		generateBlocks(bid);
+
+	barrier();
+	// raster_low errors are not visualized, but propagated to high
+	if(s_raster_error != 0) {
+		if(LIX == 0) {
+			int id = atomicAdd(g_info.bin_level_counts[BIN_LEVEL_HIGH], 1);
+			HIGH_LEVEL_BINS(id) = int(bin_id);
+			s_promoted_bin_count = max(s_promoted_bin_count, id + 1);
 		}
+		return;
 	}
+	groupMemoryBarrier();
 	UPDATE_TIMER(1);
 
+	const int num_rblocks = (BIN_SIZE / RBLOCK_WIDTH) * (BIN_SIZE / RBLOCK_HEIGHT);
 	for(uint rbid = LIX >> WARP_SHIFT; rbid < num_rblocks; rbid += NUM_WARPS) {
 		ReductionContext context;
 		initReduceSamples(context);

@@ -445,8 +445,7 @@ void rasterBin(int bin_id) {
 			uint lrbid = rbid & (NUM_WARPS - 1);
 			uint src_offset = scratchRasterBlockTrisOffset(lrbid);
 			uint tri_count = s_rblock_tri_counts[lrbid];
-			loadSamples(lrbid, cur_tri_idx, segment_id, tri_count | (block_frag_count << 16),
-						src_offset);
+			loadSamples(cur_tri_idx, segment_id, tri_count | (block_frag_count << 16), src_offset);
 			UPDATE_TIMER(2);
 
 			shadeAndReduceSamples(rbid, frag_count, context);

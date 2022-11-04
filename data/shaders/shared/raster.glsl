@@ -247,8 +247,7 @@ bool highTriDensity(uint tri_count, uint frag_count) {
 	return frag_count < (tri_count << 3) && tri_count >= 16;
 }
 
-void loadSamples(uint lrbid, inout uint cur_tri_idx, int segment_id, uint rblock_counts,
-				 uint src_offset) {
+void loadSamples(inout uint cur_tri_idx, int segment_id, uint rblock_counts, uint src_offset) {
 	uint buf_offset = (LIX >> WARP_SHIFT) * (SEGMENT_SIZE + WARP_SIZE);
 	{
 		// Copying samples generated in previous round which may overlap into current segment

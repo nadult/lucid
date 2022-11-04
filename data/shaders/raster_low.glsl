@@ -113,6 +113,7 @@ void generateBlocks(uint bid) {
 	uint src_offset_64 = scratch64BlockRowTrisOffset(by);
 	uint tri_count = s_block_row_tri_count[by];
 	uint buf_offset = lbid << MAX_BLOCK_TRIS_SHIFT;
+	const uint mini_offset = BASE_BUFFER_SIZE;
 
 	{
 		uint bx_bits_shift = 24 + bx, block_tri_count = 0;
@@ -255,7 +256,7 @@ void generateBlocks(uint bid) {
 #endif
 		}
 
-		s_mini_buffer[LIX] = sum - value;
+		s_buffer[mini_offset + LIX] = sum - value;
 	}
 	barrier();
 	if(s_raster_error != 0)
@@ -276,23 +277,26 @@ void generateBlocks(uint bid) {
 			uint prev = i - 1;
 			tri_offset = s_buffer[buf_offset + prev] & 0xffffff;
 			tri_offset = (tri_offset & 0xfff) | ((tri_offset & 0xfff000) << 4);
-			tri_offset += s_mini_buffer[(lbid << NUM_WARPS_SHIFT) + (prev >> WARP_SHIFT)];
+			tri_offset += s_buffer[mini_offset + (lbid << NUM_WARPS_SHIFT) + (prev >> WARP_SHIFT)];
 		}
 
 		uint tri_value = s_buffer[buf_offset + i];
 		uint block_tri_idx = tri_value >> 24;
 		tri_value = (tri_value & 0xfff) | ((tri_value & 0xfff000) << 4);
 		tri_value =
-			(tri_value + s_mini_buffer[(lbid << NUM_WARPS_SHIFT) + (i >> WARP_SHIFT)]) - tri_offset;
+			(tri_value + s_buffer[mini_offset + (lbid << NUM_WARPS_SHIFT) + (i >> WARP_SHIFT)]) -
+			tri_offset;
 
 		uint tri_offset0 = tri_offset & 0xffff, tri_offset1 = tri_offset >> 16;
+		uint segment_bits0 = (tri_offset0 & 0xf00) << 20, segment_bits1 = (tri_offset1 & 0xf00)
+																		  << 20;
 
-		uint tri_idx = g_scratch_64[src_offset_64 + block_tri_idx + MAX_BLOCK_TRIS].x;
+		uint tri_idx = g_scratch_64[src_offset_64 + block_tri_idx + MAX_BLOCK_TRIS].x << 8;
 		uvec2 tri_data = g_scratch_64[src_offset_64 + block_tri_idx];
-		g_scratch_64[dst_offset0 + i] = uvec2(tri_idx, tri_data.x);
-		g_scratch_64[dst_offset1 + i] = uvec2(tri_idx, tri_data.y);
-		g_scratch_32[dst_offset0 + i] = tri_offset0;
-		g_scratch_32[dst_offset1 + i] = tri_offset1;
+		g_scratch_64[dst_offset0 + i] =
+			uvec2(tri_idx | (tri_offset0 & 0xff), tri_data.x | segment_bits0);
+		g_scratch_64[dst_offset1 + i] =
+			uvec2(tri_idx | (tri_offset1 & 0xff), tri_data.y | segment_bits1);
 	}
 #else
 	src_offset_64 = dst_offset_64;
@@ -303,15 +307,14 @@ void generateBlocks(uint bid) {
 		if(i > 0) {
 			uint prev = i - 1;
 			tri_offset = s_buffer[buf_offset + prev] & 0xffffff;
-			tri_offset += s_mini_buffer[(lbid << NUM_WARPS_SHIFT) + (prev >> WARP_SHIFT)];
+			tri_offset += s_buffer[mini_offset + (lbid << NUM_WARPS_SHIFT) + (prev >> WARP_SHIFT)];
 		}
 		uint tri_value = s_buffer[buf_offset + i];
 		uint block_tri_idx = tri_value >> 24;
 
 		uint tri_idx = g_scratch_64[src_offset_64 + block_tri_idx + MAX_BLOCK_TRIS].x & 0xffffff;
 		uvec2 tri_data = g_scratch_64[src_offset_64 + block_tri_idx];
-		// TODO: FIT tri_offset
-		g_scratch_32[dst_offset + i] = tri_idx | tri_offset << 24;
+		g_scratch_32[dst_offset + i] = tri_idx | (tri_offset & 0xff);
 		g_scratch_64[dst_offset + i] = tri_data;
 	}
 #endif

@@ -65,9 +65,15 @@
 #define RBLOCK_COLS_MASK (RBLOCK_COLS - 1)
 
 #define SEGMENT_SIZE 256
+#define SEGMENT_SHIFT 8
 
-shared uint s_buffer[LSIZE * 8 + 1];
+#define BASE_BUFFER_SIZE (LSIZE * 8)
+#define FULL_BUFFER_SIZE (BASE_BUFFER_SIZE + LSIZE)
+
+shared uint s_buffer[FULL_BUFFER_SIZE + 1];
+#if WARP_SIZE == 64
 shared uint s_mini_buffer[LSIZE * 2];
+#endif
 
 uvec3 rasterBinStep(inout ScanlineParams scan) {
 #define SCAN_STEP(id)                                                                              \
@@ -104,8 +110,8 @@ uint rasterBlock(uint tri_mins, uint tri_maxs, int startx, out uint num_frags, i
 	cpos += vec2(cpx[0] + cpx[1] + cpx[2] + cpx[3], cpy[0] + cpy[1] + cpy[2] + cpy[3]);
 	num_frags = count[0] + count[1] + count[2] + count[3];
 	uint min_bits =
-		(xmin[0] & 7) | ((xmin[1] & 7) << 4) | ((xmin[2] & 7) << 8) | ((xmin[3] & 7) << 12);
-	uint count_bits = (count[0] << 16) | (count[1] << 20) | (count[2] << 24) | (count[3] << 28);
+		(xmin[0] & 7) | ((xmin[1] & 7) << 3) | ((xmin[2] & 7) << 6) | ((xmin[3] & 7) << 9);
+	uint count_bits = (count[0] << 12) | (count[1] << 16) | (count[2] << 20) | (count[3] << 24);
 	return min_bits | count_bits;
 }
 
@@ -221,8 +227,8 @@ void sortBuffer(uint lrbid, uint count, uint rcount, uint buf_offset, uint group
 }
 
 uint blockRowsToBits(uint rows) {
-	uvec4 countx = (uvec4(rows) >> uvec4(16, 20, 24, 28)) & 15;
-	uvec4 minx = (uvec4(rows) >> uvec4(0, 4, 8, 12)) & 15;
+	uvec4 countx = (uvec4(rows) >> uvec4(12, 16, 20, 24)) & 15;
+	uvec4 minx = (uvec4(rows) >> uvec4(0, 3, 6, 9)) & 7;
 	uint bits0 = uint((1 << countx[0]) - 1) << (minx[0] + 0);
 	uint bits1 = uint((1 << countx[1]) - 1) << (minx[1] + 8);
 	uint bits2 = uint((1 << countx[2]) - 1) << (minx[2] + 16);
@@ -232,62 +238,62 @@ uint blockRowsToBits(uint rows) {
 
 void loadSamples(uint lrbid, inout uint cur_tri_idx, int segment_id, uint rblock_counts,
 				 uint src_offset) {
+	uint buf_offset = (LIX >> WARP_SHIFT) * (SEGMENT_SIZE + WARP_SIZE);
+	{
+		// Copying samples generated in previous round which may overlap into current segment
+		uint prev_offset = buf_offset + gl_SubgroupInvocationID;
+		s_buffer[prev_offset] = s_buffer[prev_offset + SEGMENT_SIZE];
+	}
+	subgroupMemoryBarrierShared();
+
 	uint tri_count = rblock_counts & 0xffff;
 	uint frag_count = rblock_counts >> 16;
-
-	uint buf_offset = (LIX >> WARP_SHIFT) * SEGMENT_SIZE;
-	int segment_offset = int(segment_id) * SEGMENT_SIZE;
 	bool high_density = frag_count < (tri_count << 3); // TODO: move out
+	int segment_bits = segment_id & 15;
+	uint tri_offset;
 
 	if(high_density) {
 		uint i = cur_tri_idx == 0 ? LIX & WARP_MASK : cur_tri_idx;
 		for(; i < tri_count; i += WARP_SIZE) {
 			uvec2 tri_data = g_scratch_64[src_offset + i];
-			int tri_offset = int(g_scratch_32[src_offset + i] & 0xffffff) - segment_offset;
-			// How is it possible that it works for tris which are shared by two segments?
-			if(tri_offset >= SEGMENT_SIZE)
+			uint tri_segment_bits = tri_data.y >> 28;
+			if(tri_segment_bits != segment_bits)
 				break;
-			uint tri_idx = tri_data.x & 0xffffff;
+
+			tri_offset = tri_data.x & 0xff;
+			uint tri_idx = tri_data.x & 0xffffff00;
 			uint bits = blockRowsToBits(tri_data.y);
-			tri_idx <<= 8;
-			while(bits != 0 && tri_offset < SEGMENT_SIZE) {
+			while(bits != 0) {
 				uint pixel_id = findLSB(bits);
 				bits &= ~(1u << pixel_id);
-				if(tri_offset >= 0)
-					s_buffer[buf_offset + tri_offset] = pixel_id | tri_idx;
+				s_buffer[buf_offset + tri_offset] = pixel_id | tri_idx;
 				tri_offset++;
 			}
-
-			if(tri_offset > SEGMENT_SIZE)
-				break;
 		}
 		cur_tri_idx = i;
 	} else {
-		int y = int(LIX & (RBLOCK_HEIGHT - 1)), row_shift = (y & 3) * 4;
+		uint y = LIX & (RBLOCK_HEIGHT - 1);
+		uint minx_shift = (y & 3) * 3, countx_shift = 12 + (y & 3) * 4;
 		int mask1 = y >= 1 ? ~0 : 0, mask2 = y >= 2 ? ~0 : 0, mask3 = y >= 4 ? ~0 : 0;
-
 		uint i = cur_tri_idx == 0 ? (LIX & WARP_MASK) >> RBLOCK_HEIGHT_SHIFT : cur_tri_idx;
 		for(; i < tri_count; i += WARP_SIZE / RBLOCK_HEIGHT) {
 #if RBLOCK_HEIGHT == 8
 			uint tri_data = g_scratch_64[src_offset + i][y >> 2];
 			uint tri_info = g_scratch_32[src_offset + i];
-			int tri_offset = int(tri_info >> 24);
-			if(i == 0 && tri_offset != 0)
-				tri_offset -= SEGMENT_SIZE;
-			uint tri_idx = tri_info & 0xffffff;
-			uint row_data = tri_data >> row_shift;
 #else
-			uvec2 tri_data = g_scratch_64[src_offset + i];
-			uint tri_offset_data = g_scratch_32[src_offset + i];
-			int tri_offset = int(tri_offset_data & 0xffffff) - int(segment_id) * SEGMENT_SIZE;
-			if(tri_offset >= SEGMENT_SIZE)
-				break;
-
-			uint tri_idx = tri_data.x & 0xffffff;
-			uint row_data = tri_data.y >> row_shift;
+			uvec2 tri_block_data = g_scratch_64[src_offset + i];
+			uint tri_data = tri_block_data.y, tri_info = tri_block_data.x;
 #endif
 
-			int minx = int(row_data & 7), countx = int((row_data >> 16) & 15);
+			uint tri_segment_bits = tri_data >> 28;
+			if(tri_segment_bits != segment_bits)
+				break;
+
+			tri_offset = tri_info & 0xff;
+			uint tri_idx = tri_info & 0xffffff00;
+			int minx = int((tri_data >> minx_shift) & 7);
+			int countx = int((tri_data >> countx_shift) & 15);
+
 			int prevx = countx + (subgroupShuffleUp(countx, 1) & mask1);
 			prevx += (subgroupShuffleUp(prevx, 2) & mask2);
 #if RBLOCK_HEIGHT == 8
@@ -295,40 +301,40 @@ void loadSamples(uint lrbid, inout uint cur_tri_idx, int segment_id, uint rblock
 #endif
 
 			tri_offset += prevx - countx;
-			countx = min(countx, SEGMENT_SIZE - tri_offset);
-			if(tri_offset < 0)
-				countx += tri_offset, minx -= tri_offset, tri_offset = 0;
-
 			uint pixel_id = (y << 3) | minx;
-			uint value = pixel_id | (tri_idx << 8);
+			uint value = pixel_id | tri_idx;
 			for(int j = 0; j < countx; j++)
 				s_buffer[buf_offset + tri_offset++] = value++;
-
-			if(tri_offset > SEGMENT_SIZE)
-				break;
 		}
+
 		cur_tri_idx = i;
 	}
+
 	subgroupMemoryBarrierShared();
 }
 
 void shadeAndReduceSamples(uint rbid, uint sample_count, in out ReductionContext ctx) {
-	uint buf_offset = (LIX >> WARP_SHIFT) * SEGMENT_SIZE;
+	uint buf_offset = (LIX >> WARP_SHIFT) * (SEGMENT_SIZE + WARP_SIZE);
 	uint mini_offset =
 		WARP_SIZE == 64 ? (LIX & ~WARP_MASK) + ((LIX & 32) != 0 ? LSIZE : 0) : LIX & ~WARP_MASK;
-	// TODO: make it work the same way as in raster_low? maybe it's better to change in raster_low ?
 	ivec2 rblock_pos = (rasterBlockPos(rbid) << rasterBlockShift()) + s_bin_pos;
 	vec3 out_color = ctx.out_color;
 
 	for(uint i = 0; i < sample_count; i += WARP_SIZE) {
-		// TODO: we don't need s_mini_buffer here, we can use s_buffer, thus decreasing mini_buffer size
+		// TODO: load two values at once in 64-bit mode, mini_buffer won't be needed!
+		uint value = s_buffer[buf_offset + gl_SubgroupInvocationID];
+#if WARP_SIZE == 32
+		s_buffer[buf_offset + gl_SubgroupInvocationID] = 0;
+		subgroupMemoryBarrierShared();
+#else
 		s_mini_buffer[LIX] = 0;
 		if(WARP_SIZE == 64)
 			s_mini_buffer[LSIZE + LIX] = 0;
+#endif
 		uvec2 sample_s;
-		uint sample_id = i + (LIX & WARP_MASK);
+
+		uint sample_id = i + gl_SubgroupInvocationID;
 		if(sample_id < sample_count) {
-			uint value = s_buffer[buf_offset + sample_id];
 			uint sample_pixel_id = value & WARP_MASK;
 			uint tri_idx = value >> 8;
 			ivec2 pix_pos = rblock_pos + ivec2(sample_pixel_id & 7, sample_pixel_id >> 3);
@@ -336,7 +342,7 @@ void shadeAndReduceSamples(uint rbid, uint sample_count, in out ReductionContext
 			uint sample_color = shadeSample(pix_pos, tri_idx, sample_depth);
 			sample_s = uvec2(sample_color, floatBitsToUint(sample_depth));
 #if WARP_SIZE == 32
-			atomicOr(s_mini_buffer[mini_offset + sample_pixel_id], gl_SubgroupEqMask.x);
+			atomicOr(s_buffer[buf_offset + sample_pixel_id], gl_SubgroupEqMask.x);
 #else
 			const uint pixel_bit = gl_SubgroupEqMask.x | gl_SubgroupEqMask.y;
 			atomicOr(s_mini_buffer[mini_offset + sample_pixel_id], pixel_bit);
@@ -345,12 +351,13 @@ void shadeAndReduceSamples(uint rbid, uint sample_count, in out ReductionContext
 		subgroupMemoryBarrierShared();
 
 #if WARP_SIZE == 32
-		uint pixel_bitmask = s_mini_buffer[LIX];
+		uint pixel_bitmask = s_buffer[buf_offset + gl_SubgroupInvocationID];
 #else
 		uvec2 pixel_bitmask = uvec2(s_mini_buffer[LIX], s_mini_buffer[LIX + LSIZE]);
 #endif
 		if(reduceSample(ctx, out_color, sample_s, pixel_bitmask))
 			break;
+		buf_offset += WARP_SIZE;
 	}
 
 	// TODO: check if encode+decode for out_color is really needed (to save 2 regs)

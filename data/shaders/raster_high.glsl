@@ -195,6 +195,7 @@ void generateRBlocks(uint start_rbid) {
 	uint group_shift = s_rblock_group_shift;
 	uint group_mask = group_size - 1;
 	uint group_thread = LIX & group_mask;
+	const uint mini_offset = BASE_BUFFER_SIZE;
 
 	// TODO: better names for indices
 	uint group_rbid = LIX >> (WARP_SHIFT + group_shift);
@@ -322,10 +323,10 @@ void generateRBlocks(uint start_rbid) {
 			updateStats(int(sum), int(tri_count));
 			s_rblock_frag_counts[lrbid] = sum;
 		}
-		s_mini_buffer[LIX * 4 + 0] = sum - value, value -= values[0];
-		s_mini_buffer[LIX * 4 + 1] = sum - value, value -= values[1];
-		s_mini_buffer[LIX * 4 + 2] = sum - value;
-		s_mini_buffer[LIX * 4 + 3] = sum - values[3];
+		s_buffer[mini_offset + LIX * 4 + 0] = sum - value, value -= values[0];
+		s_buffer[mini_offset + LIX * 4 + 1] = sum - value, value -= values[1];
+		s_buffer[mini_offset + LIX * 4 + 2] = sum - value;
+		s_buffer[mini_offset + LIX * 4 + 3] = sum - values[3];
 	}
 	barrier();
 	if(s_raster_error != 0)
@@ -338,8 +339,9 @@ void generateRBlocks(uint start_rbid) {
 	for(uint i = group_thread; i < tri_count; i += group_size) {
 		uint current = s_buffer[buf_offset + i];
 		uint rblock_tri_idx = current >> 19;
-		uint mini_offset = group_rbid << (3 + group_shift);
-		uint tri_offset = (current & 0xfff) + s_mini_buffer[mini_offset + (i >> WARP_SHIFT)];
+		uint tri_offset =
+			(current & 0xfff) +
+			s_buffer[mini_offset + (group_rbid << (3 + group_shift)) + (i >> WARP_SHIFT)];
 
 		// Moze warto by by³o procesowac 8 rzedów na raz?
 		// Mniej do sortowania by by³o? Ale niektóre trók¹ty maj¹ tylko jeden rz¹d...
@@ -351,9 +353,10 @@ void generateRBlocks(uint start_rbid) {
 		s_buffer[buf_offset + i] = tri_idx | seg_offset;
 #else
 		uvec2 tri_data = g_scratch_64[dst_offset + rblock_tri_idx];
-		uint tri_idx = tri_data.y & 0xffffff;
-		stored_tris[stored_idx++] = uvec2(tri_idx, tri_data.x); // 4 wolne bity...
-		s_buffer[buf_offset + i] = tri_offset;
+		uint tri_idx = (tri_data.y & 0xffffff);
+		uint segment_bits = (tri_offset & 0xf00) << 20;
+		stored_tris[stored_idx++] =
+			uvec2((tri_idx << 8) | (tri_offset & 0xff), tri_data.x | segment_bits);
 #endif
 	}
 	barrier();
@@ -364,7 +367,9 @@ void generateRBlocks(uint start_rbid) {
 	stored_idx = 0;
 	for(uint i = group_thread; i < tri_count; i += group_size) {
 		g_scratch_64[dst_offset + i] = stored_tris[stored_idx++];
+#if RBLOCK_HEIGHT == 8
 		g_scratch_32[dst_offset + i] = s_buffer[buf_offset + i];
+#endif
 	}
 	barrier();
 }

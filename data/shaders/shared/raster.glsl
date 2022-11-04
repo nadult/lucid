@@ -109,9 +109,9 @@ uint rasterBlock(uint tri_mins, uint tri_maxs, int startx, out uint num_frags, i
 	vec4 cpy = vec4(1.0, 3.0, 5.0, 7.0) * count;
 	cpos += vec2(cpx[0] + cpx[1] + cpx[2] + cpx[3], cpy[0] + cpy[1] + cpy[2] + cpy[3]);
 	num_frags = count[0] + count[1] + count[2] + count[3];
-	uint min_bits =
-		(xmin[0] & 7) | ((xmin[1] & 7) << 3) | ((xmin[2] & 7) << 6) | ((xmin[3] & 7) << 9);
-	uint count_bits = (count[0] << 12) | (count[1] << 16) | (count[2] << 20) | (count[3] << 24);
+	uint min_bits = ((xmin[0] << 0) | (xmin[1] << 7) | (xmin[2] << 14) | (xmin[3] << 21)) &
+					(7 | (7 << 7) | (7 << 14) | (7 << 21));
+	uint count_bits = (count[0] << 3) | (count[1] << 10) | (count[2] << 17) | (count[3] << 24);
 	return min_bits | count_bits;
 }
 
@@ -227,8 +227,8 @@ void sortBuffer(uint lrbid, uint count, uint rcount, uint buf_offset, uint group
 }
 
 uint blockRowsToBits(uint rows) {
-	uvec4 countx = (uvec4(rows) >> uvec4(12, 16, 20, 24)) & 15;
-	uvec4 minx = (uvec4(rows) >> uvec4(0, 3, 6, 9)) & 7;
+	uvec4 minx = (uvec4(rows) >> uvec4(0, 7, 14, 21)) & 7;
+	uvec4 countx = (uvec4(rows) >> uvec4(3, 10, 17, 24)) & 15;
 	uint bits0 = uint((1 << countx[0]) - 1) << (minx[0] + 0);
 	uint bits1 = uint((1 << countx[1]) - 1) << (minx[1] + 8);
 	uint bits2 = uint((1 << countx[2]) - 1) << (minx[2] + 16);
@@ -275,9 +275,8 @@ void loadSamples(uint lrbid, inout uint cur_tri_idx, int segment_id, uint rblock
 		}
 		cur_tri_idx = i;
 	} else {
-		uint y = LIX & (RBLOCK_HEIGHT - 1);
-		uint minx_shift = (y & 3) * 3, countx_shift = 12 + (y & 3) * 4;
-		int mask1 = y >= 1 ? ~0 : 0, mask2 = y >= 2 ? ~0 : 0, mask3 = y >= 4 ? ~0 : 0;
+		uint y = LIX & (RBLOCK_HEIGHT - 1), row_shift = (y & 3) * 7;
+		uint mask1 = y >= 1 ? ~0u : 0, mask2 = y >= 2 ? ~0u : 0, mask3 = y >= 4 ? ~0u : 0;
 		uint i = cur_tri_idx == 0 ? (LIX & WARP_MASK) >> RBLOCK_HEIGHT_SHIFT : cur_tri_idx;
 		for(; i < tri_count; i += WARP_SIZE / RBLOCK_HEIGHT) {
 #if RBLOCK_HEIGHT == 8
@@ -294,10 +293,9 @@ void loadSamples(uint lrbid, inout uint cur_tri_idx, int segment_id, uint rblock
 
 			tri_offset = tri_info & 0xff;
 			uint tri_idx = tri_info & 0xffffff00;
-			int minx = int((tri_data >> minx_shift) & 7);
-			int countx = int((tri_data >> countx_shift) & 15);
-
-			int prevx = countx + (subgroupShuffleUp(countx, 1) & mask1);
+			uint row_data = tri_data >> row_shift;
+			uint minx = row_data & 7, countx = (row_data >> 3) & 15;
+			uint prevx = countx + (subgroupShuffleUp(countx, 1) & mask1);
 			prevx += (subgroupShuffleUp(prevx, 2) & mask2);
 #if RBLOCK_HEIGHT == 8
 			prevx += (subgroupShuffleUp(prevx, 4) & mask3);

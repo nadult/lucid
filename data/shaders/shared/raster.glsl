@@ -236,6 +236,10 @@ uint blockRowsToBits(uint rows) {
 	return bits0 | bits1 | bits2 | bits3;
 }
 
+bool highTriDensity(uint tri_count, uint frag_count) {
+	return frag_count < (tri_count << 3) && tri_count >= 16;
+}
+
 void loadSamples(uint lrbid, inout uint cur_tri_idx, int segment_id, uint rblock_counts,
 				 uint src_offset) {
 	uint buf_offset = (LIX >> WARP_SHIFT) * (SEGMENT_SIZE + WARP_SIZE);
@@ -246,13 +250,12 @@ void loadSamples(uint lrbid, inout uint cur_tri_idx, int segment_id, uint rblock
 	}
 	subgroupMemoryBarrierShared();
 
-	uint tri_count = rblock_counts & 0xffff;
-	uint frag_count = rblock_counts >> 16;
-	bool high_density = frag_count < (tri_count << 3); // TODO: move out
+	uint tri_count = rblock_counts & 0xffff, frag_count = rblock_counts >> 16;
 	int segment_bits = segment_id & 15;
 	uint tri_offset;
 
-	if(high_density) {
+	// TODO: compute highTriDensity outside
+	if(highTriDensity(tri_count, frag_count)) {
 		uint i = cur_tri_idx == 0 ? LIX & WARP_MASK : cur_tri_idx;
 		for(; i < tri_count; i += WARP_SIZE) {
 			uvec2 tri_data = g_scratch_64[src_offset + i];

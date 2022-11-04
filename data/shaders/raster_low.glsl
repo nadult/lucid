@@ -13,19 +13,20 @@ DEBUG_SETUP(1, 11)
 layout(local_size_x = LSIZE) in;
 
 // TODO: too much mem used
-#define WORKGROUP_SCRATCH_SIZE (64 * 1024)
-#define WORKGROUP_SCRATCH_SHIFT 16
+#define WORKGROUP_SCRATCH_SIZE (32 * 1024)
+#define WORKGROUP_SCRATCH_SHIFT 15
 
+// More space needed only for 64x64 bins
 uint scratch64BlockRowTrisOffset(uint by) {
 	return (gl_WorkGroupID.x << WORKGROUP_SCRATCH_SHIFT) + by * (MAX_BLOCK_ROW_TRIS * 2);
 }
 
 uint scratch64BlockTrisOffset(uint bid) {
-	return (gl_WorkGroupID.x << WORKGROUP_SCRATCH_SHIFT) + 32 * 1024 + bid * (MAX_BLOCK_TRIS * 2);
+	return (gl_WorkGroupID.x << WORKGROUP_SCRATCH_SHIFT) + 16 * 1024 + bid * (MAX_BLOCK_TRIS * 2);
 }
 
 uint scratchRasterBlockTrisOffset(uint rbid) {
-	return (gl_WorkGroupID.x << WORKGROUP_SCRATCH_SHIFT) + 48 * 1024 + rbid * MAX_BLOCK_TRIS;
+	return (gl_WorkGroupID.x << WORKGROUP_SCRATCH_SHIFT) + 24 * 1024 + rbid * MAX_BLOCK_TRIS;
 }
 
 shared int s_num_bins, s_bin_id;
@@ -60,11 +61,6 @@ void generateRowTris(uint tri_idx) {
 			continue;
 
 		uint row_idx = atomicAdd(s_block_row_tri_count[by], 1);
-		if(row_idx >= MAX_BLOCK_ROW_TRIS) {
-			atomicOr(s_raster_error, 0xffffffff);
-			return;
-		}
-
 		uint roffset = row_idx + by * (MAX_BLOCK_ROW_TRIS * 2);
 		g_scratch_64[dst_offset_64 + roffset] =
 			uvec2(bits0.x | (bx_mask << 24), bits1.x | ((tri_idx & 0xff0000) << 8));
@@ -74,10 +70,6 @@ void generateRowTris(uint tri_idx) {
 }
 
 void processQuads() {
-	// TODO: optimization: in many cases all rows may very well fit in SMEM,
-	// maybe it would be worth it not to use scratch at all then?
-	// TODO: this loop is slooooow
-	// TODO: divide big tris across different threads
 	for(uint i = LIX >> 1; i < s_bin_quad_count; i += LSIZE / 2) {
 		uint second_tri = LIX & 1;
 		uint bin_quad_idx = g_bin_quads[s_bin_quad_offset + i];
@@ -259,11 +251,9 @@ void generateBlocks(uint bid) {
 		s_buffer[mini_offset + LIX] = sum - value;
 	}
 	barrier();
-	if(s_raster_error != 0)
-		return;
 
-		// Storing triangle fragment offsets to scratch mem
-		// Also finding first triangle for each segment
+	// Storing triangle fragment offsets to scratch mem
+	// Also finding first triangle for each segment
 
 #if WARP_SIZE == 32
 	src_offset_64 = dst_offset_64;
@@ -280,16 +270,10 @@ void generateBlocks(uint bid) {
 			tri_offset += s_buffer[mini_offset + (lbid << NUM_WARPS_SHIFT) + (prev >> WARP_SHIFT)];
 		}
 
-		uint tri_value = s_buffer[buf_offset + i];
-		uint block_tri_idx = tri_value >> 24;
-		tri_value = (tri_value & 0xfff) | ((tri_value & 0xfff000) << 4);
-		tri_value =
-			(tri_value + s_buffer[mini_offset + (lbid << NUM_WARPS_SHIFT) + (i >> WARP_SHIFT)]) -
-			tri_offset;
-
+		uint block_tri_idx = s_buffer[buf_offset + i] >> 24;
 		uint tri_offset0 = tri_offset & 0xffff, tri_offset1 = tri_offset >> 16;
-		uint segment_bits0 = (tri_offset0 & 0xf00) << 20, segment_bits1 = (tri_offset1 & 0xf00)
-																		  << 20;
+		uint segment_bits0 = (tri_offset0 & 0xf00) << 20;
+		uint segment_bits1 = (tri_offset1 & 0xf00) << 20;
 
 		uint tri_idx = g_scratch_64[src_offset_64 + block_tri_idx + MAX_BLOCK_TRIS].x << 8;
 		uvec2 tri_data = g_scratch_64[src_offset_64 + block_tri_idx];
@@ -358,13 +342,6 @@ void rasterBin(int bin_id) {
 	UPDATE_TIMER(0);
 
 	const int num_rblocks = (BIN_SIZE / RBLOCK_WIDTH) * (BIN_SIZE / RBLOCK_HEIGHT);
-
-	//  bid: block (8x8) id; We have 8 x 8 = 64 blocks
-	// rbid: half block (8x4) id; We have 8 x 16 = 128 half blocks
-	//       half blocks which make a single block are stored one after another
-	//       (upper block first)
-	// lbid: local block id (range: 0 up to NUM_WARPS - 1)
-	// Each block has 64 pixels, so we need 2 warps to process all pixels within a single block
 	for(uint rbid = LIX >> WARP_SHIFT; rbid < num_rblocks; rbid += NUM_WARPS) {
 		barrier();
 		if(WARP_SIZE == 64 || (rbid & NUM_WARPS) == 0) {

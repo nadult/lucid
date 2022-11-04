@@ -9,6 +9,13 @@
 // TODO: cleanup in the beginning (group definitions)
 // NOTE: converting integer multiplications to shifts does not increase perf
 
+// Variable naming:
+//   bid: block (8x8) id; In 32x32 bin we have 4 x 4 = 16 blocks
+//  rbid: raster block id: either 8x4 or 8x8
+//  lbid: local block id (range: 0 up to NUM_WARPS - 1)
+// lrbid: local raster block id
+// Each block has 64 pixels, so we need 2 warps to process all pixels within a single block
+
 #include "compute_funcs.glsl"
 #include "funcs.glsl"
 #include "scanline.glsl"

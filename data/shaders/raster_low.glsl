@@ -275,7 +275,6 @@ void generateBlocks(uint bid) {
 	}
 #else
 	uint dst_offset = scratchRasterBlockOffset(bid);
-
 	for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_SIZE) {
 		uint tri_offset = 0;
 		if(i > 0) {

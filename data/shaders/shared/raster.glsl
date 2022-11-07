@@ -247,8 +247,10 @@ bool highTriDensity(uint tri_count, uint frag_count) {
 	return frag_count < (tri_count << 3) && tri_count >= 16;
 }
 
+uint shadingBufferOffset() { return (LIX >> WARP_SHIFT) * (SEGMENT_SIZE + WARP_SIZE); }
+
 void loadSamples(inout uint cur_tri_idx, int segment_id, uint rblock_counts, uint src_offset) {
-	uint buf_offset = (LIX >> WARP_SHIFT) * (SEGMENT_SIZE + WARP_SIZE);
+	uint buf_offset = shadingBufferOffset();
 	{
 		// Copying samples generated in previous round which may overlap into current segment
 		uint prev_offset = buf_offset + gl_SubgroupInvocationID;
@@ -321,7 +323,7 @@ void loadSamples(inout uint cur_tri_idx, int segment_id, uint rblock_counts, uin
 }
 
 void shadeAndReduceSamples(uint rbid, uint sample_count, in out ReductionContext ctx) {
-	uint buf_offset = (LIX >> WARP_SHIFT) * (SEGMENT_SIZE + WARP_SIZE);
+	uint buf_offset = shadingBufferOffset();
 	uint mini_offset =
 		WARP_SIZE == 64 ? (LIX & ~WARP_MASK) + ((LIX & 32) != 0 ? LSIZE : 0) : LIX & ~WARP_MASK;
 	ivec2 rblock_pos = (rasterBlockPos(rbid) << rasterBlockShift()) + s_bin_pos;
@@ -380,7 +382,7 @@ shared uint s_vis_pixels[LSIZE];
 void initVisualizeSamples() { s_vis_pixels[LIX] = 0; }
 
 void visualizeSamples(uint sample_count) {
-	uint buf_offset = (LIX >> WARP_SHIFT) * SEGMENT_SIZE;
+	uint buf_offset = shadingBufferOffset();
 	for(uint i = LIX & WARP_MASK; i < sample_count; i += WARP_SIZE) {
 		uint pixel_id = s_buffer[buf_offset + i] & WARP_MASK;
 		atomicAdd(s_vis_pixels[(LIX & ~WARP_MASK) + pixel_id], 1);

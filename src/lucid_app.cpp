@@ -371,9 +371,13 @@ void LucidApp::doMenu() {
 					  orbit_cam->rot_horiz, orbit_cam->rot_vert);
 		}
 		ImGui::InputFloat("Square weight", &m_square_weight);
-		if(setup.scene && ImGui::Button("Generate meshlets")) {
-			m_test_meshlets = true;
-		}
+		//if(setup.scene && ImGui::Button("Generate meshlets")) {
+		//	m_test_meshlets = true;
+		//}
+		if(perf::Manager::instance() && !m_perf_analyzer)
+			if(ImGui::Button("Show performance analyzer"))
+				m_perf_analyzer.emplace();
+
 		if(scene && ImGui::Button("Print materials")) {
 			for(auto &mat : scene->materials)
 				print("%\n", mat.description());

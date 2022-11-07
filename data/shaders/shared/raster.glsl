@@ -77,12 +77,9 @@
 #define SEGMENT_SHIFT 8
 
 #define BASE_BUFFER_SIZE (LSIZE * 8)
-#define FULL_BUFFER_SIZE (BASE_BUFFER_SIZE + LSIZE)
+#define FULL_BUFFER_SIZE (BASE_BUFFER_SIZE + LSIZE * (WARP_SIZE / 32))
 
 shared uint s_buffer[FULL_BUFFER_SIZE + 1];
-#if WARP_SIZE == 64
-shared uint s_mini_buffer[LSIZE * 2];
-#endif
 
 uvec3 rasterBinStep(inout ScanlineParams scan) {
 #define SCAN_STEP(id)                                                                              \
@@ -326,22 +323,18 @@ void loadSamples(inout uint cur_tri_idx, int segment_id, uint rblock_counts, uin
 
 void shadeAndReduceSamples(uint rbid, uint sample_count, in out ReductionContext ctx) {
 	uint buf_offset = shadingBufferOffset();
-	uint mini_offset =
-		WARP_SIZE == 64 ? (LIX & ~WARP_MASK) + ((LIX & 32) != 0 ? LSIZE : 0) : LIX & ~WARP_MASK;
 	ivec2 rblock_pos = (rasterBlockPos(rbid) << rasterBlockShift()) + s_bin_pos;
 	vec3 out_color = ctx.out_color;
+	uint second_offset = (LIX & ~WARP_MASK) + BASE_BUFFER_SIZE + LSIZE;
 
 	for(uint i = 0; i < sample_count; i += WARP_SIZE) {
-		// TODO: load two values at once in 64-bit mode, mini_buffer won't be needed!
 		uint value = s_buffer[buf_offset + gl_SubgroupInvocationID];
-#if WARP_SIZE == 32
+
 		s_buffer[buf_offset + gl_SubgroupInvocationID] = 0;
-		subgroupMemoryBarrierShared();
-#else
-		s_mini_buffer[LIX] = 0;
-		if(WARP_SIZE == 64)
-			s_mini_buffer[LSIZE + LIX] = 0;
+#if WARP_SIZE == 64
+		s_buffer[second_offset + gl_SubgroupInvocationID] = 0;
 #endif
+		subgroupMemoryBarrierShared();
 		uvec2 sample_s;
 
 		uint sample_id = i + gl_SubgroupInvocationID;
@@ -352,20 +345,23 @@ void shadeAndReduceSamples(uint rbid, uint sample_count, in out ReductionContext
 			float sample_depth;
 			uint sample_color = shadeSample(pix_pos, tri_idx, sample_depth);
 			sample_s = uvec2(sample_color, floatBitsToUint(sample_depth));
-#if WARP_SIZE == 32
-			atomicOr(s_buffer[buf_offset + sample_pixel_id], gl_SubgroupEqMask.x);
-#else
-			const uint pixel_bit = gl_SubgroupEqMask.x | gl_SubgroupEqMask.y;
-			atomicOr(s_mini_buffer[mini_offset + sample_pixel_id], pixel_bit);
-#endif
+
+			uint bits_offset =
+				WARP_SIZE == 64 && gl_SubgroupInvocationID >= 32 ? second_offset : buf_offset;
+			uint pixel_bit =
+				WARP_SIZE == 64 ? gl_SubgroupEqMask.x | gl_SubgroupEqMask.y : gl_SubgroupEqMask.x;
+			atomicOr(s_buffer[bits_offset + sample_pixel_id], pixel_bit);
 		}
 		subgroupMemoryBarrierShared();
 
 #if WARP_SIZE == 32
 		uint pixel_bitmask = s_buffer[buf_offset + gl_SubgroupInvocationID];
 #else
-		uvec2 pixel_bitmask = uvec2(s_mini_buffer[LIX], s_mini_buffer[LIX + LSIZE]);
+		uvec2 pixel_bitmask = uvec2(s_buffer[buf_offset + gl_SubgroupInvocationID],
+									s_buffer[second_offset + gl_SubgroupInvocationID]);
+		subgroupMemoryBarrierShared();
 #endif
+
 		if(reduceSample(ctx, out_color, sample_s, pixel_bitmask))
 			break;
 		buf_offset += WARP_SIZE;

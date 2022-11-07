@@ -378,6 +378,9 @@ void rasterBin(int bin_id) {
 		UPDATE_TIMER(4);
 	}
 
+	// TODO: we should be able to start processing next bin before all warps have finished
+	// but we would have to divide work in processQuads differently;
+	// We could load bins in double-buffered fashion and once one bin is completely finished, we could load next one
 	barrier(); // TODO: stall (10.5%, conference)
 }
 

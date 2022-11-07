@@ -54,7 +54,8 @@ LucidApp::LucidApp(VWindowRef window, VDeviceRef device)
 	  m_gui(device, window, m_gui_render_pass, {GuiStyleMode::mini}),
 	  m_cam_control(Plane3F(float3(0, 1, 0), 0.0f)), m_lighting(SceneLighting::makeDefault()) {
 
-	//m_device->memory().setLogging(true, false);
+	//m_device->memory().setLogging(VMemoryDomain::device,
+	//							  VMemoryBlockType::slab | VMemoryBlockType::unmanaged);
 	ShaderCompilerSetup sc_setup;
 	auto shader_config = getShaderConfig(*device);
 	sc_setup.vulkan_version = device->version();
@@ -539,6 +540,9 @@ bool LucidApp::tick(float time_diff) {
 
 	if(m_lucid_renderer)
 		m_lucid_renderer->verifyInfo();
+#ifndef NDEBUG
+	m_device->memory().validate();
+#endif
 
 	return result;
 }

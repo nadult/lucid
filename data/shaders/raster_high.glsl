@@ -342,19 +342,16 @@ void generateRBlocks(uint start_rbid) {
 		uint tri_offset =
 			(current & 0xfff) +
 			s_buffer[mini_offset + (group_rbid << (3 + group_shift)) + (i >> WARP_SHIFT)];
-
-		// Moze warto by by³o procesowac 8 rzedów na raz?
-		// Mniej do sortowania by by³o? Ale niektóre trók¹ty maj¹ tylko jeden rz¹d...
-#if RBLOCK_HEIGHT == 8
+		uint segment_bits = (tri_offset & 0xf00) << 20;
 		uvec2 tri_data = g_scratch_64[dst_offset + rblock_tri_idx];
+
+#if RBLOCK_HEIGHT == 8
 		uint tri_info = g_scratch_32[dst_offset + rblock_tri_idx];
 		uint tri_idx = tri_info & 0xffffff;
-		stored_tris[stored_idx++] = tri_data; // TODO: 8 free bits
-		s_buffer[buf_offset + i] = tri_idx | seg_offset;
+		stored_tris[stored_idx++] = uvec2(tri_data.x | segment_bits, tri_data.y | segment_bits);
+		s_buffer[buf_offset + i] = (tri_idx << 8) | (tri_offset & 0xff);
 #else
-		uvec2 tri_data = g_scratch_64[dst_offset + rblock_tri_idx];
-		uint tri_idx = (tri_data.y & 0xffffff);
-		uint segment_bits = (tri_offset & 0xf00) << 20;
+		uint tri_idx = tri_data.y & 0xffffff;
 		stored_tris[stored_idx++] =
 			uvec2((tri_idx << 8) | (tri_offset & 0xff), tri_data.x | segment_bits);
 #endif

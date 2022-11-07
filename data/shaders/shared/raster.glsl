@@ -265,7 +265,7 @@ void loadSamples(inout uint cur_tri_idx, int segment_id, uint rblock_counts, uin
 	uint tri_offset;
 
 	// TODO: compute highTriDensity outside
-	if(highTriDensity(tri_count, frag_count)) {
+	if(WARP_SIZE == 32 && highTriDensity(tri_count, frag_count)) {
 		uint i = cur_tri_idx == 0 ? LIX & WARP_MASK : cur_tri_idx;
 		for(; i < tri_count; i += WARP_SIZE) {
 			uvec2 tri_data = g_scratch_64[src_offset + i];

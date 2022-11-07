@@ -280,16 +280,17 @@ void generateBlocks(uint bid) {
 			tri_offset = s_buffer[buf_offset + prev] & 0xffffff;
 			tri_offset += s_buffer[mini_offset + (lbid << WARP_SHIFT) + (prev >> WARP_SHIFT)];
 		}
-		uint tri_value = s_buffer[buf_offset + i];
-		uint block_tri_idx = tri_value >> 24;
+
+		uint block_tri_idx = s_buffer[buf_offset + i] >> 24;
+		uint segment_bits = (tri_offset & 0xf00) << 20;
 
 		uvec2 tri_data = g_scratch_64[tmp_offset + block_tri_idx];
 		uint tri_idx =
 			((g_scratch_32[tmp_offset + block_tri_idx] & 0xfffff) << 8) | (tri_data.x & 0xf0000000);
 		tri_data.x &= 0xfffffff;
 
+		g_scratch_64[dst_offset + i] = uvec2(tri_data.x | segment_bits, tri_data.y | segment_bits);
 		g_scratch_32[dst_offset + i] = tri_idx | (tri_offset & 0xff);
-		g_scratch_64[dst_offset + i] = tri_data;
 	}
 #endif
 }
@@ -302,7 +303,7 @@ void visualizeBlockCounts(uint rbid, ivec2 pixel_pos) {
 
 	vec3 color;
 	color = gradientColor(frag_count, uvec4(8, 32, 128, 1024) * WARP_SIZE);
-	color = gradientColor(tri_count, uvec4(16, 64, 256, 1024));
+	//color = gradientColor(tri_count, uvec4(16, 64, 256, 1024));
 
 	outputPixel(pixel_pos, vec4(SATURATE(color), 1.0));
 }

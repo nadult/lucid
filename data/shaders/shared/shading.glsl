@@ -302,27 +302,22 @@ vec4 finishReduceSamples(ReductionContext ctx) {
 }
 
 // Basic rasterization statistics
+#define NUM_STATS 2
+shared uint s_stats[NUM_STATS];
 
-shared int s_stat_fragments;
-shared int s_stat_hblocks;
-
-void updateStats(int num_fragments, int num_hblocks) {
-	atomicAdd(s_stat_fragments, num_fragments);
-	atomicAdd(s_stat_hblocks, num_hblocks);
+void updateStats(uint num_fragments, uint num_rblocks) {
+	atomicAdd(s_stats[0], num_fragments);
+	atomicAdd(s_stats[1], num_rblocks);
 }
 
 void initStats() {
-	if(LIX == 0) {
-		s_stat_fragments = 0;
-		s_stat_hblocks = 0;
-	}
+	if(LIX < NUM_STATS)
+		s_stats[LIX] = 0;
 }
 
 void commitStats() {
-	if(LIX == 0) {
-		atomicAdd(g_info.num_fragments, s_stat_fragments);
-		atomicAdd(g_info.num_half_blocks, s_stat_hblocks);
-	}
+	if(LIX < NUM_STATS)
+		atomicAdd(g_info.stats[LIX], s_stats[LIX]);
 }
 
 #endif

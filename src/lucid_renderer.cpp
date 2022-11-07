@@ -729,9 +729,12 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 			dispatcher_task_counts.emplace_back(count);
 	}
 
-	auto fragment_info = stdFormat("%.3f avg fragments / pixel\n%.3f avg fragments / hblock",
-								   double(info.num_fragments) / (m_size.x * m_size.y),
-								   double(info.num_fragments) / info.num_half_blocks);
+	uint num_fragments = info.stats[0];
+	uint num_rblocks = info.stats[1];
+
+	auto fragment_info = stdFormat("%.3f avg fragments / pixel\n%.3f avg fragments / rblock",
+								   double(num_fragments) / (m_size.x * m_size.y),
+								   double(num_fragments) / num_rblocks);
 
 	vector<StatsRow> basic_rows = {
 		{"input instances", formatLarge(m_num_instances)},
@@ -744,8 +747,8 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 		{"bin tris", formatLarge(num_bin_tris), "Total per-bin tris"},
 		{"max small quads / bin", formatLarge(max_quads_per_bin)},
 		{"max large tris / bin", formatLarge(max_tris_per_bin)},
-		{"half-blocks", formatLarge(info.num_half_blocks)},
-		{"fragments", formatLarge(info.num_fragments), fragment_info},
+		{"render-blocks", formatLarge(num_rblocks)},
+		{"fragments", formatLarge(num_fragments), fragment_info},
 	};
 
 	if(!allOf(info.temp, 0)) {

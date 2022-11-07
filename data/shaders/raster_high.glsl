@@ -320,7 +320,7 @@ void generateRBlocks(uint start_rbid) {
 			temp = subgroupShuffleUp(sum, 16), sum += group_sub_idx >= 16 ? temp : 0;
 
 		if(group_sub_idx == wgmask) {
-			updateStats(int(sum), int(tri_count));
+			updateStats(sum, tri_count);
 			s_rblock_frag_counts[lrbid] = sum;
 		}
 		s_buffer[mini_offset + LIX * 4 + 0] = sum - value, value -= values[0];

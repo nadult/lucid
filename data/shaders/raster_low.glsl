@@ -36,7 +36,7 @@ shared uint s_bin_tri_count, s_bin_tri_offset;
 
 shared uint s_block_row_tri_count[BLOCK_ROWS];
 shared uint s_temp_block_tri_count[NUM_WARPS];
-shared uint s_rblock_counts[RBLOCK_COLS * RBLOCK_ROWS];
+shared uint s_rblock_counts[NUM_RBLOCKS];
 
 shared int s_raster_error;
 shared int s_promoted_bin_count;
@@ -226,14 +226,12 @@ void generateBlocks(uint bid) {
 
 		if(warp_idx == NUM_WARPS_MASK) {
 #if WARP_SIZE == 32
-			uint v0 = sum & 0xffff, v1 = sum >> 16;
-			updateStats(int(v0 + v1), int(tri_count * 2));
 			uint rbid = blockIdToRaster(lbid + (bid & ~(NUM_WARPS - 1)));
+			uint v0 = sum & 0xffff, v1 = sum >> 16;
 			s_rblock_counts[rbid] = (v0 << 16) | tri_count;
 			s_rblock_counts[rbid + RBLOCK_COLS] = (v1 << 16) | tri_count;
 #else
-			s_rblock_counts[lbid] = (sum << 16) | tri_count;
-			updateStats(int(sum), int(tri_count * 2));
+			s_rblock_counts[bid] = (sum << 16) | tri_count;
 #endif
 		}
 
@@ -349,8 +347,7 @@ void rasterBin(int bin_id) {
 	groupMemoryBarrier();
 	UPDATE_TIMER(1);
 
-	const int num_rblocks = (BIN_SIZE / RBLOCK_WIDTH) * (BIN_SIZE / RBLOCK_HEIGHT);
-	for(uint rbid = LIX >> WARP_SHIFT; rbid < num_rblocks; rbid += NUM_WARPS) {
+	for(uint rbid = LIX >> WARP_SHIFT; rbid < NUM_RBLOCKS; rbid += NUM_WARPS) {
 		ReductionContext context;
 		initReduceSamples(context);
 		//initVisualizeSamples();
@@ -381,6 +378,11 @@ void rasterBin(int bin_id) {
 		//finishVisualizeSamples(pixel_pos);
 		//visualizeBlockCounts(rbid, pixel_pos);
 		UPDATE_TIMER(4);
+	}
+
+	if(LIX >= LSIZE - NUM_RBLOCKS) {
+		uint counts = s_rblock_counts[(LSIZE - 1) - LIX];
+		updateStats(counts >> 16, counts & 0xffff);
 	}
 
 	// TODO: we should be able to start processing next bin before all warps have finished

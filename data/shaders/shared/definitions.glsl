@@ -70,6 +70,7 @@ struct SpecializationConstants {
 #define BIN_LEVELS_COUNT		5
 #define REJECTION_TYPE_COUNT	4
 #define TIMERS_COUNT			8
+#define STATS_COUNT				2
 
 #define BIN_LEVEL_EMPTY		0
 #define BIN_LEVEL_MICRO		1

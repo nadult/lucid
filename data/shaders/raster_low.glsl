@@ -22,11 +22,12 @@ uint scratchBlockRowOffset(uint by) {
 }
 
 uint scratchTempBlockOffset(uint bid) {
-	return (gl_WorkGroupID.x << WORKGROUP_SCRATCH_SHIFT) + 16 * 1024 + bid * (MAX_BLOCK_TRIS * 2);
+	return (gl_WorkGroupID.x << WORKGROUP_SCRATCH_SHIFT) + 8 * 1024 + bid * MAX_BLOCK_TRIS;
 }
 
+// TODO: It could overlap with block row data
 uint scratchRasterBlockOffset(uint rbid) {
-	return (gl_WorkGroupID.x << WORKGROUP_SCRATCH_SHIFT) + 24 * 1024 + rbid * MAX_BLOCK_TRIS;
+	return (gl_WorkGroupID.x << WORKGROUP_SCRATCH_SHIFT) + 12 * 1024 + rbid * MAX_BLOCK_TRIS;
 }
 
 shared int s_num_bins, s_bin_id;
@@ -161,8 +162,9 @@ void generateBlocks(uint bid) {
 			DEBUG_RECORD(0, 0, 0, 0);
 		uint counts =
 			WARP_SIZE == 64 ? num_frags.x + num_frags.y : num_frags.x | (num_frags.y << 6);
+		bits.x |= (tri_idx & 0xf00000) << 8;
 		g_scratch_64[tmp_offset + i] = bits;
-		g_scratch_64[tmp_offset + i + MAX_BLOCK_TRIS] = uvec2(tri_idx, counts);
+		g_scratch_32[tmp_offset + i] = (tri_idx & 0xfffff) | (counts << 20);
 
 		// 12 bits for tile-tri index, 20 bits for depth
 		s_buffer[buf_offset + i] = i | (depth << 12);
@@ -188,22 +190,23 @@ void generateBlocks(uint bid) {
 		}
 #endif
 
+	// Computing per-tri sample offsets within each block
 	for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_SIZE) {
 		uint idx = s_buffer[buf_offset + i] & 0xff;
-		uint counts = g_scratch_64[tmp_offset + idx + MAX_BLOCK_TRIS].y;
+		uint counts = g_scratch_32[tmp_offset + idx] >> 20;
 #if WARP_SIZE == 32
 		uint num_frags1 = counts & 63, num_frags2 = (counts >> 6) & 63;
 		uint num_frags = num_frags1 | (num_frags2 << 12);
 #else
 		uint num_frags = counts;
 #endif
-		// Computing triangle-ordered sample offsets within each block
+
 		num_frags = subgroupInclusiveAddFast(num_frags);
 		s_buffer[buf_offset + i] = num_frags | (idx << 24);
 	}
 	subgroupMemoryBarrierShared();
 
-	// Computing prefix sum across whole blocks
+	// Computing per-tri sample offsets across whole blocks
 	if(gl_SubgroupInvocationID < NUM_WARPS) {
 		uint warp_idx = gl_SubgroupInvocationID;
 		uint warp_offset = warp_idx << WARP_SHIFT;
@@ -260,8 +263,11 @@ void generateBlocks(uint bid) {
 		uint segment_bits0 = (tri_offset0 & 0xf00) << 20;
 		uint segment_bits1 = (tri_offset1 & 0xf00) << 20;
 
-		uint tri_idx = g_scratch_64[tmp_offset + block_tri_idx + MAX_BLOCK_TRIS].x << 8;
 		uvec2 tri_data = g_scratch_64[tmp_offset + block_tri_idx];
+		uint tri_idx =
+			((g_scratch_32[tmp_offset + block_tri_idx] & 0xfffff) << 8) | (tri_data.x & 0xf0000000);
+		tri_data.x &= 0xfffffff;
+
 		g_scratch_64[dst_offset0 + i] =
 			uvec2(tri_idx | (tri_offset0 & 0xff), tri_data.x | segment_bits0);
 		g_scratch_64[dst_offset1 + i] =
@@ -280,8 +286,11 @@ void generateBlocks(uint bid) {
 		uint tri_value = s_buffer[buf_offset + i];
 		uint block_tri_idx = tri_value >> 24;
 
-		uint tri_idx = g_scratch_64[tmp_offset + block_tri_idx + MAX_BLOCK_TRIS].x & 0xffffff;
 		uvec2 tri_data = g_scratch_64[tmp_offset + block_tri_idx];
+		uint tri_idx =
+			((g_scratch_32[tmp_offset + block_tri_idx] & 0xfffff) << 8) | (tri_data.x & 0xf0000000);
+		tri_data.x &= 0xfffffff;
+
 		g_scratch_32[dst_offset + i] = tri_idx | (tri_offset & 0xff);
 		g_scratch_64[dst_offset + i] = tri_data;
 	}

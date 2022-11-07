@@ -393,7 +393,7 @@ void finishVisualizeSamples(ivec2 pixel_pos) {
 	uint pixel_id = (pixel_pos.x & (RBLOCK_WIDTH - 1)) +
 					((pixel_pos.y & (RBLOCK_HEIGHT - 1)) << RBLOCK_WIDTH_SHIFT);
 	uint value = s_vis_pixels[(LIX & ~WARP_MASK) + pixel_id];
-	vec3 color = gradientColor(value, uvec4(16, 64, 256, 1024));
+	vec3 color = gradientColor(value, uvec4(8, 32, 128, 1024));
 	outputPixel(pixel_pos, vec4(SATURATE(color), 1.0));
 }
 

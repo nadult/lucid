@@ -35,7 +35,7 @@ shared uint s_bin_quad_count, s_bin_quad_offset;
 shared uint s_bin_tri_count, s_bin_tri_offset;
 
 shared uint s_block_row_tri_count[BLOCK_ROWS];
-shared uint s_block_tri_count[NUM_WARPS];
+shared uint s_temp_block_tri_count[NUM_WARPS];
 shared uint s_rblock_counts[RBLOCK_COLS * RBLOCK_ROWS];
 
 shared int s_raster_error;
@@ -126,7 +126,7 @@ void generateBlocks(uint bid) {
 		}
 
 		if(gl_SubgroupInvocationID == 0) {
-			s_block_tri_count[lbid] = block_tri_count;
+			s_temp_block_tri_count[lbid] = block_tri_count;
 			if(block_tri_count > MAX_BLOCK_TRIS)
 				atomicOr(s_raster_error, 1 << lbid);
 		}
@@ -136,7 +136,7 @@ void generateBlocks(uint bid) {
 	}
 
 	uint tmp_offset = scratchTempBlockOffset(lbid);
-	tri_count = s_block_tri_count[lbid];
+	tri_count = s_temp_block_tri_count[lbid];
 	int startx = int(bx << BLOCK_SHIFT);
 	vec2 block_pos = vec2(s_bin_pos + ivec2(bx << BLOCK_SHIFT, by << BLOCK_SHIFT));
 
@@ -297,15 +297,14 @@ void generateBlocks(uint bid) {
 }
 
 void visualizeBlockCounts(uint rbid, ivec2 pixel_pos) {
-	uint lrbid = rbid & (RBLOCK_COUNT - 1), lbid = blockIdFromRaster(lrbid);
-	uint frag_count = (WARP_SIZE == 64 ? 1 : 2) * (s_rblock_counts[rbid] >> 16);
-	uint tri_count = s_block_tri_count[lbid];
+	uint frag_count = s_rblock_counts[rbid] >> 16;
+	uint tri_count = s_rblock_counts[rbid] & 0xffff;
 	//tri_count = s_block_row_tri_count[pixel_pos.y >> BLOCK_SHIFT];
 	//tri_count = s_bin_quad_count * 2 + s_bin_tri_count;
 
 	vec3 color;
-	color = gradientColor(frag_count, uvec4(64, 256, 1024, 4096));
-	//color = gradientColor(tri_count, uvec4(16, 64, 256, 1024));
+	color = gradientColor(frag_count, uvec4(8, 32, 128, 1024) * WARP_SIZE);
+	color = gradientColor(tri_count, uvec4(16, 64, 256, 1024));
 
 	outputPixel(pixel_pos, vec4(SATURATE(color), 1.0));
 }

@@ -18,23 +18,16 @@
 
 // TODO: why on desktop AMD on windows some shaders work 2-3x slower? balancedDispatcher & rasterizers
 // TODO: rename WARP to SUBGROUP ?
-// TODO: better stats (than num_half_blocks)
 // TODO: ability to change options without recreating renderer
 // TODO: re-enable bin_64 support?
 // TODO: opisać różnego rodzaju definicje/nazwy używane w kodzie
 // TODO: problemy na hairballu i powerplancie na AMD jak jest duzo trisow?
 // Cały czas są jakieś dziwne błędy przy 1 i 2 klatce renderingu (też jak się zmienia rozdziałkę)
 // Nie tylko dziwne rzeczy się wyświetlają, ale są też błędy w tri offsetach w dispatcherze
-// TODO: opcja rekonstrukcji ucid renderera, żeby nie trzeba było tworzyć od nowa buforów
+// TODO: opcja rekonstrukcji lucid renderera, żeby nie trzeba było tworzyć od nowa buforów
 // TODO: properly handling cases with more visible quads than is allowed
-// Raz się zdarzyło, że na teapocie były jakieś dziwne glitche na NVIDII, po włączeniu wcześniej kilku dużych scen
 // TODO: maybe it would be possible to remove some code from quad_setup, because we use 3D rasterization ?
 // TODO: better way to stora data in scratch memory? we could do it in more optimal way in some cases (_32 instead of _64)
-// TODO: raz zdarzył się crash przy przełączeniu sceny z powrplant na san miguel
-// TODO: zjebane teksturki w chestnut_tree01 jak sie poprzelacza pomiedzy scenami; w trybie debug...
-// TODO: jakies dziwne bugi a AMD jak sie wlaczy timery? problemy z mazaniem po pamięci?
-// TODO: crash przy zmianie rozdziałki kilka razy
-// TODO: coś się pierdzieli na NVIDII też, jak się załaduje kilka scen w tym duże i jest włączona visualizacja błędów
 
 // TODO: dużo specyficznych przypadków do obsłużenia:
 // - clipping: może zaimplementować dodatkowe passy do obsługi clipowanych trójkątów ?

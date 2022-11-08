@@ -106,10 +106,23 @@
 LucidRenderer::LucidRenderer() = default;
 FWK_MOVABLE_CLASS_IMPL(LucidRenderer)
 
+static int subgroupSize(const VulkanDevice &device) {
+	auto &phys_info = device.physInfo();
+	auto &subgroup_control = phys_info.subgroup_control_props;
+	if(subgroup_control.requiredSubgroupSizeStages & VK_SHADER_STAGE_COMPUTE_BIT) {
+		auto min_size = subgroup_control.minSubgroupSize;
+		auto max_size = subgroup_control.maxSubgroupSize;
+		if(min_size <= 32 && max_size >= 32)
+			return 32;
+		if(min_size <= 64 && max_size >= 64)
+			return 64;
+	}
+	return phys_info.subgroup_props.subgroupSize;
+}
+
 ShaderConfig getShaderConfig(VulkanDevice &device) {
 	ShaderConfig out;
-
-	auto warp_size = device.physInfo().subgroup_props.subgroupSize;
+	auto warp_size = subgroupSize(device);
 	auto &pinfo = device.physInfo();
 	out.predefined_macros.emplace_back("WARP_SIZE", toString(warp_size));
 	out.predefined_macros.emplace_back("WARP_SHIFT", toString(log2(warp_size)));
@@ -234,6 +247,7 @@ Ex<void> LucidRenderer::exConstruct(VulkanDevice &device, ShaderCompiler &compil
 	if(m_opts & (Opt::debug_bin_dispatcher | Opt::debug_raster))
 		m_errors = EX_PASS(VulkanBuffer::create<u32>(device, 1024 * 1024, usage_copyable));
 
+	auto subgroup_size = subgroupSize(device);
 	auto make_compute_pipe = [&](string name, Opts debug_option,
 								 bool has_timers) -> Ex<PVPipeline> {
 		if(opts & debug_option)
@@ -247,6 +261,7 @@ Ex<void> LucidRenderer::exConstruct(VulkanDevice &device, ShaderCompiler &compil
 		m_shader_def_ids.emplace_back(def_id);
 		setup.compute_module = EX_PASS(compiler.createShaderModule(device.ref(), def_id));
 		setup.spec_constants.emplace_back(consts, 0u);
+		setup.subgroup_size = subgroup_size;
 		auto result = VulkanPipeline::create(device.ref(), setup);
 		print("Compute pipeline '%': % ms\n", name, int((getTime() - time) * 1000));
 		return result;

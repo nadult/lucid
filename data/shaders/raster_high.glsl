@@ -331,8 +331,8 @@ void generateRBlocks(uint start_rbid) {
 	barrier();
 
 	// Finding triangles which start segments
-	// Also storing hblock-tri data to temporary stored_tris array
-	uvec2 stored_tris[8];
+	// Also storing rblocks data to temporary stored_rblocks array
+	uvec2 stored_rblocks[8];
 	uint stored_idx = 0;
 	for(uint i = group_thread; i < tri_count; i += group_size) {
 		uint current = s_buffer[buf_offset + i];
@@ -346,20 +346,20 @@ void generateRBlocks(uint start_rbid) {
 #if RBLOCK_HEIGHT == 8
 		uint tri_info = g_scratch_32[dst_offset + rblock_tri_idx];
 		uint tri_idx = tri_info & 0xffffff;
-		stored_tris[stored_idx++] = uvec2(tri_data.x | segment_bits, tri_data.y | segment_bits);
+		stored_rblocks[stored_idx++] = uvec2(tri_data.x | segment_bits, tri_data.y | segment_bits);
 		s_buffer[buf_offset + i] = (tri_idx << 8) | (tri_offset & 0xff);
 #else
 		uint tri_idx = tri_data.y & 0xffffff;
-		stored_tris[stored_idx++] =
+		stored_rblocks[stored_idx++] =
 			uvec2((tri_idx << 8) | (tri_offset & 0xff), tri_data.x | segment_bits);
 #endif
 	}
 	barrier();
 
-	// Reordering hblock-tris in scratch
+	// Reordering rblocks in scratch
 	stored_idx = 0;
 	for(uint i = group_thread; i < tri_count; i += group_size) {
-		g_scratch_64[dst_offset + i] = stored_tris[stored_idx++];
+		g_scratch_64[dst_offset + i] = stored_rblocks[stored_idx++];
 #if RBLOCK_HEIGHT == 8
 		g_scratch_32[dst_offset + i] = s_buffer[buf_offset + i];
 #endif

@@ -168,7 +168,7 @@ uint swap(uint x, int mask, bool dir) {
 }
 bool bitExtract(uint value, int boffset) { return ((value >> boffset) & 1) != 0; }
 
-void sortBuffer(uint lrbid, uint count, uint rcount, uint buf_offset, uint group_size, uint lid,
+void sortBuffer(uint count, uint rcount, uint buf_offset, uint group_size, uint lid,
 				bool with_barriers) {
 	for(uint i = lid + count; i < rcount; i += group_size)
 		s_buffer[buf_offset + i] = 0xffffffff;
@@ -385,6 +385,7 @@ void visualizeSamples(uint sample_count) {
 		uint pixel_id = s_buffer[buf_offset + i] & WARP_MASK;
 		atomicAdd(s_vis_pixels[(LIX & ~WARP_MASK) + pixel_id], 1);
 	}
+	subgroupMemoryBarrierShared();
 }
 
 void finishVisualizeSamples(ivec2 pixel_pos) {

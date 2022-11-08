@@ -175,7 +175,7 @@ void generateBlocks(uint bid) {
 		// rcount: count rounded up to next power of 2; minimum: WARP_SIZE
 		uint rcount = max(
 			WARP_SIZE, (tri_count & (tri_count - 1)) == 0 ? tri_count : (2 << findMSB(tri_count)));
-		sortBuffer(lbid, tri_count, rcount, buf_offset, WARP_SIZE, LIX & WARP_MASK, false);
+		sortBuffer(tri_count, rcount, buf_offset, WARP_SIZE, LIX & WARP_MASK, false);
 	}
 	subgroupMemoryBarrierShared();
 

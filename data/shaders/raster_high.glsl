@@ -259,7 +259,7 @@ void generateRBlocks(uint start_rbid) {
 	}
 	barrier();
 	groupMemoryBarrier();
-	sortBuffer(lrbid, tri_count, s_max_sort_rcount, buf_offset, group_size, group_thread, true);
+	sortBuffer(tri_count, s_max_sort_rcount, buf_offset, group_size, group_thread, true);
 	barrier();
 
 #ifdef DEBUG_ENABLED
@@ -329,8 +329,6 @@ void generateRBlocks(uint start_rbid) {
 		s_buffer[mini_offset + LIX * 4 + 3] = sum - values[3];
 	}
 	barrier();
-	if(s_raster_error != 0)
-		return;
 
 	// Finding triangles which start segments
 	// Also storing hblock-tri data to temporary stored_tris array
@@ -357,8 +355,6 @@ void generateRBlocks(uint start_rbid) {
 #endif
 	}
 	barrier();
-	if(s_raster_error != 0)
-		return;
 
 	// Reordering hblock-tris in scratch
 	stored_idx = 0;

@@ -28,6 +28,7 @@
 // TODO: properly handling cases with more visible quads than is allowed
 // TODO: maybe it would be possible to remove some code from quad_setup, because we use 3D rasterization ?
 // TODO: better way to stora data in scratch memory? we could do it in more optimal way in some cases (_32 instead of _64)
+// TODO: crash when changing resolution on linux/amd
 
 // TODO: dużo specyficznych przypadków do obsłużenia:
 // - clipping: może zaimplementować dodatkowe passy do obsługi clipowanych trójkątów ?

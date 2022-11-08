@@ -53,6 +53,10 @@ void categorizeBins() {
 	if(LIX < BIN_LEVELS_COUNT)
 		s_bin_level_counts[LIX] = 0;
 	barrier();
+
+	// Note: ordering bins by number of tris (largest first) does not make everything go faster
+	// maybe it's not as cache friendly as row by row?
+	// TODO: can we make it more cache friendly by different layout than row-by-row?
 	for(uint i = LIX; i < BIN_COUNT; i += LSIZE) {
 		int num_quads = BIN_QUAD_COUNTS(i);
 		int num_tris = BIN_TRI_COUNTS(i) + num_quads * 2;
@@ -68,15 +72,14 @@ void categorizeBins() {
 			int id = atomicAdd(s_bin_level_counts[BIN_LEVEL_HIGH], 1);
 			HIGH_LEVEL_BINS(id) = int(i);
 		}
-
-		barrier();
-		if(LIX < BIN_LEVELS_COUNT) {
-			g_info.bin_level_counts[LIX] = s_bin_level_counts[LIX];
-			int max_dispatches = MAX_DISPATCHES >> (LIX == BIN_LEVEL_HIGH ? 1 : 0);
-			g_info.bin_level_dispatches[LIX][0] = min(s_bin_level_counts[LIX], max_dispatches);
-			g_info.bin_level_dispatches[LIX][1] = 1;
-			g_info.bin_level_dispatches[LIX][2] = 1;
-		}
+	}
+	barrier();
+	if(LIX < BIN_LEVELS_COUNT) {
+		g_info.bin_level_counts[LIX] = s_bin_level_counts[LIX];
+		int max_dispatches = MAX_DISPATCHES >> (LIX == BIN_LEVEL_HIGH ? 1 : 0);
+		g_info.bin_level_dispatches[LIX][0] = min(s_bin_level_counts[LIX], max_dispatches);
+		g_info.bin_level_dispatches[LIX][1] = 1;
+		g_info.bin_level_dispatches[LIX][2] = 1;
 	}
 }
 

@@ -7,6 +7,8 @@ FWK_GEOM      := disabled
 CFLAGS        := -Isrc/
 CFLAGS_linux  := -fopenmp
 CFLAGS_mingw  := -fopenmp
+CFLAGS_release := -DNDEBUG
+
 LDFLAGS_linux := -fopenmp -Wl,--export-dynamic
 LDFLAGS_mingw := -fopenmp
 

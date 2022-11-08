@@ -186,7 +186,11 @@ Ex<void> LucidRenderer::exConstruct(VulkanDevice &device, ShaderCompiler &compil
 	m_max_dispatches = mem_size_mb >= 4000 ? 256 : mem_size_mb >= 2000 ? 128 : 64;
 	uint max_visible_quads = min(1024ull * 1024 * 1024 / 224, mem_size_mb * 1024);
 	m_max_visible_quads = max_visible_quads;
-	DASSERT(m_max_dispatches <= LUCID_INFO_MAX_DISPATCHES);
+	if(m_max_dispatches > LUCID_INFO_MAX_DISPATCHES) {
+		print("Warning: max dispatches limit reached (%)\nIncrease LUCID_INFO_MAX_DISPATCHES\n",
+			  LUCID_INFO_MAX_DISPATCHES);
+		m_max_dispatches = LUCID_INFO_MAX_DISPATCHES;
+	}
 
 	m_opts = opts;
 	m_size = view_size;

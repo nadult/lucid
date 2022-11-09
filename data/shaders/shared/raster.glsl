@@ -166,7 +166,6 @@ uint swap(uint x, int mask, bool dir) {
 	uint y = subgroupShuffleXor(x, mask);
 	return (x < y) == dir ? y : x;
 }
-bool bitExtract(uint value, int boffset) { return ((value >> boffset) & 1) != 0; }
 
 void sortBuffer(uint count, uint rcount, uint buf_offset, uint group_size, uint lid,
 				bool with_barriers) {
@@ -220,11 +219,11 @@ void sortBuffer(uint count, uint rcount, uint buf_offset, uint group_size, uint 
 		for(uint i = lid; i < rcount; i += group_size) {
 			bool bit = (i & k) != 0;
 			uint value = s_buffer[buf_offset + i];
-			value = swap(value, 0x10, bit != bitExtract(lid, 4));
-			value = swap(value, 0x08, bit != bitExtract(lid, 3));
-			value = swap(value, 0x04, bit != bitExtract(lid, 2));
-			value = swap(value, 0x02, bit != bitExtract(lid, 1));
-			value = swap(value, 0x01, bit != bitExtract(lid, 0));
+			value = swap(value, 0x10, bit != bit4);
+			value = swap(value, 0x08, bit != bit3);
+			value = swap(value, 0x04, bit != bit2);
+			value = swap(value, 0x02, bit != bit1);
+			value = swap(value, 0x01, bit != bit0);
 			s_buffer[buf_offset + i] = value;
 		}
 		if(with_barriers)

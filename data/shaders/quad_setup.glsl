@@ -144,6 +144,8 @@ void processInputQuad(uint quad_id, uint v0, uint v1, uint v2, uint v3, uint loc
 	}
 
 	vec3 vws[4] = {vertexLoad(v0), vertexLoad(v1), vertexLoad(v2), vertexLoad(v3)};
+	cull0 = cull0 || vws[0] == vws[1] || vws[1] == vws[2] || vws[2] == vws[0];
+	cull1 = cull1 || vws[0] == vws[2] || vws[2] == vws[3] || vws[3] == vws[0];
 
 	if(u_config.enable_backface_culling != 0) {
 		vec3 frustum_origin = u_config.frustum.ws_origin0.xyz;

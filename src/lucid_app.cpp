@@ -431,16 +431,16 @@ void LucidApp::doMenu() {
 	ImGui::SetNextItemWidth(220 * m_gui.dpiScale() - labels_size[0]);
 	ImGui::ColorEdit3("Scene color", setup.render_config.scene_color.v, 0);
 
-	if(m_is_picking_block) {
+	/*if(m_is_picking_block) {
 		auto bin_size = m_lucid_renderer->binSize();
-		m_gui.text("Picking %dx%d bin: %d", bin_size, bin_size, m_selected_block);
+		m_gui.text("Picking %x% bin: %", bin_size, bin_size, m_selected_block);
 		if(m_selection_info) {
 			m_gui.text("TODO: selection info");
 		}
 	} else if(ImGui::Button("Introspect bin")) {
 		m_is_picking_block = true;
 	}
-	ImGui::Checkbox("Merge introspected masks", &m_merge_masks);
+	ImGui::Checkbox("Merge introspected masks", &m_merge_masks);*/
 
 	ImGui::End();
 

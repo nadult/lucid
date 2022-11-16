@@ -242,8 +242,6 @@ Ex<void> LucidRenderer::exConstruct(VulkanDevice &device, ShaderCompiler &compil
 	m_scratch_32 = EX_PASS(VulkanBuffer::create(device, scratch_32_size, usage));
 	m_scratch_64 =
 		EX_PASS(VulkanBuffer::create(device, scratch_64_size, usage | VBufferUsage::transfer_src));
-	if(m_opts & (Opt::debug_bin_dispatcher | Opt::debug_raster))
-		m_errors = EX_PASS(VulkanBuffer::create<u32>(device, 1024 * 1024, usage_copyable));
 
 	auto subgroup_size = subgroupSize(device);
 	auto make_compute_pipe = [&](string name, Opts debug_option,
@@ -463,7 +461,7 @@ void LucidRenderer::quadSetup(const Context &ctx) {
 	int num_workgroups = (m_num_instances + m_instance_packet_size - 1) / m_instance_packet_size;
 	cmds.dispatchCompute({num_workgroups, 1, 1});
 
-	if(m_opts & Opt::debug_bin_dispatcher)
+	if(m_opts & Opt::debug_quad_setup)
 		getDebugData(ctx, m_debug_buffer, "quad_setup_debug");
 }
 

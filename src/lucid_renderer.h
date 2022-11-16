@@ -71,7 +71,6 @@ class LucidRenderer {
 	VBufferSpan<float4> m_instance_uv_rects;
 	VBufferSpan<u32> m_scratch_32;
 	VBufferSpan<u64> m_scratch_64;
-	VBufferSpan<u32> m_errors;
 	VBufferSpan<u32> m_bin_quads, m_bin_tris;
 	VBufferSpan<u32> m_normals_storage;
 	VBufferSpan<int4> m_uvec4_storage;

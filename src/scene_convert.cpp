@@ -288,6 +288,10 @@ struct SceneInfo {
 
 void convertScenes(ZStr source_path) {
 	SceneInfo inputs[] = {
+		{"dragon2.obj", 1.5},
+		{"armadillo.obj", 1.5},
+		{"thai.obj", 1.5},
+		{"buddha.obj", 1.5},
 		{"bunny.obj", 1.5},
 		{"chestnut_tree/chestnut_tree01.obj", 2},
 		{"chestnut_tree/chestnut_tree02.obj", 2},

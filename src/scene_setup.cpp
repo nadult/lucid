@@ -210,6 +210,12 @@ Ex<> LoadedSetup::updateScene(VDeviceRef device) {
 		views.emplace_back(default_cam);
 		views.emplace_back(
 			FppCamera{{0.133944, 0.298333, -0.290384}, {-0.334019, 0.611418}, 0.830695});
+	} else if(name == "buddha") {
+		views.emplace_back(
+			OrbitingCamera{{-2.746651, 75.126877, -3.378395}, 103.999908, 3.108339, 0.266667});
+	} else if(name == "dragon2") {
+		views.emplace_back(
+			OrbitingCamera{{1.100576, -3.339322, 4.876184}, 73.448845, 0.741666, 0.283334});
 	} else {
 		views.emplace_back(default_cam);
 	}

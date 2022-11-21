@@ -108,36 +108,20 @@ uvec3 rasterBinStep(inout ScanlineParams scan) {
 	return uvec3(min_bits, max_bits, bx_mask);
 }
 
-void rasterHalfBlockCentroid(uint tri_mins, uint tri_maxs, int startx, out uint num_frags,
-							 inout vec2 cpos) {
+vec2 rasterHalfBlockCentroid(uint tri_mins, uint tri_maxs, int startx, out uint num_frags) {
 	ivec4 xmin = max(((ivec4(tri_mins) >> ivec4(0, 5, 10, 15)) & BIN_MASK) - startx, 0);
 	ivec4 xmax = min(((ivec4(tri_maxs) >> ivec4(0, 5, 10, 15)) & BIN_MASK) - startx, 7);
 	ivec4 count = max(xmax - xmin + 1, 0);
 	vec4 cpx = vec4(xmin * 2 + count) * count;
 	vec4 cpy = vec4(1.0, 3.0, 5.0, 7.0) * count;
-	cpos += vec2(cpx[0] + cpx[1] + cpx[2] + cpx[3], cpy[0] + cpy[1] + cpy[2] + cpy[3]);
 	num_frags = count[0] + count[1] + count[2] + count[3];
+	return vec2(cpx[0] + cpx[1] + cpx[2] + cpx[3], cpy[0] + cpy[1] + cpy[2] + cpy[3]);
 }
 
 uint rasterHalfBlockBits(uint tri_mins, uint tri_maxs, int startx) {
 	ivec4 xmin = max(((ivec4(tri_mins) >> ivec4(0, 5, 10, 15)) & BIN_MASK) - startx, 0);
 	ivec4 xmax = min(((ivec4(tri_maxs) >> ivec4(0, 5, 10, 15)) & BIN_MASK) - startx, 7);
 	ivec4 count = max(xmax - xmin + 1, 0);
-	uint min_bits = ((xmin[0] << 0) | (xmin[1] << 7) | (xmin[2] << 14) | (xmin[3] << 21)) &
-					(7 | (7 << 7) | (7 << 14) | (7 << 21));
-	uint count_bits = (count[0] << 3) | (count[1] << 10) | (count[2] << 17) | (count[3] << 24);
-	return min_bits | count_bits;
-}
-
-uint rasterHalfBlock(uint tri_mins, uint tri_maxs, int startx, out uint num_frags,
-					 inout vec2 cpos) {
-	ivec4 xmin = max(((ivec4(tri_mins) >> ivec4(0, 5, 10, 15)) & BIN_MASK) - startx, 0);
-	ivec4 xmax = min(((ivec4(tri_maxs) >> ivec4(0, 5, 10, 15)) & BIN_MASK) - startx, 7);
-	ivec4 count = max(xmax - xmin + 1, 0);
-	vec4 cpx = vec4(xmin * 2 + count) * count;
-	vec4 cpy = vec4(1.0, 3.0, 5.0, 7.0) * count;
-	cpos += vec2(cpx[0] + cpx[1] + cpx[2] + cpx[3], cpy[0] + cpy[1] + cpy[2] + cpy[3]);
-	num_frags = count[0] + count[1] + count[2] + count[3];
 	uint min_bits = ((xmin[0] << 0) | (xmin[1] << 7) | (xmin[2] << 14) | (xmin[3] << 21)) &
 					(7 | (7 << 7) | (7 << 14) | (7 << 21));
 	uint count_bits = (count[0] << 3) | (count[1] << 10) | (count[2] << 17) | (count[3] << 24);

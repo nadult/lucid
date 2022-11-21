@@ -13,21 +13,17 @@ DEBUG_SETUP(1, 11)
 layout(local_size_x = LSIZE) in;
 
 // TODO: too much mem used
-#define WORKGROUP_SCRATCH_SIZE (32 * 1024)
-#define WORKGROUP_SCRATCH_SHIFT 15
+#define WORKGROUP_SCRATCH_SIZE (16 * 1024)
+#define WORKGROUP_SCRATCH_SHIFT 14
 
 // More space needed only for 64x64 bins
 uint scratchBlockRowOffset(uint by) {
 	return (gl_WorkGroupID.x << WORKGROUP_SCRATCH_SHIFT) + by * (MAX_BLOCK_ROW_TRIS * 2);
 }
 
-uint scratchTempBlockOffset(uint bid) {
-	return (gl_WorkGroupID.x << WORKGROUP_SCRATCH_SHIFT) + 8 * 1024 + bid * MAX_BLOCK_TRIS;
-}
-
 // TODO: It could overlap with block row data
 uint scratchRasterBlockOffset(uint rbid) {
-	return (gl_WorkGroupID.x << WORKGROUP_SCRATCH_SHIFT) + 12 * 1024 + rbid * MAX_BLOCK_TRIS;
+	return (gl_WorkGroupID.x << WORKGROUP_SCRATCH_SHIFT) + 8 * 1024 + rbid * MAX_BLOCK_TRIS;
 }
 
 shared int s_num_bins, s_bin_id;
@@ -135,45 +131,39 @@ void generateBlocks(uint bid) {
 			return;
 	}
 
-	uint tmp_offset = scratchTempBlockOffset(lbid);
 	tri_count = s_temp_block_tri_count[lbid];
 	int startx = int(bx << BLOCK_SHIFT);
 	vec2 block_pos = vec2(s_bin_pos + ivec2(bx << BLOCK_SHIFT, by << BLOCK_SHIFT));
 
 	uint frag_count = 0;
 	for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_SIZE) {
-		uint row_idx = s_buffer[buf_offset + i];
+		uint row_tri_idx = s_buffer[buf_offset + i];
 
-		uvec2 tri_mins = g_scratch_64[rows_offset + row_idx];
-		uvec2 tri_maxs = g_scratch_64[rows_offset + row_idx + MAX_BLOCK_ROW_TRIS];
+		uvec2 tri_mins = g_scratch_64[rows_offset + row_tri_idx];
+		uvec2 tri_maxs = g_scratch_64[rows_offset + row_tri_idx + MAX_BLOCK_ROW_TRIS];
+		// TODO: better encoding
 		uint tri_idx =
 			(tri_maxs.x >> 24) | ((tri_maxs.y >> 16) & 0xff00) | ((tri_mins.y >> 8) & 0xff0000);
 
-		uvec2 bits;
 		uvec2 num_frags;
-		vec2 cpos = vec2(0);
-
-		bits.x = rasterHalfBlock(tri_mins.x, tri_maxs.x, startx, num_frags.x, cpos);
-		bits.y = rasterHalfBlock(tri_mins.y, tri_maxs.y, startx, num_frags.y, cpos);
+		vec2 cpos = rasterHalfBlockCentroid(tri_mins.x, tri_maxs.x, startx, num_frags.x) +
+					rasterHalfBlockCentroid(tri_mins.y, tri_maxs.y, startx, num_frags.y);
 
 		uint num_block_frags = num_frags.x + num_frags.y;
 		uint depth = rasterBlockDepth(cpos * (0.5 / float(num_block_frags)) + block_pos, tri_idx);
 		if(num_block_frags == 0) // This means that bx_mask is invalid
 			DEBUG_RECORD(0, 0, 0, 0);
 		frag_count += WARP_SIZE == 64 ? num_block_frags : num_frags.x | (num_frags.y << 16);
-		// TODO: optimize this?
-		g_scratch_64[tmp_offset + i] = bits;
-		g_scratch_32[tmp_offset + i] = tri_idx << 8;
 
 		// 12 bits for tile-tri index, 20 bits for depth
-		s_buffer[buf_offset + i] = i | (depth << 12);
+		s_buffer[buf_offset + i] = row_tri_idx | (depth << 12);
 	}
 	subgroupMemoryBarrier();
 
 	frag_count = subgroupInclusiveAddFast(frag_count);
 	if(gl_SubgroupInvocationID == WARP_SIZE - 1) {
 		// TODO: separate tri_count & frag_count; use same counters in high & low?
-#if WARP_SIZE == 32
+#if RBLOCK_HEIGHT == 4
 		uint rbid = blockIdToRaster(lbid + (bid & ~(NUM_WARPS - 1)));
 		uint v0 = frag_count & 0xffff, v1 = frag_count >> 16;
 		s_rblock_counts[rbid] = (v0 << 16) | tri_count;
@@ -202,32 +192,35 @@ void generateBlocks(uint bid) {
 		}
 #endif
 
-		// Storing triangle fragment offsets to scratch mem
-		// Also finding first triangle for each segment
-
-#if WARP_SIZE == 32
-	uint rbid0 = blockIdToRaster(bid);
-	uint rbid1 = rbid0 + RBLOCK_COLS;
+#if RBLOCK_HEIGHT == 4
+	uint rbid0 = blockIdToRaster(bid), rbid1 = rbid0 + RBLOCK_COLS;
 	uint dst_offset0 = scratchRasterBlockOffset(rbid0);
 	uint dst_offset1 = scratchRasterBlockOffset(rbid1);
-	for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_SIZE) {
-		uint block_tri_idx = s_buffer[buf_offset + i] & 0xff;
-		uvec2 tri_data = g_scratch_64[tmp_offset + block_tri_idx];
-		uint tri_idx = g_scratch_32[tmp_offset + block_tri_idx];
-		// TODO: optimize this?
-		g_scratch_64[dst_offset0 + i] = uvec2(tri_idx, tri_data.x);
-		g_scratch_64[dst_offset1 + i] = uvec2(tri_idx, tri_data.y);
-	}
 #else
 	uint dst_offset = scratchRasterBlockOffset(bid);
-	for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_SIZE) {
-		uint block_tri_idx = s_buffer[buf_offset + i] & 0xff;
-		uvec2 tri_data = g_scratch_64[tmp_offset + block_tri_idx];
-		uint tri_idx = g_scratch_32[tmp_offset + block_tri_idx];
-		g_scratch_64[dst_offset + i] = uvec2(tri_data.x, tri_data.y);
-		g_scratch_32[dst_offset + i] = tri_idx;
-	}
 #endif
+
+	for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_SIZE) {
+		uint row_idx = s_buffer[buf_offset + i] & 0xfff;
+
+		uvec2 tri_mins = g_scratch_64[rows_offset + row_idx];
+		uvec2 tri_maxs = g_scratch_64[rows_offset + row_idx + MAX_BLOCK_ROW_TRIS];
+		uint tri_idx =
+			(tri_maxs.x >> 24) | ((tri_maxs.y >> 16) & 0xff00) | ((tri_mins.y >> 8) & 0xff0000);
+		tri_idx <<= 8;
+		uvec2 bits;
+		bits.x = rasterHalfBlockBits(tri_mins.x, tri_maxs.x, startx);
+		bits.y = rasterHalfBlockBits(tri_mins.y, tri_maxs.y, startx);
+
+#if RBLOCK_HEIGHT == 4
+		// TODO: optimize this?
+		g_scratch_64[dst_offset0 + i] = uvec2(tri_idx, bits.x);
+		g_scratch_64[dst_offset1 + i] = uvec2(tri_idx, bits.y);
+#else
+		g_scratch_64[dst_offset + i] = bits;
+		g_scratch_32[dst_offset + i] = tri_idx;
+#endif
+	}
 }
 
 void visualizeBlockCounts(uint rbid, ivec2 pixel_pos) {

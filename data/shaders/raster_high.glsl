@@ -215,7 +215,6 @@ void generateRBlocks(uint start_rbid) {
 	uint frag_count = 0;
 	for(uint i = group_thread; i < tri_count; i += group_size) {
 		uint row_tri_idx = s_buffer[buf_offset + i];
-		vec2 cpos = vec2(0, 0);
 		uint num_frags;
 
 #if RBLOCK_HEIGHT == 8
@@ -224,13 +223,13 @@ void generateRBlocks(uint start_rbid) {
 		uint tri_idx =
 			(tri_maxs.x >> 24) | ((tri_maxs.y >> 16) & 0xff00) | ((tri_mins.y >> 8) & 0xff0000);
 		uvec2 hnum_frags;
-		rasterHalfBlockCentroid(tri_mins.x, tri_maxs.x, startx, hnum_frags.x, cpos);
-		rasterHalfBlockCentroid(tri_mins.y, tri_maxs.y, startx, hnum_frags.y, cpos);
+		vec2 cpos = rasterHalfBlockCentroid(tri_mins.x, tri_maxs.x, startx, hnum_frags.x) +
+					rasterHalfBlockCentroid(tri_mins.y, tri_maxs.y, startx, hnum_frags.y);
 		num_frags = hnum_frags.x + hnum_frags.y;
 #else
 		uvec2 tri_info = g_scratch_64[src_offset_64 + row_tri_idx];
 		uint tri_idx = (tri_info.x >> 20) | ((tri_info.y & 0xfff00000) >> 8);
-		rasterHalfBlockCentroid(tri_info.x, tri_info.y, startx, num_frags, cpos);
+		vec2 cpos = rasterHalfBlockCentroid(tri_info.x, tri_info.y, startx, num_frags);
 #endif
 
 		if(num_frags == 0) // This means that bx_mask is invalid

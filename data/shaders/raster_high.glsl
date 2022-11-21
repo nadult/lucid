@@ -183,7 +183,7 @@ void generateRBlocks(uint start_rbid) {
 	uint group_rbid = LIX >> (WARP_SHIFT + group_shift);
 	uint rbid = start_rbid + group_rbid;
 
-	uvec2 rblock_pos = rasterBlockPos(rbid);
+	uvec2 rblock_pos = renderBlockPos(rbid);
 	uint tri_count = s_rblock_row_tri_counts[rblock_pos.y];
 	uint buf_offset = group_rbid << (MAX_RBLOCK_TRIS0_SHIFT + group_shift);
 
@@ -208,7 +208,7 @@ void generateRBlocks(uint start_rbid) {
 	uint dst_offset = scratchRasterBlockTrisOffset(rbid);
 	tri_count = s_rblock_tri_counts[rbid];
 	int startx = int(rblock_pos.x << RBLOCK_WIDTH_SHIFT);
-	vec2 block_pos = vec2(rblock_pos << rasterBlockShift()) + vec2(s_bin_pos);
+	vec2 block_pos = vec2(rblock_pos << renderBlockShift()) + vec2(s_bin_pos);
 	const uint rblock_tri_mask = RBLOCK_HEIGHT == 8 ? 0x1fff : 0xfff;
 
 	uint frag_count = 0;
@@ -223,15 +223,15 @@ void generateRBlocks(uint start_rbid) {
 		uint tri_idx =
 			(tri_maxs.x >> 24) | ((tri_maxs.y >> 16) & 0xff00) | ((tri_mins.y >> 8) & 0xff0000);
 		uvec2 hnum_frags;
-		uvec2 bits = uvec2(rasterBlock(tri_mins.x, tri_maxs.x, startx, hnum_frags.x, cpos),
-						   rasterBlock(tri_mins.y, tri_maxs.y, startx, hnum_frags.y, cpos));
+		uvec2 bits = uvec2(rasterHalfBlock(tri_mins.x, tri_maxs.x, startx, hnum_frags.x, cpos),
+						   rasterHalfBlock(tri_mins.y, tri_maxs.y, startx, hnum_frags.y, cpos));
 		num_frags = hnum_frags.x + hnum_frags.y;
 		g_scratch_64[dst_offset + i] = bits;
 		g_scratch_32[dst_offset + i] = tri_idx << 8;
 #else
 		uint tri_idx = g_scratch_32[src_offset_32 + row_tri_idx] & 0xffffff;
 		uvec2 tri_info = g_scratch_64[src_offset_64 + row_tri_idx];
-		uint bits = rasterBlock(tri_info.x, tri_info.y, startx, num_frags, cpos);
+		uint bits = rasterHalfBlock(tri_info.x, tri_info.y, startx, num_frags, cpos);
 		g_scratch_64[dst_offset + i] = uvec2(tri_idx << 8, bits);
 #endif
 
@@ -342,7 +342,7 @@ void rasterBin(int bin_id) {
 
 	int rbid = int(LIX >> WARP_SHIFT);
 	if(s_raster_error != 0) {
-		outputPixel(rasterBlockPixelPos(rbid), vec4(1.0, 0.0, 0.0, 0.0));
+		outputPixel(renderBlockPixelPos(rbid), vec4(1.0, 0.0, 0.0, 0.0));
 		barrier();
 		return;
 	}
@@ -352,7 +352,7 @@ void rasterBin(int bin_id) {
 	initReduceSamples(context);
 	//initVisualizeSamples();
 
-	uint cur_tri_idx = initLoadSamples(s_rblock_tri_counts[rbid], s_rblock_frag_counts[rbid]);
+	uint cur_tri_idx = initUnpackSamples(s_rblock_tri_counts[rbid], s_rblock_frag_counts[rbid]);
 	for(int segment_id = 0;; segment_id++) {
 		int frag_count = int(s_rblock_frag_counts[rbid]);
 		frag_count = min(SEGMENT_SIZE, frag_count - (segment_id * SEGMENT_SIZE));
@@ -361,7 +361,7 @@ void rasterBin(int bin_id) {
 
 		uint src_offset = scratchRasterBlockTrisOffset(rbid);
 		uint tri_count = s_rblock_tri_counts[rbid];
-		loadSamples(cur_tri_idx, tri_count, src_offset);
+		unpackSamples(cur_tri_idx, tri_count, src_offset);
 		UPDATE_TIMER(2);
 
 		shadeAndReduceSamples(rbid, frag_count, context);
@@ -374,7 +374,7 @@ void rasterBin(int bin_id) {
 #endif
 	}
 
-	ivec2 pixel_pos = rasterBlockPixelPos(rbid);
+	ivec2 pixel_pos = renderBlockPixelPos(rbid);
 	outputPixel(pixel_pos, finishReduceSamples(context));
 	//finishVisualizeSamples(pixel_pos);
 	//visualizeBlockCounts(rbid, pixel_pos);

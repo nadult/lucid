@@ -153,8 +153,8 @@ void generateBlocks(uint bid) {
 		uvec2 num_frags;
 		vec2 cpos = vec2(0);
 
-		bits.x = rasterBlock(tri_mins.x, tri_maxs.x, startx, num_frags.x, cpos);
-		bits.y = rasterBlock(tri_mins.y, tri_maxs.y, startx, num_frags.y, cpos);
+		bits.x = rasterHalfBlock(tri_mins.x, tri_maxs.x, startx, num_frags.x, cpos);
+		bits.y = rasterHalfBlock(tri_mins.y, tri_maxs.y, startx, num_frags.y, cpos);
 
 		uint num_block_frags = num_frags.x + num_frags.y;
 		uint depth = rasterBlockDepth(cpos * (0.5 / float(num_block_frags)) + block_pos, tri_idx);
@@ -289,7 +289,7 @@ void rasterBin(int bin_id) {
 		//initVisualizeSamples();
 
 		uint temp_counts = s_rblock_counts[rbid];
-		uint cur_tri_idx = initLoadSamples(temp_counts & 0xffff, temp_counts >> 16);
+		uint cur_tri_idx = initUnpackSamples(temp_counts & 0xffff, temp_counts >> 16);
 		for(int segment_id = 0;; segment_id++) {
 			uint counts = s_rblock_counts[rbid];
 			int frag_count = min(SEGMENT_SIZE, int(counts >> 16) - segment_id * SEGMENT_SIZE);
@@ -297,7 +297,7 @@ void rasterBin(int bin_id) {
 				break;
 
 			uint src_offset = scratchRasterBlockOffset(rbid);
-			loadSamples(cur_tri_idx, counts & 0xffff, src_offset);
+			unpackSamples(cur_tri_idx, counts & 0xffff, src_offset);
 			UPDATE_TIMER(2);
 
 			shadeAndReduceSamples(rbid, frag_count, context);
@@ -310,7 +310,7 @@ void rasterBin(int bin_id) {
 #endif
 		}
 
-		ivec2 pixel_pos = rasterBlockPixelPos(rbid);
+		ivec2 pixel_pos = renderBlockPixelPos(rbid);
 		outputPixel(pixel_pos, finishReduceSamples(context));
 		//finishVisualizeSamples(pixel_pos);
 		//visualizeBlockCounts(rbid, pixel_pos);

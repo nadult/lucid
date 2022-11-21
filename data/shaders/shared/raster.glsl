@@ -80,6 +80,7 @@
 #define FULL_BUFFER_SIZE (BASE_BUFFER_SIZE + LSIZE * (WARP_SIZE / 32))
 
 shared uint s_buffer[FULL_BUFFER_SIZE + 1];
+shared uint s_sample_counts[LSIZE / WARP_SIZE];
 
 uvec3 rasterBinStep(inout ScanlineParams scan) {
 #define SCAN_STEP(id)                                                                              \
@@ -107,7 +108,7 @@ uvec3 rasterBinStep(inout ScanlineParams scan) {
 	return uvec3(min_bits, max_bits, bx_mask);
 }
 
-uint rasterBlock(uint tri_mins, uint tri_maxs, int startx, out uint num_frags, inout vec2 cpos) {
+uint rasterHalfBlock(uint tri_mins, uint tri_maxs, int startx, out uint num_frags, inout vec2 cpos) {
 	ivec4 xmin = max(((ivec4(tri_mins) >> ivec4(0, 6, 12, 18)) & BIN_MASK) - startx, 0);
 	ivec4 xmax = min(((ivec4(tri_maxs) >> ivec4(0, 6, 12, 18)) & BIN_MASK) - startx, 7);
 	ivec4 count = max(xmax - xmin + 1, 0);
@@ -129,7 +130,7 @@ uint rasterBlockDepth(vec2 cpos, uint tri_idx) {
 	return uint(depth);
 }
 
-ivec2 rasterBlockPos(uint rbid) {
+ivec2 renderBlockPos(uint rbid) {
 	uint rbx = rbid & RBLOCK_COLS_MASK;
 	uint rby = rbid >> RBLOCK_COLS_SHIFT;
 	return ivec2(rbx, rby);
@@ -139,7 +140,7 @@ uint blockIdFromRaster(uint rbid) {
 #if RBLOCK_HEIGHT == BLOCK_HEIGHT
 	return rbid;
 #else
-	ivec2 pos = rasterBlockPos(rbid);
+	ivec2 pos = renderBlockPos(rbid);
 	return pos.x + ((pos.y >> 1) << RBLOCK_COLS_SHIFT);
 #endif
 }
@@ -154,12 +155,12 @@ uint blockIdToRaster(uint bid) {
 #endif
 }
 
-uvec2 rasterBlockShift() { return uvec2(RBLOCK_WIDTH_SHIFT, RBLOCK_HEIGHT_SHIFT); }
+uvec2 renderBlockShift() { return uvec2(RBLOCK_WIDTH_SHIFT, RBLOCK_HEIGHT_SHIFT); }
 
-ivec2 rasterBlockPixelPos(uint rbid) {
+ivec2 renderBlockPixelPos(uint rbid) {
 	ivec2 pix_pos =
 		ivec2(LIX & (RBLOCK_WIDTH - 1), (LIX >> RBLOCK_WIDTH_SHIFT) & (RBLOCK_HEIGHT - 1));
-	return (rasterBlockPos(rbid) << rasterBlockShift()) + pix_pos;
+	return (renderBlockPos(rbid) << renderBlockShift()) + pix_pos;
 }
 
 uint swap(uint x, int mask, bool dir) {
@@ -247,9 +248,7 @@ bool highTriDensity(uint tri_count, uint frag_count) {
 
 uint shadingBufferOffset() { return (LIX >> WARP_SHIFT) * (SEGMENT_SIZE + WARP_SIZE); }
 
-shared uint s_sample_counts[LSIZE / WARP_SIZE];
-
-uint initLoadSamples(uint tri_count, uint frag_count) {
+uint initUnpackSamples(uint tri_count, uint frag_count) {
 	bool high_tri_density = WARP_SIZE == 32 && highTriDensity(tri_count, frag_count);
 	if(gl_SubgroupInvocationID == 0)
 		s_sample_counts[gl_SubgroupID] = 0;
@@ -259,8 +258,7 @@ uint initLoadSamples(uint tri_count, uint frag_count) {
 	return (LIX & WARP_MASK) >> RBLOCK_HEIGHT_SHIFT;
 }
 
-// TODO: new name: unpack samples
-void loadSamples(inout uint cur_tri_idx, uint tri_count, uint src_offset) {
+void unpackSamples(inout uint cur_tri_idx, uint tri_count, uint src_offset) {
 	uint buf_offset = shadingBufferOffset();
 	{
 		// Copying samples generated in previous round which may overlap into current segment
@@ -330,7 +328,7 @@ void loadSamples(inout uint cur_tri_idx, uint tri_count, uint src_offset) {
 
 void shadeAndReduceSamples(uint rbid, uint sample_count, in out ReductionContext ctx) {
 	uint buf_offset = shadingBufferOffset();
-	ivec2 rblock_pos = (rasterBlockPos(rbid) << rasterBlockShift()) + s_bin_pos;
+	ivec2 rblock_pos = (renderBlockPos(rbid) << renderBlockShift()) + s_bin_pos;
 	vec3 out_color = ctx.out_color;
 	uint second_offset = (LIX & ~WARP_MASK) + BASE_BUFFER_SIZE + LSIZE;
 

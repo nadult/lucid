@@ -99,8 +99,8 @@ uvec3 rasterBinStep(inout ScanlineParams scan) {
 	SCAN_STEP(3);
 
 	uint bx_mask = BX_MASK_ROW(0) | BX_MASK_ROW(1) | BX_MASK_ROW(2) | BX_MASK_ROW(3);
-	uint min_bits = (min0 << 0) | (min1 << 6) | (min2 << 12) | (min3 << 18);
-	uint max_bits = (max0 << 0) | (max1 << 6) | (max2 << 12) | (max3 << 18);
+	uint min_bits = (min0 << 0) | (min1 << 5) | (min2 << 10) | (min3 << 15);
+	uint max_bits = (max0 << 0) | (max1 << 5) | (max2 << 10) | (max3 << 15);
 
 #undef BX_MASK_ROW
 #undef SCAN_STEP
@@ -108,9 +108,31 @@ uvec3 rasterBinStep(inout ScanlineParams scan) {
 	return uvec3(min_bits, max_bits, bx_mask);
 }
 
-uint rasterHalfBlock(uint tri_mins, uint tri_maxs, int startx, out uint num_frags, inout vec2 cpos) {
-	ivec4 xmin = max(((ivec4(tri_mins) >> ivec4(0, 6, 12, 18)) & BIN_MASK) - startx, 0);
-	ivec4 xmax = min(((ivec4(tri_maxs) >> ivec4(0, 6, 12, 18)) & BIN_MASK) - startx, 7);
+void rasterHalfBlockCentroid(uint tri_mins, uint tri_maxs, int startx, out uint num_frags,
+							 inout vec2 cpos) {
+	ivec4 xmin = max(((ivec4(tri_mins) >> ivec4(0, 5, 10, 15)) & BIN_MASK) - startx, 0);
+	ivec4 xmax = min(((ivec4(tri_maxs) >> ivec4(0, 5, 10, 15)) & BIN_MASK) - startx, 7);
+	ivec4 count = max(xmax - xmin + 1, 0);
+	vec4 cpx = vec4(xmin * 2 + count) * count;
+	vec4 cpy = vec4(1.0, 3.0, 5.0, 7.0) * count;
+	cpos += vec2(cpx[0] + cpx[1] + cpx[2] + cpx[3], cpy[0] + cpy[1] + cpy[2] + cpy[3]);
+	num_frags = count[0] + count[1] + count[2] + count[3];
+}
+
+uint rasterHalfBlockBits(uint tri_mins, uint tri_maxs, int startx) {
+	ivec4 xmin = max(((ivec4(tri_mins) >> ivec4(0, 5, 10, 15)) & BIN_MASK) - startx, 0);
+	ivec4 xmax = min(((ivec4(tri_maxs) >> ivec4(0, 5, 10, 15)) & BIN_MASK) - startx, 7);
+	ivec4 count = max(xmax - xmin + 1, 0);
+	uint min_bits = ((xmin[0] << 0) | (xmin[1] << 7) | (xmin[2] << 14) | (xmin[3] << 21)) &
+					(7 | (7 << 7) | (7 << 14) | (7 << 21));
+	uint count_bits = (count[0] << 3) | (count[1] << 10) | (count[2] << 17) | (count[3] << 24);
+	return min_bits | count_bits;
+}
+
+uint rasterHalfBlock(uint tri_mins, uint tri_maxs, int startx, out uint num_frags,
+					 inout vec2 cpos) {
+	ivec4 xmin = max(((ivec4(tri_mins) >> ivec4(0, 5, 10, 15)) & BIN_MASK) - startx, 0);
+	ivec4 xmax = min(((ivec4(tri_maxs) >> ivec4(0, 5, 10, 15)) & BIN_MASK) - startx, 7);
 	ivec4 count = max(xmax - xmin + 1, 0);
 	vec4 cpx = vec4(xmin * 2 + count) * count;
 	vec4 cpy = vec4(1.0, 3.0, 5.0, 7.0) * count;

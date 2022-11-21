@@ -347,10 +347,6 @@ void addVisibleQuad(int quad_idx, int src_idx, int instance_id) {
 	uint instance_flags = g_instances[instance_id].flags;
 
 	vec3 shared_origin = u_config.frustum.ws_origin0.xyz;
-	vec3 tri0 = vertexLoad(v0) - shared_origin;
-	vec3 tri1 = vertexLoad(v1) - shared_origin;
-	vec3 tri2 = vertexLoad(v2) - shared_origin;
-	vec3 tri3 = vertexLoad(v3) - shared_origin;
 	storeQuad(quad_idx, instance_flags, v0, v1, v2, v3);
 }
 

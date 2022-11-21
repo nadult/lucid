@@ -247,7 +247,14 @@ bool highTriDensity(uint tri_count, uint frag_count) {
 
 uint shadingBufferOffset() { return (LIX >> WARP_SHIFT) * (SEGMENT_SIZE + WARP_SIZE); }
 
-void loadSamples(inout uint cur_tri_idx, int segment_id, uint rblock_counts, uint src_offset) {
+uint initLoadSamples(uint tri_count, uint frag_count) {
+	bool high_tri_density = WARP_SIZE == 32 && highTriDensity(tri_count, frag_count);
+	if(high_tri_density)
+		return LIX & WARP_MASK | 0x80000000;
+	return (LIX & WARP_MASK) >> RBLOCK_HEIGHT_SHIFT;
+}
+
+void loadSamples(inout uint cur_tri_idx, int segment_id, uint tri_count, uint src_offset) {
 	uint buf_offset = shadingBufferOffset();
 	{
 		// Copying samples generated in previous round which may overlap into current segment
@@ -256,13 +263,12 @@ void loadSamples(inout uint cur_tri_idx, int segment_id, uint rblock_counts, uin
 	}
 	subgroupMemoryBarrierShared();
 
-	uint tri_count = rblock_counts & 0xffff, frag_count = rblock_counts >> 16;
 	int segment_bits = segment_id & 15;
 	uint tri_offset;
 
-	// TODO: compute highTriDensity outside
-	if(WARP_SIZE == 32 && highTriDensity(tri_count, frag_count)) {
-		uint i = cur_tri_idx == 0 ? LIX & WARP_MASK : cur_tri_idx;
+	bool high_tri_density = (cur_tri_idx & 0x80000000) != 0;
+	if(high_tri_density) {
+		uint i = cur_tri_idx & 0x7fffffff;
 		for(; i < tri_count; i += WARP_SIZE) {
 			uvec2 tri_data = g_scratch_64[src_offset + i];
 			uint tri_segment_bits = tri_data.y >> 28;
@@ -279,11 +285,11 @@ void loadSamples(inout uint cur_tri_idx, int segment_id, uint rblock_counts, uin
 				tri_offset++;
 			}
 		}
-		cur_tri_idx = i;
+		cur_tri_idx = i | 0x80000000;
 	} else {
 		uint y = LIX & (RBLOCK_HEIGHT - 1), row_shift = (y & 3) * 7;
 		uint mask1 = y >= 1 ? ~0u : 0, mask2 = y >= 2 ? ~0u : 0, mask3 = y >= 4 ? ~0u : 0;
-		uint i = cur_tri_idx == 0 ? (LIX & WARP_MASK) >> RBLOCK_HEIGHT_SHIFT : cur_tri_idx;
+		uint i = cur_tri_idx;
 		for(; i < tri_count; i += WARP_SIZE / RBLOCK_HEIGHT) {
 #if RBLOCK_HEIGHT == 8
 			uint tri_data = g_scratch_64[src_offset + i][y >> 2];

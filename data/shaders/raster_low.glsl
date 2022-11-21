@@ -353,7 +353,8 @@ void rasterBin(int bin_id) {
 		initReduceSamples(context);
 		//initVisualizeSamples();
 
-		uint cur_tri_idx = 0;
+		uint temp_counts = s_rblock_counts[rbid];
+		uint cur_tri_idx = initLoadSamples(temp_counts & 0xffff, temp_counts >> 16);
 		for(int segment_id = 0;; segment_id++) {
 			uint counts = s_rblock_counts[rbid];
 			int frag_count = min(SEGMENT_SIZE, int(counts >> 16) - segment_id * SEGMENT_SIZE);
@@ -361,7 +362,7 @@ void rasterBin(int bin_id) {
 				break;
 
 			uint src_offset = scratchRasterBlockOffset(rbid);
-			loadSamples(cur_tri_idx, segment_id, counts, src_offset);
+			loadSamples(cur_tri_idx, segment_id, counts & 0xffff, src_offset);
 			UPDATE_TIMER(2);
 
 			shadeAndReduceSamples(rbid, frag_count, context);

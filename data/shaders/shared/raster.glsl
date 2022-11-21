@@ -247,14 +247,20 @@ bool highTriDensity(uint tri_count, uint frag_count) {
 
 uint shadingBufferOffset() { return (LIX >> WARP_SHIFT) * (SEGMENT_SIZE + WARP_SIZE); }
 
+shared uint s_sample_counts[LSIZE / WARP_SIZE];
+
 uint initLoadSamples(uint tri_count, uint frag_count) {
 	bool high_tri_density = WARP_SIZE == 32 && highTriDensity(tri_count, frag_count);
+	if(gl_SubgroupInvocationID == 0)
+		s_sample_counts[gl_SubgroupID] = 0;
+	subgroupMemoryBarrierShared();
 	if(high_tri_density)
-		return LIX & WARP_MASK | 0x80000000;
+		return (LIX & WARP_MASK) | 0x80000000;
 	return (LIX & WARP_MASK) >> RBLOCK_HEIGHT_SHIFT;
 }
 
-void loadSamples(inout uint cur_tri_idx, int segment_id, uint tri_count, uint src_offset) {
+// TODO: new name: unpack samples
+void loadSamples(inout uint cur_tri_idx, uint tri_count, uint src_offset) {
 	uint buf_offset = shadingBufferOffset();
 	{
 		// Copying samples generated in previous round which may overlap into current segment
@@ -263,33 +269,35 @@ void loadSamples(inout uint cur_tri_idx, int segment_id, uint tri_count, uint sr
 	}
 	subgroupMemoryBarrierShared();
 
-	int segment_bits = segment_id & 15;
-	uint tri_offset;
-
 	bool high_tri_density = (cur_tri_idx & 0x80000000) != 0;
+	uint max_offset = 0;
+
 	if(high_tri_density) {
 		uint i = cur_tri_idx & 0x7fffffff;
+
 		for(; i < tri_count; i += WARP_SIZE) {
 			uvec2 tri_data = g_scratch_64[src_offset + i];
-			uint tri_segment_bits = tri_data.y >> 28;
-			if(tri_segment_bits != segment_bits)
+			uint bits = blockRowsToBits(tri_data.y);
+			uint num_bits = bitCount(bits);
+			uint tri_offset = atomicAdd(s_sample_counts[gl_SubgroupID], num_bits);
+			if(tri_offset >= SEGMENT_SIZE)
 				break;
 
-			tri_offset = tri_data.x & 0xff;
 			uint tri_idx = tri_data.x & 0xffffff00;
-			uint bits = blockRowsToBits(tri_data.y);
 			while(bits != 0) {
 				uint pixel_id = findLSB(bits);
 				bits &= ~(1u << pixel_id);
 				s_buffer[buf_offset + tri_offset] = pixel_id | tri_idx;
 				tri_offset++;
 			}
+			max_offset = tri_offset;
 		}
 		cur_tri_idx = i | 0x80000000;
 	} else {
 		uint y = LIX & (RBLOCK_HEIGHT - 1), row_shift = (y & 3) * 7;
 		uint mask1 = y >= 1 ? ~0u : 0, mask2 = y >= 2 ? ~0u : 0, mask3 = y >= 4 ? ~0u : 0;
 		uint i = cur_tri_idx;
+
 		for(; i < tri_count; i += WARP_SIZE / RBLOCK_HEIGHT) {
 #if RBLOCK_HEIGHT == 8
 			uint tri_data = g_scratch_64[src_offset + i][y >> 2];
@@ -299,31 +307,25 @@ void loadSamples(inout uint cur_tri_idx, int segment_id, uint tri_count, uint sr
 			uint tri_data = tri_block_data.y, tri_info = tri_block_data.x;
 #endif
 
-			uint tri_segment_bits = tri_data >> 28;
-			if(tri_segment_bits != segment_bits)
+			uint row_data = tri_data >> row_shift;
+			uint countx = (row_data >> 3) & 15;
+			uint tri_offset = atomicAdd(s_sample_counts[gl_SubgroupID], countx);
+			if(tri_offset >= SEGMENT_SIZE)
 				break;
 
-			tri_offset = tri_info & 0xff;
+			uint pixel_id = (y << 3) | (row_data & 7);
 			uint tri_idx = tri_info & 0xffffff00;
-			uint row_data = tri_data >> row_shift;
-			uint minx = row_data & 7, countx = (row_data >> 3) & 15;
-			uint prevx = countx + (subgroupShuffleUp(countx, 1) & mask1);
-			prevx += (subgroupShuffleUp(prevx, 2) & mask2);
-#if RBLOCK_HEIGHT == 8
-			prevx += (subgroupShuffleUp(prevx, 4) & mask3);
-#endif
-
-			tri_offset += prevx - countx;
-			uint pixel_id = (y << 3) | minx;
 			uint value = pixel_id | tri_idx;
 			for(int j = 0; j < countx; j++)
 				s_buffer[buf_offset + tri_offset++] = value++;
+			max_offset = tri_offset;
 		}
 
 		cur_tri_idx = i;
 	}
-
 	subgroupMemoryBarrierShared();
+	if(max_offset >= SEGMENT_SIZE)
+		s_sample_counts[gl_SubgroupID] = max_offset - SEGMENT_SIZE;
 }
 
 void shadeAndReduceSamples(uint rbid, uint sample_count, in out ReductionContext ctx) {

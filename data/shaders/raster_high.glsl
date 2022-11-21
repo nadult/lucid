@@ -209,7 +209,9 @@ void generateRBlocks(uint start_rbid) {
 	tri_count = s_rblock_tri_counts[rbid];
 	int startx = int(rblock_pos.x << RBLOCK_WIDTH_SHIFT);
 	vec2 block_pos = vec2(rblock_pos << rasterBlockShift()) + vec2(s_bin_pos);
+	const uint rblock_tri_mask = RBLOCK_HEIGHT == 8 ? 0x1fff : 0xfff;
 
+	uint frag_count = 0;
 	for(uint i = group_thread; i < tri_count; i += group_size) {
 		uint row_tri_idx = s_buffer[buf_offset + i];
 		vec2 cpos = vec2(0, 0);
@@ -225,21 +227,25 @@ void generateRBlocks(uint start_rbid) {
 						   rasterBlock(tri_mins.y, tri_maxs.y, startx, hnum_frags.y, cpos));
 		num_frags = hnum_frags.x + hnum_frags.y;
 		g_scratch_64[dst_offset + i] = bits;
-		g_scratch_32[dst_offset + i] = tri_idx | (num_frags << 24);
+		g_scratch_32[dst_offset + i] = tri_idx << 8;
 #else
 		uint tri_idx = g_scratch_32[src_offset_32 + row_tri_idx] & 0xffffff;
 		uvec2 tri_info = g_scratch_64[src_offset_64 + row_tri_idx];
 		uint bits = rasterBlock(tri_info.x, tri_info.y, startx, num_frags, cpos);
-		g_scratch_64[dst_offset + i] = uvec2(bits, tri_idx | (num_frags << 24));
+		g_scratch_64[dst_offset + i] = uvec2(tri_idx << 8, bits);
 #endif
 
 		if(num_frags == 0) // This means that bx_mask is invalid
 			DEBUG_RECORD(0, 0, 0, 0);
+		frag_count += num_frags;
 		uint depth = rasterBlockDepth(cpos * (0.5 / float(num_frags)) + block_pos, tri_idx);
 		s_buffer[buf_offset + i] = i | (RBLOCK_HEIGHT == 8 ? (depth >> 1) << 13 : depth << 12);
 	}
 	barrier();
 	groupMemoryBarrier();
+	frag_count = subgroupInclusiveAddFast(frag_count);
+	if(gl_SubgroupInvocationID == WARP_SIZE - 1)
+		atomicAdd(s_rblock_frag_counts[rbid], frag_count);
 	sortBuffer(tri_count, s_max_sort_rcount, buf_offset, group_size, group_thread, true);
 	barrier();
 
@@ -253,98 +259,38 @@ void generateRBlocks(uint start_rbid) {
 	barrier();
 #endif
 
+	// Reordering rblocks in scratch
+	// TODO: optimize it further (unroll?)
+#if RBLOCK_HEIGHT == 4
+	uint stored_rblocks[8];
+	uint stored_idx = 0;
 	for(uint i = group_thread; i < tri_count; i += group_size) {
-		uint rblock_tri_idx = s_buffer[buf_offset + i] & (RBLOCK_HEIGHT == 8 ? 0x1fff : 0xfff);
-#if RBLOCK_HEIGHT == 8
-		uint num_frags = g_scratch_32[dst_offset + rblock_tri_idx] >> 24;
+		uint rblock_tri_idx = s_buffer[buf_offset + i] & rblock_tri_mask;
+		uvec2 tri_data = g_scratch_64[dst_offset + rblock_tri_idx];
+		stored_rblocks[stored_idx++] = tri_data.x;
+		s_buffer[buf_offset + i] = tri_data.y;
+	}
+	barrier();
+	stored_idx = 0;
+	for(uint i = group_thread; i < tri_count; i += group_size)
+		g_scratch_64[dst_offset + i] =
+			uvec2(stored_rblocks[stored_idx++], s_buffer[buf_offset + i]);
 #else
-		uint num_frags = g_scratch_64[dst_offset + rblock_tri_idx].y >> 24;
-#endif
-
-		// Computing triangle-ordered sample offsets within each block
-		uint sum = subgroupInclusiveAddFast(num_frags);
-		s_buffer[buf_offset + i] = (sum - num_frags) | (num_frags << 12) | (rblock_tri_idx << 19);
-	}
-	barrier();
-
-	// Computing prefix sum across whole render-blocks. We're processing 4 elements
-	// at a time, so that we can fit with MAX_RBLOCK_TRIS tris/hblock (128 warps).
-	if(LIX < 2 * NUM_WARPS) {
-		uint wgsize = 2 << group_shift, wgmask = wgsize - 1;
-		uint group_rbid = LIX >> (1 + group_shift), group_sub_idx = LIX & wgmask;
-		uint buf_offset = group_rbid << (MAX_RBLOCK_TRIS0_SHIFT + group_shift);
-		uint rbid = start_rbid + group_rbid;
-		uint tri_count = s_rblock_tri_counts[rbid];
-		uint warp_offset = group_sub_idx << (WARP_SHIFT + 2);
-
-		uvec4 values = uvec4(0);
-		for(int j = 0; j < 4; j++) {
-			if(warp_offset < tri_count) {
-				uint rblock_tri_idx = min(warp_offset + WARP_MASK, tri_count - 1);
-				uint last = s_buffer[buf_offset + rblock_tri_idx];
-				values[j] = (last & 0xfff) + ((last >> 12) & 0x7f);
-			}
-			warp_offset += WARP_SIZE;
-		}
-
-		uint value = values[0] + values[1] + values[2] + values[3];
-		uint sum = value, temp;
-		if(true)
-			temp = subgroupShuffleUp(sum, 1), sum += group_sub_idx >= 1 ? temp : 0;
-		if(wgsize >= 4)
-			temp = subgroupShuffleUp(sum, 2), sum += group_sub_idx >= 2 ? temp : 0;
-		if(wgsize >= 8)
-			temp = subgroupShuffleUp(sum, 4), sum += group_sub_idx >= 4 ? temp : 0;
-		if(wgsize >= 16)
-			temp = subgroupShuffleUp(sum, 8), sum += group_sub_idx >= 8 ? temp : 0;
-		if(wgsize >= 32)
-			temp = subgroupShuffleUp(sum, 16), sum += group_sub_idx >= 16 ? temp : 0;
-
-		if(group_sub_idx == wgmask) {
-			updateStats(sum, tri_count);
-			s_rblock_frag_counts[rbid] = sum;
-		}
-		s_buffer[mini_offset + LIX * 4 + 0] = sum - value, value -= values[0];
-		s_buffer[mini_offset + LIX * 4 + 1] = sum - value, value -= values[1];
-		s_buffer[mini_offset + LIX * 4 + 2] = sum - value;
-		s_buffer[mini_offset + LIX * 4 + 3] = sum - values[3];
-	}
-	barrier();
-
-	// Finding triangles which start segments
-	// Also storing rblocks data to temporary stored_rblocks array
 	uvec2 stored_rblocks[8];
 	uint stored_idx = 0;
 	for(uint i = group_thread; i < tri_count; i += group_size) {
-		uint current = s_buffer[buf_offset + i];
-		uint rblock_tri_idx = current >> 19;
-		uint tri_offset =
-			(current & 0xfff) +
-			s_buffer[mini_offset + (group_rbid << (3 + group_shift)) + (i >> WARP_SHIFT)];
-		uint segment_bits = (tri_offset & 0xf00) << 20;
+		uint rblock_tri_idx = s_buffer[buf_offset + i] & rblock_tri_mask;
 		uvec2 tri_data = g_scratch_64[dst_offset + rblock_tri_idx];
-
-#if RBLOCK_HEIGHT == 8
-		uint tri_info = g_scratch_32[dst_offset + rblock_tri_idx];
-		uint tri_idx = tri_info & 0xffffff;
-		stored_rblocks[stored_idx++] = uvec2(tri_data.x | segment_bits, tri_data.y | segment_bits);
-		s_buffer[buf_offset + i] = (tri_idx << 8) | (tri_offset & 0xff);
-#else
-		uint tri_idx = tri_data.y & 0xffffff;
-		stored_rblocks[stored_idx++] =
-			uvec2((tri_idx << 8) | (tri_offset & 0xff), tri_data.x | segment_bits);
-#endif
+		stored_rblocks[stored_idx++] = tri_data;
+		s_buffer[buf_offset + i] = g_scratch_32[dst_offset + rblock_tri_idx];
 	}
 	barrier();
-
-	// Reordering rblocks in scratch
 	stored_idx = 0;
 	for(uint i = group_thread; i < tri_count; i += group_size) {
 		g_scratch_64[dst_offset + i] = stored_rblocks[stored_idx++];
-#if RBLOCK_HEIGHT == 8
 		g_scratch_32[dst_offset + i] = s_buffer[buf_offset + i];
-#endif
 	}
+#endif
 	barrier();
 }
 
@@ -364,6 +310,7 @@ void rasterBin(int bin_id) {
 	START_TIMER();
 	if(LIX < NUM_RBLOCKS) {
 		s_rblock_tri_counts[LIX] = 0;
+		s_rblock_frag_counts[LIX] = 0;
 		if(LIX < RBLOCK_ROWS)
 			s_rblock_row_tri_counts[LIX] = 0;
 		if(LIX == 0) {
@@ -414,7 +361,7 @@ void rasterBin(int bin_id) {
 
 		uint src_offset = scratchRasterBlockTrisOffset(rbid);
 		uint tri_count = s_rblock_tri_counts[rbid];
-		loadSamples(cur_tri_idx, segment_id, tri_count, src_offset);
+		loadSamples(cur_tri_idx, tri_count, src_offset);
 		UPDATE_TIMER(2);
 
 		shadeAndReduceSamples(rbid, frag_count, context);

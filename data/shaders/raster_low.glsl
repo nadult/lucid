@@ -140,6 +140,7 @@ void generateBlocks(uint bid) {
 	int startx = int(bx << BLOCK_SHIFT);
 	vec2 block_pos = vec2(s_bin_pos + ivec2(bx << BLOCK_SHIFT, by << BLOCK_SHIFT));
 
+	uint frag_count = 0;
 	for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_SIZE) {
 		uint row_idx = s_buffer[buf_offset + i];
 
@@ -155,21 +156,32 @@ void generateBlocks(uint bid) {
 		bits.x = rasterBlock(tri_mins.x, tri_maxs.x, startx, num_frags.x, cpos);
 		bits.y = rasterBlock(tri_mins.y, tri_maxs.y, startx, num_frags.y, cpos);
 
-		uint num_all_frags = num_frags.x + num_frags.y;
-		uint depth = rasterBlockDepth(cpos * (0.5 / float(num_all_frags)) + block_pos, tri_idx);
-
-		if(num_all_frags == 0) // This means that bx_mask is invalid
+		uint num_block_frags = num_frags.x + num_frags.y;
+		uint depth = rasterBlockDepth(cpos * (0.5 / float(num_block_frags)) + block_pos, tri_idx);
+		if(num_block_frags == 0) // This means that bx_mask is invalid
 			DEBUG_RECORD(0, 0, 0, 0);
-		uint counts =
-			WARP_SIZE == 64 ? num_frags.x + num_frags.y : num_frags.x | (num_frags.y << 6);
-		bits.x |= (tri_idx & 0xf00000) << 8;
+		frag_count += WARP_SIZE == 64 ? num_block_frags : num_frags.x | (num_frags.y << 16);
+		// TODO: optimize this?
 		g_scratch_64[tmp_offset + i] = bits;
-		g_scratch_32[tmp_offset + i] = (tri_idx & 0xfffff) | (counts << 20);
+		g_scratch_32[tmp_offset + i] = tri_idx << 8;
 
 		// 12 bits for tile-tri index, 20 bits for depth
 		s_buffer[buf_offset + i] = i | (depth << 12);
 	}
 	subgroupMemoryBarrier();
+
+	frag_count = subgroupInclusiveAddFast(frag_count);
+	if(gl_SubgroupInvocationID == WARP_SIZE - 1) {
+		// TODO: separate tri_count & frag_count; use same counters in high & low?
+#if WARP_SIZE == 32
+		uint rbid = blockIdToRaster(lbid + (bid & ~(NUM_WARPS - 1)));
+		uint v0 = frag_count & 0xffff, v1 = frag_count >> 16;
+		s_rblock_counts[rbid] = (v0 << 16) | tri_count;
+		s_rblock_counts[rbid + RBLOCK_COLS] = (v1 << 16) | tri_count;
+#else
+		s_rblock_counts[bid] = (frag_count << 16) | tri_count;
+#endif
+	}
 
 	if(tri_count > RC_COLOR_SIZE) {
 		// rcount: count rounded up to next power of 2; minimum: WARP_SIZE
@@ -190,57 +202,8 @@ void generateBlocks(uint bid) {
 		}
 #endif
 
-	// Computing per-tri sample offsets within each block
-	for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_SIZE) {
-		uint idx = s_buffer[buf_offset + i] & 0xff;
-		uint counts = g_scratch_32[tmp_offset + idx] >> 20;
-#if WARP_SIZE == 32
-		uint num_frags1 = counts & 63, num_frags2 = (counts >> 6) & 63;
-		uint num_frags = num_frags1 | (num_frags2 << 12);
-#else
-		uint num_frags = counts;
-#endif
-
-		num_frags = subgroupInclusiveAddFast(num_frags);
-		s_buffer[buf_offset + i] = num_frags | (idx << 24);
-	}
-	subgroupMemoryBarrierShared();
-
-	// Computing per-tri sample offsets across whole blocks
-	if(gl_SubgroupInvocationID < NUM_WARPS) {
-		uint warp_idx = gl_SubgroupInvocationID;
-		uint warp_offset = warp_idx << WARP_SHIFT;
-		uint value = 0;
-
-		if(warp_offset < tri_count) {
-			uint block_tri_idx = min(warp_offset + WARP_MASK, tri_count - 1);
-			value = s_buffer[buf_offset + block_tri_idx];
-		}
-		value = WARP_SIZE == 64 ? value & 0xffffff : (value & 0xfff) | ((value & 0xfff000) << 4);
-		uint sum = value, temp;
-		temp = subgroupShuffleUp(sum, 1), sum += warp_idx >= 1 ? temp : 0;
-		temp = subgroupShuffleUp(sum, 2), sum += warp_idx >= 2 ? temp : 0;
-#if NUM_WARPS > 4
-		temp = subgroupShuffleUp(sum, 4), sum += warp_idx >= 4 ? temp : 0;
-#endif
-
-		if(warp_idx == NUM_WARPS_MASK) {
-#if WARP_SIZE == 32
-			uint rbid = blockIdToRaster(lbid + (bid & ~(NUM_WARPS - 1)));
-			uint v0 = sum & 0xffff, v1 = sum >> 16;
-			s_rblock_counts[rbid] = (v0 << 16) | tri_count;
-			s_rblock_counts[rbid + RBLOCK_COLS] = (v1 << 16) | tri_count;
-#else
-			s_rblock_counts[bid] = (sum << 16) | tri_count;
-#endif
-		}
-
-		s_buffer[mini_offset + LIX] = sum - value;
-	}
-	subgroupMemoryBarrierShared();
-
-	// Storing triangle fragment offsets to scratch mem
-	// Also finding first triangle for each segment
+		// Storing triangle fragment offsets to scratch mem
+		// Also finding first triangle for each segment
 
 #if WARP_SIZE == 32
 	uint rbid0 = blockIdToRaster(bid);
@@ -248,49 +211,21 @@ void generateBlocks(uint bid) {
 	uint dst_offset0 = scratchRasterBlockOffset(rbid0);
 	uint dst_offset1 = scratchRasterBlockOffset(rbid1);
 	for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_SIZE) {
-		uint tri_offset = 0;
-		if(i > 0) {
-			uint prev = i - 1;
-			tri_offset = s_buffer[buf_offset + prev] & 0xffffff;
-			tri_offset = (tri_offset & 0xfff) | ((tri_offset & 0xfff000) << 4);
-			tri_offset += s_buffer[mini_offset + (lbid << WARP_SHIFT) + (prev >> WARP_SHIFT)];
-		}
-
-		uint block_tri_idx = s_buffer[buf_offset + i] >> 24;
-		uint tri_offset0 = tri_offset & 0xffff, tri_offset1 = tri_offset >> 16;
-		uint segment_bits0 = (tri_offset0 & 0xf00) << 20;
-		uint segment_bits1 = (tri_offset1 & 0xf00) << 20;
-
+		uint block_tri_idx = s_buffer[buf_offset + i] & 0xff;
 		uvec2 tri_data = g_scratch_64[tmp_offset + block_tri_idx];
-		uint tri_idx =
-			((g_scratch_32[tmp_offset + block_tri_idx] & 0xfffff) << 8) | (tri_data.x & 0xf0000000);
-		tri_data.x &= 0xfffffff;
-
-		g_scratch_64[dst_offset0 + i] =
-			uvec2(tri_idx | (tri_offset0 & 0xff), tri_data.x | segment_bits0);
-		g_scratch_64[dst_offset1 + i] =
-			uvec2(tri_idx | (tri_offset1 & 0xff), tri_data.y | segment_bits1);
+		uint tri_idx = g_scratch_32[tmp_offset + block_tri_idx];
+		// TODO: optimize this?
+		g_scratch_64[dst_offset0 + i] = uvec2(tri_idx, tri_data.x);
+		g_scratch_64[dst_offset1 + i] = uvec2(tri_idx, tri_data.y);
 	}
 #else
 	uint dst_offset = scratchRasterBlockOffset(bid);
 	for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_SIZE) {
-		uint tri_offset = 0;
-		if(i > 0) {
-			uint prev = i - 1;
-			tri_offset = s_buffer[buf_offset + prev] & 0xffffff;
-			tri_offset += s_buffer[mini_offset + (lbid << WARP_SHIFT) + (prev >> WARP_SHIFT)];
-		}
-
-		uint block_tri_idx = s_buffer[buf_offset + i] >> 24;
-		uint segment_bits = (tri_offset & 0xf00) << 20;
-
+		uint block_tri_idx = s_buffer[buf_offset + i] & 0xff;
 		uvec2 tri_data = g_scratch_64[tmp_offset + block_tri_idx];
-		uint tri_idx =
-			((g_scratch_32[tmp_offset + block_tri_idx] & 0xfffff) << 8) | (tri_data.x & 0xf0000000);
-		tri_data.x &= 0xfffffff;
-
-		g_scratch_64[dst_offset + i] = uvec2(tri_data.x | segment_bits, tri_data.y | segment_bits);
-		g_scratch_32[dst_offset + i] = tri_idx | (tri_offset & 0xff);
+		uint tri_idx = g_scratch_32[tmp_offset + block_tri_idx];
+		g_scratch_64[dst_offset + i] = uvec2(tri_data.x, tri_data.y);
+		g_scratch_32[dst_offset + i] = tri_idx;
 	}
 #endif
 }
@@ -362,7 +297,7 @@ void rasterBin(int bin_id) {
 				break;
 
 			uint src_offset = scratchRasterBlockOffset(rbid);
-			loadSamples(cur_tri_idx, segment_id, counts & 0xffff, src_offset);
+			loadSamples(cur_tri_idx, counts & 0xffff, src_offset);
 			UPDATE_TIMER(2);
 
 			shadeAndReduceSamples(rbid, frag_count, context);

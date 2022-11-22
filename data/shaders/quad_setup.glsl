@@ -225,8 +225,6 @@ void processInputQuad(uint quad_id, uint v0, uint v1, uint v2, uint v3, uint loc
 		return;
 	}
 
-	// TODO: cull second degenerate triangle?
-
 	// TODO: don't forget to change it in MSAA mode
 	aabb0 = clamp(aabb0 + vec4(0.49, 0.49, -0.49, -0.49), vec4(0.0),
 				  vec4(max_screen_pos, max_screen_pos));

@@ -165,7 +165,7 @@ void computeRBlockGroups() {
 			s_rblock_group_shift = group_shift;
 			s_rblock_group_size = group_size;
 			if(group_size > MAX_GROUP_SIZE)
-				atomicOr(s_raster_error, 0xffffffff);
+				s_raster_error = 0xffffffff;
 		}
 	}
 }

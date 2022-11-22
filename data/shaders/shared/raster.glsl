@@ -262,7 +262,7 @@ uint initUnpackSamples(uint tri_count, uint frag_count) {
 	subgroupMemoryBarrierShared();
 	if(high_tri_density)
 		return (LIX & WARP_MASK) | 0x80000000;
-	return (LIX & WARP_MASK) >> RBLOCK_HEIGHT_SHIFT;
+	return LIX & WARP_MASK;
 }
 
 void unpackSamples(inout uint cur_tri_idx, uint tri_count, uint src_offset) {
@@ -272,6 +272,7 @@ void unpackSamples(inout uint cur_tri_idx, uint tri_count, uint src_offset) {
 		uint prev_offset = buf_offset + gl_SubgroupInvocationID;
 		s_buffer[prev_offset] = s_buffer[prev_offset + SEGMENT_SIZE];
 	}
+	uint base_offset = s_sample_counts[gl_SubgroupID];
 	subgroupMemoryBarrierShared();
 
 	bool high_tri_density = (cur_tri_idx & 0x80000000) != 0;
@@ -280,15 +281,21 @@ void unpackSamples(inout uint cur_tri_idx, uint tri_count, uint src_offset) {
 	if(high_tri_density) {
 		uint i = cur_tri_idx & 0x7fffffff;
 
-		for(; i < tri_count; i += WARP_SIZE) {
-			uvec2 tri_data = g_scratch_64[src_offset + i];
-			uint bits = blockRowsToBits(tri_data.y);
+		for(; subgroupAny(i < tri_count); i += WARP_SIZE) {
+			uint bits = 0, tri_idx;
+			if(i < tri_count) {
+				uvec2 tri_data = g_scratch_64[src_offset + i];
+				bits = blockRowsToBits(tri_data.y);
+				tri_idx = tri_data.x & 0xffffff00;
+			}
 			uint num_bits = bitCount(bits);
-			uint tri_offset = atomicAdd(s_sample_counts[gl_SubgroupID], num_bits);
+
+			uint num_bits_sum = subgroupInclusiveAddFast(num_bits);
+			uint tri_offset = base_offset + num_bits_sum - num_bits;
+			base_offset += subgroupShuffle(num_bits_sum, WARP_SIZE - 1);
 			if(tri_offset >= SEGMENT_SIZE)
 				break;
 
-			uint tri_idx = tri_data.x & 0xffffff00;
 			while(bits != 0) {
 				uint pixel_id = findLSB(bits);
 				bits &= ~(1u << pixel_id);
@@ -299,37 +306,50 @@ void unpackSamples(inout uint cur_tri_idx, uint tri_count, uint src_offset) {
 		}
 		cur_tri_idx = i | 0x80000000;
 	} else {
-		uint y = LIX & (RBLOCK_HEIGHT - 1), row_shift = (y & 3) * 7;
-		uint i = cur_tri_idx;
+		uint y = cur_tri_idx & (RBLOCK_HEIGHT - 1), row_shift = (y & 3) * 7;
+		uint i = cur_tri_idx >> RBLOCK_HEIGHT_SHIFT;
 
-		for(; i < tri_count; i += WARP_SIZE / RBLOCK_HEIGHT) {
+		// TODO: najpierw wyznaczyæ offsety a póŸniej dopiero sample?
+		for(; subgroupAny(i < tri_count); i += WARP_SIZE / RBLOCK_HEIGHT) {
+			uint countx = 0, row_data, tri_info;
+
+			if(i < tri_count) {
 #if RBLOCK_HEIGHT == 8
-			uint tri_data = g_scratch_64[src_offset + i][y >> 2];
-			uint tri_info = g_scratch_32[src_offset + i];
+				uint tri_data = g_scratch_64[src_offset + i][y >> 2];
+				tri_info = g_scratch_32[src_offset + i];
 #else
-			uvec2 tri_block_data = g_scratch_64[src_offset + i];
-			uint tri_data = tri_block_data.y, tri_info = tri_block_data.x;
+				uvec2 tri_block_data = g_scratch_64[src_offset + i];
+				uint tri_data = tri_block_data.y;
+				tri_info = tri_block_data.x;
 #endif
 
-			uint row_data = tri_data >> row_shift;
-			uint countx = (row_data >> 3) & 15;
-			uint tri_offset = atomicAdd(s_sample_counts[gl_SubgroupID], countx);
+				row_data = tri_data >> row_shift;
+				countx = (row_data >> 3) & 15;
+			}
+
+			uint countx_sum = subgroupInclusiveAddFast(countx);
+			uint tri_offset = base_offset + countx_sum - countx;
+			base_offset += subgroupBroadcast(countx_sum, WARP_SIZE - 1);
 			if(tri_offset >= SEGMENT_SIZE)
 				break;
 
 			uint pixel_id = (y << 3) | (row_data & 7);
-			uint tri_idx = tri_info & 0xffffff00;
+			uint tri_idx = tri_info & 0xffffff00; // TODO: redundant
 			uint value = pixel_id | tri_idx;
 			for(int j = 0; j < countx; j++)
 				s_buffer[buf_offset + tri_offset++] = value++;
 			max_offset = tri_offset;
 		}
 
-		cur_tri_idx = i;
+		cur_tri_idx = (i << RBLOCK_HEIGHT_SHIFT) | y;
 	}
 	subgroupMemoryBarrierShared();
-	if(max_offset >= SEGMENT_SIZE)
-		s_sample_counts[gl_SubgroupID] = max_offset - SEGMENT_SIZE;
+	bool is_last_thread = max_offset >= SEGMENT_SIZE; // There is only one
+	uint last_thread = subgroupBallotFindLSB(subgroupBallot(is_last_thread));
+	cur_tri_idx = subgroupShuffle(cur_tri_idx, (last_thread + gl_SubgroupInvocationID) & WARP_MASK);
+	if(is_last_thread)
+		s_sample_counts[gl_SubgroupID] =
+			max_offset - SEGMENT_SIZE; // TODO: pass this through cur_tri_idx
 }
 
 void shadeAndReduceSamples(uint rbid, uint sample_count, in out ReductionContext ctx) {

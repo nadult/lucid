@@ -81,7 +81,6 @@
 #define FULL_BUFFER_SIZE (BASE_BUFFER_SIZE + LSIZE * (WARP_SIZE / 32))
 
 shared uint s_buffer[FULL_BUFFER_SIZE + 1];
-shared uint s_sample_counts[LSIZE / WARP_SIZE];
 
 uvec3 rasterBinStep(inout ScanlineParams scan) {
 #define SCAN_STEP(id)                                                                              \
@@ -257,9 +256,6 @@ uint shadingBufferOffset() { return (LIX >> WARP_SHIFT) * (SEGMENT_SIZE + WARP_S
 
 uint initUnpackSamples(uint tri_count, uint frag_count) {
 	bool high_tri_density = WARP_SIZE == 32 && highTriDensity(tri_count, frag_count);
-	if(gl_SubgroupInvocationID == 0)
-		s_sample_counts[gl_SubgroupID] = 0;
-	subgroupMemoryBarrierShared();
 	if(high_tri_density)
 		return (LIX & WARP_MASK) | 0x80000000;
 	return LIX & WARP_MASK;
@@ -268,18 +264,17 @@ uint initUnpackSamples(uint tri_count, uint frag_count) {
 void unpackSamples(inout uint cur_tri_idx, uint tri_count, uint src_offset) {
 	uint buf_offset = shadingBufferOffset();
 	{
-		// Copying samples generated in previous round which may overlap into current segment
+		// Copying samples generated for current segment by last thread in previous round
 		uint prev_offset = buf_offset + gl_SubgroupInvocationID;
 		s_buffer[prev_offset] = s_buffer[prev_offset + SEGMENT_SIZE];
 	}
-	uint base_offset = s_sample_counts[gl_SubgroupID];
 	subgroupMemoryBarrierShared();
-
+	uint base_offset = (cur_tri_idx >> 16) & WARP_MASK;
 	bool high_tri_density = (cur_tri_idx & 0x80000000) != 0;
 	uint max_offset = 0;
 
 	if(high_tri_density) {
-		uint i = cur_tri_idx & 0x7fffffff;
+		uint i = cur_tri_idx & 0xffff;
 
 		for(; subgroupAny(i < tri_count); i += WARP_SIZE) {
 			uint bits = 0, tri_idx;
@@ -306,8 +301,9 @@ void unpackSamples(inout uint cur_tri_idx, uint tri_count, uint src_offset) {
 		}
 		cur_tri_idx = i | 0x80000000;
 	} else {
-		uint y = cur_tri_idx & (RBLOCK_HEIGHT - 1), row_shift = (y & 3) * 7;
-		uint i = cur_tri_idx >> RBLOCK_HEIGHT_SHIFT;
+		uint i = cur_tri_idx & 0xffff;
+		uint y = i & (RBLOCK_HEIGHT - 1), row_shift = (y & 3) * 7;
+		i >>= RBLOCK_HEIGHT_SHIFT;
 
 		// TODO: najpierw wyznaczyæ offsety a póŸniej dopiero sample?
 		for(; subgroupAny(i < tri_count); i += WARP_SIZE / RBLOCK_HEIGHT) {
@@ -344,12 +340,14 @@ void unpackSamples(inout uint cur_tri_idx, uint tri_count, uint src_offset) {
 		cur_tri_idx = (i << RBLOCK_HEIGHT_SHIFT) | y;
 	}
 	subgroupMemoryBarrierShared();
-	bool is_last_thread = max_offset >= SEGMENT_SIZE; // There is only one
+
+	// There can be only one
+	bool is_last_thread = max_offset >= SEGMENT_SIZE;
 	uint last_thread = subgroupBallotFindLSB(subgroupBallot(is_last_thread));
+	// Reindexing threads so that last one will be the first
 	cur_tri_idx = subgroupShuffle(cur_tri_idx, (last_thread + gl_SubgroupInvocationID) & WARP_MASK);
-	if(is_last_thread)
-		s_sample_counts[gl_SubgroupID] =
-			max_offset - SEGMENT_SIZE; // TODO: pass this through cur_tri_idx
+	// Last thread may have written some samples from next segment
+	cur_tri_idx |= subgroupShuffle((max_offset - SEGMENT_SIZE) << 16, last_thread);
 }
 
 void shadeAndReduceSamples(uint rbid, uint sample_count, in out ReductionContext ctx) {

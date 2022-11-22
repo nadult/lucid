@@ -164,7 +164,7 @@ void generateBlocks(uint bid) {
 	if(gl_SubgroupInvocationID == WARP_SIZE - 1) {
 		// TODO: separate tri_count & frag_count; use same counters in high & low?
 #if RBLOCK_HEIGHT == 4
-		uint rbid = blockIdToRaster(lbid + (bid & ~(NUM_WARPS - 1)));
+		uint rbid = blockIdToRender(lbid + (bid & ~(NUM_WARPS - 1)));
 		uint v0 = frag_count & 0xffff, v1 = frag_count >> 16;
 		s_rblock_counts[rbid] = (v0 << 16) | tri_count;
 		s_rblock_counts[rbid + RBLOCK_COLS] = (v1 << 16) | tri_count;
@@ -194,7 +194,7 @@ void generateBlocks(uint bid) {
 #endif
 
 #if RBLOCK_HEIGHT == 4
-	uint rbid0 = blockIdToRaster(bid), rbid1 = rbid0 + RBLOCK_COLS;
+	uint rbid0 = blockIdToRender(bid), rbid1 = rbid0 + RBLOCK_COLS;
 	uint dst_offset0 = scratchRasterBlockOffset(rbid0);
 	uint dst_offset1 = scratchRasterBlockOffset(rbid1);
 #else

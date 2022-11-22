@@ -142,7 +142,7 @@ ivec2 renderBlockPos(uint rbid) {
 	return ivec2(rbx, rby);
 }
 
-uint blockIdFromRaster(uint rbid) {
+uint blockIdFromRender(uint rbid) {
 #if RBLOCK_HEIGHT == BLOCK_HEIGHT
 	return rbid;
 #else
@@ -151,7 +151,7 @@ uint blockIdFromRaster(uint rbid) {
 #endif
 }
 
-uint blockIdToRaster(uint bid) {
+uint blockIdToRender(uint bid) {
 #if RBLOCK_HEIGHT == BLOCK_HEIGHT
 	return bid;
 #else

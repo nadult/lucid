@@ -5,7 +5,7 @@
 #define LSIZE BIN_CATEGORIZER_LSIZE
 layout(local_size_x = 512, local_size_x_id = BIN_CATEGORIZER_LSIZE_ID) in;
 
-coherent layout(std430, set = 0, binding = 0) buffer lucid_info_ {
+coherent layout(std430, binding = 0) buffer lucid_info_ {
 	LucidInfo g_info;
 	int g_counts[];
 };
@@ -54,9 +54,9 @@ void categorizeBins() {
 		s_bin_level_counts[LIX] = 0;
 	barrier();
 
-	// Note: ordering bins by number of tris (largest first) does not make everything go faster
-	// maybe it's not as cache friendly as row by row?
-	// TODO: can we make it more cache friendly by different layout than row-by-row?
+	// Note: ordering bins by number of tris (largest first) does not help
+	// Note: using morton order doesnt help either (actually it makes it run slower)
+	// It seems that normal order (row by row) is quite good
 	for(uint i = LIX; i < BIN_COUNT; i += LSIZE) {
 		int num_quads = BIN_QUAD_COUNTS(i);
 		int num_tris = BIN_TRI_COUNTS(i) + num_quads * 2;

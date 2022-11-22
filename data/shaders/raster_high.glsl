@@ -246,6 +246,7 @@ void generateRBlocks(uint start_rbid) {
 	sortBuffer(tri_count, s_max_sort_rcount, buf_offset, group_size, group_thread, true);
 	barrier();
 
+	// TODO: move to sortBuffer()
 #ifdef DEBUG_ENABLED
 	for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_SIZE) {
 		uint value = s_buffer[buf_offset + i];

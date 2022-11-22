@@ -181,6 +181,7 @@ void generateBlocks(uint bid) {
 	}
 	subgroupMemoryBarrierShared();
 
+	// TODO: move to sortBuffer()
 #ifdef DEBUG_ENABLED
 	// Making sure that tris are properly ordered
 	if(tri_count > 3)
@@ -321,6 +322,8 @@ void rasterBin(int bin_id) {
 	barrier(); // TODO: stall (10.5%, conference)
 }
 
+// TODO: consider removing persistent threads and using qcquire/unacquire
+// TODO: consider Z-order for bins to improve cache efficiency
 int loadNextBin() {
 	if(LIX == 0) {
 		uint bin_idx = atomicAdd(g_info.a_small_bins, 1);

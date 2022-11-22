@@ -821,7 +821,7 @@ void LucidApp::printPerfStats() {
 				row.emplace_back();
 				continue;
 			}
-			int value = (int)round(stat.gpu_min / 1000.0);
+			int value = (int)round(stat.gpu_avg / 1000.0);
 			if(row.size() == lucid_id)
 				lucid_value = value;
 			else if(row.size() == simple_id)
@@ -842,7 +842,7 @@ void LucidApp::printPerfStats() {
 	}
 
 	if(rows) {
-		print("Minimum GPU timings shown; unit: microseconds; Resolution: %\n", m_viewport.size());
+		print("Average GPU timings shown; unit: microseconds; Resolution: %\n", m_viewport.size());
 		print2DArray(column_names, row_names, rows);
 	}
 }

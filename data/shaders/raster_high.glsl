@@ -191,14 +191,11 @@ void generateRBlocks(uint start_rbid) {
 	uint src_offset_64 = scratch64RBlockRowTrisOffset(rblock_pos.y);
 
 	// Filling s_buffer with tri indices
-	uint bx_bits_shift = (RBLOCK_HEIGHT == 8 ? 24 : 0) + rblock_pos.x;
+	uint bx_bits_mask = 1u << ((RBLOCK_HEIGHT == 8 ? 24 : 0) + rblock_pos.x);
 	for(uint i = group_thread; i < tri_count; i += group_size) {
-#if RBLOCK_HEIGHT == 8
-		uint bx_bit = (g_scratch_64[src_offset_64 + i].x >> bx_bits_shift) & 1;
-#else
-		uint bx_bit = (g_scratch_32[src_offset_32 + i] >> bx_bits_shift) & 1;
-#endif
-		if(bx_bit != 0) {
+		uint bx_bits = RBLOCK_HEIGHT == 8 ? g_scratch_64[src_offset_64 + i].x :
+											g_scratch_32[src_offset_32 + i];
+		if((bx_bits & bx_bits_mask) != 0) {
 			uint tri_offset = atomicAdd(s_rblock_tri_counts[rbid], 1);
 			s_buffer[buf_offset + tri_offset] = i;
 		}

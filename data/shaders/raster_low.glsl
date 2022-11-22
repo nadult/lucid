@@ -31,7 +31,7 @@ shared uint s_bin_quad_count, s_bin_quad_offset;
 shared uint s_bin_tri_count, s_bin_tri_offset;
 
 shared uint s_block_row_tri_count[BLOCK_ROWS];
-shared uint s_temp_block_tri_count[NUM_WARPS];
+shared uint s_block_tri_count[NUM_BLOCKS];
 shared uint s_rblock_counts[NUM_RBLOCKS];
 
 shared int s_raster_error;
@@ -92,45 +92,24 @@ void generateBlocks(uint bid) {
 	const uint mini_offset = BASE_BUFFER_SIZE;
 
 	{
-		uint bx_bits_shift = 24 + bx, block_tri_count = 0;
-		// In some cases on integrated AMD gpu atomic-based version is faster
+		uint bx_bits_mask = 1u << (24 + bx), tri_offset = 0;
 		for(uint i = gl_SubgroupInvocationID; i < tri_count; i += gl_SubgroupSize) {
-			uint bx_bit = (g_scratch_64[rows_offset + i].x >> bx_bits_shift) & 1;
-
-#if WARP_SIZE == 32
-			uint bit_mask = subgroupBallot(bx_bit != 0).x;
-			if(bit_mask == 0)
-				continue;
-			uint warp_offset = bitCount(bit_mask & gl_SubgroupLtMask.x);
-			uint bit_count = bitCount(bit_mask);
-#else
-			uvec2 bit_mask = subgroupBallot(bx_bit != 0).xy;
-			if(bit_mask.x == 0 && bit_mask.y == 0)
-				continue;
-			uint warp_offset = bitCount(bit_mask.x & gl_SubgroupLtMask.x) +
-							   bitCount(bit_mask.y & gl_SubgroupLtMask.y);
-			uint bit_count = bitCount(bit_mask.x) + bitCount(bit_mask.y);
-#endif
-
-			if(bx_bit != 0) {
-				uint tri_offset = block_tri_count + warp_offset;
+			uint bx_bits = g_scratch_64[rows_offset + i].x;
+			if((bx_bits & bx_bits_mask) != 0) {
+				tri_offset = atomicAdd(s_block_tri_count[bid], 1);
 				if(tri_offset < MAX_BLOCK_TRIS)
 					s_buffer[buf_offset + tri_offset] = i;
 			}
-			block_tri_count += bit_count;
-		}
-
-		if(gl_SubgroupInvocationID == 0) {
-			s_temp_block_tri_count[lbid] = block_tri_count;
-			if(block_tri_count > MAX_BLOCK_TRIS)
-				atomicOr(s_raster_error, 1 << lbid);
 		}
 		subgroupMemoryBarrierShared();
-		if(s_raster_error != 0)
+		if(subgroupAny(tri_offset >= MAX_BLOCK_TRIS)) {
+			if(gl_SubgroupInvocationID == 0)
+				s_raster_error = ~0;
 			return;
+		}
 	}
 
-	tri_count = s_temp_block_tri_count[lbid];
+	tri_count = s_block_tri_count[bid];
 	int startx = int(bx << BLOCK_SHIFT);
 	vec2 block_pos = vec2(s_bin_pos + ivec2(bx << BLOCK_SHIFT, by << BLOCK_SHIFT));
 
@@ -234,7 +213,10 @@ void visualizeBlockCounts(uint rbid, ivec2 pixel_pos) {
 void rasterBin(int bin_id) {
 	START_TIMER();
 
-	if(LIX < BLOCK_ROWS) {
+	if(LIX < NUM_BLOCKS) {
+		s_block_tri_count[LIX] = 0;
+		if(LIX < BLOCK_ROWS)
+			s_block_row_tri_count[LIX] = 0;
 		if(LIX == 0) {
 			// TODO: optimize
 			ivec2 bin_pos = ivec2(bin_id % BIN_COUNT_X, bin_id / BIN_COUNT_X) * BIN_SIZE;
@@ -245,8 +227,6 @@ void rasterBin(int bin_id) {
 			s_bin_tri_offset = BIN_TRI_OFFSETS(bin_id);
 			s_raster_error = 0;
 		}
-
-		s_block_row_tri_count[LIX] = 0;
 	}
 	barrier();
 	processQuads();

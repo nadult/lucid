@@ -71,6 +71,7 @@
 #define RBLOCK_COLS_SHIFT (BIN_SHIFT - RBLOCK_WIDTH_SHIFT)
 #define RBLOCK_COLS_MASK (RBLOCK_COLS - 1)
 
+#define NUM_BLOCKS (BLOCK_ROWS * BLOCK_ROWS)
 #define NUM_RBLOCKS (RBLOCK_COLS * RBLOCK_ROWS)
 
 #define SEGMENT_SIZE 256
@@ -299,7 +300,6 @@ void unpackSamples(inout uint cur_tri_idx, uint tri_count, uint src_offset) {
 		cur_tri_idx = i | 0x80000000;
 	} else {
 		uint y = LIX & (RBLOCK_HEIGHT - 1), row_shift = (y & 3) * 7;
-		uint mask1 = y >= 1 ? ~0u : 0, mask2 = y >= 2 ? ~0u : 0, mask3 = y >= 4 ? ~0u : 0;
 		uint i = cur_tri_idx;
 
 		for(; i < tri_count; i += WARP_SIZE / RBLOCK_HEIGHT) {

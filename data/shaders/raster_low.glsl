@@ -59,10 +59,9 @@ void generateRowTris(uint tri_idx) {
 
 		uint row_idx = atomicAdd(s_block_row_tri_count[by], 1);
 		uint roffset = row_idx + by * (MAX_BLOCK_ROW_TRIS * 2);
-		g_scratch_64[dst_offset + roffset] =
-			uvec2(bits0.x | (bx_mask << 24), bits1.x | ((tri_idx & 0xff0000) << 8));
+		g_scratch_64[dst_offset + roffset] = uvec2(bits0.x | (bx_mask << 24), bits1.x);
 		g_scratch_64[dst_offset + roffset + MAX_BLOCK_ROW_TRIS] =
-			uvec2(bits0.y | ((tri_idx & 0xff) << 24), bits1.y | ((tri_idx & 0xff00) << 16));
+			uvec2(bits0.y | ((tri_idx & 0xfff) << 20), bits1.y | ((tri_idx & 0xfff000) << 8));
 	}
 }
 
@@ -141,9 +140,7 @@ void generateBlocks(uint bid) {
 
 		uvec2 tri_mins = g_scratch_64[rows_offset + row_tri_idx];
 		uvec2 tri_maxs = g_scratch_64[rows_offset + row_tri_idx + MAX_BLOCK_ROW_TRIS];
-		// TODO: better encoding
-		uint tri_idx =
-			(tri_maxs.x >> 24) | ((tri_maxs.y >> 16) & 0xff00) | ((tri_mins.y >> 8) & 0xff0000);
+		uint tri_idx = (tri_maxs.x >> 20) | ((tri_maxs.y & 0xfff00000) >> 8);
 
 		uvec2 num_frags;
 		vec2 cpos = rasterHalfBlockCentroid(tri_mins.x, tri_maxs.x, startx, num_frags.x) +
@@ -206,20 +203,17 @@ void generateBlocks(uint bid) {
 
 		uvec2 tri_mins = g_scratch_64[rows_offset + row_idx];
 		uvec2 tri_maxs = g_scratch_64[rows_offset + row_idx + MAX_BLOCK_ROW_TRIS];
-		uint tri_idx =
-			(tri_maxs.x >> 24) | ((tri_maxs.y >> 16) & 0xff00) | ((tri_mins.y >> 8) & 0xff0000);
-		tri_idx <<= 8;
-		uvec2 bits;
-		bits.x = rasterHalfBlockBits(tri_mins.x, tri_maxs.x, startx);
-		bits.y = rasterHalfBlockBits(tri_mins.y, tri_maxs.y, startx);
+		uint tri_idx_shifted = (tri_maxs.x >> 12) | (tri_maxs.y & 0xfff00000);
+		uvec2 bits = uvec2(rasterHalfBlockBits(tri_mins.x, tri_maxs.x, startx),
+						   rasterHalfBlockBits(tri_mins.y, tri_maxs.y, startx));
 
 #if RBLOCK_HEIGHT == 4
 		// TODO: optimize this?
-		g_scratch_64[dst_offset0 + i] = uvec2(tri_idx, bits.x);
-		g_scratch_64[dst_offset1 + i] = uvec2(tri_idx, bits.y);
+		g_scratch_64[dst_offset0 + i] = uvec2(tri_idx_shifted, bits.x);
+		g_scratch_64[dst_offset1 + i] = uvec2(tri_idx_shifted, bits.y);
 #else
 		g_scratch_64[dst_offset + i] = bits;
-		g_scratch_32[dst_offset + i] = tri_idx;
+		g_scratch_32[dst_offset + i] = tri_idx_shifted;
 #endif
 	}
 }

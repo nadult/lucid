@@ -263,12 +263,11 @@ uint initUnpackSamples(uint tri_count, uint frag_count) {
 
 void unpackSamples(inout uint cur_tri_idx, uint tri_count, uint src_offset) {
 	uint buf_offset = shadingBufferOffset();
-	{
-		// Copying samples generated for current segment by last thread in previous round
-		uint prev_offset = buf_offset + gl_SubgroupInvocationID;
-		s_buffer[prev_offset] = s_buffer[prev_offset + SEGMENT_SIZE];
-	}
+	// Copying samples generated for current segment by last thread in previous round
+	uint prev_offset = buf_offset + gl_SubgroupInvocationID;
+	s_buffer[prev_offset] = s_buffer[prev_offset + SEGMENT_SIZE];
 	subgroupMemoryBarrierShared();
+
 	uint base_offset = (cur_tri_idx >> 16) & WARP_MASK;
 	bool high_tri_density = (cur_tri_idx & 0x80000000) != 0;
 	uint max_offset = 0;
@@ -277,11 +276,11 @@ void unpackSamples(inout uint cur_tri_idx, uint tri_count, uint src_offset) {
 		uint i = cur_tri_idx & 0xffff;
 
 		for(; subgroupAny(i < tri_count); i += WARP_SIZE) {
-			uint bits = 0, tri_idx;
+			uint bits = 0, tri_idx_shifted;
 			if(i < tri_count) {
 				uvec2 tri_data = g_scratch_64[src_offset + i];
 				bits = blockRowsToBits(tri_data.y);
-				tri_idx = tri_data.x & 0xffffff00;
+				tri_idx_shifted = tri_data.x;
 			}
 			uint num_bits = bitCount(bits);
 
@@ -294,7 +293,7 @@ void unpackSamples(inout uint cur_tri_idx, uint tri_count, uint src_offset) {
 			while(bits != 0) {
 				uint pixel_id = findLSB(bits);
 				bits &= ~(1u << pixel_id);
-				s_buffer[buf_offset + tri_offset] = pixel_id | tri_idx;
+				s_buffer[buf_offset + tri_offset] = pixel_id | tri_idx_shifted;
 				tri_offset++;
 			}
 			max_offset = tri_offset;
@@ -307,16 +306,16 @@ void unpackSamples(inout uint cur_tri_idx, uint tri_count, uint src_offset) {
 
 		// TODO: najpierw wyznaczyæ offsety a póŸniej dopiero sample?
 		for(; subgroupAny(i < tri_count); i += WARP_SIZE / RBLOCK_HEIGHT) {
-			uint countx = 0, row_data, tri_info;
+			uint countx = 0, row_data, tri_idx_shifted;
 
 			if(i < tri_count) {
 #if RBLOCK_HEIGHT == 8
 				uint tri_data = g_scratch_64[src_offset + i][y >> 2];
-				tri_info = g_scratch_32[src_offset + i];
+				tri_idx_shifted = g_scratch_32[src_offset + i];
 #else
 				uvec2 tri_block_data = g_scratch_64[src_offset + i];
 				uint tri_data = tri_block_data.y;
-				tri_info = tri_block_data.x;
+				tri_idx_shifted = tri_block_data.x;
 #endif
 
 				row_data = tri_data >> row_shift;
@@ -330,8 +329,7 @@ void unpackSamples(inout uint cur_tri_idx, uint tri_count, uint src_offset) {
 				break;
 
 			uint pixel_id = (y << 3) | (row_data & 7);
-			uint tri_idx = tri_info & 0xffffff00; // TODO: redundant
-			uint value = pixel_id | tri_idx;
+			uint value = pixel_id | tri_idx_shifted;
 			for(int j = 0; j < countx; j++)
 				s_buffer[buf_offset + tri_offset++] = value++;
 			max_offset = tri_offset;

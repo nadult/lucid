@@ -258,7 +258,7 @@ void generateRBlocks(uint start_rbid) {
 #if RBLOCK_HEIGHT == 8
 		uvec2 tri_mins = g_scratch_64[src_offset_64 + row_tri_idx];
 		uvec2 tri_maxs = g_scratch_64[src_offset_64 + row_tri_idx + MAX_RBLOCK_ROW_TRIS];
-		uint tri_idx_shifted = (tri_maxs.x >> 12) | (tri_maxs.y & 0xfff00000);
+		uint tri_idx_shifted = ((tri_maxs.x >> 12) & 0xfff00) | (tri_maxs.y & 0xfff00000);
 		uvec2 bits = uvec2(rasterHalfBlockBits(tri_mins.x, tri_maxs.x, startx),
 						   rasterHalfBlockBits(tri_mins.y, tri_maxs.y, startx));
 
@@ -266,7 +266,7 @@ void generateRBlocks(uint start_rbid) {
 		g_scratch_32[dst_offset + i] = tri_idx_shifted;
 #else
 		uvec2 tri_info = g_scratch_64[src_offset_64 + row_tri_idx];
-		uint tri_idx_shifted = (tri_info.x >> 12) | (tri_info.y & 0xfff00000);
+		uint tri_idx_shifted = ((tri_info.x >> 12) & 0xfff00) | (tri_info.y & 0xfff00000);
 		uint bits = rasterHalfBlockBits(tri_info.x, tri_info.y, startx);
 		g_scratch_64[dst_offset + i] = uvec2(tri_idx_shifted, bits);
 #endif

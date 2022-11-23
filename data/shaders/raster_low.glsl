@@ -182,7 +182,7 @@ void generateBlocks(uint bid) {
 
 		uvec2 tri_mins = g_scratch_64[rows_offset + row_idx];
 		uvec2 tri_maxs = g_scratch_64[rows_offset + row_idx + MAX_BLOCK_ROW_TRIS];
-		uint tri_idx_shifted = (tri_maxs.x >> 12) | (tri_maxs.y & 0xfff00000);
+		uint tri_idx_shifted = ((tri_maxs.x >> 12) & 0xfff00) | (tri_maxs.y & 0xfff00000);
 		uvec2 bits = uvec2(rasterHalfBlockBits(tri_mins.x, tri_maxs.x, startx),
 						   rasterHalfBlockBits(tri_mins.y, tri_maxs.y, startx));
 

@@ -237,7 +237,7 @@ void generateRBlocks(uint start_rbid) {
 
 	// TODO: move to sortBuffer()
 #ifdef DEBUG_ENABLED
-	for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_SIZE) {
+	for(uint i = gl_SubgroupInvocationID; i < tri_count; i += WARP_SIZE) {
 		uint value = s_buffer[buf_offset + i];
 		uint prev_value = i == 0 ? 0 : s_buffer[buf_offset + i - 1];
 		if(value <= prev_value)

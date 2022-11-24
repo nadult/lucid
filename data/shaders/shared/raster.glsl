@@ -294,8 +294,8 @@ uint shadingBufferOffset() { return (LIX >> WARP_SHIFT) * (SEGMENT_SIZE + WARP_S
 uint initUnpackSamples(uint tri_count, uint frag_count) {
 	bool high_tri_density = WARP_SIZE == 32 && highTriDensity(tri_count, frag_count);
 	if(high_tri_density)
-		return (LIX & WARP_MASK) | 0x80000000;
-	return LIX & WARP_MASK;
+		return gl_SubgroupInvocationID | 0x80000000;
+	return gl_SubgroupInvocationID;
 }
 
 void unpackSamples(inout uint cur_tri_idx, uint tri_count, uint src_offset) {
@@ -445,7 +445,7 @@ void initVisualizeSamples() { s_vis_pixels[LIX] = 0; }
 
 void visualizeSamples(uint sample_count) {
 	uint buf_offset = shadingBufferOffset();
-	for(uint i = LIX & WARP_MASK; i < sample_count; i += WARP_SIZE) {
+	for(uint i = gl_SubgroupInvocationID; i < sample_count; i += WARP_SIZE) {
 		uint pixel_id = s_buffer[buf_offset + i] & WARP_MASK;
 		atomicAdd(s_vis_pixels[(LIX & ~WARP_MASK) + pixel_id], 1);
 	}

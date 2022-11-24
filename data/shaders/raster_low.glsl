@@ -108,7 +108,7 @@ void generateBlocks(uint bid) {
 	vec2 block_pos = vec2(s_bin_pos + ivec2(bx << BLOCK_SHIFT, by << BLOCK_SHIFT));
 
 	uint frag_count = 0;
-	for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_SIZE) {
+	for(uint i = gl_SubgroupInvocationID; i < tri_count; i += WARP_SIZE) {
 		uint row_tri_idx = s_buffer[buf_offset + i];
 
 		uvec2 tri_mins = g_scratch_64[rows_offset + row_tri_idx];
@@ -144,18 +144,18 @@ void generateBlocks(uint bid) {
 	}
 
 	if(tri_count > RC_COLOR_SIZE) {
-		// rcount: count rounded up to next power of 2; minimum: WARP_SIZE
+		// rcount: count rounded up to the next power of 2; minimum: WARP_SIZE
 		uint rcount = max(
 			WARP_SIZE, (tri_count & (tri_count - 1)) == 0 ? tri_count : (2 << findMSB(tri_count)));
-		sortBuffer(tri_count, rcount, buf_offset, WARP_SIZE, LIX & WARP_MASK, false);
+		sortBuffer(tri_count, rcount, buf_offset, WARP_SIZE, gl_SubgroupInvocationID, false);
 	}
 	subgroupMemoryBarrierShared();
 
 	// TODO: move to sortBuffer()
 #ifdef DEBUG_ENABLED
 	// Making sure that tris are properly ordered
-	if(tri_count > 3)
-		for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_SIZE) {
+	if(tri_count > RC_COLOR_SIZE)
+		for(uint i = gl_SubgroupInvocationID; i < tri_count; i += WARP_SIZE) {
 			uint value = s_buffer[buf_offset + i];
 			uint prev_value = i == 0 ? 0 : s_buffer[buf_offset + i - 1];
 			if(value <= prev_value)
@@ -171,7 +171,7 @@ void generateBlocks(uint bid) {
 	uint dst_offset = scratchRasterBlockOffset(bid);
 #endif
 
-	for(uint i = LIX & WARP_MASK; i < tri_count; i += WARP_SIZE) {
+	for(uint i = gl_SubgroupInvocationID; i < tri_count; i += WARP_SIZE) {
 		uint row_idx = s_buffer[buf_offset + i] & 0xfff;
 
 		uvec2 tri_mins = g_scratch_64[rows_offset + row_idx];

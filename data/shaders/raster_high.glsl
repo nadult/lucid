@@ -319,19 +319,13 @@ void rasterBin() {
 	initReduceSamples(context);
 	//initVisualizeSamples();
 
-	uint cur_tri_idx = initUnpackSamples(s_rblock_tri_counts[rbid], s_rblock_frag_counts[rbid]);
-	for(int segment_id = 0;; segment_id++) {
-		int frag_count = int(s_rblock_frag_counts[rbid]);
-		frag_count = min(SEGMENT_SIZE, frag_count - (segment_id * SEGMENT_SIZE));
-		if(frag_count <= 0)
-			break;
-
-		uint src_offset = scratchRasterBlockTrisOffset(rbid);
-		uint tri_count = s_rblock_tri_counts[rbid];
-		unpackSamples(cur_tri_idx, tri_count, src_offset);
+	uint control_var = initUnpackSamples(s_rblock_tri_counts[rbid], s_rblock_frag_counts[rbid]);
+	int frag_count = int(s_rblock_frag_counts[rbid]);
+	while(frag_count > 0) {
+		unpackSamples(control_var, s_rblock_tri_counts[rbid], scratchRasterBlockTrisOffset(rbid));
 		UPDATE_TIMER(2);
 
-		shadeAndReduceSamples(rbid, frag_count, context);
+		shadeAndReduceSamples(rbid, min(frag_count, SEGMENT_SIZE), context);
 		//visualizeSamples(frag_count);
 		UPDATE_TIMER(3);
 
@@ -339,6 +333,7 @@ void rasterBin() {
 		if(subgroupAll(context.out_trans < alpha_threshold))
 			break;
 #endif
+		frag_count -= SEGMENT_SIZE;
 	}
 
 	ivec2 pixel_pos = renderBlockPixelPos(rbid);

@@ -304,6 +304,8 @@ void rasterBin() {
 	}
 	groupMemoryBarrier();
 	barrier();
+	if(LIX < NUM_RBLOCKS)
+		updateStats(s_rblock_frag_counts[LIX], s_rblock_tri_counts[LIX]);
 
 	int rbid = int(LIX >> WARP_SHIFT);
 	if(s_raster_error != 0) {

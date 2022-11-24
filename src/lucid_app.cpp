@@ -441,6 +441,8 @@ void LucidApp::doMenu() {
 		m_is_picking_block = true;
 	}
 	ImGui::Checkbox("Merge introspected masks", &m_merge_masks);*/
+	if(m_lucid_renderer && m_lucid_renderer->subgroupSize() != 32)
+		m_gui.text("Running in sub-optimal mode\n(Lucid is optimized for 32-thread subgroups)");
 
 	ImGui::End();
 

@@ -243,7 +243,7 @@ Ex<void> LucidRenderer::exConstruct(VulkanDevice &device, ShaderCompiler &compil
 	m_scratch_64 =
 		EX_PASS(VulkanBuffer::create(device, scratch_64_size, usage | VBufferUsage::transfer_src));
 
-	auto subgroup_size = subgroupSize(device);
+	m_subgroup_size = ::subgroupSize(device);
 	auto make_compute_pipe = [&](string name, Opts debug_option,
 								 bool has_timers) -> Ex<PVPipeline> {
 		if(opts & debug_option)
@@ -257,7 +257,7 @@ Ex<void> LucidRenderer::exConstruct(VulkanDevice &device, ShaderCompiler &compil
 		m_shader_def_ids.emplace_back(def_id);
 		setup.compute_module = EX_PASS(compiler.createShaderModule(device.ref(), def_id));
 		setup.spec_constants.emplace_back(consts, 0u);
-		setup.subgroup_size = subgroup_size;
+		setup.subgroup_size = m_subgroup_size;
 		auto result = VulkanPipeline::create(device.ref(), setup);
 		print("Compute pipeline '%': % ms\n", name, int((getTime() - time) * 1000));
 		return result;

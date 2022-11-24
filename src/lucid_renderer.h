@@ -44,6 +44,7 @@ class LucidRenderer {
 	auto opts() const { return m_opts; }
 	int binSize() const { return m_bin_size; }
 	int blockSize() const { return m_block_size; }
+	int subgroupSize() const { return m_subgroup_size; }
 
   private:
 	Ex<> uploadInstances(const Context &);
@@ -84,7 +85,7 @@ class LucidRenderer {
 	vector<u32> m_last_info;
 	bool m_last_info_updated = false;
 
-	int m_bin_size, m_block_size;
+	int m_bin_size, m_block_size, m_subgroup_size;
 	int m_max_dispatches, m_max_visible_quads;
 
 	int2 m_bin_counts;

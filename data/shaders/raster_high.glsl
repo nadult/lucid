@@ -44,10 +44,6 @@ uint scratchRasterBlockTrisOffset(uint rbid) {
 	return (gl_WorkGroupID.x << WORKGROUP_SCRATCH_SHIFT) + offset + rbid * MAX_RBLOCK_TRIS;
 }
 
-shared int s_num_bins, s_bin_id;
-shared uint s_bin_quad_count, s_bin_quad_offset;
-shared uint s_bin_tri_count, s_bin_tri_offset;
-
 shared uint s_rblock_row_tri_counts[RBLOCK_ROWS];
 shared int s_rblock_tri_counts[NUM_RBLOCKS];
 shared uint s_rblock_frag_counts[NUM_RBLOCKS];
@@ -59,8 +55,6 @@ shared uint s_rblock_max_tri_counts;
 shared uint s_rblock_group_size;
 shared uint s_rblock_group_shift;
 shared uint s_max_sort_rcount;
-
-shared int s_raster_error;
 
 void generateRowTris(uint tri_idx) {
 	uint scan_offset = STORAGE_TRI_SCAN_OFFSET + tri_idx * 2;
@@ -287,23 +281,13 @@ void visualizeBlockCounts(uint rbid, ivec2 pixel_pos) {
 	outputPixel(pixel_pos, vec4(SATURATE(color), 1.0));
 }
 
-void rasterBin(int bin_id) {
+void rasterBin() {
 	START_TIMER();
 	if(LIX < NUM_RBLOCKS) {
 		s_rblock_tri_counts[LIX] = 0;
 		s_rblock_frag_counts[LIX] = 0;
 		if(LIX < RBLOCK_ROWS)
 			s_rblock_row_tri_counts[LIX] = 0;
-		if(LIX == 0) {
-			// TODO: optimize
-			ivec2 bin_pos = ivec2(bin_id % BIN_COUNT_X, bin_id / BIN_COUNT_X) * BIN_SIZE;
-			s_bin_pos = bin_pos;
-			s_bin_quad_count = BIN_QUAD_COUNTS(bin_id);
-			s_bin_quad_offset = BIN_QUAD_OFFSETS(bin_id);
-			s_bin_tri_count = BIN_TRI_COUNTS(bin_id);
-			s_bin_tri_offset = BIN_TRI_OFFSETS(bin_id);
-			s_raster_error = 0;
-		}
 	}
 	barrier();
 	processQuads();
@@ -375,16 +359,11 @@ int loadNextBin() {
 
 void main() {
 	INIT_TIMERS();
-	if(LIX == 0)
-		s_num_bins = g_info.bin_level_counts[BIN_LEVEL_HIGH];
+	initBinLoader(BIN_LEVEL_HIGH);
 	initStats();
 
-	int bin_id = loadNextBin();
-	while(bin_id != -1) {
-		barrier();
-		rasterBin(bin_id);
-		bin_id = loadNextBin();
-	}
+	while(loadNextBin(BIN_LEVEL_HIGH))
+		rasterBin();
 
 	COMMIT_TIMERS(g_info.raster_timers);
 	commitStats();

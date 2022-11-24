@@ -80,6 +80,43 @@
 #define BASE_BUFFER_SIZE (LSIZE * 8)
 #define FULL_BUFFER_SIZE (BASE_BUFFER_SIZE + LSIZE * (WARP_SIZE / 32))
 
+shared int s_num_bins, s_bin_id;
+shared uint s_bin_quad_count, s_bin_quad_offset;
+shared uint s_bin_tri_count, s_bin_tri_offset;
+shared int s_raster_error;
+
+void initBinLoader(uint level) {
+	if(LIX == 0)
+		s_num_bins = g_info.bin_level_counts[level];
+}
+
+bool loadNextBin(uint level) {
+	if(LIX == 0) {
+		uint level_idx;
+		if(level == BIN_LEVEL_LOW)
+			level_idx = atomicAdd(g_info.a_small_bins, 1);
+		else
+			level_idx = atomicAdd(g_info.a_high_bins, 1);
+
+		if(level_idx < s_num_bins) {
+			int bin_id =
+				level == BIN_LEVEL_LOW ? LOW_LEVEL_BINS(level_idx) : HIGH_LEVEL_BINS(level_idx);
+			s_bin_id = bin_id;
+			int pos_y = bin_id / BIN_COUNT_X, pos_x = bin_id - pos_y * BIN_COUNT_X;
+			s_bin_pos = ivec2(pos_x, pos_y) * BIN_SIZE;
+			s_bin_quad_count = BIN_QUAD_COUNTS(bin_id);
+			s_bin_quad_offset = BIN_QUAD_OFFSETS(bin_id);
+			s_bin_tri_count = BIN_TRI_COUNTS(bin_id);
+			s_bin_tri_offset = BIN_TRI_OFFSETS(bin_id);
+			s_raster_error = 0;
+		} else {
+			s_bin_id = -1;
+		}
+	}
+	barrier();
+	return s_bin_id != -1;
+}
+
 shared uint s_buffer[FULL_BUFFER_SIZE + 1];
 
 uvec3 rasterBinStep(inout ScanlineParams scan) {

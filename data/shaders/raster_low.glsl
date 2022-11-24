@@ -26,15 +26,9 @@ uint scratchRasterBlockOffset(uint rbid) {
 	return (gl_WorkGroupID.x << WORKGROUP_SCRATCH_SHIFT) + 8 * 1024 + rbid * MAX_BLOCK_TRIS;
 }
 
-shared int s_num_bins, s_bin_id;
-shared uint s_bin_quad_count, s_bin_quad_offset;
-shared uint s_bin_tri_count, s_bin_tri_offset;
-
 shared uint s_block_row_tri_count[BLOCK_ROWS];
 shared uint s_block_tri_count[NUM_BLOCKS];
 shared uint s_rblock_counts[NUM_RBLOCKS];
-
-shared int s_raster_error;
 shared int s_promoted_bin_count;
 
 void generateRowTris(uint tri_idx) {
@@ -210,23 +204,13 @@ void visualizeBlockCounts(uint rbid, ivec2 pixel_pos) {
 	outputPixel(pixel_pos, vec4(SATURATE(color), 1.0));
 }
 
-void rasterBin(int bin_id) {
+void rasterBin() {
 	START_TIMER();
 
 	if(LIX < NUM_BLOCKS) {
 		s_block_tri_count[LIX] = 0;
 		if(LIX < BLOCK_ROWS)
 			s_block_row_tri_count[LIX] = 0;
-		if(LIX == 0) {
-			// TODO: optimize
-			ivec2 bin_pos = ivec2(bin_id % BIN_COUNT_X, bin_id / BIN_COUNT_X) * BIN_SIZE;
-			s_bin_pos = bin_pos;
-			s_bin_quad_count = BIN_QUAD_COUNTS(bin_id);
-			s_bin_quad_offset = BIN_QUAD_OFFSETS(bin_id);
-			s_bin_tri_count = BIN_TRI_COUNTS(bin_id);
-			s_bin_tri_offset = BIN_TRI_OFFSETS(bin_id);
-			s_raster_error = 0;
-		}
 	}
 	barrier();
 	processQuads();
@@ -243,7 +227,7 @@ void rasterBin(int bin_id) {
 	if(s_raster_error != 0) {
 		if(LIX == 0) {
 			int id = atomicAdd(g_info.bin_level_counts[BIN_LEVEL_HIGH], 1);
-			HIGH_LEVEL_BINS(id) = int(bin_id);
+			HIGH_LEVEL_BINS(id) = s_bin_id;
 			s_promoted_bin_count = max(s_promoted_bin_count, id + 1);
 		}
 		return;
@@ -296,31 +280,16 @@ void rasterBin(int bin_id) {
 	barrier(); // TODO: stall (10.5%, conference)
 }
 
-// TODO: consider removing persistent threads and using qcquire/unacquire
-// TODO: consider Z-order for bins to improve cache efficiency
-int loadNextBin() {
-	if(LIX == 0) {
-		uint bin_idx = atomicAdd(g_info.a_small_bins, 1);
-		s_bin_id = bin_idx < s_num_bins ? LOW_LEVEL_BINS(bin_idx) : -1;
-	}
-	barrier();
-	return s_bin_id;
-}
-
+// TODO: consider removing persistent threads and using qcquire/unacquire for storage
 void main() {
 	INIT_TIMERS();
-	if(LIX == 0) {
-		s_num_bins = g_info.bin_level_counts[BIN_LEVEL_LOW];
+	initBinLoader(BIN_LEVEL_LOW);
+	if(LIX == 0)
 		s_promoted_bin_count = 0;
-	}
 	initStats();
 
-	int bin_id = loadNextBin();
-	while(bin_id != -1) {
-		barrier();
-		rasterBin(bin_id);
-		bin_id = loadNextBin();
-	}
+	while(loadNextBin(BIN_LEVEL_LOW))
+		rasterBin();
 
 	// If some of the bins are promoted to the next level, we have to adjust number of dispatches
 	if(LIX == 0 && s_promoted_bin_count > 0) {

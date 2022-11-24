@@ -304,7 +304,6 @@ void unpackSamples(inout uint control_var, uint tri_count, uint src_offset) {
 	// Copying samples generated for current segment by last thread in previous round
 	uint prev_offset = buf_offset + gl_SubgroupInvocationID;
 	s_buffer[prev_offset] = s_buffer[prev_offset + SEGMENT_SIZE];
-	subgroupMemoryBarrierShared();
 
 	uint base_offset = (control_var >> 16) & WARP_MASK;
 	bool high_tri_density = (control_var & 0x80000000) != 0;
@@ -368,22 +367,27 @@ void unpackSamples(inout uint control_var, uint tri_count, uint src_offset) {
 
 			uint pixel_id = (y << 3) | (row_data & 7);
 			uint value = pixel_id | tri_idx_shifted;
-			for(int j = 0; j < countx; j++)
+			max_offset = tri_offset + countx;
+			while(tri_offset < max_offset)
 				s_buffer[buf_offset + tri_offset++] = value++;
-			max_offset = tri_offset;
 		}
 
 		control_var = (i << RBLOCK_HEIGHT_SHIFT) | y;
 	}
-	subgroupMemoryBarrierShared();
 
-	// There can be only one
-	bool is_last_thread = max_offset >= SEGMENT_SIZE;
+	bool is_last_thread = max_offset >= SEGMENT_SIZE; // There can be only one
 	uint last_thread = subgroupBallotFindLSB(subgroupBallot(is_last_thread));
+
 	// Reindexing threads so that last one will be the first
-	control_var = subgroupShuffle(control_var, (last_thread + gl_SubgroupInvocationID) & WARP_MASK);
+	if(high_tri_density) {
+		// TODO: why is this casing slowdown on white_oak and speed p on hairball???
+		uint next_thread = (last_thread + gl_SubgroupInvocationID) & WARP_MASK;
+		control_var = subgroupShuffle(control_var, next_thread);
+	}
+
 	// Last thread may have written some samples from next segment
 	control_var |= subgroupShuffle((max_offset - SEGMENT_SIZE) << 16, last_thread);
+	subgroupMemoryBarrierShared();
 }
 
 void shadeAndReduceSamples(uint rbid, uint sample_count, in out ReductionContext ctx) {

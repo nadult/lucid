@@ -155,10 +155,11 @@ vec2 rasterHalfBlockCentroid(uint tri_mins, uint tri_maxs, int startx, out uint 
 	return vec2(cpx[0] + cpx[1] + cpx[2] + cpx[3], cpy[0] + cpy[1] + cpy[2] + cpy[3]);
 }
 
-uint rasterHalfBlockBits(uint tri_mins, uint tri_maxs, int startx) {
+uint rasterHalfBlockBits(uint tri_mins, uint tri_maxs, int startx, out uint num_frags) {
 	ivec4 xmin = max(((ivec4(tri_mins) >> ivec4(0, 5, 10, 15)) & BIN_MASK) - startx, 0);
 	ivec4 xmax = min(((ivec4(tri_maxs) >> ivec4(0, 5, 10, 15)) & BIN_MASK) - startx, 7);
 	ivec4 count = max(xmax - xmin + 1, 0);
+	num_frags = count[0] + count[1] + count[2] + count[3];
 	uint min_bits = ((xmin[0] << 0) | (xmin[1] << 7) | (xmin[2] << 14) | (xmin[3] << 21)) &
 					(7 | (7 << 7) | (7 << 14) | (7 << 21));
 	uint count_bits = (count[0] << 3) | (count[1] << 10) | (count[2] << 17) | (count[3] << 24);
@@ -289,14 +290,16 @@ bool highTriDensity(uint tri_count, uint frag_count) {
 	return frag_count < (tri_count << 3) && tri_count >= 16;
 }
 
-uint shadingBufferOffset() { return (LIX >> WARP_SHIFT) * (SEGMENT_SIZE + WARP_SIZE); }
+uint shadingBufferOffset() { return gl_SubgroupID * (SEGMENT_SIZE + WARP_SIZE); }
 
 // bits  0-16: current_tri_idx + optional y
 // bits 16-21: number of samples generated in previous round
 // bit     31: high_tri_density
 uint initUnpackSamples(uint tri_count, uint frag_count) {
-	bool high_tri_density = WARP_SIZE == 32 && highTriDensity(tri_count, frag_count);
-	return gl_SubgroupInvocationID | (high_tri_density ? 0x80000000 : 0);
+	bool high_tri_density =
+		BIN_LEVEL == BIN_LEVEL_HIGH && WARP_SIZE == 32 && highTriDensity(tri_count, frag_count);
+	return (high_tri_density ? gl_SubgroupInvocationID | 0x80000000 :
+							   gl_SubgroupInvocationID >> RBLOCK_HEIGHT_SHIFT);
 }
 
 void unpackSamples(inout uint control_var, uint tri_count, uint src_offset) {
@@ -306,27 +309,23 @@ void unpackSamples(inout uint control_var, uint tri_count, uint src_offset) {
 	s_buffer[prev_offset] = s_buffer[prev_offset + SEGMENT_SIZE];
 
 	uint base_offset = (control_var >> 16) & WARP_MASK;
-	bool high_tri_density = (control_var & 0x80000000) != 0;
 	uint max_offset = 0;
 
+	bool high_tri_density = BIN_LEVEL == BIN_LEVEL_HIGH && (control_var & 0x80000000) != 0;
 	if(high_tri_density) {
 		uint i = control_var & 0xffff;
+		uint segment_id = (control_var >> 24) & 0xf;
 
-		for(; subgroupAny(i < tri_count); i += WARP_SIZE) {
-			uint bits = 0, tri_idx_shifted;
-			if(i < tri_count) {
-				uvec2 tri_data = g_scratch_64[src_offset + i];
-				bits = blockRowsToBits(tri_data.y);
-				tri_idx_shifted = tri_data.x;
-			}
-			uint num_bits = bitCount(bits);
-
-			uint num_bits_sum = subgroupInclusiveAddFast(num_bits);
-			uint tri_offset = base_offset + num_bits_sum - num_bits;
-			base_offset += subgroupShuffle(num_bits_sum, WARP_SIZE - 1);
-			if(tri_offset >= SEGMENT_SIZE)
+		for(; i < tri_count; i += WARP_SIZE) {
+			uvec2 tri_data = g_scratch_64[src_offset + i];
+			uint tri_info = tri_data.x;
+			uint seg_id = tri_data.y >> 28;
+			if(seg_id != segment_id)
 				break;
 
+			uint tri_offset = tri_info & 0xff;
+			uint tri_idx_shifted = tri_info & 0xffffff00;
+			uint bits = blockRowsToBits(tri_data.y);
 			while(bits != 0) {
 				uint pixel_id = findLSB(bits);
 				bits &= ~(1u << pixel_id);
@@ -335,58 +334,49 @@ void unpackSamples(inout uint control_var, uint tri_count, uint src_offset) {
 			}
 			max_offset = tri_offset;
 		}
-		control_var = i | 0x80000000;
+		segment_id++;
+		control_var = i | 0x80000000 | (segment_id << 24);
 	} else {
 		uint i = control_var & 0xffff;
-		uint y = i & (RBLOCK_HEIGHT - 1), row_shift = (y & 3) * 7;
-		i >>= RBLOCK_HEIGHT_SHIFT;
+		uint y = gl_SubgroupInvocationID & (RBLOCK_HEIGHT - 1), row_shift = (y & 3) * 7;
+		uint mask1 = y >= 1 ? ~0u : 0, mask2 = y >= 2 ? ~0u : 0, mask3 = y >= 4 ? ~0u : 0;
 
 		// TODO: najpierw wyznaczyæ offsety a póŸniej dopiero sample?
-		for(; subgroupAny(i < tri_count); i += WARP_SIZE / RBLOCK_HEIGHT) {
-			uint countx = 0, row_data, tri_idx_shifted;
-
-			if(i < tri_count) {
+		for(; i < tri_count; i += WARP_SIZE / RBLOCK_HEIGHT) {
 #if RBLOCK_HEIGHT == 8
-				uint tri_data = g_scratch_64[src_offset + i][y >> 2];
-				tri_idx_shifted = g_scratch_32[src_offset + i];
+			uint tri_data = g_scratch_64[src_offset + i][y >> 2];
+			uint tri_info = g_scratch_32[src_offset + i];
 #else
-				uvec2 tri_block_data = g_scratch_64[src_offset + i];
-				uint tri_data = tri_block_data.y;
-				tri_idx_shifted = tri_block_data.x;
+			uvec2 tri_block_data = g_scratch_64[src_offset + i];
+			uint tri_data = tri_block_data.y, tri_info = tri_block_data.x;
 #endif
 
-				row_data = tri_data >> row_shift;
-				countx = (row_data >> 3) & 15;
-			}
+			uint row_data = tri_data >> row_shift;
+			uint countx = (row_data >> 3) & 15;
+			uint prevx = countx + (subgroupShuffleUp(countx, 1) & mask1);
+			prevx += (subgroupShuffleUp(prevx, 2) & mask2);
+			if(RBLOCK_HEIGHT == 8)
+				prevx += (subgroupShuffleUp(prevx, 4) & mask3);
 
-			uint countx_sum = subgroupInclusiveAddFast(countx);
-			uint tri_offset = base_offset + countx_sum - countx;
-			base_offset += subgroupBroadcast(countx_sum, WARP_SIZE - 1);
-			if(tri_offset >= SEGMENT_SIZE)
+			uint tri_offset = (tri_info & 0xff) + prevx - countx;
+			if(tri_offset < max_offset)
 				break;
 
 			uint pixel_id = (y << 3) | (row_data & 7);
-			uint value = pixel_id | tri_idx_shifted;
+			uint value = pixel_id | (tri_info & 0xffffff00);
 			max_offset = tri_offset + countx;
 			while(tri_offset < max_offset)
 				s_buffer[buf_offset + tri_offset++] = value++;
 		}
 
-		control_var = (i << RBLOCK_HEIGHT_SHIFT) | y;
-	}
-
-	bool is_last_thread = max_offset >= SEGMENT_SIZE; // There can be only one
-	uint last_thread = subgroupBallotFindLSB(subgroupBallot(is_last_thread));
-
-	// Reindexing threads so that last one will be the first
-	if(high_tri_density) {
-		// TODO: why is this casing slowdown on white_oak and speed p on hairball???
-		uint next_thread = (last_thread + gl_SubgroupInvocationID) & WARP_MASK;
-		control_var = subgroupShuffle(control_var, next_thread);
+		control_var = i;
 	}
 
 	// Last thread may have written some samples from next segment
-	control_var |= subgroupShuffle((max_offset - SEGMENT_SIZE) << 16, last_thread);
+	bool is_last_thread = max_offset >= SEGMENT_SIZE; // There can be only one
+	uint last_thread = subgroupBallotFindLSB(subgroupBallot(is_last_thread));
+	uint last_samples = subgroupShuffle(max_offset - SEGMENT_SIZE, last_thread);
+	control_var |= last_samples << 16;
 	subgroupMemoryBarrierShared();
 }
 

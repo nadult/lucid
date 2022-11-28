@@ -1,6 +1,8 @@
 #define LSIZE 256
 #define LSHIFT 8
 
+#define BIN_LEVEL BIN_LEVEL_LOW
+
 #include "shared/raster.glsl"
 
 #include "%shader_debug"
@@ -171,19 +173,26 @@ void generateBlocks(uint bid) {
 	uint dst_offset = scratchRasterBlockOffset(bid);
 #endif
 
+	uint base_offset = 0;
 	for(uint i = gl_SubgroupInvocationID; i < tri_count; i += WARP_SIZE) {
 		uint row_idx = s_buffer[buf_offset + i] & 0xfff;
-
 		uvec2 tri_mins = g_scratch_64[rows_offset + row_idx];
 		uvec2 tri_maxs = g_scratch_64[rows_offset + row_idx + MAX_BLOCK_ROW_TRIS];
 		uint tri_idx_shifted = ((tri_maxs.x >> 12) & 0xfff00) | (tri_maxs.y & 0xfff00000);
-		uvec2 bits = uvec2(rasterHalfBlockBits(tri_mins.x, tri_maxs.x, startx),
-						   rasterHalfBlockBits(tri_mins.y, tri_maxs.y, startx));
+		uvec2 num_frags_half;
+		uvec2 bits = uvec2(rasterHalfBlockBits(tri_mins.x, tri_maxs.x, startx, num_frags_half.x),
+						   rasterHalfBlockBits(tri_mins.y, tri_maxs.y, startx, num_frags_half.y));
+		uint num_frags = num_frags_half.x | (num_frags_half.y << 16);
+
+		uint num_frags_accum = subgroupInclusiveAddFast(num_frags);
+		uint cur_offset = base_offset + num_frags_accum - num_frags;
+		base_offset += subgroupBroadcast(num_frags_accum, WARP_SIZE - 1);
 
 #if RBLOCK_HEIGHT == 4
+		uint seg_offset0 = cur_offset & 0xff, seg_offset1 = (cur_offset & 0xff0000) >> 16;
 		// TODO: optimize this?
-		g_scratch_64[dst_offset0 + i] = uvec2(tri_idx_shifted, bits.x);
-		g_scratch_64[dst_offset1 + i] = uvec2(tri_idx_shifted, bits.y);
+		g_scratch_64[dst_offset0 + i] = uvec2(tri_idx_shifted | seg_offset0, bits.x);
+		g_scratch_64[dst_offset1 + i] = uvec2(tri_idx_shifted | seg_offset1, bits.y);
 #else
 		g_scratch_64[dst_offset + i] = bits;
 		g_scratch_32[dst_offset + i] = tri_idx_shifted;

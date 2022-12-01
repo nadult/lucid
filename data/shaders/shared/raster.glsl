@@ -310,18 +310,16 @@ uint initUnpackSamples(uint tri_count, uint frag_count) {
 
 void unpackSamples(inout uint control_var, uint tri_count, uint src_offset) {
 	uint buf_offset = shadingBufferOffset();
+
 	// Copying samples generated for current segment by last thread in previous round
 	uint prev_offset = buf_offset + gl_SubgroupInvocationID;
 	s_buffer[prev_offset] = s_buffer[prev_offset + SEGMENT_SIZE];
 
-	uint base_offset = (control_var >> 16) & WARP_MASK;
-	uint max_offset = 0;
-
 	bool high_tri_density = (control_var & 0x80000000) != 0;
-	if(high_tri_density) {
-		uint i = control_var & 0xffff;
-		uint segment_id = (control_var >> 24) & 0xf;
+	uint segment_id = (control_var >> 16) & 0xf;
+	uint i = control_var & 0xffff;
 
+	if(high_tri_density) {
 		for(; i < tri_count; i += WARP_SIZE) {
 			uvec2 tri_data = g_scratch_64[src_offset + i];
 			uint tri_info = tri_data.x;
@@ -338,12 +336,9 @@ void unpackSamples(inout uint control_var, uint tri_count, uint src_offset) {
 				s_buffer[buf_offset + tri_offset] = pixel_id | tri_idx_shifted;
 				tri_offset++;
 			}
-			max_offset = tri_offset;
 		}
-		segment_id++;
-		control_var = i | 0x80000000 | (segment_id << 24);
+		control_var = i | 0x80000000 | ((segment_id + 1) << 16);
 	} else {
-		uint i = control_var & 0xffff;
 		uint y = gl_SubgroupInvocationID & (RBLOCK_HEIGHT - 1), row_shift = (y & 3) * 7;
 		uint mask1 = y >= 1 ? ~0u : 0, mask2 = y >= 2 ? ~0u : 0, mask3 = y >= 4 ? ~0u : 0;
 
@@ -357,6 +352,10 @@ void unpackSamples(inout uint control_var, uint tri_count, uint src_offset) {
 			uint tri_data = tri_block_data.y, tri_info = tri_block_data.x;
 #endif
 
+			uint seg_id = tri_data >> 28;
+			if(segment_id != seg_id)
+				break;
+
 			uint row_data = tri_data >> row_shift;
 			uint countx = (row_data >> 3) & 15;
 			uint prevx = countx + (subgroupShuffleUp(countx, 1) & mask1);
@@ -365,24 +364,15 @@ void unpackSamples(inout uint control_var, uint tri_count, uint src_offset) {
 				prevx += (subgroupShuffleUp(prevx, 4) & mask3);
 
 			uint tri_offset = (tri_info & 0xff) + prevx - countx;
-			if(tri_offset < max_offset)
-				break;
-
 			uint pixel_id = (y << 3) | (row_data & 7);
 			uint value = pixel_id | (tri_info & 0xffffff00);
-			max_offset = tri_offset + countx;
+			uint max_offset = tri_offset + countx;
 			while(tri_offset < max_offset)
 				s_buffer[buf_offset + tri_offset++] = value++;
 		}
-
-		control_var = i;
+		control_var = i | ((segment_id + 1) << 16);
 	}
 
-	// Last thread may have written some samples from next segment
-	bool is_last_thread = max_offset >= SEGMENT_SIZE; // There can be only one
-	uint last_thread = subgroupBallotFindLSB(subgroupBallot(is_last_thread));
-	uint last_samples = subgroupShuffle(max_offset - SEGMENT_SIZE, last_thread);
-	control_var |= last_samples << 16;
 	subgroupMemoryBarrierShared();
 }
 

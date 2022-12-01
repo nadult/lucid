@@ -717,7 +717,7 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 												   "dispatch small quads", "dispatch large tris"});
 
 	auto raster_timers =
-		processTimers(info.raster_timers, {"generate rows", "generate blocks", "load samples",
+		processTimers(info.raster_timers, {"generate rows", "generate blocks", "unpack samples",
 										   "shade and reduce", "finish reduce"});
 
 	auto format_percentage = [](int value, int total) {

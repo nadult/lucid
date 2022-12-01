@@ -248,10 +248,74 @@ void generateRBlocks(uint start_rbid) {
 	barrier();
 #endif
 
-	uint base_offset = 0;
 	// TODO: FIXME: it won't work for groups bigger than 1
 	for(uint i = group_thread; i < tri_count; i += group_size) {
 		uint row_tri_idx = s_buffer[buf_offset + i] & (MAX_RBLOCK_ROW_TRIS - 1);
+
+#if RBLOCK_HEIGHT == 8
+#error fixme
+#else
+		uvec2 tri_info = g_scratch_64[src_offset_64 + row_tri_idx];
+		uint num_frags = rasterHalfBlockNumFrags(tri_info.x, tri_info.y, startx); // 7 bitów
+		uint num_frags_accum = subgroupInclusiveAddFast(num_frags);
+#endif
+		s_buffer[buf_offset + i] = row_tri_idx | (num_frags << 14) | (num_frags_accum << 20);
+	}
+
+	barrier();
+
+	// Computing prefix sum across whole render-blocks. We're processing 4 elements
+	// at a time, so that we can fit with MAX_RBLOCK_TRIS tris/hblock (128 warps).
+	if(LIX < 2 * NUM_WARPS) {
+		uint wgsize = 2 << group_shift, wgmask = wgsize - 1;
+		uint group_rbid = LIX >> (1 + group_shift), group_sub_idx = LIX & wgmask;
+		uint buf_offset = group_rbid << (MAX_RBLOCK_TRIS0_SHIFT + group_shift);
+		uint rbid = start_rbid + group_rbid;
+		uint tri_count = s_rblock_tri_counts[rbid];
+		uint warp_offset = group_sub_idx << (WARP_SHIFT + 2);
+
+		uvec4 values = uvec4(0);
+		for(int j = 0; j < 4; j++) {
+			if(warp_offset < tri_count) {
+				uint rblock_tri_idx = min(warp_offset + WARP_MASK, tri_count - 1);
+				values[j] = s_buffer[buf_offset + rblock_tri_idx] >> 20;
+			}
+			warp_offset += WARP_SIZE;
+		}
+
+		uint value = values[0] + values[1] + values[2] + values[3];
+		uint sum = value, temp;
+		if(true)
+			temp = subgroupShuffleUp(sum, 1), sum += group_sub_idx >= 1 ? temp : 0;
+		if(wgsize >= 4)
+			temp = subgroupShuffleUp(sum, 2), sum += group_sub_idx >= 2 ? temp : 0;
+		if(wgsize >= 8)
+			temp = subgroupShuffleUp(sum, 4), sum += group_sub_idx >= 4 ? temp : 0;
+		if(wgsize >= 16)
+			temp = subgroupShuffleUp(sum, 8), sum += group_sub_idx >= 8 ? temp : 0;
+		if(wgsize >= 32)
+			temp = subgroupShuffleUp(sum, 16), sum += group_sub_idx >= 16 ? temp : 0;
+
+		if(group_sub_idx == wgmask) {
+			updateStats(sum, tri_count);
+			s_rblock_frag_counts[rbid] = sum;
+		}
+		s_buffer[mini_offset + LIX * 4 + 0] = sum - value, value -= values[0];
+		s_buffer[mini_offset + LIX * 4 + 1] = sum - value, value -= values[1];
+		s_buffer[mini_offset + LIX * 4 + 2] = sum - value;
+		s_buffer[mini_offset + LIX * 4 + 3] = sum - values[3];
+	}
+	barrier();
+
+	uint base_offset = 0;
+	// TODO: FIXME: it won't work for groups bigger than 1
+	for(uint i = group_thread; i < tri_count; i += group_size) {
+		uint current = s_buffer[buf_offset + i];
+		uint row_tri_idx = current & 0x3fff;
+
+		uint cur_offset =
+			(current >> 20) - ((current >> 14) & 0x3f) +
+			s_buffer[mini_offset + (group_rbid << (3 + group_shift)) + (i >> WARP_SHIFT)];
 
 #if RBLOCK_HEIGHT == 8
 		uvec2 tri_mins = g_scratch_64[src_offset_64 + row_tri_idx];
@@ -267,9 +331,6 @@ void generateRBlocks(uint start_rbid) {
 		uvec2 tri_info = g_scratch_64[src_offset_64 + row_tri_idx];
 		uint tri_idx_shifted = ((tri_info.x >> 12) & 0xfff00) | (tri_info.y & 0xfff00000);
 		uint num_frags, bits = rasterHalfBlockBits(tri_info.x, tri_info.y, startx, num_frags);
-		uint num_frags_accum = subgroupInclusiveAddFast(num_frags);
-		uint cur_offset = base_offset + num_frags_accum - num_frags;
-		base_offset += subgroupBroadcast(num_frags_accum, WARP_SIZE - 1);
 
 		uint seg_offset = cur_offset & 0xff, seg_high = (cur_offset & 0xf00) << 20;
 		g_scratch_64[dst_offset + i] =

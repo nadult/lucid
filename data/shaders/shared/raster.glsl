@@ -166,6 +166,13 @@ uint rasterHalfBlockBits(uint tri_mins, uint tri_maxs, int startx, out uint num_
 	return min_bits | count_bits;
 }
 
+uint rasterHalfBlockNumFrags(uint tri_mins, uint tri_maxs, int startx) {
+	ivec4 xmin = max(((ivec4(tri_mins) >> ivec4(0, 5, 10, 15)) & BIN_MASK) - startx, 0);
+	ivec4 xmax = min(((ivec4(tri_maxs) >> ivec4(0, 5, 10, 15)) & BIN_MASK) - startx, 7);
+	ivec4 count = max(xmax - xmin + 1, 0);
+	return count[0] + count[1] + count[2] + count[3];
+}
+
 uint rasterBlockDepth(vec2 cpos, uint tri_idx) {
 	uint depth_offset = STORAGE_TRI_DEPTH_OFFSET + tri_idx;
 	vec3 depth_eq = uintBitsToFloat(g_uvec4_storage[depth_offset].xyz);
@@ -296,8 +303,7 @@ uint shadingBufferOffset() { return gl_SubgroupID * (SEGMENT_SIZE + WARP_SIZE); 
 // bits 16-21: number of samples generated in previous round
 // bit     31: high_tri_density
 uint initUnpackSamples(uint tri_count, uint frag_count) {
-	bool high_tri_density =
-		BIN_LEVEL == BIN_LEVEL_HIGH && WARP_SIZE == 32 && highTriDensity(tri_count, frag_count);
+	bool high_tri_density = WARP_SIZE == 32 && highTriDensity(tri_count, frag_count);
 	return (high_tri_density ? gl_SubgroupInvocationID | 0x80000000 :
 							   gl_SubgroupInvocationID >> RBLOCK_HEIGHT_SHIFT);
 }
@@ -311,7 +317,7 @@ void unpackSamples(inout uint control_var, uint tri_count, uint src_offset) {
 	uint base_offset = (control_var >> 16) & WARP_MASK;
 	uint max_offset = 0;
 
-	bool high_tri_density = BIN_LEVEL == BIN_LEVEL_HIGH && (control_var & 0x80000000) != 0;
+	bool high_tri_density = (control_var & 0x80000000) != 0;
 	if(high_tri_density) {
 		uint i = control_var & 0xffff;
 		uint segment_id = (control_var >> 24) & 0xf;

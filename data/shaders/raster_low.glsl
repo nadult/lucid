@@ -190,9 +190,11 @@ void generateBlocks(uint bid) {
 
 #if RBLOCK_HEIGHT == 4
 		uint seg_offset0 = cur_offset & 0xff, seg_offset1 = (cur_offset & 0xff0000) >> 16;
+		uint seg_high0 = (cur_offset & 0xf00) << 20, seg_high1 = (cur_offset & 0x0f000000) << 4;
+
 		// TODO: optimize this?
-		g_scratch_64[dst_offset0 + i] = uvec2(tri_idx_shifted | seg_offset0, bits.x);
-		g_scratch_64[dst_offset1 + i] = uvec2(tri_idx_shifted | seg_offset1, bits.y);
+		g_scratch_64[dst_offset0 + i] = uvec2(tri_idx_shifted | seg_offset0, bits.x | seg_high0);
+		g_scratch_64[dst_offset1 + i] = uvec2(tri_idx_shifted | seg_offset1, bits.y | seg_high1);
 #else
 		g_scratch_64[dst_offset + i] = bits;
 		g_scratch_32[dst_offset + i] = tri_idx_shifted;

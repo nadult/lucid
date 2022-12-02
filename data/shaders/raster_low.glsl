@@ -256,7 +256,7 @@ void rasterBin() {
 		uint control_var = initUnpackSamples(temp_counts & 0xffff, temp_counts >> 16);
 		while(frag_count > 0) {
 			uint src_offset = scratchRasterBlockOffset(rbid);
-			unpackSamples(control_var, s_rblock_counts[rbid] & 0xffff, src_offset);
+			unpackSamples(control_var, src_offset);
 			UPDATE_TIMER(2);
 
 			shadeAndReduceSamples(rbid, min(frag_count, SEGMENT_SIZE), context);

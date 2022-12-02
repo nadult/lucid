@@ -304,20 +304,21 @@ uint shadingBufferOffset() { return gl_SubgroupID * (SEGMENT_SIZE + WARP_SIZE); 
 // bit     31: high_tri_density
 uint initUnpackSamples(uint tri_count, uint frag_count) {
 	bool high_tri_density = WARP_SIZE == 32 && highTriDensity(tri_count, frag_count);
-	return (high_tri_density ? gl_SubgroupInvocationID | 0x80000000 :
-							   gl_SubgroupInvocationID >> RBLOCK_HEIGHT_SHIFT);
+	return (high_tri_density ? gl_SubgroupInvocationID | 0x08000000 :
+							   gl_SubgroupInvocationID >> RBLOCK_HEIGHT_SHIFT) |
+		   (tri_count << 12);
 }
 
-void unpackSamples(inout uint control_var, uint tri_count, uint src_offset) {
+void unpackSamples(inout uint control_var, uint src_offset) {
 	uint buf_offset = shadingBufferOffset();
 
 	// Copying samples generated for current segment by last thread in previous round
 	uint prev_offset = buf_offset + gl_SubgroupInvocationID;
 	s_buffer[prev_offset] = s_buffer[prev_offset + SEGMENT_SIZE];
 
-	bool high_tri_density = (control_var & 0x80000000) != 0;
-	uint segment_id = (control_var >> 16) & 0xf;
-	uint i = control_var & 0xffff;
+	bool high_tri_density = (control_var & 0x08000000) != 0;
+	uint segment_id = (control_var >> 28) & 0xf;
+	uint i = control_var & 0xfff, tri_count = (control_var >> 12) & 0xfff;
 
 	if(high_tri_density) {
 		for(; i < tri_count; i += WARP_SIZE) {
@@ -337,7 +338,6 @@ void unpackSamples(inout uint control_var, uint tri_count, uint src_offset) {
 				tri_offset++;
 			}
 		}
-		control_var = i | 0x80000000 | ((segment_id + 1) << 16);
 	} else {
 		uint y = gl_SubgroupInvocationID & (RBLOCK_HEIGHT - 1), row_shift = (y & 3) * 7;
 		uint mask1 = y >= 1 ? ~0u : 0, mask2 = y >= 2 ? ~0u : 0, mask3 = y >= 4 ? ~0u : 0;
@@ -370,10 +370,10 @@ void unpackSamples(inout uint control_var, uint tri_count, uint src_offset) {
 			while(tri_offset < max_offset)
 				s_buffer[buf_offset + tri_offset++] = value++;
 		}
-		control_var = i | ((segment_id + 1) << 16);
 	}
 
-	subgroupMemoryBarrierShared();
+	// Increase segment_id (only lower 4 bits are needed) and updating triangle id
+	control_var = ((control_var & 0xfffff000) + 0x10000000) | i;
 }
 
 void shadeAndReduceSamples(uint rbid, uint sample_count, in out ReductionContext ctx) {
@@ -381,6 +381,7 @@ void shadeAndReduceSamples(uint rbid, uint sample_count, in out ReductionContext
 	ivec2 rblock_pos = (renderBlockPos(rbid) << renderBlockShift()) + s_bin_pos;
 	vec3 out_color = ctx.out_color;
 	uint second_offset = (LIX & ~WARP_MASK) + BASE_BUFFER_SIZE + LSIZE;
+	subgroupMemoryBarrierShared();
 
 	for(uint i = 0; i < sample_count; i += WARP_SIZE) {
 		uint value = s_buffer[buf_offset + gl_SubgroupInvocationID];

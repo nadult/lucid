@@ -45,6 +45,23 @@ uint subgroupInclusiveAddFast(uint accum) {
 
 #endif
 
+// TODO: ifdef for WARP_SIZE == 32?
+uint subgroupInclusiveAddFast32(uint accum) {
+	uint temp, invocation_id = LIX & 31;
+#define INCLUSIVE_ADD_STEP(step)                                                                   \
+	if(WARP_SIZE > step) {                                                                         \
+		temp = subgroupShuffleUp(accum, step);                                                     \
+		accum += invocation_id >= step ? temp : 0;                                                 \
+	}
+	INCLUSIVE_ADD_STEP(1);
+	INCLUSIVE_ADD_STEP(2);
+	INCLUSIVE_ADD_STEP(4);
+	INCLUSIVE_ADD_STEP(8);
+	INCLUSIVE_ADD_STEP(16);
+#undef INCLUSIVE_ADD_STEP
+	return accum;
+}
+
 uint subgroupMax_(uint value, int width) {
 	if(width >= 2)
 		value = max(value, subgroupShuffleXor(value, 1));

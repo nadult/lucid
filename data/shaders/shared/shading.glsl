@@ -7,12 +7,6 @@
 #extension GL_KHR_shader_subgroup_vote : require
 #extension GL_KHR_shader_subgroup_shuffle : require
 
-#if WARP_SIZE == 32
-#define WARP_BITMASK uint
-#else
-#define WARP_BITMASK uvec2
-#endif
-
 coherent layout(std430, binding = 0) buffer lucid_info_ {
 	LucidInfo g_info;
 	int g_counts[];
@@ -209,24 +203,17 @@ void initReduceSamples(out ReductionContext ctx) {
 }
 
 bool reduceSample(inout ReductionContext ctx, inout vec3 out_color, uvec2 sample_s,
-				  WARP_BITMASK pixel_bitmask) {
-#if WARP_SIZE == 32
+				  uint pixel_bitmask) {
 	int num_samples = bitCount(pixel_bitmask); // TODO: stall (2.75%, conference)
-#else
-	int num_samples = bitCount(pixel_bitmask.x) + bitCount(pixel_bitmask.y);
-#endif
 
 	while(subgroupAny(num_samples > 0)) {
-#if WARP_SIZE == 32
 		int bit = int(findLSB(pixel_bitmask));
 		pixel_bitmask &= ~(1u << bit);
-#else
-		int bitmask_index = pixel_bitmask.x == 0 ? 1 : 0;
-		int bit = findLSB(pixel_bitmask[bitmask_index]);
-		pixel_bitmask[bitmask_index] &= ~(1u << bit);
-		bit += bitmask_index << 5;
-#endif
+#if WARP_SIZE == RASTER_SUBGROUP_SIZE
 		uvec2 value = subgroupShuffle(sample_s, bit);
+#else
+		uvec2 value = subgroupShuffle(sample_s, (LIX & 32) + bit);
+#endif
 		uint color = value.x;
 		float depth = uintBitsToFloat(value.y);
 

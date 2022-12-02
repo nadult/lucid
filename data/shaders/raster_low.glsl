@@ -79,7 +79,7 @@ void processQuads() {
 // TODO: maybe process smaller amount of blocks at the same time?
 // smaller chance that it will leave cache
 void generateBlocks(uint bid) {
-	int lbid = int(LIX >> WARP_SHIFT);
+	int lbid = int(LIX >> RASTER_SUBGROUP_SHIFT);
 	uint by = bid >> BLOCK_ROWS_SHIFT, bx = bid & BLOCK_ROWS_MASK;
 
 	uint rows_offset = scratchBlockRowOffset(by);
@@ -89,7 +89,7 @@ void generateBlocks(uint bid) {
 
 	{
 		uint bx_bits_mask = 1u << (24 + bx), tri_offset = 0;
-		for(uint i = gl_SubgroupInvocationID; i < tri_count; i += gl_SubgroupSize) {
+		for(uint i = LIX & RASTER_SUBGROUP_MASK; i < tri_count; i += RASTER_SUBGROUP_SIZE) {
 			uint bx_bits = g_scratch_64[rows_offset + i].x;
 			if((bx_bits & bx_bits_mask) != 0) {
 				tri_offset = atomicAdd(s_block_tri_count[bid], 1);
@@ -110,7 +110,7 @@ void generateBlocks(uint bid) {
 	vec2 block_pos = vec2(s_bin_pos + ivec2(bx << BLOCK_SHIFT, by << BLOCK_SHIFT));
 
 	uint frag_count = 0;
-	for(uint i = gl_SubgroupInvocationID; i < tri_count; i += WARP_SIZE) {
+	for(uint i = LIX & RASTER_SUBGROUP_MASK; i < tri_count; i += RASTER_SUBGROUP_SIZE) {
 		uint row_tri_idx = s_buffer[buf_offset + i];
 
 		uvec2 tri_mins = g_scratch_64[rows_offset + row_tri_idx];
@@ -125,31 +125,29 @@ void generateBlocks(uint bid) {
 		uint depth = rasterBlockDepth(cpos * (0.5 / float(num_block_frags)) + block_pos, tri_idx);
 		if(num_block_frags == 0) // This means that bx_mask is invalid
 			DEBUG_RECORD(0, 0, 0, 0);
-		frag_count += WARP_SIZE == 64 ? num_block_frags : num_frags.x | (num_frags.y << 16);
+		frag_count += num_frags.x | (num_frags.y << 16);
 
 		// 12 bits for tile-tri index, 20 bits for depth
 		s_buffer[buf_offset + i] = row_tri_idx | (depth << 12);
 	}
 	subgroupMemoryBarrier();
 
-	frag_count = subgroupInclusiveAddFast(frag_count);
-	if(gl_SubgroupInvocationID == WARP_SIZE - 1) {
+	frag_count = subgroupInclusiveAddFast32(frag_count);
+	if((LIX & RASTER_SUBGROUP_MASK) == RASTER_SUBGROUP_MASK) {
 		// TODO: separate tri_count & frag_count; use same counters in high & low?
-#if RBLOCK_HEIGHT == 4
-		uint rbid = blockIdToRender(lbid + (bid & ~(NUM_WARPS - 1)));
+		uint rbid = blockIdToRender(lbid + (bid & ~(NUM_RASTER_SUBGROUPS - 1)));
 		uint v0 = frag_count & 0xffff, v1 = frag_count >> 16;
 		s_rblock_counts[rbid] = (v0 << 16) | tri_count;
 		s_rblock_counts[rbid + RBLOCK_COLS] = (v1 << 16) | tri_count;
-#else
-		s_rblock_counts[bid] = (frag_count << 16) | tri_count;
-#endif
 	}
 
 	if(tri_count > RC_COLOR_SIZE) {
-		// rcount: count rounded up to the next power of 2; minimum: WARP_SIZE
-		uint rcount = max(
-			WARP_SIZE, (tri_count & (tri_count - 1)) == 0 ? tri_count : (2 << findMSB(tri_count)));
-		sortBuffer(tri_count, rcount, buf_offset, WARP_SIZE, gl_SubgroupInvocationID, false);
+		// rcount: count rounded up to the next power of 2; minimum: RASTER_SUBGROUP_SIZE
+		uint rcount =
+			max(RASTER_SUBGROUP_SIZE,
+				(tri_count & (tri_count - 1)) == 0 ? tri_count : (2 << findMSB(tri_count)));
+		sortBuffer(tri_count, rcount, buf_offset, RASTER_SUBGROUP_SIZE, LIX & RASTER_SUBGROUP_MASK,
+				   false);
 	}
 	subgroupMemoryBarrierShared();
 
@@ -157,7 +155,7 @@ void generateBlocks(uint bid) {
 #ifdef DEBUG_ENABLED
 	// Making sure that tris are properly ordered
 	if(tri_count > RC_COLOR_SIZE)
-		for(uint i = gl_SubgroupInvocationID; i < tri_count; i += WARP_SIZE) {
+		for(uint i = LIX & RASTER_SUBGROUP_MASK; i < tri_count; i += RASTER_SUBGROUP_SIZE) {
 			uint value = s_buffer[buf_offset + i];
 			uint prev_value = i == 0 ? 0 : s_buffer[buf_offset + i - 1];
 			if(value <= prev_value)
@@ -165,16 +163,12 @@ void generateBlocks(uint bid) {
 		}
 #endif
 
-#if RBLOCK_HEIGHT == 4
 	uint rbid0 = blockIdToRender(bid), rbid1 = rbid0 + RBLOCK_COLS;
 	uint dst_offset0 = scratchRasterBlockOffset(rbid0);
 	uint dst_offset1 = scratchRasterBlockOffset(rbid1);
-#else
-	uint dst_offset = scratchRasterBlockOffset(bid);
-#endif
 
 	uint base_offset = 0;
-	for(uint i = gl_SubgroupInvocationID; i < tri_count; i += WARP_SIZE) {
+	for(uint i = LIX & RASTER_SUBGROUP_MASK; i < tri_count; i += RASTER_SUBGROUP_SIZE) {
 		uint row_idx = s_buffer[buf_offset + i] & 0xfff;
 		uvec2 tri_mins = g_scratch_64[rows_offset + row_idx];
 		uvec2 tri_maxs = g_scratch_64[rows_offset + row_idx + MAX_BLOCK_ROW_TRIS];
@@ -184,32 +178,32 @@ void generateBlocks(uint bid) {
 						   rasterHalfBlockBits(tri_mins.y, tri_maxs.y, startx, num_frags_half.y));
 		uint num_frags = num_frags_half.x | (num_frags_half.y << 16);
 
-		uint num_frags_accum = subgroupInclusiveAddFast(num_frags);
+		uint num_frags_accum = subgroupInclusiveAddFast32(num_frags);
 		uint cur_offset = base_offset + num_frags_accum - num_frags;
-		base_offset += subgroupBroadcast(num_frags_accum, WARP_SIZE - 1);
 
-#if RBLOCK_HEIGHT == 4
+#if WARP_SIZE == RASTER_SUBGROUP_SIZE
+		base_offset += subgroupBroadcast(num_frags_accum, RASTER_SUBGROUP_MASK);
+#else
+		base_offset += subgroupShuffle(num_frags_accum, (LIX & 32) + RASTER_SUBGROUP_MASK);
+#endif
+
 		uint seg_offset0 = cur_offset & 0xff, seg_offset1 = (cur_offset & 0xff0000) >> 16;
 		uint seg_high0 = (cur_offset & 0xf00) << 20, seg_high1 = (cur_offset & 0x0f000000) << 4;
-
 		// TODO: optimize this?
 		g_scratch_64[dst_offset0 + i] = uvec2(tri_idx_shifted | seg_offset0, bits.x | seg_high0);
 		g_scratch_64[dst_offset1 + i] = uvec2(tri_idx_shifted | seg_offset1, bits.y | seg_high1);
-#else
-		g_scratch_64[dst_offset + i] = bits;
-		g_scratch_32[dst_offset + i] = tri_idx_shifted;
-#endif
 	}
 }
 
 void visualizeBlockCounts(uint rbid, ivec2 pixel_pos) {
 	uint frag_count = s_rblock_counts[rbid] >> 16;
 	uint tri_count = s_rblock_counts[rbid] & 0xffff;
+	//tri_count = s_block_tri_count[blockIdFromRender(rbid)];
 	//tri_count = s_block_row_tri_count[pixel_pos.y >> BLOCK_SHIFT];
 	//tri_count = s_bin_quad_count * 2 + s_bin_tri_count;
 
 	vec3 color;
-	color = gradientColor(frag_count, uvec4(8, 32, 128, 1024) * WARP_SIZE);
+	color = gradientColor(frag_count, uvec4(8, 32, 128, 1024) * RASTER_SUBGROUP_SIZE);
 	//color = gradientColor(tri_count, uvec4(16, 64, 256, 1024));
 
 	outputPixel(pixel_pos, vec4(SATURATE(color), 1.0));
@@ -230,7 +224,7 @@ void rasterBin() {
 	UPDATE_TIMER(0);
 
 	const int num_blocks = (BIN_SIZE / BLOCK_SIZE) * (BIN_SIZE / BLOCK_SIZE);
-	for(uint bid = LIX >> WARP_SHIFT; bid < num_blocks; bid += NUM_WARPS)
+	for(uint bid = LIX >> RASTER_SUBGROUP_SHIFT; bid < num_blocks; bid += NUM_RASTER_SUBGROUPS)
 		generateBlocks(bid);
 
 	barrier();
@@ -246,7 +240,8 @@ void rasterBin() {
 	groupMemoryBarrier();
 	UPDATE_TIMER(1);
 
-	for(uint rbid = LIX >> WARP_SHIFT; rbid < NUM_RBLOCKS; rbid += NUM_WARPS) {
+	for(uint rbid = LIX >> RASTER_SUBGROUP_SHIFT; rbid < NUM_RBLOCKS;
+		rbid += NUM_RASTER_SUBGROUPS) {
 		ReductionContext context;
 		initReduceSamples(context);
 		//initVisualizeSamples();
@@ -260,7 +255,7 @@ void rasterBin() {
 			UPDATE_TIMER(2);
 
 			shadeAndReduceSamples(rbid, min(frag_count, SEGMENT_SIZE), context);
-			//visualizeSamples(frag_count);
+			//visualizeSamples(min(frag_count, SEGMENT_SIZE));
 			UPDATE_TIMER(3);
 
 #ifdef ALPHA_THRESHOLD

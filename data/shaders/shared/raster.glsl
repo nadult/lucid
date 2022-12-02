@@ -26,7 +26,6 @@
 // TODO: improve docs
 // Block: 8x8 pixels
 // Half-block: 8x4 pixels
-// Render-block: depends on warp size: 32: half-block, 64: block
 
 #extension GL_KHR_shader_subgroup_ballot : require
 #extension GL_KHR_shader_subgroup_shuffle_relative : require
@@ -34,10 +33,6 @@
 #ifndef LSIZE
 #error "LSIZE should be defined before including raster.glsl"
 #endif
-
-#define NUM_WARPS (LSIZE / WARP_SIZE)
-#define NUM_WARPS_MASK (NUM_WARPS - 1)
-#define NUM_WARPS_SHIFT (LSHIFT - WARP_SHIFT)
 
 #define BIN_MASK (BIN_SIZE - 1)
 
@@ -49,17 +44,12 @@
 #define BLOCK_ROWS_MASK (BLOCK_ROWS - 1)
 
 #define RBLOCK_WIDTH 8
-#define RBLOCK_WIDTH_SHIFT 3
-
-#if WARP_SIZE == 32
 #define RBLOCK_HEIGHT 4
+
+#define RBLOCK_WIDTH_SHIFT 3
 #define RBLOCK_HEIGHT_SHIFT 2
-#define RBLOCK_COUNT (NUM_WARPS * 2)
-#elif WARP_SIZE == 64
-#define RBLOCK_HEIGHT 8
-#define RBLOCK_HEIGHT_SHIFT 3
-#define RBLOCK_COUNT NUM_WARPS
-#else
+
+#if WARP_SIZE != 32 && WARP_SIZE != 64
 #error "Currently only 32 & 64 warp size is supported"
 #endif
 
@@ -74,11 +64,17 @@
 #define NUM_BLOCKS (BLOCK_ROWS * BLOCK_ROWS)
 #define NUM_RBLOCKS (RBLOCK_COLS * RBLOCK_ROWS)
 
+// TODO: RBLOCK zamieniæ na half block; raster_subgroup lepsza nazwa tez
+#define RASTER_SUBGROUP_MASK 31
+#define RASTER_SUBGROUP_SIZE 32
+#define RASTER_SUBGROUP_SHIFT 5
+#define NUM_RASTER_SUBGROUPS (LSIZE / RASTER_SUBGROUP_SIZE)
+
 #define SEGMENT_SIZE 256
 #define SEGMENT_SHIFT 8
 
 #define BASE_BUFFER_SIZE (LSIZE * 8)
-#define FULL_BUFFER_SIZE (BASE_BUFFER_SIZE + LSIZE * (WARP_SIZE / 32))
+#define FULL_BUFFER_SIZE (BASE_BUFFER_SIZE + LSIZE)
 
 shared int s_num_bins, s_bin_id;
 shared uint s_bin_quad_count, s_bin_quad_offset;
@@ -188,22 +184,14 @@ ivec2 renderBlockPos(uint rbid) {
 }
 
 uint blockIdFromRender(uint rbid) {
-#if RBLOCK_HEIGHT == BLOCK_HEIGHT
-	return rbid;
-#else
 	ivec2 pos = renderBlockPos(rbid);
 	return pos.x + ((pos.y >> 1) << RBLOCK_COLS_SHIFT);
-#endif
 }
 
 uint blockIdToRender(uint bid) {
-#if RBLOCK_HEIGHT == BLOCK_HEIGHT
-	return bid;
-#else
 	uint bx = bid & RBLOCK_COLS_MASK;
 	uint by = bid >> RBLOCK_COLS_SHIFT;
 	return bx + ((by * 2) << RBLOCK_COLS_SHIFT);
-#endif
 }
 
 uvec2 renderBlockShift() { return uvec2(RBLOCK_WIDTH_SHIFT, RBLOCK_HEIGHT_SHIFT); }
@@ -297,15 +285,18 @@ bool highTriDensity(uint tri_count, uint frag_count) {
 	return frag_count < (tri_count << 3) && tri_count >= 16;
 }
 
-uint shadingBufferOffset() { return gl_SubgroupID * (SEGMENT_SIZE + WARP_SIZE); }
+uint shadingBufferOffset() {
+	return (LIX >> RASTER_SUBGROUP_SHIFT) * (SEGMENT_SIZE + RASTER_SUBGROUP_SIZE);
+}
 
-// bits  0-16: current_tri_idx + optional y
-// bits 16-21: number of samples generated in previous round
-// bit     31: high_tri_density
+// bits  0-11: current triangle idx
+// bits 12-23: triangle count
+// bit     24: high tri density
+// bits 25-31: segment id, only 4 lower bits are needed
 uint initUnpackSamples(uint tri_count, uint frag_count) {
-	bool high_tri_density = WARP_SIZE == 32 && highTriDensity(tri_count, frag_count);
-	return (high_tri_density ? gl_SubgroupInvocationID | 0x08000000 :
-							   gl_SubgroupInvocationID >> RBLOCK_HEIGHT_SHIFT) |
+	bool high_tri_density = highTriDensity(tri_count, frag_count);
+	uint subgroup_id = LIX & RASTER_SUBGROUP_MASK;
+	return (high_tri_density ? subgroup_id | 0x08000000 : subgroup_id >> RBLOCK_HEIGHT_SHIFT) |
 		   (tri_count << 12);
 }
 
@@ -313,7 +304,7 @@ void unpackSamples(inout uint control_var, uint src_offset) {
 	uint buf_offset = shadingBufferOffset();
 
 	// Copying samples generated for current segment by last thread in previous round
-	uint prev_offset = buf_offset + gl_SubgroupInvocationID;
+	uint prev_offset = buf_offset + (LIX & RASTER_SUBGROUP_MASK);
 	s_buffer[prev_offset] = s_buffer[prev_offset + SEGMENT_SIZE];
 
 	bool high_tri_density = (control_var & 0x08000000) != 0;
@@ -321,7 +312,7 @@ void unpackSamples(inout uint control_var, uint src_offset) {
 	uint i = control_var & 0xfff, tri_count = (control_var >> 12) & 0xfff;
 
 	if(high_tri_density) {
-		for(; i < tri_count; i += WARP_SIZE) {
+		for(; i < tri_count; i += RASTER_SUBGROUP_SIZE) {
 			uvec2 tri_data = g_scratch_64[src_offset + i];
 			uint tri_info = tri_data.x;
 			uint seg_id = tri_data.y >> 28;
@@ -339,19 +330,13 @@ void unpackSamples(inout uint control_var, uint src_offset) {
 			}
 		}
 	} else {
-		uint y = gl_SubgroupInvocationID & (RBLOCK_HEIGHT - 1), row_shift = (y & 3) * 7;
-		uint mask1 = y >= 1 ? ~0u : 0, mask2 = y >= 2 ? ~0u : 0, mask3 = y >= 4 ? ~0u : 0;
+		uint y = LIX & (RBLOCK_HEIGHT - 1), row_shift = (y & 3) * 7;
+		uint mask1 = y >= 1 ? ~0u : 0, mask2 = y >= 2 ? ~0u : 0;
 
 		// TODO: najpierw wyznaczyæ offsety a póŸniej dopiero sample?
-		for(; i < tri_count; i += WARP_SIZE / RBLOCK_HEIGHT) {
-#if RBLOCK_HEIGHT == 8
-			uint tri_data = g_scratch_64[src_offset + i][y >> 2];
-			uint tri_info = g_scratch_32[src_offset + i];
-#else
+		for(; i < tri_count; i += RASTER_SUBGROUP_SIZE / RBLOCK_HEIGHT) {
 			uvec2 tri_block_data = g_scratch_64[src_offset + i];
 			uint tri_data = tri_block_data.y, tri_info = tri_block_data.x;
-#endif
-
 			uint seg_id = tri_data >> 28;
 			if(segment_id != seg_id)
 				break;
@@ -360,8 +345,6 @@ void unpackSamples(inout uint control_var, uint src_offset) {
 			uint countx = (row_data >> 3) & 15;
 			uint prevx = countx + (subgroupShuffleUp(countx, 1) & mask1);
 			prevx += (subgroupShuffleUp(prevx, 2) & mask2);
-			if(RBLOCK_HEIGHT == 8)
-				prevx += (subgroupShuffleUp(prevx, 4) & mask3);
 
 			uint tri_offset = (tri_info & 0xff) + prevx - countx;
 			uint pixel_id = (y << 3) | (row_data & 7);
@@ -380,47 +363,36 @@ void shadeAndReduceSamples(uint rbid, uint sample_count, in out ReductionContext
 	uint buf_offset = shadingBufferOffset();
 	ivec2 rblock_pos = (renderBlockPos(rbid) << renderBlockShift()) + s_bin_pos;
 	vec3 out_color = ctx.out_color;
-	uint second_offset = (LIX & ~WARP_MASK) + BASE_BUFFER_SIZE + LSIZE;
 	subgroupMemoryBarrierShared();
 
-	for(uint i = 0; i < sample_count; i += WARP_SIZE) {
-		uint value = s_buffer[buf_offset + gl_SubgroupInvocationID];
+	// TODO: simplify
+	for(uint i = 0; i < sample_count; i += RASTER_SUBGROUP_SIZE) {
+		uint subgroup_id = LIX & RASTER_SUBGROUP_MASK; // TODO: wrong name
+		uint value = s_buffer[buf_offset + subgroup_id];
 
-		s_buffer[buf_offset + gl_SubgroupInvocationID] = 0;
-#if WARP_SIZE == 64
-		s_buffer[second_offset + gl_SubgroupInvocationID] = 0;
-#endif
+		s_buffer[buf_offset + subgroup_id] = 0;
 		subgroupMemoryBarrierShared();
 		uvec2 sample_s;
 
-		uint sample_id = i + gl_SubgroupInvocationID;
+		uint sample_id = i + subgroup_id;
 		if(sample_id < sample_count) {
-			uint sample_pixel_id = value & WARP_MASK;
+			uint sample_pixel_id = value & RASTER_SUBGROUP_MASK;
 			uint tri_idx = value >> 8;
 			ivec2 pix_pos = rblock_pos + ivec2(sample_pixel_id & 7, sample_pixel_id >> 3);
 			float sample_depth;
 			uint sample_color = shadeSample(pix_pos, tri_idx, sample_depth);
 			sample_s = uvec2(sample_color, floatBitsToUint(sample_depth));
 
-			uint bits_offset =
-				WARP_SIZE == 64 && gl_SubgroupInvocationID >= 32 ? second_offset : buf_offset;
 			uint pixel_bit =
 				WARP_SIZE == 64 ? gl_SubgroupEqMask.x | gl_SubgroupEqMask.y : gl_SubgroupEqMask.x;
-			atomicOr(s_buffer[bits_offset + sample_pixel_id], pixel_bit);
+			atomicOr(s_buffer[buf_offset + sample_pixel_id], pixel_bit);
 		}
 		subgroupMemoryBarrierShared();
 
-#if WARP_SIZE == 32
-		uint pixel_bitmask = s_buffer[buf_offset + gl_SubgroupInvocationID];
-#else
-		uvec2 pixel_bitmask = uvec2(s_buffer[buf_offset + gl_SubgroupInvocationID],
-									s_buffer[second_offset + gl_SubgroupInvocationID]);
-		subgroupMemoryBarrierShared();
-#endif
-
+		uint pixel_bitmask = s_buffer[buf_offset + subgroup_id];
 		if(reduceSample(ctx, out_color, sample_s, pixel_bitmask))
 			break;
-		buf_offset += WARP_SIZE;
+		buf_offset += RASTER_SUBGROUP_SIZE;
 	}
 
 	// TODO: check if encode+decode for out_color is really needed (to save 2 regs)
@@ -437,9 +409,9 @@ void initVisualizeSamples() { s_vis_pixels[LIX] = 0; }
 
 void visualizeSamples(uint sample_count) {
 	uint buf_offset = shadingBufferOffset();
-	for(uint i = gl_SubgroupInvocationID; i < sample_count; i += WARP_SIZE) {
-		uint pixel_id = s_buffer[buf_offset + i] & WARP_MASK;
-		atomicAdd(s_vis_pixels[(LIX & ~WARP_MASK) + pixel_id], 1);
+	for(uint i = LIX & RASTER_SUBGROUP_MASK; i < sample_count; i += RASTER_SUBGROUP_SIZE) {
+		uint pixel_id = s_buffer[buf_offset + i] & RASTER_SUBGROUP_MASK;
+		atomicAdd(s_vis_pixels[(LIX & ~RASTER_SUBGROUP_MASK) + pixel_id], 1);
 	}
 	subgroupMemoryBarrierShared();
 }
@@ -447,7 +419,7 @@ void visualizeSamples(uint sample_count) {
 void finishVisualizeSamples(ivec2 pixel_pos) {
 	uint pixel_id = (pixel_pos.x & (RBLOCK_WIDTH - 1)) +
 					((pixel_pos.y & (RBLOCK_HEIGHT - 1)) << RBLOCK_WIDTH_SHIFT);
-	uint value = s_vis_pixels[(LIX & ~WARP_MASK) + pixel_id];
+	uint value = s_vis_pixels[(LIX & ~RASTER_SUBGROUP_MASK) + pixel_id];
 	vec3 color = gradientColor(value, uvec4(8, 32, 128, 1024));
 	outputPixel(pixel_pos, vec4(SATURATE(color), 1.0));
 }

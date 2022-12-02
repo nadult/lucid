@@ -142,7 +142,7 @@ void computeRBlockGroups() {
 			temp = subgroupShuffleUp(value, 4), value += rbx >= 4 ? temp : 0;
 		subgroupMemoryBarrierShared();
 		s_rblock_tri_counts[LIX] = 0;
-		uint max_value = subgroupMax_(uint(value), NUM_WARPS);
+		uint max_value = subgroupMax_(uint(value), NUM_RASTER_SUBGROUPS);
 		if(LIX == 0) {
 			s_rblock_max_tri_counts = max_value;
 			// rcount: count rounded up to next power of 2, minimum: 32
@@ -266,7 +266,7 @@ void generateRBlocks(uint start_rbid) {
 
 	// Computing prefix sum across whole render-blocks. We're processing 4 elements
 	// at a time, so that we can fit with MAX_RBLOCK_TRIS tris/hblock (128 warps).
-	if(LIX < 2 * NUM_WARPS) {
+	if(LIX < 2 * NUM_RASTER_SUBGROUPS) {
 		uint wgsize = 2 << group_shift, wgmask = wgsize - 1;
 		uint group_rbid = LIX >> (1 + group_shift), group_sub_idx = LIX & wgmask;
 		uint buf_offset = group_rbid << (MAX_RBLOCK_TRIS0_SHIFT + group_shift);
@@ -370,7 +370,7 @@ void rasterBin() {
 	UPDATE_TIMER(0);
 
 	if(s_raster_error == 0) {
-		int step = NUM_WARPS >> s_rblock_group_shift;
+		int step = NUM_RASTER_SUBGROUPS >> s_rblock_group_shift;
 		for(int i = 0; i < s_rblock_group_size; i++)
 			generateRBlocks(step * i);
 	}
@@ -398,7 +398,7 @@ void rasterBin() {
 		UPDATE_TIMER(2);
 
 		shadeAndReduceSamples(rbid, min(frag_count, SEGMENT_SIZE), context);
-		//visualizeSamples(frag_count);
+		//visualizeSamples(min(frag_count, SEGMENT_SIZE));
 		UPDATE_TIMER(3);
 
 #ifdef ALPHA_THRESHOLD

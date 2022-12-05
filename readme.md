@@ -14,5 +14,5 @@ Lucid is using [libfwk](https://github.com/nadult/libfwk) framework and can be b
 - properly initialize and update all submodules (libfwk and imgui in libfwk/extern/)
 - make sure that all libfwk dependencies are available
 - under linux build with make
-- under windows use windows/lucid.sln and make sure that all libfwk dependencies are reachable; libfwk uses windows/shared_libraries.props file to define paths to dependencies; The easiest way is to simply fix include & library paths in this file
+- under windows Visual Studio 2022 with clang compiler is required; use windows/lucid.sln and make sure that all libfwk dependencies are reachable; libfwk uses windows/shared_libraries.props file to define paths to dependencies; The easiest way is to simply fix include & library paths in this file
 

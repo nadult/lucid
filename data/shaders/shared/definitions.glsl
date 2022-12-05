@@ -99,10 +99,10 @@ struct SpecializationConstants {
 #define LID		gl_LocalInvocationID
 #define WGID	gl_WorkGroupID
 
-#if !defined(WARP_SIZE) || !defined(WARP_SHIFT)
-#error "WARP_SIZE and WARP_SHIFT must be defined"
+#if !defined(SUBGROUP_SIZE) || !defined(SUBGROUP_SHIFT)
+#error "SUBGROUP_SIZE and SUBGROUP_SHIFT must be defined"
 #endif
-#define WARP_MASK (WARP_SIZE - 1)
+#define SUBGROUP_MASK (SUBGROUP_SIZE - 1)
 
 bool renderOptSet(uint bit) {
 	return (RENDER_OPTIONS & bit) != 0u;

@@ -76,14 +76,14 @@ void countSmallQuadBins(uint quad_idx) {
 
 void accumulateLargeTriCountsAcrossRows() {
 	// Accumulating large quad counts across rows
-	for(uint by = LIX >> WARP_SHIFT; by < BIN_COUNT_Y; by += LSIZE / WARP_SIZE) {
+	for(uint by = LIX >> SUBGROUP_SHIFT; by < BIN_COUNT_Y; by += LSIZE / SUBGROUP_SIZE) {
 		int prev_accum = 0;
-		for(uint bx = LIX & WARP_MASK; bx < BIN_COUNT_X; bx += WARP_SIZE) {
+		for(uint bx = LIX & SUBGROUP_MASK; bx < BIN_COUNT_X; bx += SUBGROUP_SIZE) {
 			uint idx = bx + by * BIN_COUNT_X;
 			int value = s_bins[idx];
 			int accum = prev_accum + subgroupInclusiveAddFast(value);
 			s_bins[idx] = accum;
-			prev_accum = subgroupShuffle(accum, WARP_MASK);
+			prev_accum = subgroupShuffle(accum, SUBGROUP_MASK);
 		}
 	}
 	/*if(LIX < BIN_COUNT_Y) { // Slow version

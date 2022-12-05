@@ -12,7 +12,7 @@
 // Variable naming:
 //   bid:      block (8x8) id; In 32x32 bin we have 4 x 4 = 16 blocks
 //  hbid: half-block (8x4) id; In 32x32 bin we have 4 x 8 = 32 half-blocks
-//  lbid: local block id (range: 0 up to NUM_WARPS - 1)
+//  lbid: local block id (range: 0 up to num_subgroups - 1)
 
 #include "compute_funcs.glsl"
 #include "funcs.glsl"
@@ -47,8 +47,8 @@
 #define HBLOCK_WIDTH_SHIFT 3
 #define HBLOCK_HEIGHT_SHIFT 2
 
-#if WARP_SIZE != 32 && WARP_SIZE != 64
-#error "Currently only 32 & 64 warp size is supported"
+#if SUBGROUP_SIZE != 32 && SUBGROUP_SIZE != 64
+#error "Currently only 32 & 64 subgroup size is supported"
 #endif
 
 #define HBLOCK_ROWS (BIN_SIZE / HBLOCK_HEIGHT)
@@ -380,8 +380,8 @@ void shadeAndReduceSamples(uint hbid, uint sample_count, in out ReductionContext
 			uint sample_color = shadeSample(pix_pos, tri_idx, sample_depth);
 			sample_s = uvec2(sample_color, floatBitsToUint(sample_depth));
 
-			uint pixel_bit =
-				WARP_SIZE == 64 ? gl_SubgroupEqMask.x | gl_SubgroupEqMask.y : gl_SubgroupEqMask.x;
+			uint pixel_bit = SUBGROUP_SIZE == 64 ? gl_SubgroupEqMask.x | gl_SubgroupEqMask.y :
+												   gl_SubgroupEqMask.x;
 			atomicOr(s_buffer[buf_offset + sample_pixel_id], pixel_bit);
 		}
 		subgroupMemoryBarrierShared();

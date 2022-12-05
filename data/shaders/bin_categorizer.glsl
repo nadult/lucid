@@ -12,28 +12,28 @@ coherent layout(std430, binding = 0) buffer lucid_info_ {
 layout(binding = 1) uniform lucid_config_ { LucidConfig u_config; };
 
 shared int s_bins[BIN_COUNT];
-shared int s_temp[BIN_COUNT / WARP_SIZE + 1], s_temp2[WARP_SIZE];
+shared int s_temp[BIN_COUNT / SUBGROUP_SIZE + 1], s_temp2[SUBGROUP_SIZE];
 
 void computeOffsets(const bool quads_mode) {
 	for(uint idx = LIX; idx < BIN_COUNT; idx += LSIZE) {
 		int value = quads_mode ? BIN_QUAD_COUNTS(idx) : BIN_TRI_COUNTS(idx);
 		int accum = subgroupInclusiveAddFast(value);
 		s_bins[idx] = accum - value;
-		if((idx & WARP_MASK) == WARP_MASK)
-			s_temp[idx >> WARP_SHIFT] = accum;
+		if((idx & SUBGROUP_MASK) == SUBGROUP_MASK)
+			s_temp[idx >> SUBGROUP_SHIFT] = accum;
 	}
 	barrier();
-	if(LIX < BIN_COUNT / WARP_SIZE)
+	if(LIX < BIN_COUNT / SUBGROUP_SIZE)
 		s_temp[LIX] = subgroupInclusiveAddFast(s_temp[LIX]);
 	barrier();
-	if(LIX < (BIN_COUNT / WARP_SIZE) / WARP_SIZE)
-		s_temp2[LIX] = subgroupInclusiveAddFast(s_temp[(LIX << WARP_SHIFT) + WARP_MASK]);
+	if(LIX < (BIN_COUNT / SUBGROUP_SIZE) / SUBGROUP_SIZE)
+		s_temp2[LIX] = subgroupInclusiveAddFast(s_temp[(LIX << SUBGROUP_SHIFT) + SUBGROUP_MASK]);
 	barrier();
-	if(LIX < BIN_COUNT / WARP_SIZE && LIX >= WARP_SIZE)
-		s_temp[LIX] += s_temp2[int(LIX >> WARP_SHIFT) - 1];
+	if(LIX < BIN_COUNT / SUBGROUP_SIZE && LIX >= SUBGROUP_SIZE)
+		s_temp[LIX] += s_temp2[int(LIX >> SUBGROUP_SHIFT) - 1];
 	barrier();
 	for(uint idx = LIX; idx < BIN_COUNT; idx += LSIZE) {
-		int widx = int(idx >> WARP_SHIFT) - 1;
+		int widx = int(idx >> SUBGROUP_SHIFT) - 1;
 		int accum = s_bins[idx];
 		if(widx >= 0)
 			accum += s_temp[widx];

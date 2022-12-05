@@ -209,7 +209,7 @@ bool reduceSample(inout ReductionContext ctx, inout vec3 out_color, uvec2 sample
 	while(subgroupAny(num_samples > 0)) {
 		int bit = int(findLSB(pixel_bitmask));
 		pixel_bitmask &= ~(1u << bit);
-#if WARP_SIZE == RASTER_SUBGROUP_SIZE
+#if SUBGROUP_SIZE == HALFGROUP_SIZE
 		uvec2 value = subgroupShuffle(sample_s, bit);
 #else
 		uvec2 value = subgroupShuffle(sample_s, (LIX & 32) + bit);

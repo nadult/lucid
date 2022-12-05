@@ -146,8 +146,7 @@ void generateBlocks(uint bid) {
 		uint rcount =
 			max(HALFGROUP_SIZE,
 				(tri_count & (tri_count - 1)) == 0 ? tri_count : (2 << findMSB(tri_count)));
-		sortBuffer(tri_count, rcount, buf_offset, HALFGROUP_SIZE, LIX & HALFGROUP_MASK,
-				   false);
+		sortBuffer(tri_count, rcount, buf_offset, HALFGROUP_SIZE, LIX & HALFGROUP_MASK, false);
 	}
 	subgroupMemoryBarrierShared();
 
@@ -276,7 +275,7 @@ void rasterBin() {
 		updateStats(counts >> 16, counts & 0xffff);
 	}
 
-	// TODO: we should be able to start processing next bin before all warps have finished
+	// TODO: we should be able to start processing next bin before all subgroups have finished
 	// but we would have to divide work in processQuads differently;
 	// We could load bins in double-buffered fashion and once one bin is completely finished, we could load next one
 	barrier(); // TODO: stall (10.5%, conference)

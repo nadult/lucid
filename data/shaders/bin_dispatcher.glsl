@@ -45,7 +45,7 @@ DEBUG_SETUP(1, 5)
 #define LARGE_BATCHES(idx) g_bin_batches[(MAX_DISPATCHES * BIN_COUNT * 2 + MAX_SMALL_BATCHES) + idx]
 
 shared int s_bins[BIN_COUNT];
-shared int s_temp[LSIZE], s_temp2[WARP_SIZE];
+shared int s_temp[LSIZE], s_temp2[SUBGROUP_SIZE];
 
 void scanlineStep(in out ScanlineParams params, out int bmin, out int bmax) {
 	float xmin = max(max(params.min[0], params.min[1]), params.min[2]);
@@ -112,8 +112,8 @@ void dispatchLargeTriSimple(int large_quad_idx, int second_tri, int num_quads) {
 // useful if there is a large variation in quad sizes and for large tris in general.
 //
 // Work balancing happens at each bin row. First we find out how many bins do we have
-// to write to and then we divide this work equally across all threads within a warp.
-// We do this by dividing those items into WARP_SIZE segments and then assigning 1 segment
+// to write to and then we divide this work equally across all threads within a subgroup.
+// We do this by dividing those items into SUBGROUP_SIZE segments and then assigning 1 segment
 // to each thread.
 void dispatchLargeTriBalanced(int large_quad_idx, int second_tri, int num_quads) {
 	bool is_valid = large_quad_idx < num_quads;
@@ -148,24 +148,24 @@ void dispatchLargeTriBalanced(int large_quad_idx, int second_tri, int num_quads)
 			continue;
 
 		int sample_offset = subgroupInclusiveAddFast(num_samples);
-		int warp_num_samples = subgroupShuffle(sample_offset, WARP_MASK);
+		int subgroup_num_samples = subgroupShuffle(sample_offset, SUBGROUP_MASK);
 		sample_offset -= num_samples;
 
-		int warp_offset = int(LIX & ~WARP_MASK), thread_id = int(LIX & WARP_MASK);
-		int segment_size = (warp_num_samples + WARP_MASK) / WARP_SIZE;
+		int subgroup_offset = int(LIX & ~SUBGROUP_MASK), thread_id = int(LIX & SUBGROUP_MASK);
+		int segment_size = (subgroup_num_samples + SUBGROUP_MASK) / SUBGROUP_SIZE;
 		int segment_id = sample_offset / segment_size;
 		int segment_offset = sample_offset - segment_id * segment_size;
 		if(num_samples > 0) {
 			if(segment_offset == 0)
-				s_temp[warp_offset + segment_id] = thread_id;
+				s_temp[subgroup_offset + segment_id] = thread_id;
 			for(int k = 1; segment_offset + num_samples > segment_size * k; k++)
-				s_temp[warp_offset + segment_id + k] = thread_id;
+				s_temp[subgroup_offset + segment_id + k] = thread_id;
 		}
 
 		uint cur_src_thread_id = s_temp[LIX];
 		int cur_sample_id = thread_id * segment_size;
 		int cur_offset = cur_sample_id - subgroupShuffle(sample_offset, cur_src_thread_id);
-		int cur_num_samples = min(warp_num_samples - cur_sample_id, segment_size);
+		int cur_num_samples = min(subgroup_num_samples - cur_sample_id, segment_size);
 		int base_bin_id = by * BIN_COUNT_X + bmin;
 
 		int i = 0;

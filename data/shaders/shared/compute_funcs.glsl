@@ -10,7 +10,7 @@
 #ifdef VENDOR_NVIDIA
 
 #define INCLUSIVE_ADD_STEP(step)                                                                   \
-	if(WARP_SIZE > step) {                                                                         \
+	if(SUBGROUP_SIZE > step) {                                                                     \
 		temp = subgroupShuffleUp(accum, step);                                                     \
 		accum += gl_SubgroupInvocationID >= step ? temp : 0;                                       \
 	}
@@ -45,11 +45,11 @@ uint subgroupInclusiveAddFast(uint accum) {
 
 #endif
 
-// TODO: ifdef for WARP_SIZE == 32?
+// TODO: ifdef for SUBGROUP_SIZE == 32?
 uint subgroupInclusiveAddFast32(uint accum) {
 	uint temp, invocation_id = LIX & 31;
 #define INCLUSIVE_ADD_STEP(step)                                                                   \
-	if(WARP_SIZE > step) {                                                                         \
+	if(SUBGROUP_SIZE > step) {                                                                     \
 		temp = subgroupShuffleUp(accum, step);                                                     \
 		accum += invocation_id >= step ? temp : 0;                                                 \
 	}

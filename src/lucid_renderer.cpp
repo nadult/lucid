@@ -116,13 +116,13 @@ static int subgroupSize(const VulkanDevice &device) {
 
 ShaderConfig getShaderConfig(VulkanDevice &device) {
 	ShaderConfig out;
-	auto warp_size = subgroupSize(device);
+	auto subgroup_size = subgroupSize(device);
 	auto &pinfo = device.physInfo();
-	out.predefined_macros.emplace_back("WARP_SIZE", toString(warp_size));
-	out.predefined_macros.emplace_back("WARP_SHIFT", toString(log2(warp_size)));
+	out.predefined_macros.emplace_back("SUBGROUP_SIZE", toString(subgroup_size));
+	out.predefined_macros.emplace_back("SUBGROUP_SHIFT", toString(log2(subgroup_size)));
 	out.predefined_macros.emplace_back(format("VENDOR_%", toUpper(toString(pinfo.vendor_id))), "1");
 
-	out.build_name = format("%_%", pinfo.vendor_id, warp_size);
+	out.build_name = format("%_%", pinfo.vendor_id, subgroup_size);
 
 	return out;
 }

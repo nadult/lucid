@@ -362,16 +362,16 @@ void shadeAndReduceSamples(uint hbid, uint sample_count, in out ReductionContext
 	vec3 out_color = ctx.out_color;
 	subgroupMemoryBarrierShared();
 
-	// TODO: simplify
 	for(uint i = 0; i < sample_count; i += HALFGROUP_SIZE) {
-		uint subgroup_id = LIX & HALFGROUP_MASK; // TODO: wrong name
-		uint value = s_buffer[buf_offset + subgroup_id];
+		uint invocation_id = LIX & HALFGROUP_MASK;
+		uint sample_offset = buf_offset + invocation_id;
+		uint value = s_buffer[sample_offset];
 
-		s_buffer[buf_offset + subgroup_id] = 0;
+		s_buffer[sample_offset] = 0;
 		subgroupMemoryBarrierShared();
 		uvec2 sample_s;
 
-		uint sample_id = i + subgroup_id;
+		uint sample_id = i + invocation_id;
 		if(sample_id < sample_count) {
 			uint sample_pixel_id = value & HALFGROUP_MASK;
 			uint tri_idx = value >> 8;
@@ -386,7 +386,7 @@ void shadeAndReduceSamples(uint hbid, uint sample_count, in out ReductionContext
 		}
 		subgroupMemoryBarrierShared();
 
-		uint pixel_bitmask = s_buffer[buf_offset + subgroup_id];
+		uint pixel_bitmask = s_buffer[sample_offset];
 		if(reduceSample(ctx, out_color, sample_s, pixel_bitmask))
 			break;
 		buf_offset += HALFGROUP_SIZE;

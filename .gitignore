@@ -1,0 +1,16 @@
+build/*
+/scenes
+/lucid
+/lucid_config.xml
+/temp
+/*.cap
+/*.data
+/*.exe
+/*.html
+/*.js
+/*.tga
+/*.wasm
+/windows/.vs
+/windows/build
+/data/spirv*
+*.vcxproj.user

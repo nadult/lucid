@@ -21,10 +21,6 @@
 #include "structures.glsl"
 #include "timers.glsl"
 
-// TODO: improve docs
-// Block: 8x8 pixels
-// Half-block: 8x4 pixels
-
 #extension GL_KHR_shader_subgroup_ballot : require
 #extension GL_KHR_shader_subgroup_shuffle_relative : require
 
@@ -60,7 +56,7 @@
 #define HBLOCK_COLS_MASK (HBLOCK_COLS - 1)
 
 #define NUM_BLOCKS (BLOCK_ROWS * BLOCK_ROWS)
-#define NUM_RBLOCKS (HBLOCK_COLS * HBLOCK_ROWS)
+#define NUM_HBLOCKS (HBLOCK_COLS * HBLOCK_ROWS)
 
 // half-group is a 32-thread subgroup; It has the same number of threads
 // needed to process all pixels within 8x4 half-block

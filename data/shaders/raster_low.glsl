@@ -14,7 +14,6 @@ DEBUG_SETUP(1, 11)
 
 layout(local_size_x = LSIZE) in;
 
-// TODO: too much mem used
 #define WORKGROUP_SCRATCH_SIZE (16 * 1024)
 #define WORKGROUP_SCRATCH_SHIFT 14
 
@@ -23,14 +22,13 @@ uint scratchBlockRowOffset(uint by) {
 	return (gl_WorkGroupID.x << WORKGROUP_SCRATCH_SHIFT) + by * (MAX_BLOCK_ROW_TRIS * 2);
 }
 
-// TODO: It could overlap with block row data
 uint scratchHalfBlockOffset(uint hbid) {
 	return (gl_WorkGroupID.x << WORKGROUP_SCRATCH_SHIFT) + 8 * 1024 + hbid * MAX_BLOCK_TRIS;
 }
 
 shared uint s_block_row_tri_count[BLOCK_ROWS];
 shared uint s_block_tri_count[NUM_BLOCKS];
-shared uint s_hblock_counts[NUM_RBLOCKS];
+shared uint s_hblock_counts[NUM_HBLOCKS];
 shared int s_promoted_bin_count;
 
 void generateRowTris(uint tri_idx) {
@@ -45,7 +43,6 @@ void generateRowTris(uint tri_idx) {
 	vec2 start = vec2(s_bin_pos.x, s_bin_pos.y + min_by * BLOCK_SIZE);
 	ScanlineParams scan = loadScanlineParamsRow(val0, val1, start);
 
-	// TODO: is it worth it to make this loop more work-efficient?
 	for(int by = min_by; by <= max_by; by++) {
 		uvec3 bits0 = rasterBinStep(scan);
 		uvec3 bits1 = rasterBinStep(scan);
@@ -76,8 +73,6 @@ void processQuads() {
 		generateRowTris(g_bin_tris[s_bin_tri_offset + i]);
 }
 
-// TODO: maybe process smaller amount of blocks at the same time?
-// smaller chance that it will leave cache
 void generateBlocks(uint bid) {
 	int lbid = int(LIX >> HALFGROUP_SHIFT);
 	uint by = bid >> BLOCK_ROWS_SHIFT, bx = bid & BLOCK_ROWS_MASK;
@@ -134,7 +129,6 @@ void generateBlocks(uint bid) {
 
 	frag_count = subgroupInclusiveAddFast32(frag_count);
 	if((LIX & HALFGROUP_MASK) == HALFGROUP_MASK) {
-		// TODO: separate tri_count & frag_count; use same counters in high & low?
 		uint hbid = halfBlockId(lbid + (bid & ~(NUM_HALFGROUPS - 1)));
 		uint v0 = frag_count & 0xffff, v1 = frag_count >> 16;
 		s_hblock_counts[hbid] = (v0 << 16) | tri_count;
@@ -188,7 +182,6 @@ void generateBlocks(uint bid) {
 
 		uint seg_offset0 = cur_offset & 0xff, seg_offset1 = (cur_offset & 0xff0000) >> 16;
 		uint seg_high0 = (cur_offset & 0xf00) << 20, seg_high1 = (cur_offset & 0x0f000000) << 4;
-		// TODO: optimize this?
 		g_scratch_64[dst_offset0 + i] = uvec2(tri_idx_shifted | seg_offset0, bits.x | seg_high0);
 		g_scratch_64[dst_offset1 + i] = uvec2(tri_idx_shifted | seg_offset1, bits.y | seg_high1);
 	}
@@ -239,7 +232,7 @@ void rasterBin() {
 	groupMemoryBarrier();
 	UPDATE_TIMER(1);
 
-	for(uint hbid = LIX >> HALFGROUP_SHIFT; hbid < NUM_RBLOCKS; hbid += NUM_HALFGROUPS) {
+	for(uint hbid = LIX >> HALFGROUP_SHIFT; hbid < NUM_HBLOCKS; hbid += NUM_HALFGROUPS) {
 		ReductionContext context;
 		initReduceSamples(context);
 		//initVisualizeSamples();
@@ -270,7 +263,7 @@ void rasterBin() {
 		UPDATE_TIMER(4);
 	}
 
-	if(LIX >= LSIZE - NUM_RBLOCKS) {
+	if(LIX >= LSIZE - NUM_HBLOCKS) {
 		uint counts = s_hblock_counts[(LSIZE - 1) - LIX];
 		updateStats(counts >> 16, counts & 0xffff);
 	}
@@ -281,7 +274,7 @@ void rasterBin() {
 	barrier(); // TODO: stall (10.5%, conference)
 }
 
-// TODO: consider removing persistent threads and using qcquire/unacquire for storage
+// TODO: consider removing persistent threads and using acquire/unacquire for storage
 void main() {
 	INIT_TIMERS();
 	initBinLoader(BIN_LEVEL_LOW);

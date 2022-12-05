@@ -39,8 +39,8 @@ uint scratchHalfBlockTrisOffset(uint hbid) {
 }
 
 shared uint s_hblock_row_tri_counts[HBLOCK_ROWS];
-shared int s_hblock_tri_counts[NUM_RBLOCKS];
-shared uint s_hblock_frag_counts[NUM_RBLOCKS];
+shared int s_hblock_tri_counts[NUM_HBLOCKS];
+shared uint s_hblock_frag_counts[NUM_HBLOCKS];
 
 shared uint s_hblock_group_size;
 shared uint s_hblock_group_shift;
@@ -58,7 +58,6 @@ void generateRowTris(uint tri_idx) {
 
 	uint dst_offset = scratchHalfBlockRowTrisOffset(0);
 
-	// TODO: is it worth it to make this loop more work-efficient?
 	for(int rby = min_rby; rby <= max_rby; rby++) {
 		uvec3 bits = rasterBinStep(scan);
 		uint bx_mask = bits.z;
@@ -105,7 +104,7 @@ void computeRBlockGroups() {
 	// Accumulating per hblock-counts for each hblock-row
 	// Note: these are only estimates; very good estimates, but in some cases a single
 	// triangle can have wide holes between pixels (because middle pixels don't hit pixel centers)
-	if(LIX < NUM_RBLOCKS) {
+	if(LIX < NUM_HBLOCKS) {
 		uint rbx = LIX & HBLOCK_COLS_MASK;
 		int value = s_hblock_tri_counts[LIX], temp;
 		if(HBLOCK_COLS >= 2)
@@ -139,15 +138,12 @@ void computeRBlockGroups() {
 	}
 }
 
-// TODO: maybe process smaller amount of blocks at the same time?
-// smaller chance that it will leave cache
 void generateRBlocks(uint start_hbid) {
 	uint group_size = s_hblock_group_size * HALFGROUP_SIZE;
 	uint group_shift = s_hblock_group_shift;
 	uint group_mask = group_size - 1;
 	uint group_thread = LIX & group_mask;
 
-	// TODO: better names for indices
 	uint group_hbid = LIX >> (HALFGROUP_SHIFT + group_shift);
 	uint hbid = start_hbid + group_hbid;
 
@@ -283,7 +279,7 @@ void visualizeBlockCounts(uint hbid, ivec2 pixel_pos) {
 
 void rasterBin() {
 	START_TIMER();
-	if(LIX < NUM_RBLOCKS) {
+	if(LIX < NUM_HBLOCKS) {
 		s_hblock_tri_counts[LIX] = 0;
 		if(LIX < HBLOCK_ROWS)
 			s_hblock_row_tri_counts[LIX] = 0;
@@ -303,7 +299,7 @@ void rasterBin() {
 	}
 	groupMemoryBarrier();
 	barrier();
-	if(LIX < NUM_RBLOCKS)
+	if(LIX < NUM_HBLOCKS)
 		updateStats(s_hblock_frag_counts[LIX], s_hblock_tri_counts[LIX]);
 
 	int hbid = int(LIX >> HALFGROUP_SHIFT);

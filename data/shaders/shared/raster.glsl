@@ -10,10 +10,10 @@
 // NOTE: converting integer multiplications to shifts does not increase perf
 
 // Variable naming:
-//   bid: block (8x8) id; In 32x32 bin we have 4 x 4 = 16 blocks
-//  rbid: raster block id: either 8x4 or 8x8
+//   bid:      block (8x8) id; In 32x32 bin we have 4 x 4 = 16 blocks
+//  hbid: half-block (8x4) id; In 32x32 bin we have 4 x 8 = 32 half-blocks
 //  lbid: local block id (range: 0 up to NUM_WARPS - 1)
-// lrbid: local raster block id
+// lhbid: local half-block id
 // Each block has 64 pixels, so we need 2 warps to process all pixels within a single block
 
 #include "compute_funcs.glsl"
@@ -177,14 +177,14 @@ uint rasterBlockDepth(vec2 cpos, uint tri_idx) {
 	return uint(depth);
 }
 
-ivec2 renderBlockPos(uint rbid) {
-	uint rbx = rbid & RBLOCK_COLS_MASK;
-	uint rby = rbid >> RBLOCK_COLS_SHIFT;
+ivec2 renderBlockPos(uint hbid) {
+	uint rbx = hbid & RBLOCK_COLS_MASK;
+	uint rby = hbid >> RBLOCK_COLS_SHIFT;
 	return ivec2(rbx, rby);
 }
 
-uint blockIdFromRender(uint rbid) {
-	ivec2 pos = renderBlockPos(rbid);
+uint blockIdFromRender(uint hbid) {
+	ivec2 pos = renderBlockPos(hbid);
 	return pos.x + ((pos.y >> 1) << RBLOCK_COLS_SHIFT);
 }
 
@@ -196,10 +196,10 @@ uint blockIdToRender(uint bid) {
 
 uvec2 renderBlockShift() { return uvec2(RBLOCK_WIDTH_SHIFT, RBLOCK_HEIGHT_SHIFT); }
 
-ivec2 renderBlockPixelPos(uint rbid) {
+ivec2 renderBlockPixelPos(uint hbid) {
 	ivec2 pix_pos =
 		ivec2(LIX & (RBLOCK_WIDTH - 1), (LIX >> RBLOCK_WIDTH_SHIFT) & (RBLOCK_HEIGHT - 1));
-	return (renderBlockPos(rbid) << renderBlockShift()) + pix_pos;
+	return (renderBlockPos(hbid) << renderBlockShift()) + pix_pos;
 }
 
 uint swap(uint x, int mask, bool dir) {
@@ -359,9 +359,9 @@ void unpackSamples(inout uint control_var, uint src_offset) {
 	control_var = ((control_var & 0xfffff000) + 0x10000000) | i;
 }
 
-void shadeAndReduceSamples(uint rbid, uint sample_count, in out ReductionContext ctx) {
+void shadeAndReduceSamples(uint hbid, uint sample_count, in out ReductionContext ctx) {
 	uint buf_offset = shadingBufferOffset();
-	ivec2 rblock_pos = (renderBlockPos(rbid) << renderBlockShift()) + s_bin_pos;
+	ivec2 rblock_pos = (renderBlockPos(hbid) << renderBlockShift()) + s_bin_pos;
 	vec3 out_color = ctx.out_color;
 	subgroupMemoryBarrierShared();
 

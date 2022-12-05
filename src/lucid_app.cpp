@@ -441,6 +441,14 @@ void LucidApp::doMenu() {
 		m_is_picking_block = true;
 	}
 	ImGui::Checkbox("Merge introspected masks", &m_merge_masks);*/
+
+	if(m_lucid_renderer && scene->numQuads() > m_lucid_renderer->maxSceneQuads()) {
+		auto text = format(
+			"\nScene has too many quads (%K, max:%K)\nfor Lucid rasterizer (Not enough GPU memory)",
+			scene->numQuads() / 1024, m_lucid_renderer->maxSceneQuads() / 1024);
+		ImGui::TextColored((ImVec4)FColor(ColorId::red), "%s", text.c_str());
+	}
+
 	ImGui::End();
 
 	if(m_show_stats && scene)
@@ -600,8 +608,10 @@ void LucidApp::drawScene() {
 	clearScreen(ctx);
 	if(m_rendering_mode != RenderingMode::lucid)
 		m_simple_renderer->render(ctx, m_wireframe_mode).check();
-	if(m_rendering_mode != RenderingMode::simple)
-		m_lucid_renderer->render(ctx);
+	if(m_rendering_mode != RenderingMode::simple) {
+		if(setup.scene->numQuads() <= m_lucid_renderer->maxSceneQuads())
+			m_lucid_renderer->render(ctx);
+	}
 	m_scene_frame_id++;
 }
 

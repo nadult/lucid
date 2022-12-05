@@ -46,6 +46,9 @@ class LucidRenderer {
 	int blockSize() const { return m_block_size; }
 	int subgroupSize() const { return m_subgroup_size; }
 
+	int maxVisibleQuads() const { return m_max_visible_quads; }
+	int maxSceneQuads() const { return m_max_visible_quads * 5 / 2; }
+
   private:
 	Ex<> uploadInstances(const Context &);
 	Ex<> setupInputData(const Context &);

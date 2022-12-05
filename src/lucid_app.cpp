@@ -61,8 +61,8 @@ LucidApp::LucidApp(VWindowRef window, VDeviceRef device)
 	sc_setup.vulkan_version = device->version();
 	sc_setup.source_dirs.emplace_back(dataPath("shaders"));
 	sc_setup.spirv_cache_dir = dataPath(format("spirv_%", shader_config.build_name));
-	sc_setup.generate_assembly = true;
 #ifndef NDEBUG
+	sc_setup.generate_assembly = true;
 	sc_setup.debug_info = true;
 #endif
 	m_shader_compiler.emplace(sc_setup);

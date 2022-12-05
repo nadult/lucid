@@ -28,6 +28,27 @@ layout(set = 1, binding = 10) uniform sampler2D transparent_texture;
 // TODO: separate opaque and transparent objects, draw opaque objects first to texture
 // then read it and use depth to optimize drawing
 
+// Basic rasterization statistics
+// Stat 0: num fragments
+// Stat 1: num half-block-tris
+// Stat 2: num invalid pixels
+shared uint s_stats[STATS_COUNT];
+
+void updateStats(uint num_fragments, uint num_hblocks) {
+	atomicAdd(s_stats[0], num_fragments);
+	atomicAdd(s_stats[1], num_hblocks);
+}
+
+void initStats() {
+	if(LIX < STATS_COUNT)
+		s_stats[LIX] = 0;
+}
+
+void commitStats() {
+	if(LIX < STATS_COUNT)
+		atomicAdd(g_info.stats[LIX], s_stats[LIX]);
+}
+
 shared ivec2 s_bin_pos;
 
 void outputPixel(ivec2 pixel_pos, vec4 color) {
@@ -233,6 +254,7 @@ bool reduceSample(inout ReductionContext ctx, inout vec3 out_color, uvec2 sample
 						swap(ctx, i - 1, i);
 #ifdef VISUALIZE_ERRORS
 					if(i == RC_DEPTH_SIZE) {
+						atomicAdd(s_stats[2], 1);
 						out_color = vec3(1.0, 0.0, 0.0);
 						ctx.out_trans = 0.0;
 						continue;
@@ -286,25 +308,6 @@ vec4 finishReduceSamples(ReductionContext ctx) {
 
 	out_color += ctx.out_trans * u_config.background_color.xyz;
 	return vec4(SATURATE(out_color), 1.0);
-}
-
-// Basic rasterization statistics
-#define NUM_STATS 2
-shared uint s_stats[NUM_STATS];
-
-void updateStats(uint num_fragments, uint num_rblocks) {
-	atomicAdd(s_stats[0], num_fragments);
-	atomicAdd(s_stats[1], num_rblocks);
-}
-
-void initStats() {
-	if(LIX < NUM_STATS)
-		s_stats[LIX] = 0;
-}
-
-void commitStats() {
-	if(LIX < NUM_STATS)
-		atomicAdd(g_info.stats[LIX], s_stats[LIX]);
 }
 
 #endif

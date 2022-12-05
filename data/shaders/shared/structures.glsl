@@ -81,7 +81,7 @@ struct LucidInfo {
 	int dispatcher_first_batch[2][LUCID_INFO_MAX_DISPATCHES];
 	int dispatcher_num_batches[2][LUCID_INFO_MAX_DISPATCHES];
 
-	int temp[66];
+	int temp[64];
 };
 
 // This structure keeps uniform data passed to Lucid shaders

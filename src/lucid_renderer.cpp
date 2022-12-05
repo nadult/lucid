@@ -742,6 +742,7 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 
 	uint num_fragments = info.stats[0];
 	uint num_hblocks = info.stats[1];
+	uint num_invalid_pixels = info.stats[2];
 
 	auto fragment_info = stdFormat(
 		"%.3f avg fragments / pixel\n%.3f avg fragments / half-block-tri",
@@ -762,6 +763,12 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 		{"fragments", formatLarge(num_fragments), fragment_info},
 	};
 
+	if(m_opts & Opt::visualize_errors) {
+		auto invalid_info = stdFormat("%.3f %% total pixels invalid",
+									  double(num_invalid_pixels) * 100.0 / (m_size.x * m_size.y));
+		basic_rows.emplace_back("invalid pixels", formatLarge(num_invalid_pixels), invalid_info);
+	}
+
 	if(!allOf(info.temp, 0)) {
 		int last = arraySize(info.temp) - 1;
 		while(last > 0 && info.temp[last] == 0)
@@ -772,8 +779,6 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 
 	vector<StatsRow> limit_rows = {{"max visible quads", formatLarge(m_max_visible_quads)},
 								   {"max_dispatches", formatLarge(m_max_dispatches)}};
-
-	// TODO: add better stats once rasterizer is working on all levels
 
 	if(setup_timers)
 		out.emplace_back(move(setup_timers), "quad_setup timers", 130);

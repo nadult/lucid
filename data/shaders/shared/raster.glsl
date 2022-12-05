@@ -164,11 +164,11 @@ uint rasterHalfBlockNumFrags(uint tri_mins, uint tri_maxs, int startx) {
 	return count[0] + count[1] + count[2] + count[3];
 }
 
-uint rasterBlockDepth(vec2 cpos, uint tri_idx) {
+uint rasterBlockDepth(vec2 cpos, uint tri_idx, float depth_range) {
 	uint depth_offset = STORAGE_TRI_DEPTH_OFFSET + tri_idx;
 	vec3 depth_eq = uintBitsToFloat(g_uvec4_storage[depth_offset].xyz);
 	float ray_pos = depth_eq.x * cpos.x + (depth_eq.y * cpos.y + depth_eq.z);
-	float depth = 0xffffe * SATURATE(inversesqrt(ray_pos + 1)); // 20 bits
+	float depth = depth_range * SATURATE(inversesqrt(ray_pos + 1));
 	return uint(depth);
 }
 

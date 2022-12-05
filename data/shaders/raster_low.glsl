@@ -117,12 +117,13 @@ void generateBlocks(uint bid) {
 					rasterHalfBlockCentroid(tri_mins.y, tri_maxs.y, startx, num_frags.y);
 
 		uint num_block_frags = num_frags.x + num_frags.y;
-		uint depth = rasterBlockDepth(cpos * (0.5 / float(num_block_frags)) + block_pos, tri_idx);
 		if(num_block_frags == 0) // This means that bx_mask is invalid
 			DEBUG_RECORD(0, 0, 0, 0);
-		frag_count += num_frags.x | (num_frags.y << 16);
 
-		// 12 bits for tile-tri index, 20 bits for depth
+		// 20-bit depth
+		uint depth =
+			rasterBlockDepth(cpos * (0.5 / float(num_block_frags)) + block_pos, tri_idx, 0xffffe);
+		frag_count += num_frags.x | (num_frags.y << 16);
 		s_buffer[buf_offset + i] = row_tri_idx | (depth << 12);
 	}
 	subgroupMemoryBarrier();

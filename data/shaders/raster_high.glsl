@@ -178,9 +178,11 @@ void generateRBlocks(uint start_hbid) {
 
 		if(num_frags == 0) // This means that bx_mask is invalid
 			DEBUG_RECORD(0, 0, 0, 0);
-		// TODO: make depth 18 bit from the start
-		uint depth = rasterBlockDepth(cpos * (0.5 / float(num_frags)) + block_pos, tri_idx);
-		s_buffer[buf_offset + i] = row_tri_idx | ((depth >> 2) << 14);
+
+		// 18-bit depth
+		uint depth =
+			rasterBlockDepth(cpos * (0.5 / float(num_frags)) + block_pos, tri_idx, 0x7fffe);
+		s_buffer[buf_offset + i] = row_tri_idx | (depth << 14);
 	}
 	barrier();
 	sortBuffer(tri_count, s_max_sort_rcount, buf_offset, group_size, group_thread, true);

@@ -43,26 +43,26 @@
 #define BLOCK_ROWS_SHIFT (BIN_SHIFT - BLOCK_SHIFT)
 #define BLOCK_ROWS_MASK (BLOCK_ROWS - 1)
 
-#define RBLOCK_WIDTH 8
-#define RBLOCK_HEIGHT 4
+#define HBLOCK_WIDTH 8
+#define HBLOCK_HEIGHT 4
 
-#define RBLOCK_WIDTH_SHIFT 3
-#define RBLOCK_HEIGHT_SHIFT 2
+#define HBLOCK_WIDTH_SHIFT 3
+#define HBLOCK_HEIGHT_SHIFT 2
 
 #if WARP_SIZE != 32 && WARP_SIZE != 64
 #error "Currently only 32 & 64 warp size is supported"
 #endif
 
-#define RBLOCK_ROWS (BIN_SIZE / RBLOCK_HEIGHT)
-#define RBLOCK_ROWS_SHIFT (BIN_SHIFT - RBLOCK_HEIGHT_SHIFT)
-#define RBLOCK_ROWS_MASK (RBLOCK_ROWS - 1)
+#define HBLOCK_ROWS (BIN_SIZE / HBLOCK_HEIGHT)
+#define HBLOCK_ROWS_SHIFT (BIN_SHIFT - HBLOCK_HEIGHT_SHIFT)
+#define HBLOCK_ROWS_MASK (HBLOCK_ROWS - 1)
 
-#define RBLOCK_COLS (BIN_SIZE / RBLOCK_WIDTH)
-#define RBLOCK_COLS_SHIFT (BIN_SHIFT - RBLOCK_WIDTH_SHIFT)
-#define RBLOCK_COLS_MASK (RBLOCK_COLS - 1)
+#define HBLOCK_COLS (BIN_SIZE / HBLOCK_WIDTH)
+#define HBLOCK_COLS_SHIFT (BIN_SHIFT - HBLOCK_WIDTH_SHIFT)
+#define HBLOCK_COLS_MASK (HBLOCK_COLS - 1)
 
 #define NUM_BLOCKS (BLOCK_ROWS * BLOCK_ROWS)
-#define NUM_RBLOCKS (RBLOCK_COLS * RBLOCK_ROWS)
+#define NUM_RBLOCKS (HBLOCK_COLS * HBLOCK_ROWS)
 
 // TODO: RBLOCK zamieniæ na half block; raster_subgroup lepsza nazwa tez
 #define RASTER_SUBGROUP_MASK 31
@@ -124,8 +124,8 @@ uvec3 rasterBinStep(inout ScanlineParams scan) {
 	scan.min += scan.step, scan.max += scan.step;
 
 #define BX_MASK_ROW(id)                                                                            \
-	((((1 << RBLOCK_COLS) - 1) << (min##id >> RBLOCK_WIDTH_SHIFT)) &                               \
-	 (((1 << RBLOCK_COLS) - 1) >> (RBLOCK_COLS_MASK - (max##id >> RBLOCK_WIDTH_SHIFT))))
+	((((1 << HBLOCK_COLS) - 1) << (min##id >> HBLOCK_WIDTH_SHIFT)) &                               \
+	 (((1 << HBLOCK_COLS) - 1) >> (HBLOCK_COLS_MASK - (max##id >> HBLOCK_WIDTH_SHIFT))))
 	SCAN_STEP(0);
 	SCAN_STEP(1);
 	SCAN_STEP(2);
@@ -177,29 +177,29 @@ uint rasterBlockDepth(vec2 cpos, uint tri_idx) {
 	return uint(depth);
 }
 
-ivec2 renderBlockPos(uint hbid) {
-	uint rbx = hbid & RBLOCK_COLS_MASK;
-	uint rby = hbid >> RBLOCK_COLS_SHIFT;
+ivec2 halfBlockPos(uint hbid) {
+	uint rbx = hbid & HBLOCK_COLS_MASK;
+	uint rby = hbid >> HBLOCK_COLS_SHIFT;
 	return ivec2(rbx, rby);
 }
 
-uint blockIdFromRender(uint hbid) {
-	ivec2 pos = renderBlockPos(hbid);
-	return pos.x + ((pos.y >> 1) << RBLOCK_COLS_SHIFT);
+uint fullBlockId(uint hbid) {
+	ivec2 pos = halfBlockPos(hbid);
+	return pos.x + ((pos.y >> 1) << HBLOCK_COLS_SHIFT);
 }
 
-uint blockIdToRender(uint bid) {
-	uint bx = bid & RBLOCK_COLS_MASK;
-	uint by = bid >> RBLOCK_COLS_SHIFT;
-	return bx + ((by * 2) << RBLOCK_COLS_SHIFT);
+uint halfBlockId(uint bid) {
+	uint bx = bid & HBLOCK_COLS_MASK;
+	uint by = bid >> HBLOCK_COLS_SHIFT;
+	return bx + ((by * 2) << HBLOCK_COLS_SHIFT);
 }
 
-uvec2 renderBlockShift() { return uvec2(RBLOCK_WIDTH_SHIFT, RBLOCK_HEIGHT_SHIFT); }
+uvec2 halfBlockShift() { return uvec2(HBLOCK_WIDTH_SHIFT, HBLOCK_HEIGHT_SHIFT); }
 
-ivec2 renderBlockPixelPos(uint hbid) {
+ivec2 halfBlockPixelPos(uint hbid) {
 	ivec2 pix_pos =
-		ivec2(LIX & (RBLOCK_WIDTH - 1), (LIX >> RBLOCK_WIDTH_SHIFT) & (RBLOCK_HEIGHT - 1));
-	return (renderBlockPos(hbid) << renderBlockShift()) + pix_pos;
+		ivec2(LIX & (HBLOCK_WIDTH - 1), (LIX >> HBLOCK_WIDTH_SHIFT) & (HBLOCK_HEIGHT - 1));
+	return (halfBlockPos(hbid) << halfBlockShift()) + pix_pos;
 }
 
 uint swap(uint x, int mask, bool dir) {
@@ -296,7 +296,7 @@ uint shadingBufferOffset() {
 uint initUnpackSamples(uint tri_count, uint frag_count) {
 	bool high_tri_density = highTriDensity(tri_count, frag_count);
 	uint subgroup_id = LIX & RASTER_SUBGROUP_MASK;
-	return (high_tri_density ? subgroup_id | 0x08000000 : subgroup_id >> RBLOCK_HEIGHT_SHIFT) |
+	return (high_tri_density ? subgroup_id | 0x08000000 : subgroup_id >> HBLOCK_HEIGHT_SHIFT) |
 		   (tri_count << 12);
 }
 
@@ -330,11 +330,11 @@ void unpackSamples(inout uint control_var, uint src_offset) {
 			}
 		}
 	} else {
-		uint y = LIX & (RBLOCK_HEIGHT - 1), row_shift = (y & 3) * 7;
+		uint y = LIX & (HBLOCK_HEIGHT - 1), row_shift = (y & 3) * 7;
 		uint mask1 = y >= 1 ? ~0u : 0, mask2 = y >= 2 ? ~0u : 0;
 
 		// TODO: najpierw wyznaczyæ offsety a póŸniej dopiero sample?
-		for(; i < tri_count; i += RASTER_SUBGROUP_SIZE / RBLOCK_HEIGHT) {
+		for(; i < tri_count; i += RASTER_SUBGROUP_SIZE / HBLOCK_HEIGHT) {
 			uvec2 tri_block_data = g_scratch_64[src_offset + i];
 			uint tri_data = tri_block_data.y, tri_info = tri_block_data.x;
 			uint seg_id = tri_data >> 28;
@@ -361,7 +361,7 @@ void unpackSamples(inout uint control_var, uint src_offset) {
 
 void shadeAndReduceSamples(uint hbid, uint sample_count, in out ReductionContext ctx) {
 	uint buf_offset = shadingBufferOffset();
-	ivec2 rblock_pos = (renderBlockPos(hbid) << renderBlockShift()) + s_bin_pos;
+	ivec2 hblock_pos = (halfBlockPos(hbid) << halfBlockShift()) + s_bin_pos;
 	vec3 out_color = ctx.out_color;
 	subgroupMemoryBarrierShared();
 
@@ -378,7 +378,7 @@ void shadeAndReduceSamples(uint hbid, uint sample_count, in out ReductionContext
 		if(sample_id < sample_count) {
 			uint sample_pixel_id = value & RASTER_SUBGROUP_MASK;
 			uint tri_idx = value >> 8;
-			ivec2 pix_pos = rblock_pos + ivec2(sample_pixel_id & 7, sample_pixel_id >> 3);
+			ivec2 pix_pos = hblock_pos + ivec2(sample_pixel_id & 7, sample_pixel_id >> 3);
 			float sample_depth;
 			uint sample_color = shadeSample(pix_pos, tri_idx, sample_depth);
 			sample_s = uvec2(sample_color, floatBitsToUint(sample_depth));
@@ -417,8 +417,8 @@ void visualizeSamples(uint sample_count) {
 }
 
 void finishVisualizeSamples(ivec2 pixel_pos) {
-	uint pixel_id = (pixel_pos.x & (RBLOCK_WIDTH - 1)) +
-					((pixel_pos.y & (RBLOCK_HEIGHT - 1)) << RBLOCK_WIDTH_SHIFT);
+	uint pixel_id = (pixel_pos.x & (HBLOCK_WIDTH - 1)) +
+					((pixel_pos.y & (HBLOCK_HEIGHT - 1)) << HBLOCK_WIDTH_SHIFT);
 	uint value = s_vis_pixels[(LIX & ~RASTER_SUBGROUP_MASK) + pixel_id];
 	vec3 color = gradientColor(value, uvec4(8, 32, 128, 1024));
 	outputPixel(pixel_pos, vec4(SATURATE(color), 1.0));

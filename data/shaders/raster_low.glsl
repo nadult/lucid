@@ -30,7 +30,7 @@ uint scratchHalfBlockOffset(uint hbid) {
 
 shared uint s_block_row_tri_count[BLOCK_ROWS];
 shared uint s_block_tri_count[NUM_BLOCKS];
-shared uint s_rblock_counts[NUM_RBLOCKS];
+shared uint s_hblock_counts[NUM_RBLOCKS];
 shared int s_promoted_bin_count;
 
 void generateRowTris(uint tri_idx) {
@@ -135,10 +135,10 @@ void generateBlocks(uint bid) {
 	frag_count = subgroupInclusiveAddFast32(frag_count);
 	if((LIX & RASTER_SUBGROUP_MASK) == RASTER_SUBGROUP_MASK) {
 		// TODO: separate tri_count & frag_count; use same counters in high & low?
-		uint hbid = blockIdToRender(lbid + (bid & ~(NUM_RASTER_SUBGROUPS - 1)));
+		uint hbid = halfBlockId(lbid + (bid & ~(NUM_RASTER_SUBGROUPS - 1)));
 		uint v0 = frag_count & 0xffff, v1 = frag_count >> 16;
-		s_rblock_counts[hbid] = (v0 << 16) | tri_count;
-		s_rblock_counts[hbid + RBLOCK_COLS] = (v1 << 16) | tri_count;
+		s_hblock_counts[hbid] = (v0 << 16) | tri_count;
+		s_hblock_counts[hbid + HBLOCK_COLS] = (v1 << 16) | tri_count;
 	}
 
 	if(tri_count > RC_COLOR_SIZE) {
@@ -163,7 +163,7 @@ void generateBlocks(uint bid) {
 		}
 #endif
 
-	uint hbid0 = blockIdToRender(bid), hbid1 = hbid0 + RBLOCK_COLS;
+	uint hbid0 = halfBlockId(bid), hbid1 = hbid0 + HBLOCK_COLS;
 	uint dst_offset0 = scratchHalfBlockOffset(hbid0);
 	uint dst_offset1 = scratchHalfBlockOffset(hbid1);
 
@@ -196,9 +196,9 @@ void generateBlocks(uint bid) {
 }
 
 void visualizeBlockCounts(uint hbid, ivec2 pixel_pos) {
-	uint frag_count = s_rblock_counts[hbid] >> 16;
-	uint tri_count = s_rblock_counts[hbid] & 0xffff;
-	//tri_count = s_block_tri_count[blockIdFromRender(hbid)];
+	uint frag_count = s_hblock_counts[hbid] >> 16;
+	uint tri_count = s_hblock_counts[hbid] & 0xffff;
+	//tri_count = s_block_tri_count[fullBlockId(hbid)];
 	//tri_count = s_block_row_tri_count[pixel_pos.y >> BLOCK_SHIFT];
 	//tri_count = s_bin_quad_count * 2 + s_bin_tri_count;
 
@@ -246,7 +246,7 @@ void rasterBin() {
 		initReduceSamples(context);
 		//initVisualizeSamples();
 
-		uint temp_counts = s_rblock_counts[hbid];
+		uint temp_counts = s_hblock_counts[hbid];
 		int frag_count = int(temp_counts >> 16);
 		uint control_var = initUnpackSamples(temp_counts & 0xffff, temp_counts >> 16);
 		while(frag_count > 0) {
@@ -265,7 +265,7 @@ void rasterBin() {
 			frag_count -= SEGMENT_SIZE;
 		}
 
-		ivec2 pixel_pos = renderBlockPixelPos(hbid);
+		ivec2 pixel_pos = halfBlockPixelPos(hbid);
 		outputPixel(pixel_pos, finishReduceSamples(context));
 		//finishVisualizeSamples(pixel_pos);
 		//visualizeBlockCounts(hbid, pixel_pos);
@@ -273,7 +273,7 @@ void rasterBin() {
 	}
 
 	if(LIX >= LSIZE - NUM_RBLOCKS) {
-		uint counts = s_rblock_counts[(LSIZE - 1) - LIX];
+		uint counts = s_hblock_counts[(LSIZE - 1) - LIX];
 		updateStats(counts >> 16, counts & 0xffff);
 	}
 

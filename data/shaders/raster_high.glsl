@@ -13,8 +13,8 @@
 DEBUG_SETUP(1, 11)
 
 // Basic maximum value of tris per rblock
-#define MAX_RBLOCK_TRIS0 (8 * WARP_SIZE)
-#define MAX_RBLOCK_TRIS0_SHIFT (WARP_SHIFT + 3)
+#define MAX_RBLOCK_TRIS0 256
+#define MAX_RBLOCK_TRIS0_SHIFT 8
 
 #define MAX_GROUP_SIZE 16
 #define MAX_GROUP_SHIFT 4
@@ -37,8 +37,7 @@ uint scratch32RBlockRowTrisOffset(uint rby) {
 }
 
 uint scratch64RBlockRowTrisOffset(uint rby) {
-	return (gl_WorkGroupID.x << WORKGROUP_SCRATCH_SHIFT) +
-		   rby * (MAX_RBLOCK_ROW_TRIS * (RBLOCK_HEIGHT == 8 ? 2 : 1));
+	return (gl_WorkGroupID.x << WORKGROUP_SCRATCH_SHIFT) + rby * MAX_RBLOCK_ROW_TRIS;
 }
 
 uint scratchRasterBlockTrisOffset(uint rbid) {
@@ -50,10 +49,6 @@ shared uint s_rblock_row_tri_counts[RBLOCK_ROWS];
 shared int s_rblock_tri_counts[NUM_RBLOCKS];
 shared uint s_rblock_frag_counts[NUM_RBLOCKS];
 
-shared uint s_rblock_max_tri_counts;
-
-// How many warps do we need to process single render-block in generateRBlocks ?
-// Acceptable values: 1, 2, 4, 8; More: trouble :(
 shared uint s_rblock_group_size;
 shared uint s_rblock_group_shift;
 shared uint s_max_sort_rcount;
@@ -73,14 +68,8 @@ void generateRowTris(uint tri_idx) {
 
 	// TODO: is it worth it to make this loop more work-efficient?
 	for(int rby = min_rby; rby <= max_rby; rby++) {
-#if RBLOCK_HEIGHT == 8
-		uvec3 bits0 = rasterBinStep(scan);
-		uvec3 bits1 = rasterBinStep(scan);
-		uint bx_mask = bits0.z | bits1.z;
-#else
 		uvec3 bits = rasterBinStep(scan);
 		uint bx_mask = bits.z;
-#endif
 		if(bx_mask == 0)
 			continue;
 
@@ -97,17 +86,10 @@ void generateRowTris(uint tri_idx) {
 			return;
 		}
 
-#if RBLOCK_HEIGHT == 8
-		uint roffset = row_tri_idx + rby * (MAX_RBLOCK_ROW_TRIS * 2);
-		g_scratch_64[dst_offset_64 + roffset] = uvec2(bits0.x | (bx_mask << 24), bits1.x);
-		g_scratch_64[dst_offset_64 + roffset + MAX_RBLOCK_ROW_TRIS] =
-			uvec2(bits0.y | ((tri_idx & 0xfff) << 20), bits1.y | ((tri_idx & 0xfff000) << 8));
-#else
 		uint roffset = row_tri_idx + rby * MAX_RBLOCK_ROW_TRIS;
 		g_scratch_32[dst_offset_32 + roffset] = bx_mask;
 		g_scratch_64[dst_offset_64 + roffset] =
 			uvec2(bits.x | ((tri_idx & 0xfff) << 20), bits.y | ((tri_idx & 0xfff000) << 8));
-#endif
 	}
 }
 
@@ -144,7 +126,6 @@ void computeRBlockGroups() {
 		s_rblock_tri_counts[LIX] = 0;
 		uint max_value = subgroupMax_(uint(value), NUM_RASTER_SUBGROUPS);
 		if(LIX == 0) {
-			s_rblock_max_tri_counts = max_value;
 			// rcount: count rounded up to next power of 2, minimum: 32
 			uint rcount =
 				(max_value & (max_value - 1)) == 0 ? max_value : (2 << findMSB(max_value));
@@ -169,14 +150,13 @@ void computeRBlockGroups() {
 // TODO: maybe process smaller amount of blocks at the same time?
 // smaller chance that it will leave cache
 void generateRBlocks(uint start_rbid) {
-	uint group_size = s_rblock_group_size * WARP_SIZE;
+	uint group_size = s_rblock_group_size * RASTER_SUBGROUP_SIZE;
 	uint group_shift = s_rblock_group_shift;
 	uint group_mask = group_size - 1;
 	uint group_thread = LIX & group_mask;
-	const uint mini_offset = BASE_BUFFER_SIZE;
 
 	// TODO: better names for indices
-	uint group_rbid = LIX >> (WARP_SHIFT + group_shift);
+	uint group_rbid = LIX >> (RASTER_SUBGROUP_SHIFT + group_shift);
 	uint rbid = start_rbid + group_rbid;
 
 	uvec2 rblock_pos = renderBlockPos(rbid);
@@ -187,10 +167,9 @@ void generateRBlocks(uint start_rbid) {
 	uint src_offset_64 = scratch64RBlockRowTrisOffset(rblock_pos.y);
 
 	// Filling s_buffer with tri indices
-	uint bx_bits_mask = 1u << ((RBLOCK_HEIGHT == 8 ? 24 : 0) + rblock_pos.x);
+	uint bx_bits_mask = 1u << rblock_pos.x;
 	for(uint i = group_thread; i < tri_count; i += group_size) {
-		uint bx_bits = RBLOCK_HEIGHT == 8 ? g_scratch_64[src_offset_64 + i].x :
-											g_scratch_32[src_offset_32 + i];
+		uint bx_bits = g_scratch_32[src_offset_32 + i];
 		if((bx_bits & bx_bits_mask) != 0) {
 			uint tri_offset = atomicAdd(s_rblock_tri_counts[rbid], 1);
 			s_buffer[buf_offset + tri_offset] = i;
@@ -202,44 +181,28 @@ void generateRBlocks(uint start_rbid) {
 	tri_count = s_rblock_tri_counts[rbid];
 	int startx = int(rblock_pos.x << RBLOCK_WIDTH_SHIFT);
 	vec2 block_pos = vec2(rblock_pos << renderBlockShift()) + vec2(s_bin_pos);
-	const uint rblock_tri_mask = RBLOCK_HEIGHT == 8 ? 0x1fff : 0xfff;
 
-	uint frag_count = 0;
 	for(uint i = group_thread; i < tri_count; i += group_size) {
 		uint row_tri_idx = s_buffer[buf_offset + i];
 		uint num_frags;
 
-#if RBLOCK_HEIGHT == 8
-		uvec2 tri_mins = g_scratch_64[src_offset_64 + row_tri_idx];
-		uvec2 tri_maxs = g_scratch_64[src_offset_64 + row_tri_idx + MAX_RBLOCK_ROW_TRIS];
-		uint tri_idx = (tri_maxs.x >> 20) | ((tri_maxs.y & 0xfff00000) >> 8);
-		uvec2 hnum_frags;
-		vec2 cpos = rasterHalfBlockCentroid(tri_mins.x, tri_maxs.x, startx, hnum_frags.x) +
-					rasterHalfBlockCentroid(tri_mins.y, tri_maxs.y, startx, hnum_frags.y);
-		num_frags = hnum_frags.x + hnum_frags.y;
-#else
 		uvec2 tri_info = g_scratch_64[src_offset_64 + row_tri_idx];
 		uint tri_idx = (tri_info.x >> 20) | ((tri_info.y & 0xfff00000) >> 8);
 		vec2 cpos = rasterHalfBlockCentroid(tri_info.x, tri_info.y, startx, num_frags);
-#endif
 
 		if(num_frags == 0) // This means that bx_mask is invalid
 			DEBUG_RECORD(0, 0, 0, 0);
-		frag_count += num_frags;
+		// TODO: make depth 18 bit from the start
 		uint depth = rasterBlockDepth(cpos * (0.5 / float(num_frags)) + block_pos, tri_idx);
 		s_buffer[buf_offset + i] = row_tri_idx | ((depth >> 2) << 14);
 	}
 	barrier();
-	groupMemoryBarrier();
-	frag_count = subgroupInclusiveAddFast(frag_count);
-	if(gl_SubgroupInvocationID == WARP_SIZE - 1)
-		atomicAdd(s_rblock_frag_counts[rbid], frag_count);
 	sortBuffer(tri_count, s_max_sort_rcount, buf_offset, group_size, group_thread, true);
 	barrier();
 
 	// TODO: move to sortBuffer()
 #ifdef DEBUG_ENABLED
-	for(uint i = gl_SubgroupInvocationID; i < tri_count; i += WARP_SIZE) {
+	for(uint i = LIX & RASTER_SUBGROUP_MASK; i < tri_count; i += RASTER_SUBGROUP_SIZE) {
 		uint value = s_buffer[buf_offset + i];
 		uint prev_value = i == 0 ? 0 : s_buffer[buf_offset + i - 1];
 		if(value <= prev_value)
@@ -248,20 +211,13 @@ void generateRBlocks(uint start_rbid) {
 	barrier();
 #endif
 
-	// TODO: FIXME: it won't work for groups bigger than 1
 	for(uint i = group_thread; i < tri_count; i += group_size) {
 		uint row_tri_idx = s_buffer[buf_offset + i] & (MAX_RBLOCK_ROW_TRIS - 1);
-
-#if RBLOCK_HEIGHT == 8
-#error fixme
-#else
 		uvec2 tri_info = g_scratch_64[src_offset_64 + row_tri_idx];
-		uint num_frags = rasterHalfBlockNumFrags(tri_info.x, tri_info.y, startx); // 7 bitów
-		uint num_frags_accum = subgroupInclusiveAddFast(num_frags);
-#endif
+		uint num_frags = rasterHalfBlockNumFrags(tri_info.x, tri_info.y, startx);
+		uint num_frags_accum = subgroupInclusiveAddFast32(num_frags);
 		s_buffer[buf_offset + i] = row_tri_idx | (num_frags << 14) | (num_frags_accum << 20);
 	}
-
 	barrier();
 
 	// Computing prefix sum across whole render-blocks. We're processing 4 elements
@@ -272,15 +228,15 @@ void generateRBlocks(uint start_rbid) {
 		uint buf_offset = group_rbid << (MAX_RBLOCK_TRIS0_SHIFT + group_shift);
 		uint rbid = start_rbid + group_rbid;
 		uint tri_count = s_rblock_tri_counts[rbid];
-		uint warp_offset = group_sub_idx << (WARP_SHIFT + 2);
+		uint warp_offset = group_sub_idx << (RASTER_SUBGROUP_SHIFT + 2);
 
 		uvec4 values = uvec4(0);
 		for(int j = 0; j < 4; j++) {
 			if(warp_offset < tri_count) {
-				uint rblock_tri_idx = min(warp_offset + WARP_MASK, tri_count - 1);
+				uint rblock_tri_idx = min(warp_offset + RASTER_SUBGROUP_MASK, tri_count - 1);
 				values[j] = s_buffer[buf_offset + rblock_tri_idx] >> 20;
 			}
-			warp_offset += WARP_SIZE;
+			warp_offset += RASTER_SUBGROUP_SIZE;
 		}
 
 		uint value = values[0] + values[1] + values[2] + values[3];
@@ -296,38 +252,22 @@ void generateRBlocks(uint start_rbid) {
 		if(wgsize >= 32)
 			temp = subgroupShuffleUp(sum, 16), sum += group_sub_idx >= 16 ? temp : 0;
 
-		if(group_sub_idx == wgmask) {
-			updateStats(sum, tri_count);
+		if(group_sub_idx == wgmask)
 			s_rblock_frag_counts[rbid] = sum;
-		}
-		s_buffer[mini_offset + LIX * 4 + 0] = sum - value, value -= values[0];
-		s_buffer[mini_offset + LIX * 4 + 1] = sum - value, value -= values[1];
-		s_buffer[mini_offset + LIX * 4 + 2] = sum - value;
-		s_buffer[mini_offset + LIX * 4 + 3] = sum - values[3];
+		s_buffer[BASE_BUFFER_SIZE + LIX * 4 + 0] = sum - value, value -= values[0];
+		s_buffer[BASE_BUFFER_SIZE + LIX * 4 + 1] = sum - value, value -= values[1];
+		s_buffer[BASE_BUFFER_SIZE + LIX * 4 + 2] = sum - value;
+		s_buffer[BASE_BUFFER_SIZE + LIX * 4 + 3] = sum - values[3];
 	}
 	barrier();
 
-	uint base_offset = 0;
-	// TODO: FIXME: it won't work for groups bigger than 1
 	for(uint i = group_thread; i < tri_count; i += group_size) {
 		uint current = s_buffer[buf_offset + i];
 		uint row_tri_idx = current & 0x3fff;
 
-		uint cur_offset =
-			(current >> 20) - ((current >> 14) & 0x3f) +
-			s_buffer[mini_offset + (group_rbid << (3 + group_shift)) + (i >> WARP_SHIFT)];
-
-#if RBLOCK_HEIGHT == 8
-		uvec2 tri_mins = g_scratch_64[src_offset_64 + row_tri_idx];
-		uvec2 tri_maxs = g_scratch_64[src_offset_64 + row_tri_idx + MAX_RBLOCK_ROW_TRIS];
-		uint tri_idx_shifted = ((tri_maxs.x >> 12) & 0xfff00) | (tri_maxs.y & 0xfff00000);
-		uvec2 bits = uvec2(rasterHalfBlockBits(tri_mins.x, tri_maxs.x, startx),
-						   rasterHalfBlockBits(tri_mins.y, tri_maxs.y, startx));
-
-#error fixme
-		g_scratch_64[dst_offset + i] = bits;
-		g_scratch_32[dst_offset + i] = tri_idx_shifted;
-#else
+		uint cur_offset = (current >> 20) - ((current >> 14) & 0x3f) +
+						  s_buffer[BASE_BUFFER_SIZE + (group_rbid << (3 + group_shift)) +
+								   (i >> RASTER_SUBGROUP_SHIFT)];
 		uvec2 tri_info = g_scratch_64[src_offset_64 + row_tri_idx];
 		uint tri_idx_shifted = ((tri_info.x >> 12) & 0xfff00) | (tri_info.y & 0xfff00000);
 		uint num_frags, bits = rasterHalfBlockBits(tri_info.x, tri_info.y, startx, num_frags);
@@ -335,9 +275,7 @@ void generateRBlocks(uint start_rbid) {
 		uint seg_offset = cur_offset & 0xff, seg_high = (cur_offset & 0xf00) << 20;
 		g_scratch_64[dst_offset + i] =
 			uvec2(tri_idx_shifted | (cur_offset & 0xff), bits | seg_high);
-#endif
 	}
-
 	barrier();
 }
 
@@ -357,7 +295,6 @@ void rasterBin() {
 	START_TIMER();
 	if(LIX < NUM_RBLOCKS) {
 		s_rblock_tri_counts[LIX] = 0;
-		s_rblock_frag_counts[LIX] = 0;
 		if(LIX < RBLOCK_ROWS)
 			s_rblock_row_tri_counts[LIX] = 0;
 	}
@@ -379,7 +316,7 @@ void rasterBin() {
 	if(LIX < NUM_RBLOCKS)
 		updateStats(s_rblock_frag_counts[LIX], s_rblock_tri_counts[LIX]);
 
-	int rbid = int(LIX >> WARP_SHIFT);
+	int rbid = int(LIX >> RASTER_SUBGROUP_SHIFT);
 	if(s_raster_error != 0) {
 		outputPixel(renderBlockPixelPos(rbid), vec4(1.0, 0.0, 0.0, 0.0));
 		barrier();

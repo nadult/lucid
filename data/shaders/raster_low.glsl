@@ -79,7 +79,7 @@ void processQuads() {
 // TODO: maybe process smaller amount of blocks at the same time?
 // smaller chance that it will leave cache
 void generateBlocks(uint bid) {
-	int lbid = int(LIX >> RASTER_SUBGROUP_SHIFT);
+	int lbid = int(LIX >> HALFGROUP_SHIFT);
 	uint by = bid >> BLOCK_ROWS_SHIFT, bx = bid & BLOCK_ROWS_MASK;
 
 	uint rows_offset = scratchBlockRowOffset(by);
@@ -89,7 +89,7 @@ void generateBlocks(uint bid) {
 
 	{
 		uint bx_bits_mask = 1u << (24 + bx), tri_offset = 0;
-		for(uint i = LIX & RASTER_SUBGROUP_MASK; i < tri_count; i += RASTER_SUBGROUP_SIZE) {
+		for(uint i = LIX & HALFGROUP_MASK; i < tri_count; i += HALFGROUP_SIZE) {
 			uint bx_bits = g_scratch_64[rows_offset + i].x;
 			if((bx_bits & bx_bits_mask) != 0) {
 				tri_offset = atomicAdd(s_block_tri_count[bid], 1);
@@ -110,7 +110,7 @@ void generateBlocks(uint bid) {
 	vec2 block_pos = vec2(s_bin_pos + ivec2(bx << BLOCK_SHIFT, by << BLOCK_SHIFT));
 
 	uint frag_count = 0;
-	for(uint i = LIX & RASTER_SUBGROUP_MASK; i < tri_count; i += RASTER_SUBGROUP_SIZE) {
+	for(uint i = LIX & HALFGROUP_MASK; i < tri_count; i += HALFGROUP_SIZE) {
 		uint row_tri_idx = s_buffer[buf_offset + i];
 
 		uvec2 tri_mins = g_scratch_64[rows_offset + row_tri_idx];
@@ -133,20 +133,20 @@ void generateBlocks(uint bid) {
 	subgroupMemoryBarrier();
 
 	frag_count = subgroupInclusiveAddFast32(frag_count);
-	if((LIX & RASTER_SUBGROUP_MASK) == RASTER_SUBGROUP_MASK) {
+	if((LIX & HALFGROUP_MASK) == HALFGROUP_MASK) {
 		// TODO: separate tri_count & frag_count; use same counters in high & low?
-		uint hbid = halfBlockId(lbid + (bid & ~(NUM_RASTER_SUBGROUPS - 1)));
+		uint hbid = halfBlockId(lbid + (bid & ~(NUM_HALFGROUPS - 1)));
 		uint v0 = frag_count & 0xffff, v1 = frag_count >> 16;
 		s_hblock_counts[hbid] = (v0 << 16) | tri_count;
 		s_hblock_counts[hbid + HBLOCK_COLS] = (v1 << 16) | tri_count;
 	}
 
 	if(tri_count > RC_COLOR_SIZE) {
-		// rcount: count rounded up to the next power of 2; minimum: RASTER_SUBGROUP_SIZE
+		// rcount: count rounded up to the next power of 2; minimum: HALFGROUP_SIZE
 		uint rcount =
-			max(RASTER_SUBGROUP_SIZE,
+			max(HALFGROUP_SIZE,
 				(tri_count & (tri_count - 1)) == 0 ? tri_count : (2 << findMSB(tri_count)));
-		sortBuffer(tri_count, rcount, buf_offset, RASTER_SUBGROUP_SIZE, LIX & RASTER_SUBGROUP_MASK,
+		sortBuffer(tri_count, rcount, buf_offset, HALFGROUP_SIZE, LIX & HALFGROUP_MASK,
 				   false);
 	}
 	subgroupMemoryBarrierShared();
@@ -155,7 +155,7 @@ void generateBlocks(uint bid) {
 #ifdef DEBUG_ENABLED
 	// Making sure that tris are properly ordered
 	if(tri_count > RC_COLOR_SIZE)
-		for(uint i = LIX & RASTER_SUBGROUP_MASK; i < tri_count; i += RASTER_SUBGROUP_SIZE) {
+		for(uint i = LIX & HALFGROUP_MASK; i < tri_count; i += HALFGROUP_SIZE) {
 			uint value = s_buffer[buf_offset + i];
 			uint prev_value = i == 0 ? 0 : s_buffer[buf_offset + i - 1];
 			if(value <= prev_value)
@@ -168,7 +168,7 @@ void generateBlocks(uint bid) {
 	uint dst_offset1 = scratchHalfBlockOffset(hbid1);
 
 	uint base_offset = 0;
-	for(uint i = LIX & RASTER_SUBGROUP_MASK; i < tri_count; i += RASTER_SUBGROUP_SIZE) {
+	for(uint i = LIX & HALFGROUP_MASK; i < tri_count; i += HALFGROUP_SIZE) {
 		uint row_idx = s_buffer[buf_offset + i] & 0xfff;
 		uvec2 tri_mins = g_scratch_64[rows_offset + row_idx];
 		uvec2 tri_maxs = g_scratch_64[rows_offset + row_idx + MAX_BLOCK_ROW_TRIS];
@@ -181,10 +181,10 @@ void generateBlocks(uint bid) {
 		uint num_frags_accum = subgroupInclusiveAddFast32(num_frags);
 		uint cur_offset = base_offset + num_frags_accum - num_frags;
 
-#if WARP_SIZE == RASTER_SUBGROUP_SIZE
-		base_offset += subgroupBroadcast(num_frags_accum, RASTER_SUBGROUP_MASK);
+#if WARP_SIZE == HALFGROUP_SIZE
+		base_offset += subgroupBroadcast(num_frags_accum, HALFGROUP_MASK);
 #else
-		base_offset += subgroupShuffle(num_frags_accum, (LIX & 32) + RASTER_SUBGROUP_MASK);
+		base_offset += subgroupShuffle(num_frags_accum, (LIX & 32) + HALFGROUP_MASK);
 #endif
 
 		uint seg_offset0 = cur_offset & 0xff, seg_offset1 = (cur_offset & 0xff0000) >> 16;
@@ -203,7 +203,7 @@ void visualizeBlockCounts(uint hbid, ivec2 pixel_pos) {
 	//tri_count = s_bin_quad_count * 2 + s_bin_tri_count;
 
 	vec3 color;
-	color = gradientColor(frag_count, uvec4(8, 32, 128, 1024) * RASTER_SUBGROUP_SIZE);
+	color = gradientColor(frag_count, uvec4(8, 32, 128, 1024) * HALFGROUP_SIZE);
 	//color = gradientColor(tri_count, uvec4(16, 64, 256, 1024));
 
 	outputPixel(pixel_pos, vec4(SATURATE(color), 1.0));
@@ -224,7 +224,7 @@ void rasterBin() {
 	UPDATE_TIMER(0);
 
 	const int num_blocks = (BIN_SIZE / BLOCK_SIZE) * (BIN_SIZE / BLOCK_SIZE);
-	for(uint bid = LIX >> RASTER_SUBGROUP_SHIFT; bid < num_blocks; bid += NUM_RASTER_SUBGROUPS)
+	for(uint bid = LIX >> HALFGROUP_SHIFT; bid < num_blocks; bid += NUM_HALFGROUPS)
 		generateBlocks(bid);
 
 	barrier();
@@ -240,8 +240,7 @@ void rasterBin() {
 	groupMemoryBarrier();
 	UPDATE_TIMER(1);
 
-	for(uint hbid = LIX >> RASTER_SUBGROUP_SHIFT; hbid < NUM_RBLOCKS;
-		hbid += NUM_RASTER_SUBGROUPS) {
+	for(uint hbid = LIX >> HALFGROUP_SHIFT; hbid < NUM_RBLOCKS; hbid += NUM_HALFGROUPS) {
 		ReductionContext context;
 		initReduceSamples(context);
 		//initVisualizeSamples();

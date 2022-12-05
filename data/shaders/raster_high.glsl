@@ -19,8 +19,6 @@ DEBUG_SETUP(1, 11)
 #define MAX_GROUP_SIZE 16
 #define MAX_GROUP_SHIFT 4
 
-// Actual max value of tris per rblock,
-// assuming using multiple warps per rblock in generateRBlocks
 #define MAX_HBLOCK_TRIS (MAX_HBLOCK_TRIS0 * MAX_GROUP_SIZE)
 #define MAX_HBLOCK_TRIS_SHIFT (MAX_HBLOCK_TRIS0_SHIFT + MAX_GROUP_SHIFT)
 
@@ -118,7 +116,7 @@ void computeRBlockGroups() {
 			temp = subgroupShuffleUp(value, 4), value += rbx >= 4 ? temp : 0;
 		subgroupMemoryBarrierShared();
 		s_hblock_tri_counts[LIX] = 0;
-		uint max_value = subgroupMax_(uint(value), NUM_RASTER_SUBGROUPS);
+		uint max_value = subgroupMax_(uint(value), NUM_HALFGROUPS);
 		if(LIX == 0) {
 			// rcount: count rounded up to next power of 2, minimum: 32
 			uint rcount =
@@ -144,13 +142,13 @@ void computeRBlockGroups() {
 // TODO: maybe process smaller amount of blocks at the same time?
 // smaller chance that it will leave cache
 void generateRBlocks(uint start_hbid) {
-	uint group_size = s_hblock_group_size * RASTER_SUBGROUP_SIZE;
+	uint group_size = s_hblock_group_size * HALFGROUP_SIZE;
 	uint group_shift = s_hblock_group_shift;
 	uint group_mask = group_size - 1;
 	uint group_thread = LIX & group_mask;
 
 	// TODO: better names for indices
-	uint group_hbid = LIX >> (RASTER_SUBGROUP_SHIFT + group_shift);
+	uint group_hbid = LIX >> (HALFGROUP_SHIFT + group_shift);
 	uint hbid = start_hbid + group_hbid;
 
 	uvec2 hblock_pos = halfBlockPos(hbid);
@@ -194,7 +192,7 @@ void generateRBlocks(uint start_hbid) {
 
 	// TODO: move to sortBuffer()
 #ifdef DEBUG_ENABLED
-	for(uint i = LIX & RASTER_SUBGROUP_MASK; i < tri_count; i += RASTER_SUBGROUP_SIZE) {
+	for(uint i = LIX & HALFGROUP_MASK; i < tri_count; i += HALFGROUP_SIZE) {
 		uint value = s_buffer[buf_offset + i];
 		uint prev_value = i == 0 ? 0 : s_buffer[buf_offset + i - 1];
 		if(value <= prev_value)
@@ -213,22 +211,22 @@ void generateRBlocks(uint start_hbid) {
 	barrier();
 
 	// Computing prefix sum across whole render-blocks. We're processing 4 elements
-	// at a time, so that we can fit with MAX_HBLOCK_TRIS tris/hblock (128 warps).
-	if(LIX < 2 * NUM_RASTER_SUBGROUPS) {
+	// at a time, so that we can fit with MAX_HBLOCK_TRIS tris/hblock (128 half-groups).
+	if(LIX < 2 * NUM_HALFGROUPS) {
 		uint wgsize = 2 << group_shift, wgmask = wgsize - 1;
 		uint group_hbid = LIX >> (1 + group_shift), group_sub_idx = LIX & wgmask;
 		uint buf_offset = group_hbid << (MAX_HBLOCK_TRIS0_SHIFT + group_shift);
 		uint hbid = start_hbid + group_hbid;
 		uint tri_count = s_hblock_tri_counts[hbid];
-		uint warp_offset = group_sub_idx << (RASTER_SUBGROUP_SHIFT + 2);
+		uint group_offset = group_sub_idx << (HALFGROUP_SHIFT + 2);
 
 		uvec4 values = uvec4(0);
 		for(int j = 0; j < 4; j++) {
-			if(warp_offset < tri_count) {
-				uint hblock_tri_idx = min(warp_offset + RASTER_SUBGROUP_MASK, tri_count - 1);
+			if(group_offset < tri_count) {
+				uint hblock_tri_idx = min(group_offset + HALFGROUP_MASK, tri_count - 1);
 				values[j] = s_buffer[buf_offset + hblock_tri_idx] >> 20;
 			}
-			warp_offset += RASTER_SUBGROUP_SIZE;
+			group_offset += HALFGROUP_SIZE;
 		}
 
 		uint value = values[0] + values[1] + values[2] + values[3];
@@ -257,9 +255,9 @@ void generateRBlocks(uint start_hbid) {
 		uint current = s_buffer[buf_offset + i];
 		uint row_tri_idx = current & 0x3fff;
 
-		uint cur_offset = (current >> 20) - ((current >> 14) & 0x3f) +
-						  s_buffer[BASE_BUFFER_SIZE + (group_hbid << (3 + group_shift)) +
-								   (i >> RASTER_SUBGROUP_SHIFT)];
+		uint cur_offset =
+			(current >> 20) - ((current >> 14) & 0x3f) +
+			s_buffer[BASE_BUFFER_SIZE + (group_hbid << (3 + group_shift)) + (i >> HALFGROUP_SHIFT)];
 		uvec2 tri_info = g_scratch_64[src_offset + row_tri_idx];
 		uint tri_idx_shifted = ((tri_info.x >> 12) & 0xfff00) | (tri_info.y & 0xfff00000);
 		uint num_frags, bits = rasterHalfBlockBits(tri_info.x, tri_info.y, startx, num_frags);
@@ -299,7 +297,7 @@ void rasterBin() {
 	UPDATE_TIMER(0);
 
 	if(s_raster_error == 0) {
-		int step = NUM_RASTER_SUBGROUPS >> s_hblock_group_shift;
+		int step = NUM_HALFGROUPS >> s_hblock_group_shift;
 		for(int i = 0; i < s_hblock_group_size; i++)
 			generateRBlocks(step * i);
 	}
@@ -308,7 +306,7 @@ void rasterBin() {
 	if(LIX < NUM_RBLOCKS)
 		updateStats(s_hblock_frag_counts[LIX], s_hblock_tri_counts[LIX]);
 
-	int hbid = int(LIX >> RASTER_SUBGROUP_SHIFT);
+	int hbid = int(LIX >> HALFGROUP_SHIFT);
 	if(s_raster_error != 0) {
 		outputPixel(halfBlockPixelPos(hbid), vec4(1.0, 0.0, 0.0, 0.0));
 		barrier();

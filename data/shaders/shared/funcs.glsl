@@ -3,16 +3,6 @@
 
 #include "structures.glsl"
 
-#if MSAA_SAMPLES > 1
-#define ID_BUFFER_SAMPLER usampler2DMS
-#define DEPTH_BUFFER_SAMPLER sampler2DMS
-#define COLOR_BUFFER_SAMPLER sampler2DMS
-#else
-#define ID_BUFFER_SAMPLER usampler2D
-#define DEPTH_BUFFER_SAMPLER sampler2D
-#define COLOR_BUFFER_SAMPLER sampler2D
-#endif
-
 #define PI 3.14159265359
 
 #define SATURATE(val) clamp(val, 0.0, 1.0)
@@ -102,18 +92,6 @@ vec4 encodeInt4(uint v) {
 uint decodeInt4(vec4 v) {
 	v *= 255.0f;
 	return uint(v.x) | (uint(v.y) << 8) | (uint(v.z) << 16) | (uint(v.w) << 24);
-}
-
-vec4 encodeMotion(vec3 motion) {
-	motion.x = clamp(motion.x, -1.0, 1.0);
-	motion.y = clamp(motion.y, -1.0, 1.0);
-	motion = (motion + 1.0) * 0.5;
-	return vec4(encodeFloat2(motion.x), encodeFloat2(motion.y));
-}
-
-vec2 decodeMotion(vec4 enc) {
-	vec2 motion = vec2(decodeFloat2(enc.xy), decodeFloat2(enc.zw));
-	return motion * 2.0 - 1.0;
 }
 
 vec4 decodeRGBA8(uint icolor) {

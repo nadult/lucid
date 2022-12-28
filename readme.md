@@ -1,9 +1,9 @@
-# Lucid: real-time software transparency rasterizer based on Vulkan compute shaders
+# Lucid: Real-time GPU software transparency rasterizer
 
-Lucid is a fully software-based rasterizer designed specifically for efficient rendering of transparent objects.  
-Shaders are only available in compiled Spir-v format. If you're interested in shader code, please contact the author.  
+Lucid is a fully software-based rasterizer designed specifically for efficient rendering of transparent scenes running on Vulkan's compute shaders. 
+Core shaders are only available in compiled Spir-v format. If you're interested in full shader code, please contact the author.  
   
-[Project page (more details)](https://nadult.github.io/lucid/)  
+[Project page (more details + scene files)](https://nadult.github.io/lucid/)  
 [Author's Linkedin profile](https://www.linkedin.com/in/nadult/)  
 
 ![](https://nadult.github.io/images/lucid/lucid1.jpg)

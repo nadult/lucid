@@ -133,7 +133,9 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="..\data\shaders\shared\definitions.glsl" />
+    <None Include="..\data\shaders\shared\funcs.glsl" />
     <None Include="..\data\shaders\shared\structures.glsl" />
+    <None Include="..\data\shaders\simple.glsl" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

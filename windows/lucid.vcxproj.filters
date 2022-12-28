@@ -108,5 +108,11 @@
     <None Include="..\data\shaders\shared\structures.glsl">
       <Filter>shaders\shared</Filter>
     </None>
+    <None Include="..\data\shaders\shared\funcs.glsl">
+      <Filter>shaders\shared</Filter>
+    </None>
+    <None Include="..\data\shaders\simple.glsl">
+      <Filter>shaders</Filter>
+    </None>
   </ItemGroup>
 </Project>

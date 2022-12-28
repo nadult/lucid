@@ -16,6 +16,7 @@
 #include <fwk/vulkan/vulkan_pipeline.h>
 #include <fwk/vulkan/vulkan_swap_chain.h>
 
+// TODO: bugi na powerplant jak geometria przecina near clipping plane
 // TODO: why on desktop AMD on windows some shaders work 2-3x slower? balancedDispatcher & rasterizers
 // TODO: rename WARP to SUBGROUP ?
 // TODO: ability to change options without recreating renderer

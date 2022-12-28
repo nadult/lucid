@@ -120,11 +120,11 @@ void generateBlocks(uint bid) {
 		if(num_block_frags == 0) // This means that bx_mask is invalid
 			DEBUG_RECORD(0, 0, 0, 0);
 
-		// 20-bit depth
+		// 22-bit depth
 		uint depth =
-			rasterBlockDepth(cpos * (0.5 / float(num_block_frags)) + block_pos, tri_idx, 0xffffe);
+			rasterBlockDepth(cpos * (0.5 / float(num_block_frags)) + block_pos, tri_idx, 0x3ffffe);
 		frag_count += num_frags.x | (num_frags.y << 16);
-		s_buffer[buf_offset + i] = row_tri_idx | (depth << 12);
+		s_buffer[buf_offset + i] = row_tri_idx | (depth << 10);
 	}
 	subgroupMemoryBarrier();
 
@@ -163,9 +163,9 @@ void generateBlocks(uint bid) {
 
 	uint base_offset = 0;
 	for(uint i = LIX & HALFGROUP_MASK; i < tri_count; i += HALFGROUP_SIZE) {
-		uint row_idx = s_buffer[buf_offset + i] & 0xfff;
-		uvec2 tri_mins = g_scratch_64[rows_offset + row_idx];
-		uvec2 tri_maxs = g_scratch_64[rows_offset + row_idx + MAX_BLOCK_ROW_TRIS];
+		uint row_tri_idx = s_buffer[buf_offset + i] & 0x3ff;
+		uvec2 tri_mins = g_scratch_64[rows_offset + row_tri_idx];
+		uvec2 tri_maxs = g_scratch_64[rows_offset + row_tri_idx + MAX_BLOCK_ROW_TRIS];
 		uint tri_idx_shifted = ((tri_maxs.x >> 12) & 0xfff00) | (tri_maxs.y & 0xfff00000);
 		uvec2 num_frags_half;
 		uvec2 bits = uvec2(rasterHalfBlockBits(tri_mins.x, tri_maxs.x, startx, num_frags_half.x),

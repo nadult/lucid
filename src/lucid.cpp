@@ -17,6 +17,8 @@
 #include <fwk/vulkan/vulkan_swap_chain.h>
 #include <fwk/vulkan/vulkan_window.h>
 
+#include <fwk/libs_msvc.h>
+
 Ex<int> exMain(int argc, char **argv) {
 	IRect window_rect = IRect({1280, 720}) + int2(32, 32);
 

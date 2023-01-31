@@ -62,12 +62,12 @@
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpplatest</LanguageStandard>
-      <AdditionalOptions>/wd4800 /wd4244 /wd4521 -Woverloaded-virtual -Wnon-virtual-dtor -Wno-reorder -Wuninitialized -Wno-unused-function -Werror=switch -Werror=delete-incomplete -Wno-unused-variable -Wno-unused-parameter -Wparentheses -Wno-overloaded-virtual -Wconstant-conversion -Werror=return-type -Werror=init-self -Werror=uninitialized -Wno-undefined-inline %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalOptions>/wd4800 /wd4244 /wd4521 -Woverloaded-virtual -Wnon-virtual-dtor -Wno-reorder -Wuninitialized -Wno-unused-function -Werror=switch -Werror=delete-incomplete -Wno-unused-variable -Wno-unused-parameter -Wparentheses -Wno-overloaded-virtual -Wconstant-conversion -Werror=return-type -Werror=init-self -Werror=uninitialized -Wno-undefined-inline -Wno-unqualified-std-cast-call %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>sdl2.lib;freetype.lib;libpng16.lib;bz2.lib;zlib.lib;vulkan-1.lib;shaderc_shared.lib;setupapi.lib;version.lib;winmm.lib;dbghelp.lib;Imm32.lib;dwrite.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <Manifest>
       <EnableDpiAwareness>PerMonitorHighDPIAware</EnableDpiAwareness>
@@ -82,14 +82,14 @@
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpplatest</LanguageStandard>
-      <AdditionalOptions>/wd4800 /wd4244 /wd4521 -Woverloaded-virtual -Wnon-virtual-dtor -Wno-reorder -Wuninitialized -Wno-unused-function -Werror=switch -Werror=delete-incomplete -Wno-unused-variable -Wno-unused-parameter -Wparentheses -Wno-overloaded-virtual -Wconstant-conversion -Werror=return-type -Werror=init-self -Werror=uninitialized -Wno-undefined-inline %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalOptions>/wd4800 /wd4244 /wd4521 -Woverloaded-virtual -Wnon-virtual-dtor -Wno-reorder -Wuninitialized -Wno-unused-function -Werror=switch -Werror=delete-incomplete -Wno-unused-variable -Wno-unused-parameter -Wparentheses -Wno-overloaded-virtual -Wconstant-conversion -Werror=return-type -Werror=init-self -Werror=uninitialized -Wno-undefined-inline -Wno-unqualified-std-cast-call %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>sdl2.lib;freetype.lib;libpng16.lib;bz2.lib;zlib.lib;vulkan-1.lib;shaderc_shared.lib;setupapi.lib;version.lib;winmm.lib;dbghelp.lib;Imm32.lib;dwrite.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <Manifest>
       <EnableDpiAwareness>PerMonitorHighDPIAware</EnableDpiAwareness>

@@ -169,6 +169,74 @@ Ex<void> Scene::save(Stream &stream) const {
 	return stream.getValid();
 }
 
+void Scene::mergeVertices(int decimal_places) {
+	// TODO: add support for colors & tex_coords
+	DASSERT(tex_coords.empty());
+	DASSERT(colors.empty());
+
+	float scale = pow(10.0, decimal_places);
+	float inv_scale = 1.0 / scale;
+
+	struct NewVertex {
+		float3 position;
+		float3 normal;
+		int count;
+	};
+
+	vector<NewVertex> new_vertices;
+	PodVector<int> new_indices(positions.size());
+	HashMap<float3, int> map;
+
+	map.reserve(positions.size() * 3 / 2);
+	new_vertices.reserve(positions.size());
+
+	for(int i : intRange(positions)) {
+		auto pos = positions[i];
+		auto normal = normals.empty() ? float3(0, 1, 0) : normals[i];
+
+		auto quantized_pos =
+			float3(round(pos.x * scale), round(pos.y * scale), round(pos.z * scale));
+		auto [it, added] = map.emplace(quantized_pos, -1);
+		if(it->value == -1) {
+			it->value = new_vertices.size();
+			new_vertices.emplace_back(pos, normal, 1);
+		} else {
+			auto &ref = new_vertices[it->value];
+			ref.position += pos;
+			ref.normal += normal;
+			ref.count++;
+		}
+		new_indices[i] = it->value;
+	}
+
+	if(new_vertices.size() == positions.size())
+		return;
+
+	{
+		auto new_positions = transform(new_vertices, [](auto &new_vert) {
+			return new_vert.position * (float(1.0) / float(new_vert.count));
+		});
+		positions.swap(new_positions);
+	}
+
+	if(normals) {
+		vector<float3> new_normals;
+		new_normals = transform(new_vertices, [](auto &new_vert) {
+			return new_vert.normal * (float(1.0) / float(new_vert.count));
+		});
+		normals.swap(new_normals);
+	}
+
+	for(auto &mesh : meshes) {
+		for(auto &tri : mesh.tris)
+			for(auto &idx : tri)
+				idx = new_indices[idx];
+		for(auto &quad : mesh.quads)
+			for(auto &idx : quad)
+				idx = new_indices[idx];
+	}
+}
+
 void Scene::generateQuads(float squareness) {
 	for(auto &mesh : meshes) {
 		auto tri_neighbours = triNeighbours(mesh.tris);

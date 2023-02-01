@@ -177,7 +177,8 @@ void rescale(Scene &scene, float target_scale = 100.0f) {
 		mesh.bounding_box = (mesh.bounding_box + offset) * scale;
 }
 
-Scene convertScene(WavefrontObject obj, bool flip_yz, Str scene_name, float squareness) {
+Scene convertScene(WavefrontObject obj, bool flip_yz, Str scene_name, float squareness,
+				   bool merge_verts) {
 	Scene out;
 	out.positions = move(obj.positions);
 	out.normals = move(obj.normals);
@@ -190,6 +191,7 @@ Scene convertScene(WavefrontObject obj, bool flip_yz, Str scene_name, float squa
 			normal = -normal;
 		}
 	}
+
 	out.bounding_box = enclose(out.positions);
 
 	vector<string> tex_paths;
@@ -241,6 +243,15 @@ Scene convertScene(WavefrontObject obj, bool flip_yz, Str scene_name, float squa
 		out.meshes.emplace_back(mesh);
 	}
 
+	if(merge_verts && !out.tex_coords && !out.colors) {
+		int old_count = out.numVerts();
+		out.mergeVertices(5);
+		int new_count = out.numVerts();
+		if(old_count != new_count)
+			print("Merged vertices: % -> %\n", old_count, new_count);
+		// TODO: move bbox computaiton to separate function
+	}
+
 	if(out.hasTexCoords()) {
 		detectClampedTextures(out);
 
@@ -284,14 +295,15 @@ Scene convertScene(WavefrontObject obj, bool flip_yz, Str scene_name, float squa
 struct SceneInfo {
 	ZStr path;
 	float quad_squareness;
+	bool merge_verts = false;
 };
 
 void convertScenes(ZStr source_path) {
 	SceneInfo inputs[] = {
-		{"dragon2.obj", 1.5},
-		{"armadillo.obj", 1.5},
-		{"thai.obj", 1.5},
-		{"buddha.obj", 1.5},
+		{"dragon2.obj", 1.5, true},
+		{"armadillo.obj", 1.5, true},
+		{"thai.obj", 1.5, true},
+		{"buddha.obj", 1.5, true},
 		{"bunny.obj", 1.5},
 		{"chestnut_tree/chestnut_tree01.obj", 2},
 		{"chestnut_tree/chestnut_tree02.obj", 2},
@@ -313,7 +325,7 @@ void convertScenes(ZStr source_path) {
 	auto scenes_path = executablePath().parent() / "scenes";
 	mkdirRecursive(scenes_path).check();
 
-	for(auto [ipath, isquareness] : inputs) {
+	for(auto [ipath, isquareness, imerge_verts] : inputs) {
 		auto src_path = FilePath(source_path) / ipath;
 		auto scene_name = src_path.fileStem();
 		auto dst_path = format("%/%.scene", scenes_path, scene_name);
@@ -329,7 +341,8 @@ void convertScenes(ZStr source_path) {
 		print("  loaded in % msec\n", int((getTime() - time) * 1000.0));
 
 		bool flip_yz = ipath.find("chestnut_tree") != -1;
-		auto scene = convertScene(move(*wavefront_obj), flip_yz, scene_name, isquareness);
+		auto scene =
+			convertScene(move(*wavefront_obj), flip_yz, scene_name, isquareness, imerge_verts);
 
 		print("  materials:% textures:% meshes:% tris:% quads:% verts:%\n\n",
 			  scene.materials.size(), scene.textures.size(), scene.meshes.size(), scene.numTris(),

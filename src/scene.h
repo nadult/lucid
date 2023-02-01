@@ -71,6 +71,8 @@ struct Scene {
 
 	Ex<void> load(Stream &);
 	Ex<void> save(Stream &) const;
+
+	void mergeVertices(int decimal_places = 3);
 	void generateQuads(float squareness_weight);
 
 	int numTris() const;

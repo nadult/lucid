@@ -793,9 +793,10 @@ void print2DArray(CSpan<ZStr> column_names, CSpan<ZStr> row_names, CSpan<vector<
 
 		for(int c = 0; c < col_widths.size(); c++) {
 			auto &value = rows[r][c];
+			print_spaces(col_widths[c] - value.size());
 			printf("%s", value.c_str());
 			if(c + 1 < col_widths.size())
-				print_spaces(col_widths[c] - value.size() + 2);
+				print_spaces(2);
 		}
 		printf("\n");
 	}

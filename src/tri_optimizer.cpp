@@ -6,6 +6,9 @@
 
 #include "lucid_base.h"
 
+#include <fwk/list_node.h>
+#include <map>
+
 static constexpr int max_vertex_cache_size = 32;
 
 struct VertData {
@@ -17,9 +20,10 @@ struct VertData {
 };
 
 struct TriData {
-	bool is_in_list = false;
+	ListNode node;
 	float score = 0.0f;
 	int vert_idx[3] = {0, 0, 0};
+	bool is_in_list = false;
 };
 
 // Source: http://home.comcast.net/~tom_forsyth/papers/fast_vert_cache_opt.html
@@ -178,6 +182,7 @@ int LRUCacheModel::getCachePosition(const int vidx) {
 /// "Linear-Speed Vertex Cache Optimization"
 /// http://home.comcast.net/~tom_forsyth/papers/fast_vert_cache_opt.html
 /// @note Both 'indices' and 'outIndices' can point to the same memory.
+/// TODO: this is still quite slow
 void optimizeTriangleOrdering(const int num_verts, CSpan<int> indices, Span<int> out_indices) {
 	if(num_verts == 0 || indices.size() == 0)
 		return;
@@ -196,12 +201,9 @@ void optimizeTriangleOrdering(const int num_verts, CSpan<int> indices, Span<int>
 		TriData &cur_tri = tri_data[tri];
 
 		for(int c = 0; c < 3; c++) {
-			const int &curVIdx = indices[cur_idx];
-			DASSERT(curVIdx < num_verts && "Out of range index.");
-
-			cur_tri.vert_idx[c] = curVIdx;
-			VertData &cur_vert = vertex_data[curVIdx];
-			cur_vert.num_unadded_refs++;
+			int cur_vidx = indices[cur_idx];
+			cur_tri.vert_idx[c] = cur_vidx;
+			vertex_data[cur_vidx].num_unadded_refs++;
 			num_refs++;
 			cur_idx++;
 		}
@@ -242,26 +244,52 @@ void optimizeTriangleOrdering(const int num_verts, CSpan<int> indices, Span<int>
 		validate_tri_idx(next_best_tri_idx);
 	};
 
+	// TODO: use heap?
+	std::map<float, List, std::greater<float>> ordered_tris;
+
+	auto remove_ordered_tri = [&](int tri_idx) {
+		auto &tri = tri_data[tri_idx];
+		auto it = ordered_tris.find(tri.score);
+		listRemove([&](int i) -> ListNode & { return tri_data[i].node; }, it->second, tri_idx);
+		if(it->second.empty())
+			ordered_tris.erase(it);
+	};
+
+	auto get_next_best_tris = [&]() {
+		int count = 0;
+		auto it = ordered_tris.begin();
+		while(count < 2 && it != ordered_tris.end()) {
+			auto idx = it->second.head;
+			while(idx != -1 && count < 2) {
+				check_next_best(it->first, idx);
+				check_next_next_best(it->first, idx);
+				idx = tri_data[idx].node.next;
+				count++;
+			}
+			it++;
+		}
+	};
+
+	auto add_ordered_tri = [&](int tri_idx) {
+		auto &tri = tri_data[tri_idx];
+		auto &list = ordered_tris[tri.score];
+		listInsert([&](int i) -> ListNode & { return tri_data[i].node; }, list, tri_idx);
+	};
+
 	// Fill-in per-vertex triangle lists, and sum the scores of each vertex used
 	// per-triangle, to get the starting triangle score
 	cur_idx = 0;
 	for(int tri = 0; tri < num_primitives; tri++) {
 		TriData &cur_tri = tri_data[tri];
-
 		for(int c = 0; c < 3; c++) {
-			const int &curVIdx = indices[cur_idx];
-			DASSERT(curVIdx < num_verts && "Out of range index.");
-			VertData &cur_vert = vertex_data[curVIdx];
-
+			VertData &cur_vert = vertex_data[indices[cur_idx]];
 			cur_vert.tri_index[cur_vert.num_refs++] = tri;
 			cur_tri.score += cur_vert.score;
 			cur_idx++;
 		}
-
-		// This will pick the first triangle to add to the list in 'Step 2'
-		check_next_best(cur_tri.score, tri);
-		check_next_next_best(cur_tri.score, tri);
+		add_ordered_tri(tri);
 	}
+	get_next_best_tris();
 
 	// Step 2: Start emitting triangles...this is the emit loop
 	LRUCacheModel lru_cache(vertex_data);
@@ -270,24 +298,14 @@ void optimizeTriangleOrdering(const int num_verts, CSpan<int> indices, Span<int>
 		// If there is no next best triangle, than search for the next highest
 		// scored triangle that isn't in the list already
 		if(next_best_tri_idx < 0) {
-			// TODO: Something better than linear performance here...
 			next_best_tri_score = next_next_best_tri_score = -1.0f;
 			next_best_tri_idx = next_next_best_tri_idx = -1;
-
-			for(int tri = 0; tri < num_primitives; tri++) {
-				TriData &cur_tri = tri_data[tri];
-				if(!cur_tri.is_in_list) {
-					check_next_best(cur_tri.score, tri);
-					check_next_next_best(cur_tri.score, tri);
-				}
-			}
+			get_next_best_tris();
 		}
-		DASSERT(next_best_tri_idx > -1 &&
-				"Ran out of 'nextBestTriangle' before I ran out of indices...not good.");
+		DASSERT(next_best_tri_idx > -1);
 
 		TriData &next_best_tri = tri_data[next_best_tri_idx];
-		DASSERT(!next_best_tri.is_in_list &&
-				"Next best triangle already in list, this is no good.");
+		DASSERT(!next_best_tri.is_in_list);
 		for(int i = 0; i < 3; i++) {
 			out_indices[out_idx++] = int(next_best_tri.vert_idx[i]);
 			VertData &cur_vert = vertex_data[next_best_tri.vert_idx[i]];
@@ -300,28 +318,34 @@ void optimizeTriangleOrdering(const int num_verts, CSpan<int> indices, Span<int>
 			}
 			lru_cache.useVertex(next_best_tri.vert_idx[i]);
 		}
+
 		next_best_tri.is_in_list = true;
+		remove_ordered_tri(next_best_tri_idx);
 
 		// Enforce cache size, this will update the cache position of all verts
 		// still in the cache. It will also update the score of the verts in the
 		// cache, and give back a list of triangle indicies that need updating.
-		Vector<uint> tris_to_update;
+		vector<uint> tris_to_update;
 		lru_cache.enforceSize(max_vertex_cache_size, tris_to_update);
 
 		// Now update scores for triangles that need updates, and find the new best
 		// triangle score/index
 		next_best_tri_idx = -1;
 		next_best_tri_score = -1.0f;
+
+		// TODO: use idx directly
 		for(auto itr = tris_to_update.begin(); itr != tris_to_update.end(); itr++) {
 			TriData &tri = tri_data[*itr];
 
 			// If this triangle isn't already emitted, re-score it
 			if(!tri.is_in_list) {
+				remove_ordered_tri(*itr);
 				tri.score = 0.0f;
 				for(int i = 0; i < 3; i++)
 					tri.score += vertex_data[tri.vert_idx[i]].score;
 				check_next_best(tri.score, *itr);
 				check_next_next_best(tri.score, *itr);
+				add_ordered_tri(*itr);
 			}
 		}
 

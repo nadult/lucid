@@ -76,8 +76,6 @@ Ex<WavefrontObject> WavefrontObject::load(ZStr path, i64 file_size_limit) {
 	HashMap<MultiIndex, int> vertex_map;
 	vector<array<int, 3>> tris;
 
-	auto getVertex = [&](const MultiIndex &midx) { auto it = vertex_map.find(midx); };
-
 	auto parseIndex = [&](Str text) {
 		array<int, 3> idx = {0, 0, 0};
 		idx[0] = atoi(text.data());

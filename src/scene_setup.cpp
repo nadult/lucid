@@ -163,6 +163,10 @@ Ex<> LoadedSetup::updateScene(VDeviceRef device) {
 	auto path = format("%/scenes/%.scene", mainPath(), name);
 	scene = EX_PASS(Scene::load(path));
 
+	auto name = this->name;
+	if(name.rfind("_old") != string::npos)
+		name.resize(name.size() - 4);
+
 	if(isOneOf(name, "bunny", "hairball", "teapot"))
 		render_config.scene_opacity = 0.5;
 	else

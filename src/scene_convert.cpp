@@ -177,6 +177,8 @@ void rescale(Scene &scene, float target_scale = 100.0f) {
 		mesh.bounding_box = (mesh.bounding_box + offset) * scale;
 }
 
+void optimizeTriangleOrdering(const int num_verts, CSpan<int> indices, Span<int> out_indices);
+
 Scene convertScene(WavefrontObject obj, bool flip_yz, Str scene_name, float squareness,
 				   bool merge_verts) {
 	Scene out;
@@ -191,8 +193,6 @@ Scene convertScene(WavefrontObject obj, bool flip_yz, Str scene_name, float squa
 			normal = -normal;
 		}
 	}
-
-	out.bounding_box = enclose(out.positions);
 
 	vector<string> tex_paths;
 	auto loadTex = [&](WavefrontMap &map) {
@@ -231,6 +231,37 @@ Scene convertScene(WavefrontObject obj, bool flip_yz, Str scene_name, float squa
 			cspan(obj.tris).subSpan(mtl_group.first_tri, mtl_group.first_tri + mtl_group.num_tris);
 		if(!mesh.tris)
 			continue;
+		out.meshes.emplace_back(mesh);
+	}
+
+	if(merge_verts && !out.tex_coords && !out.colors) {
+		print("Merging duplicate vertices...\n");
+		int old_count = out.numVerts();
+		out.mergeVertices(5);
+		int new_count = out.numVerts();
+		if(old_count != new_count)
+			print("Merged vertices: % -> %\n", old_count, new_count);
+		// TODO: move bbox computaiton to separate function
+	}
+
+	print("Optimizing triangle order ");
+	fflush(stdout);
+	double time = getTime();
+	for(auto &mesh : out.meshes) {
+		// TODO: might be slow in case of large number of meshes
+		auto old = mesh.tris;
+		auto indices = span(mesh.tris).reinterpret<int>();
+		optimizeTriangleOrdering(out.numVerts(), indices, indices);
+		for(auto &idx : indices)
+			DASSERT(idx >= 0 && idx < out.numVerts());
+		print(".");
+		fflush(stdout);
+	}
+	printf(" (%.2f sec)\n", getTime() - time);
+
+	print("Computing bounding boxes...\n");
+	out.bounding_box = enclose(out.positions);
+	for(auto &mesh : out.meshes) {
 		auto bmin = out.positions[mesh.tris[0][0]];
 		auto bmax = bmin;
 		for(auto &tri : mesh.tris)
@@ -240,28 +271,17 @@ Scene convertScene(WavefrontObject obj, bool flip_yz, Str scene_name, float squa
 				bmax = vmax(bmax, point);
 			}
 		mesh.bounding_box = {bmin, bmax};
-		out.meshes.emplace_back(mesh);
 	}
 
-	if(merge_verts && !out.tex_coords && !out.colors) {
-		int old_count = out.numVerts();
-		out.mergeVertices(5);
-		int new_count = out.numVerts();
-		if(old_count != new_count)
-			print("Merged vertices: % -> %\n", old_count, new_count);
-		// TODO: move bbox computaiton to separate function
-	}
-
+	print("Compressing & generating mipmaps for textures...\n");
 	if(out.hasTexCoords()) {
 		detectClampedTextures(out);
 
 		makeTextureAtlas(out, format("%_opaque", scene_name), true);
 		makeTextureAtlas(out, format("%_transparent", scene_name), false);
 	}
-
 	int max_atlas_mips = 6; // For atlas, other textures can have more ?
 
-	print("Compressing & generating mipmaps for textures...\n");
 	for(auto &texture : out.textures) {
 		print("- Processing texture: %\n", texture.plain_mips[0].size());
 		auto &plain_tex = texture.plain_mips[0];

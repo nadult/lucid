@@ -107,6 +107,7 @@
     <ClCompile Include="..\src\shading.cpp" />
     <ClCompile Include="..\src\simple_renderer.cpp" />
     <ClCompile Include="..\src\texture_atlas.cpp" />
+    <ClCompile Include="..\src\tri_optimizer.cpp" />
     <ClCompile Include="..\src\wavefront_obj.cpp" />
   </ItemGroup>
   <ItemGroup>

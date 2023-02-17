@@ -81,6 +81,7 @@ LucidApp::LucidApp(VWindowRef window, VDeviceRef device)
 	};
 
 	m_setups.emplace_back(new BoxesSetup());
+	m_setups.emplace_back(new PlanesSetup());
 	for(auto scene_name : LoadedSetup::findAll())
 		m_setups.emplace_back(new LoadedSetup(scene_name));
 	selectSetup(0);

@@ -84,6 +84,7 @@
 
 #include "shading.h"
 #include <fwk/enum_map.h>
+#include <fwk/gfx/fpp_camera.h>
 #include <fwk/gfx/orbiting_camera.h>
 #include <fwk/gui/imgui.h>
 #include <fwk/gui/widgets.h>
@@ -94,7 +95,8 @@ FilePath mainPath();
 SceneSetup::SceneSetup(string name) : name(move(name)) {}
 SceneSetup::~SceneSetup() = default;
 
-BoxesSetup::BoxesSetup() : SceneSetup("#boxes") { render_config.scene_opacity = 0.8; }
+BoxesSetup::BoxesSetup() : SceneSetup("#boxes") { render_config.scene_opacity = 0.5; }
+PlanesSetup::PlanesSetup() : SceneSetup("#planes") { render_config.scene_opacity = 0.25; }
 
 void BoxesSetup::doMenu(VDeviceRef device) {
 	auto scene_dims = m_dims;
@@ -111,6 +113,18 @@ void BoxesSetup::doMenu(VDeviceRef device) {
 	}
 }
 
+void PlanesSetup::doMenu(VDeviceRef device) {
+	auto &gui = Gui::instance();
+	int label_size = (int)ImGui::CalcTextSize("Num planes").x;
+	ImGui::SetNextItemWidth(220 * gui.dpiScale() - label_size);
+	int num_planes = m_num_planes;
+	ImGui::SliderInt("Num planes", &num_planes, 1, 256);
+	if(scene && m_num_planes != num_planes) {
+		m_num_planes = num_planes;
+		updateScene(device).check();
+	}
+}
+
 static void addBox(Scene &scene, SceneMesh &out, IColor color, float size, float3 pos) {
 	auto corners = (FBox(float3(size)) + pos).corners();
 	array<int, 3> tris[12] = {{0, 2, 3}, {0, 3, 1}, {1, 3, 7}, {1, 7, 5}, {2, 6, 7}, {2, 7, 3},
@@ -120,12 +134,26 @@ static void addBox(Scene &scene, SceneMesh &out, IColor color, float size, float
 	for(auto &tri : tris)
 		out.tris.emplace_back(tri[0] + off, tri[1] + off, tri[2] + off);
 	insertBack(scene.positions, corners);
-	scene.colors.resize(scene.colors.size() + 8, color);
+	scene.colors.resize(scene.colors.size() + corners.size(), color);
+}
+
+static void addQuad(Scene &scene, SceneMesh &out, IColor color, float size, float3 pos) {
+	auto corners = (FRect(float2(size)) + pos.xy()).corners();
+	array<int, 3> tris[2] = {{0, 1, 2}, {0, 2, 3}};
+
+	int off = scene.positions.size();
+	for(auto &tri : tris)
+		out.tris.emplace_back(tri[0] + off, tri[1] + off, tri[2] + off);
+	for(auto &corner : corners)
+		scene.positions.emplace_back(float3(corner, pos.z));
+	scene.colors.resize(scene.colors.size() + corners.size(), color);
 }
 
 Ex<> BoxesSetup::updateScene(VDeviceRef device) {
 	if(m_current_dims == m_dims && scene)
 		return {};
+
+	m_current_dims = m_dims;
 	float3 offset = -float3(m_dims) * (m_box_size + m_box_dist) * 0.5f;
 	float3 col_scale = vinv(float3(m_dims) - float3(1));
 	Random rand;
@@ -150,6 +178,35 @@ Ex<> BoxesSetup::updateScene(VDeviceRef device) {
 	scene->generateQuads(4.0f);
 
 	views = {OrbitingCamera({}, 10.0f, 0.5f, 0.8f)};
+	if(!camera)
+		camera = views.front();
+	return scene->updateRenderingData(*device);
+}
+
+Ex<> PlanesSetup::updateScene(VDeviceRef device) {
+	if(m_current_planes == m_num_planes && scene)
+		return {};
+	m_current_planes = m_num_planes;
+
+	scene = Scene{};
+	SceneMesh mesh;
+	for(int z = 0; z < m_num_planes; z++) {
+		float size = m_plane_size * (1.0 + float(z) * 0.05);
+		float t = float(z) / (m_num_planes - 1);
+		float3 pos = float3(-0.5, -0.5, 0.0) * size + float3(0.0, 0, z * m_plane_dist);
+		FColor color(hsvToRgb(float3(t, 1.0, 1.0)), 1.0f);
+		addQuad(*scene, mesh, IColor(color), size, pos);
+	}
+	mesh.bounding_box = enclose(scene->positions);
+	mesh.colors_opaque = true;
+
+	scene->materials.emplace_back("default");
+	scene->meshes.emplace_back(std::move(mesh));
+	scene->generateQuads(4.0f);
+
+	// TODO: rasterization bugs visible in this scene when camera forward
+	// vector is equal to -plane.normal
+	views = {FppCamera({0, 0, -5.0}, normalize(float2(0.001, 1.0)), 0.001)};
 	if(!camera)
 		camera = views.front();
 	return scene->updateRenderingData(*device);

@@ -14,19 +14,15 @@ SceneLighting SceneLighting::makeDefault() {
 	out.sun.power = 2.5;
 	out.ambient.color = {0.8, 0.8, 0.6};
 	out.ambient.power = 0.4f;
-	out.scene.color = {0.7, 0.6, 0.5};
-	out.scene.power = 0.3f;
 	return out;
 }
 
 SceneLighting::operator shader::Lighting() const {
 	shader::Lighting out;
 	out.ambient_color = float4(ambient.color, 1.0);
-	out.scene_color = float4(scene.color, 1.0);
 	out.sun_color = float4(sun.color, 1.0);
 	out.sun_dir = float4(sun.dir, 0.0);
 	out.ambient_power = ambient.power;
-	out.scene_power = scene.power;
 	out.sun_power = sun.power;
 	return out;
 }

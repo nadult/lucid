@@ -26,7 +26,6 @@ struct SceneLighting {
 	operator shader::Lighting() const;
 
 	SimpleLight ambient;
-	SimpleLight scene;
 	SunLight sun;
 };
 

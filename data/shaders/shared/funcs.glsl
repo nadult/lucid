@@ -250,8 +250,8 @@ vec3 skyColor(float vertical_pos) {
 }
 
 vec3 finalShading(Lighting lighting, vec3 diffuse, float light_value) {
-	// TODO: is this correct? read more about HDR?
-	diffuse = SRGBToLinear(mix(diffuse, lighting.scene_color.rgb, lighting.scene_power));
+	// TODO: read more about HDR?
+	diffuse = SRGBToLinear(diffuse);
 	vec3 amb_light = lighting.ambient_color.rgb * lighting.ambient_power;
 	vec3 dif_light = lighting.sun_color.rgb * lighting.sun_power * light_value;
 

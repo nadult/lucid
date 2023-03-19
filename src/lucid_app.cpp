@@ -425,12 +425,9 @@ void LucidApp::doMenu() {
 	ImGui::Checkbox("Wireframe mode (only simple rendering)", &m_wireframe_mode);
 
 	// TODO: different opacity for different scenes ?
-	int labels_size[] = {(int)ImGui::CalcTextSize("Scene opacity").x,
-						 (int)ImGui::CalcTextSize("Scene color").x};
-	ImGui::SetNextItemWidth(220 * m_gui.dpiScale() - labels_size[0]);
+	int label_size = (int)ImGui::CalcTextSize("Scene opacity").x;
+	ImGui::SetNextItemWidth(220 * m_gui.dpiScale() - label_size);
 	ImGui::SliderFloat("Scene opacity", &setup.render_config.scene_opacity, 0.0f, 1.0f);
-	ImGui::SetNextItemWidth(220 * m_gui.dpiScale() - labels_size[0]);
-	ImGui::ColorEdit3("Scene color", setup.render_config.scene_color.v, 0);
 
 	/*if(m_is_picking_block) {
 		auto bin_size = m_lucid_renderer->binSize();
@@ -598,10 +595,8 @@ void LucidApp::drawScene() {
 					  frustum,
 					  cam};
 
-	for(auto &material : ctx.materials) {
+	for(auto &material : ctx.materials)
 		material.opacity *= setup.render_config.scene_opacity;
-		material.diffuse *= setup.render_config.scene_color;
-	}
 	if(setup.render_config.scene_opacity < 1.0)
 		for(auto &dc : ctx.dcs)
 			dc.opts &= ~DrawCallOpt::is_opaque;

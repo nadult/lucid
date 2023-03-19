@@ -12,10 +12,9 @@ struct InstanceData {
 
 struct Lighting {
 	vec4 ambient_color;
-	vec4 scene_color;
 	vec4 sun_color;
 	vec4 sun_dir;
-	float scene_power, sun_power, ambient_power;
+	float sun_power, ambient_power;
 };
 
 // All vectors in world space

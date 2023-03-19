@@ -139,8 +139,6 @@ Ex<> SimpleRenderer::render(const RenderContext &ctx, bool wireframe) {
 	shader::Lighting lighting;
 	lighting.ambient_color = ctx.lighting.ambient.color;
 	lighting.ambient_power = ctx.lighting.ambient.power;
-	lighting.scene_color = ctx.lighting.scene.color;
-	lighting.scene_power = ctx.lighting.scene.power;
 	lighting.sun_color = ctx.lighting.sun.color;
 	lighting.sun_power = ctx.lighting.sun.power;
 	lighting.sun_dir = ctx.lighting.sun.dir;

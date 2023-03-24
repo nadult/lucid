@@ -55,6 +55,9 @@
     <ClCompile Include="..\src\path_tracer.cpp">
       <Filter>source</Filter>
     </ClCompile>
+    <ClCompile Include="..\src\bvh.cpp">
+      <Filter>source</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\src\lucid_app.h">
@@ -103,6 +106,9 @@
       <Filter>source</Filter>
     </ClInclude>
     <ClInclude Include="..\src\wavefront_obj.h">
+      <Filter>source</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\bvh.h">
       <Filter>source</Filter>
     </ClInclude>
   </ItemGroup>

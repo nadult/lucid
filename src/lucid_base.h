@@ -42,6 +42,7 @@ struct SceneDrawCall {
 };
 
 // TODO: cleanup in structures
+struct Scene;
 struct SceneMaterial;
 struct SceneDrawCall;
 struct SceneLighting;
@@ -56,6 +57,7 @@ struct VertexArray {
 };
 
 struct RenderContext {
+	Scene &scene;
 	VulkanDevice &device;
 	RenderConfig config;
 	VertexArray verts;

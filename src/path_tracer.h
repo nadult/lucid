@@ -32,6 +32,7 @@ class PathTracer {
 
   private:
 	Ex<> setupInputData(const Context &);
+	void updateScene(Scene &);
 
 	template <class T>
 	Maybe<ShaderDebugInfo> getDebugData(const Context &, VBufferSpan<T>, Str title);
@@ -43,6 +44,8 @@ class PathTracer {
 
 	VBufferSpan<shader::LucidConfig> m_config;
 	VBufferSpan<u32> m_info;
+
+	string m_scene_id;
 
 	static constexpr int num_frames = 2;
 	VBufferSpan<> m_frame_instance_data[num_frames];

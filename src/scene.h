@@ -5,6 +5,7 @@
 #include <fwk/vulkan_base.h>
 
 struct WavefrontObject;
+class TriangleBVH;
 
 struct SceneTexture {
 	SceneTexture();
@@ -65,6 +66,9 @@ struct SceneMesh {
 };
 
 struct Scene {
+	Scene();
+	FWK_MOVABLE_CLASS(Scene);
+
 	static Ex<Scene> loadObj(ZStr path);
 	static Ex<Scene> loadAssimp(ZStr path);
 	static Ex<Scene> load(ZStr Path);
@@ -98,11 +102,14 @@ struct Scene {
 	vector<float3> normals;
 	vector<uint> quantized_normals;
 
-	string resource_path;
+	string id, resource_path;
 	vector<SceneTexture> textures;
 	vector<SceneMaterial> materials;
 	vector<SceneMesh> meshes;
 	FBox bounding_box;
+
+	void generateBVH();
+	Dynamic<TriangleBVH> bvh;
 
 	// ------ Rendering data --------------------------------------------------
 

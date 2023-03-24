@@ -1,5 +1,6 @@
 #include "scene.h"
 
+#include "bvh.h"
 #include "quad_generator.h"
 #include "shading.h"
 #include <fwk/gfx/compressed_image.h>
@@ -117,6 +118,9 @@ Ex<void> SceneTexture::loadPlain(ZStr path) {
 	print("Loaded texture '%' in % ms\n", path, (getTime() - time) * 1000.0);
 	return {};
 }
+
+Scene::Scene() = default;
+FWK_MOVABLE_CLASS_IMPL(Scene);
 
 Ex<Scene> Scene::load(ZStr path) {
 	Scene scene;
@@ -422,4 +426,21 @@ Pair<PVImageView> Scene::textureAtlasPair() const {
 			out.second = tex.vk_image;
 	}
 	return out;
+}
+
+void Scene::generateBVH() {
+	auto time = getTime();
+
+	vector<Triangle3F> tris;
+	tris.reserve(numTris());
+
+	for(auto &mesh : meshes) {
+		for(auto mesh_tri : mesh.tris) {
+			Triangle3F tri(positions[mesh_tri[0]], positions[mesh_tri[1]], positions[mesh_tri[2]]);
+			tris.emplace_back(tri);
+		}
+	}
+
+	bvh.emplace(move(tris));
+	print("BVH built in % msec\n", int((getTime() - time) * 1000.0));
 }

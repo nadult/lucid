@@ -113,6 +113,8 @@ void BoxesSetup::doMenu(VDeviceRef device) {
 	}
 }
 
+string BoxesSetup::sceneId() const { return format("#boxes_%", m_dims); }
+
 void PlanesSetup::doMenu(VDeviceRef device) {
 	auto &gui = Gui::instance();
 	int label_size = (int)ImGui::CalcTextSize("Num planes").x;
@@ -124,6 +126,8 @@ void PlanesSetup::doMenu(VDeviceRef device) {
 		updateScene(device).check();
 	}
 }
+
+string PlanesSetup::sceneId() const { return format("#planes_%", m_num_planes); }
 
 static void addBox(Scene &scene, SceneMesh &out, IColor color, float size, float3 pos) {
 	auto corners = (FBox(float3(size)) + pos).corners();
@@ -159,6 +163,7 @@ Ex<> BoxesSetup::updateScene(VDeviceRef device) {
 	Random rand;
 
 	scene = Scene{};
+	scene->id = sceneId();
 	SceneMesh mesh;
 	for(int x = 0; x < m_dims.x; x++) {
 		for(int y = 0; y < m_dims.y; y++) {
@@ -189,6 +194,7 @@ Ex<> PlanesSetup::updateScene(VDeviceRef device) {
 	m_current_planes = m_num_planes;
 
 	scene = Scene{};
+	scene->id = sceneId();
 	SceneMesh mesh;
 	for(int z = 0; z < m_num_planes; z++) {
 		float size = m_plane_size * (1.0 + float(z) * 0.05);
@@ -219,6 +225,7 @@ Ex<> LoadedSetup::updateScene(VDeviceRef device) {
 		return {};
 	auto path = format("%/scenes/%.scene", mainPath(), name);
 	scene = EX_PASS(Scene::load(path));
+	scene->id = name;
 
 	auto name = this->name;
 	if(name.rfind("_old") != string::npos)

@@ -24,6 +24,7 @@ class BoxesSetup final : public SceneSetup {
 	BoxesSetup();
 	void doMenu(VDeviceRef) override;
 	Ex<> updateScene(VDeviceRef) override;
+	string sceneId() const;
 
   private:
 	int3 m_current_dims;
@@ -37,6 +38,7 @@ class PlanesSetup final : public SceneSetup {
 	PlanesSetup();
 	void doMenu(VDeviceRef) override;
 	Ex<> updateScene(VDeviceRef) override;
+	string sceneId() const;
 
   private:
 	int m_current_planes = 0;

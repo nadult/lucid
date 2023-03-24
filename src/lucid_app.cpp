@@ -572,7 +572,8 @@ void LucidApp::drawScene() {
 	auto draws = setup.scene->draws(frustum);
 	auto tex_pair = setup.scene->textureAtlasPair();
 
-	RenderContext ctx{*m_device,
+	RenderContext ctx{*setup.scene,
+					  *m_device,
 					  setup.render_config,
 					  setup.scene->verts,
 					  setup.scene->tris_ib,

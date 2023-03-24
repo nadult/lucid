@@ -114,9 +114,18 @@ Ex<void> PathTracer::exConstruct(VulkanDevice &device, ShaderCompiler &compiler,
 	return {};
 }
 
+void PathTracer::updateScene(Scene &scene) {
+	m_scene_id = scene.id;
+	if(!scene.bvh)
+		scene.generateBVH();
+}
+
 void PathTracer::render(const Context &ctx) {
 	auto &cmds = ctx.device.cmdQueue();
 	PERF_GPU_SCOPE(cmds);
+
+	if(ctx.scene.id != m_scene_id)
+		updateScene(ctx.scene);
 
 	cmds.fullBarrier();
 

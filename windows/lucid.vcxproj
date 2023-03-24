@@ -96,6 +96,7 @@
     </Manifest>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="..\src\bvh.cpp" />
     <ClCompile Include="..\src\lucid.cpp" />
     <ClCompile Include="..\src\lucid_app.cpp" />
     <ClCompile Include="..\src\lucid_renderer.cpp" />
@@ -112,6 +113,7 @@
     <ClCompile Include="..\src\wavefront_obj.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="..\src\bvh.h" />
     <ClInclude Include="..\src\lucid_app.h" />
     <ClInclude Include="..\src\lucid_base.h" />
     <ClInclude Include="..\src\lucid_pch.h" />

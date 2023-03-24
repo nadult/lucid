@@ -2,6 +2,7 @@
 
 #include "lucid_renderer.h"
 #include "meshlet.h"
+#include "path_tracer.h"
 #include "scene_setup.h"
 #include "simple_renderer.h"
 
@@ -68,6 +69,7 @@ LucidApp::LucidApp(VWindowRef window, VDeviceRef device)
 	m_shader_compiler.emplace(sc_setup);
 	SimpleRenderer::addShaderDefs(*device, *m_shader_compiler, shader_config);
 	LucidRenderer::addShaderDefs(*device, *m_shader_compiler, shader_config);
+	PathTracer::addShaderDefs(*device, *m_shader_compiler, shader_config);
 
 	if(perf::Manager::instance())
 		m_perf_analyzer.emplace();
@@ -197,7 +199,6 @@ Ex<void> LucidApp::updateRenderer() {
 
 	bool do_update =
 		!m_simple_renderer || !m_lucid_renderer || m_lucid_renderer->opts() != m_lucid_opts;
-
 	if(updateViewport())
 		do_update = true;
 
@@ -218,7 +219,7 @@ Ex<void> LucidApp::updateRenderer() {
 		auto swap_chain = m_device->swapChain();
 		m_lucid_renderer.reset();
 		m_simple_renderer.reset();
-
+		m_path_tracer.reset();
 		m_device->waitForIdle();
 
 		m_simple_renderer = EX_PASS(construct<SimpleRenderer>(m_device, *m_shader_compiler,
@@ -227,6 +228,12 @@ Ex<void> LucidApp::updateRenderer() {
 			*m_device, *m_shader_compiler, swap_chain->format(), m_lucid_opts, m_viewport.size()));
 		m_last_shader_update_time = m_last_time;
 		m_scene_frame_id = 0;
+	}
+
+	if(m_rendering_mode == RenderingMode::path_trace && !m_path_tracer) {
+		auto format = m_device->swapChain()->format();
+		m_path_tracer = EX_PASS(construct<PathTracer>(*m_device, *m_shader_compiler, format,
+													  m_path_tracer_opts, m_viewport.size()));
 	}
 
 	return {};
@@ -429,17 +436,6 @@ void LucidApp::doMenu() {
 	ImGui::SetNextItemWidth(220 * m_gui.dpiScale() - label_size);
 	ImGui::SliderFloat("Scene opacity", &setup.render_config.scene_opacity, 0.0f, 1.0f);
 
-	/*if(m_is_picking_block) {
-		auto bin_size = m_lucid_renderer->binSize();
-		m_gui.text("Picking %x% bin: %", bin_size, bin_size, m_selected_block);
-		if(m_selection_info) {
-			m_gui.text("TODO: selection info");
-		}
-	} else if(ImGui::Button("Introspect bin")) {
-		m_is_picking_block = true;
-	}
-	ImGui::Checkbox("Merge introspected masks", &m_merge_masks);*/
-
 	if(m_lucid_renderer && scene->numQuads() > m_lucid_renderer->maxSceneQuads()) {
 		auto text = format(
 			"\nScene has too many quads (%K, max:%K)\nfor Lucid rasterizer (Not enough GPU memory)",
@@ -476,8 +472,6 @@ bool LucidApp::handleInput(vector<InputEvent> events, float time_diff) {
 
 		if(event.mouseButtonDown(InputButton::right) && m_is_picking_block) {
 			m_is_picking_block = false;
-			m_selected_block = none;
-			m_selection_info = none;
 		}
 
 		if(event.mouseButtonDown(InputButton::left) && m_setup_idx != -1) {
@@ -502,11 +496,7 @@ bool LucidApp::handleInput(vector<InputEvent> events, float time_diff) {
 	if(m_is_picking_block && m_mouse_pos) {
 		int2 pos = int2(*m_mouse_pos);
 		pos.y = m_viewport.height() - pos.y;
-		auto bin_size = m_lucid_renderer->binSize();
-		if(m_viewport.contains(pos))
-			m_selected_block = pos / bin_size;
-		else
-			m_selected_block = none;
+		// TODO
 	}
 
 	return true;
@@ -602,29 +592,15 @@ void LucidApp::drawScene() {
 			dc.opts &= ~DrawCallOpt::is_opaque;
 
 	clearScreen(ctx);
-	if(m_rendering_mode != RenderingMode::lucid)
+	if(isOneOf(m_rendering_mode, RenderingMode::simple, RenderingMode::mixed))
 		m_simple_renderer->render(ctx, m_wireframe_mode).check();
-	if(m_rendering_mode != RenderingMode::simple) {
+	if(isOneOf(m_rendering_mode, RenderingMode::lucid, RenderingMode::mixed))
 		if(setup.scene->numQuads() <= m_lucid_renderer->maxSceneQuads())
 			m_lucid_renderer->render(ctx);
-	}
+
+	if(m_rendering_mode == RenderingMode::path_trace && m_path_tracer)
+		m_path_tracer->render(ctx);
 	m_scene_frame_id++;
-}
-
-void LucidApp::draw2D() {
-	// TODO: fixme
-	/*Canvas2D renderer_2d(m_viewport, Orient2D::y_up);
-	if(m_selected_block && m_lucid_renderer) {
-		int bin_size = m_lucid_renderer->binSize();
-		int block_size = m_lucid_renderer->blockSize();
-
-		int2 offset = *m_selected_block;
-		IRect block_rect = IRect(0, 0, block_size + 1, block_size + 1) + offset;
-		IRect bin_rect = IRect(0, 0, bin_size + 1, bin_size + 1) + offset;
-		renderer_2d.addRect(bin_rect, ColorId::brown);
-		renderer_2d.addRect(block_rect, ColorId::purple);
-	}
-	renderer_2d.render();*/
 }
 
 void LucidApp::drawFrame() {
@@ -634,7 +610,6 @@ void LucidApp::drawFrame() {
 	auto swap_chain = m_device->swapChain();
 	if(swap_chain->status() == VSwapChainStatus::image_acquired) {
 		drawScene();
-		draw2D();
 
 		auto &cmds = m_device->cmdQueue();
 		PERF_GPU_SCOPE(cmds, "ImGuiWrapper::drawFrame");
@@ -660,20 +635,6 @@ bool LucidApp::mainLoop() {
 
 	updateRenderer().check();
 	drawFrame();
-
-	if(m_selected_block && m_lucid_renderer && m_rendering_mode != RenderingMode::simple &&
-	   m_setup_idx != -1) {
-		auto &verts = m_setups[m_setup_idx]->scene->positions;
-		if(m_is_final_pick) {
-			// TODO: use it for bins / tiles / blocks introspection
-			// m_selection_info = ...
-			m_is_final_pick = false;
-			m_is_picking_block = false;
-			m_selected_block = none;
-		}
-	} else {
-		m_selection_info = none;
-	}
 
 	return true;
 }

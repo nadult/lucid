@@ -1,6 +1,7 @@
 #pragma once
 
 #include "lucid_renderer.h"
+#include "path_tracer.h"
 #include "shading.h"
 #include <fwk/gfx/camera_control.h>
 #include <fwk/gui/gui.h>
@@ -11,10 +12,11 @@
 
 class LucidRenderer;
 class SimpleRenderer;
+class PathTracer;
 class SceneSetup;
 struct Scene;
 
-DEFINE_ENUM(RenderingMode, simple, lucid, mixed);
+DEFINE_ENUM(RenderingMode, simple, lucid, mixed, path_trace);
 
 class LucidApp {
   public:
@@ -40,7 +42,6 @@ class LucidApp {
 	void clearScreen(const RenderContext &);
 	void drawFrame();
 	void drawScene();
-	void draw2D();
 
 	bool mainLoop();
 	static bool mainLoop(VulkanWindow &, void *this_ptr);
@@ -63,9 +64,11 @@ class LucidApp {
 	Maybe<float3> m_picked_pos;
 
 	Dynamic<ShaderCompiler> m_shader_compiler;
+	Dynamic<PathTracer> m_path_tracer;
 	Dynamic<LucidRenderer> m_lucid_renderer;
 	Dynamic<SimpleRenderer> m_simple_renderer;
 	LucidRenderOpts m_lucid_opts = none;
+	PathTracerOpts m_path_tracer_opts = none;
 	bool m_wireframe_mode = false;
 	bool m_test_meshlets = false;
 	bool m_show_stats = false;
@@ -81,8 +84,6 @@ class LucidApp {
 	bool m_merge_masks = false;
 	bool m_is_picking_block = false;
 	bool m_is_final_pick = false;
-	Maybe<int2> m_selected_block;
-	Maybe<int> m_selection_info;
 
 	struct StatPoint {
 		perf::ExecId exec_id;

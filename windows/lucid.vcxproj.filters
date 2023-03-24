@@ -56,6 +56,9 @@
     <ClCompile Include="..\src\tri_optimizer.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="..\src\path_tracer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\src\lucid_app.h">
@@ -101,6 +104,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\src\shader_structs.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\path_tracer.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
@@ -150,6 +156,9 @@
     </None>
     <None Include="..\data\shaders\shared\raster.glsl">
       <Filter>shaders\shared</Filter>
+    </None>
+    <None Include="..\data\shaders\trace.glsl">
+      <Filter>shaders</Filter>
     </None>
   </ItemGroup>
 </Project>

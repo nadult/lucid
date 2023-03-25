@@ -25,13 +25,15 @@ Ex<int> exMain(int argc, char **argv) {
 	// TODO: xml loading is still messy
 	Maybe<AnyConfig> config = LucidApp::loadConfig();
 	VInstanceSetup setup;
-#ifndef NDEBUG
-	setup.debug_levels = VDebugLevel::warning | VDebugLevel::error;
-	setup.debug_types = all<VDebugType>;
-#endif
 	auto window_flags = VWindowFlag::resizable | VWindowFlag::centered | VWindowFlag::allow_hidpi |
 						VWindowFlag::sleep_when_minimized;
 	uint multisampling = 1;
+#ifdef NDEBUG
+	bool debug_mode = false;
+#else
+	bool debug_mode = true;
+#endif
+
 	VSwapChainSetup swap_chain_setup;
 	// TODO: UI is configure for Unorm, shouldn't we use SRGB by default?
 	swap_chain_setup.preferred_formats = {{VK_FORMAT_B8G8R8A8_UNORM}};
@@ -48,6 +50,10 @@ Ex<int> exMain(int argc, char **argv) {
 			return 0;
 		} else if(argument == "--vsync") {
 			swap_chain_setup.preferred_present_mode = VPresentMode::fifo;
+		} else if(argument == "--vulkan-debug") {
+			debug_mode = true;
+		} else if(argument == "--no-vulkan-debug") {
+			debug_mode = false;
 		} else if(argument == "--msaa") {
 			ASSERT(n + 1 < argc && "Invalid nr of arguments");
 			multisampling = clamp(atoi(argv[n + 1]), 1, 16);
@@ -55,6 +61,11 @@ Ex<int> exMain(int argc, char **argv) {
 		} else {
 			FATAL("Unsupported argument: %s", argument.c_str());
 		}
+	}
+
+	if(debug_mode) {
+		setup.debug_levels = VDebugLevel::warning | VDebugLevel::error;
+		setup.debug_types = all<VDebugType>;
 	}
 
 	// TODO: create instance on a thread, in the meantime load resources?

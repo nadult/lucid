@@ -7,18 +7,22 @@
 #extension GL_KHR_shader_subgroup_vote : require
 #extension GL_KHR_shader_subgroup_shuffle : require
 
-coherent layout(std430, binding = 0) buffer lucid_info_ {
-	LucidInfo g_info;
+coherent layout(std430, binding = 0) buffer info_ {
+	PathTracerInfo g_info;
 	int g_counts[];
 };
-layout(binding = 1) uniform lucid_config_ { LucidConfig u_config; };
+layout(binding = 1) uniform config_ { PathTracerConfig u_config; };
 
 layout(binding = 2, rgba8) uniform image2D g_raster_image;
-layout(binding = 3) uniform sampler2D opaque_texture;
-layout(binding = 4) uniform sampler2D transparent_texture;
+layout(binding = 3) buffer buf03_ { uint g_bvh_nodes[]; };
+layout(binding = 4) buffer buf04_ { float g_bvh_boxes[]; };
+layout(binding = 5) buffer buf05_ { vec4 g_bvh_tris[]; };
+
+layout(binding = 10) uniform sampler2D opaque_texture;
+layout(binding = 11) uniform sampler2D transparent_texture;
 
 #include "%shader_debug"
-DEBUG_SETUP(1, 10)
+DEBUG_SETUP(1, 12)
 
 shared ivec2 s_bin_pos;
 

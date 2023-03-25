@@ -12,8 +12,8 @@ DEFINE_ENUM(PathTracerOpt, timers, debug);
 using PathTracerOpts = EnumFlags<PathTracerOpt>;
 
 namespace shader {
-struct LucidConfig;
-struct LucidInfo;
+struct PathTracerConfig;
+struct PathTracerInfo;
 }
 
 class PathTracer {
@@ -32,7 +32,7 @@ class PathTracer {
 
   private:
 	Ex<> setupInputData(const Context &);
-	void updateScene(Scene &);
+	Ex<> updateScene(VulkanDevice &, Scene &);
 
 	template <class T>
 	Maybe<ShaderDebugInfo> getDebugData(const Context &, VBufferSpan<T>, Str title);
@@ -42,19 +42,20 @@ class PathTracer {
 	vector<ShaderDefId> m_shader_def_ids;
 	PVPipeline p_trace;
 
-	VBufferSpan<shader::LucidConfig> m_config;
+	VBufferSpan<shader::PathTracerConfig> m_config;
 	VBufferSpan<u32> m_info;
 
 	string m_scene_id;
+	VBufferSpan<FBox> m_bvh_boxes;
+	VBufferSpan<u32> m_bvh_nodes;
+	VBufferSpan<float4> m_bvh_triangles;
 
 	static constexpr int num_frames = 2;
-	VBufferSpan<> m_frame_instance_data[num_frames];
-	VBufferSpan<u32> m_frame_info[num_frames];
-	VBufferSpan<shader::LucidConfig> m_frame_config[num_frames];
+	VBufferSpan<shader::PathTracerInfo> m_frame_info[num_frames];
+	VBufferSpan<shader::PathTracerConfig> m_frame_config[num_frames];
 	VBufferSpan<u32> m_debug_buffer;
 
 	int2 m_bin_counts;
 	int m_bin_count, m_bin_size;
-
 	int2 m_size; // TODO: rename
 };

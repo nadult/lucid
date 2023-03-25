@@ -1,5 +1,6 @@
 #include "path_tracer.h"
 
+#include "bvh.h"
 #include "scene.h"
 #include "shader_structs.h"
 #include "shading.h"
@@ -47,8 +48,8 @@ Ex<void> PathTracer::exConstruct(VulkanDevice &device, ShaderCompiler &compiler,
 								 VColorAttachment color_att, Opts opts, int2 view_size) {
 	print("Constructing PathTracer (flags:% res:%):\n", opts, view_size);
 	auto time = getTime();
-	m_bin_size = 32; //opts & Opt::bin_size_64 ? 64 : 32;
 
+	m_bin_size = 32;
 	m_bin_counts = (view_size + int2(m_bin_size - 1)) / m_bin_size;
 	m_bin_count = m_bin_counts.x * m_bin_counts.y;
 	m_opts = opts;
@@ -99,25 +100,50 @@ Ex<void> PathTracer::exConstruct(VulkanDevice &device, ShaderCompiler &compiler,
 
 	uint bin_counters_size = LUCID_INFO_SIZE + m_bin_count * 10;
 	for(int i : intRange(num_frames)) {
-		auto instance_usage = VBufferUsage::storage_buffer | VBufferUsage::transfer_dst;
 		auto info_usage = VBufferUsage::storage_buffer | VBufferUsage::transfer_src |
 						  VBufferUsage::transfer_dst | VBufferUsage::indirect_buffer;
 		auto config_usage = VBufferUsage::uniform_buffer | VBufferUsage::transfer_dst;
 		auto mem_usage = VMemoryUsage::temporary;
 		m_frame_info[i] =
-			EX_PASS(VulkanBuffer::create<u32>(device, bin_counters_size, info_usage, mem_usage));
-		m_frame_config[i] =
-			EX_PASS(VulkanBuffer::create<shader::LucidConfig>(device, 1, config_usage, mem_usage));
+			EX_PASS(VulkanBuffer::create<shader::PathTracerInfo>(device, 1, info_usage, mem_usage));
+		m_frame_config[i] = EX_PASS(
+			VulkanBuffer::create<shader::PathTracerConfig>(device, 1, config_usage, mem_usage));
 	}
 
 	print("Total build time: % ms\n\n", int((getTime() - time) * 1000.0));
 	return {};
 }
 
-void PathTracer::updateScene(Scene &scene) {
+Ex<> PathTracer::updateScene(VulkanDevice &device, Scene &scene) {
 	m_scene_id = scene.id;
 	if(!scene.bvh)
 		scene.generateBVH();
+
+	auto &bvh = *scene.bvh;
+	PodVector<u32> nodes(bvh.m_nodes.size() * 2);
+	PodVector<FBox> boxes(bvh.m_nodes.size());
+	PodVector<float4> tris(bvh.m_tris.size() * 3);
+
+	for(int i : intRange(bvh.m_nodes)) {
+		auto &node = bvh.m_nodes[i];
+		nodes[i * 2 + 0] = node.count;
+		nodes[i * 2 + 1] = node.sub_node;
+		boxes[i] = node.bbox;
+	}
+
+	for(int i : intRange(bvh.m_tris)) {
+		auto &tri = bvh.m_tris[i];
+		tris[i * 3 + 0] = float4(tri.a(), 1.0f);
+		tris[i * 3 + 1] = float4(tri.b(), 1.0f);
+		tris[i * 3 + 2] = float4(tri.c(), 1.0f);
+	}
+
+	auto usage = VBufferUsage::storage_buffer | VBufferUsage::transfer_dst;
+	m_bvh_nodes = EX_PASS(VulkanBuffer::createAndUpload(device, nodes, usage));
+	m_bvh_boxes = EX_PASS(VulkanBuffer::createAndUpload(device, boxes, usage));
+	m_bvh_triangles = EX_PASS(VulkanBuffer::createAndUpload(device, tris, usage));
+
+	return {};
 }
 
 void PathTracer::render(const Context &ctx) {
@@ -125,25 +151,30 @@ void PathTracer::render(const Context &ctx) {
 	PERF_GPU_SCOPE(cmds);
 
 	if(ctx.scene.id != m_scene_id)
-		updateScene(ctx.scene);
+		updateScene(ctx.device, ctx.scene).check();
 
 	cmds.fullBarrier();
 
 	// TODO: second frame is broken
 	setupInputData(ctx).check();
+
 	cmds.bind(p_trace);
 	auto ds = cmds.bindDS(0);
 	ds.set(0, m_info);
 	ds.set(1, VDescriptorType::uniform_buffer, m_config);
-	auto sampler = ctx.device.getSampler(ctx.config.sampler_setup);
-	ds.set(3, {{sampler, ctx.opaque_tex}});
-	ds.set(4, {{sampler, ctx.trans_tex}});
 
 	auto swap_chain = ctx.device.swapChain();
 	auto raster_image = swap_chain->acquiredImage();
 	ds.setStorageImage(2, raster_image, VImageLayout::general);
+
+	ds.set(3, m_bvh_nodes, m_bvh_boxes, m_bvh_triangles);
+
+	auto sampler = ctx.device.getSampler(ctx.config.sampler_setup);
+	ds.set(10, {{sampler, ctx.opaque_tex}});
+	ds.set(11, {{sampler, ctx.trans_tex}});
+
 	if(m_opts & Opt::debug) {
-		ds.set(10, m_debug_buffer);
+		ds.set(12, m_debug_buffer);
 		shaderDebugInitBuffer(cmds, m_debug_buffer);
 	}
 
@@ -159,17 +190,14 @@ Ex<> PathTracer::setupInputData(const Context &ctx) {
 	PERF_GPU_SCOPE(cmds);
 
 	auto frame_index = cmds.frameIndex() % num_frames;
-	m_info = m_frame_info[frame_index];
-	cmds.fill(m_info.subSpan(0, LUCID_INFO_SIZE + m_bin_count * 6), 0);
 
-	shader::LucidConfig config;
+	shader::PathTracerConfig config;
 	config.frustum = FrustumInfo(ctx.camera);
 	config.view_proj_matrix = ctx.camera.matrix();
 	config.lighting = ctx.lighting;
 	config.background_color = (float4)FColor(ctx.config.background_color);
-	config.num_instances = 0;
-	config.enable_backface_culling = ctx.config.backface_culling;
-	config.instance_packet_size = 0;
+	config.num_nodes = m_bvh_nodes.size() / 2;
+	config.num_triangles = m_bvh_triangles.size() / 3;
 	m_config = m_frame_config[frame_index];
 	EXPECT(cmds.upload(m_config, cspan(&config, 1)));
 

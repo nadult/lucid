@@ -95,4 +95,20 @@ struct LucidConfig {
 	int instance_packet_size;
 };
 
+struct PathTracerInfo {
+	int temp[256];
+};
+
+// This structure keeps uniform data passed to Lucid shaders
+struct PathTracerConfig {
+	Frustum frustum;
+	mat4 view_proj_matrix;
+	Lighting lighting;
+	vec4 background_color;
+
+	uint num_nodes;
+	uint num_triangles;
+	uint max_depth;
+};
+
 #endif

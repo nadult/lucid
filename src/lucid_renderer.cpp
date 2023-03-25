@@ -288,7 +288,7 @@ Ex<void> LucidRenderer::exConstruct(VulkanDevice &device, ShaderCompiler &compil
 		m_debug_buffer = EX_PASS(VulkanBuffer::create<u32>(device, 1024 * 1024, usage, mem_usage));
 	}
 
-	uint bin_counters_size = LUCID_INFO_SIZE + m_bin_count * 10;
+	uint bin_counters_size = sizeof(shader::LucidInfo) + m_bin_count * 10;
 	for(int i : intRange(num_frames)) {
 		auto instance_usage = VBufferUsage::storage_buffer | VBufferUsage::transfer_dst;
 		auto info_usage = VBufferUsage::storage_buffer | VBufferUsage::transfer_src |
@@ -419,7 +419,7 @@ Ex<> LucidRenderer::setupInputData(const Context &ctx) {
 
 	auto frame_index = cmds.frameIndex() % num_frames;
 	m_info = m_frame_info[frame_index];
-	cmds.fill(m_info.subSpan(0, LUCID_INFO_SIZE + m_bin_count * 6), 0);
+	cmds.fill(m_info.subSpan(0, sizeof(shader::LucidInfo) + m_bin_count * 6), 0);
 
 	shader::LucidConfig config;
 	config.frustum = FrustumInfo(ctx.camera);
@@ -619,7 +619,7 @@ void LucidRenderer::verifyInfo() {
 
 	shader::LucidInfo info;
 	memcpy(&info, m_last_info.data(), sizeof(info));
-	auto bin_counters = cspan(m_last_info).subSpan(LUCID_INFO_SIZE);
+	auto bin_counters = cspan(m_last_info).subSpan(sizeof(shader::LucidInfo));
 
 	CSpan<uint> bin_quad_counts = cspan(bin_counters.data() + m_bin_count * 0, m_bin_count);
 	CSpan<uint> bin_quad_offsets = cspan(bin_counters.data() + m_bin_count * 1, m_bin_count);
@@ -676,7 +676,7 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 
 	shader::LucidInfo info;
 	memcpy(&info, m_last_info.data(), sizeof(info));
-	auto bin_counters = cspan(m_last_info).subSpan(LUCID_INFO_SIZE);
+	auto bin_counters = cspan(m_last_info).subSpan(sizeof(shader::LucidInfo));
 	CSpan<uint> bin_quad_counts = cspan(bin_counters.data() + m_bin_count * 0, m_bin_count);
 	CSpan<uint> bin_tri_counts = cspan(bin_counters.data() + m_bin_count * 3, m_bin_count);
 

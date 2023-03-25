@@ -98,7 +98,6 @@ Ex<void> PathTracer::exConstruct(VulkanDevice &device, ShaderCompiler &compiler,
 		m_debug_buffer = EX_PASS(VulkanBuffer::create<u32>(device, 1024 * 1024, usage, mem_usage));
 	}
 
-	uint bin_counters_size = LUCID_INFO_SIZE + m_bin_count * 10;
 	for(int i : intRange(num_frames)) {
 		auto info_usage = VBufferUsage::storage_buffer | VBufferUsage::transfer_src |
 						  VBufferUsage::transfer_dst | VBufferUsage::indirect_buffer;

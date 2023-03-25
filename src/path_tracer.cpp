@@ -126,8 +126,8 @@ Ex<> PathTracer::updateScene(VulkanDevice &device, Scene &scene) {
 
 	for(int i : intRange(bvh.m_nodes)) {
 		auto &node = bvh.m_nodes[i];
-		nodes[i * 2 + 0] = node.count;
-		nodes[i * 2 + 1] = node.sub_node;
+		nodes[i * 2 + 0] = node.first;
+		nodes[i * 2 + 1] = node.count;
 		boxes[i] = node.bbox;
 	}
 

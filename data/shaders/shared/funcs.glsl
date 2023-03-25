@@ -218,6 +218,12 @@ void swap(inout uint a, inout uint b) {
 	b = temp;
 }
 
+void swap(inout int a, inout int b) {
+	int temp = a;
+	a = b;
+	b = temp;
+}
+
 vec4 rectPos(Rect rect, vec3 pos) { return vec4(rect.pos + rect.size * pos.xy, 0.0, 1.0); }
 vec2 rectTexCoord(Rect rect, vec3 pos) {
 	return (rect.pos + rect.size * pos.xy + vec2(1.0, 1.0)) * 0.5;

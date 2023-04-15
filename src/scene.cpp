@@ -28,33 +28,26 @@ SceneMaterial::~SceneMaterial() = default;
 
 Ex<void> SceneMaterial::load(Stream &sr) {
 	sr >> name >> diffuse >> opacity;
-	auto unpack_tex = [&](UsedTexture &tex) {
-		sr.unpack(tex.id, tex.is_opaque, tex.is_clamped, tex.uv_rect);
-	};
-	unpack_tex(diffuse_tex);
-	unpack_tex(normal_tex);
+	for(auto &map : maps)
+		sr.unpack(map.texture_id, map.is_opaque, map.is_clamped, map.uv_rect);
 	return sr.getValid();
 }
 
 Ex<void> SceneMaterial::save(Stream &sr) const {
 	sr << name << diffuse << opacity;
-	for(auto &tex : {diffuse_tex, normal_tex})
-		sr.pack(tex.id, tex.is_opaque, tex.is_clamped, tex.uv_rect);
+	for(auto &map : maps)
+		sr.pack(map.texture_id, map.is_opaque, map.is_clamped, map.uv_rect);
 	return sr.getValid();
 }
 
-string SceneMaterial::description() const {
-	return format("Material: '%': diffuse:% opacity:% is_opaque:% diff_tex:% normal_tex:%\n", name,
-				  diffuse, opacity, isOpaque(), diffuse_tex.id, normal_tex.id);
-}
-
 bool SceneMaterial::isOpaque() const {
-	return opacity == 1.0 && (diffuse_tex.id == -1 || diffuse_tex.is_opaque);
+	auto &albedo = maps[SceneMapType::albedo];
+	return opacity == 1.0 && (albedo.texture_id == -1 || albedo.is_opaque);
 }
 
 void SceneMaterial::freeTextures() {
-	diffuse_tex.vk_image = {};
-	normal_tex.vk_image = {};
+	for(auto &map : maps)
+		map.vk_image = {};
 }
 
 SceneTexture::SceneTexture() = default;
@@ -65,7 +58,7 @@ Ex<void> SceneTexture::load(Stream &sr) {
 	bool is_compressed;
 	u8 num_levels;
 	sr >> name;
-	sr.unpack(is_compressed, is_opaque, is_clamped, is_atlas, num_levels);
+	sr.unpack(is_compressed, map_type, is_opaque, is_clamped, is_atlas, num_levels);
 	for(int i = 0; i < num_levels; i++)
 		if(is_compressed) {
 			int2 size;
@@ -94,7 +87,7 @@ Ex<void> SceneTexture::save(Stream &sr) const {
 	DASSERT(plain_mips.empty() != block_mips.empty());
 	sr << name;
 	u8 num_levels = block_mips ? block_mips.size() : plain_mips.size();
-	sr.pack(!!block_mips, is_opaque, is_clamped, is_atlas, num_levels);
+	sr.pack(!!block_mips, map_type, is_opaque, is_clamped, is_atlas, num_levels);
 	if(block_mips) {
 		for(auto &tex : block_mips) {
 			sr.pack(tex.size(), tex.format());
@@ -149,8 +142,9 @@ Ex<void> Scene::load(Stream &stream) {
 	materials.resize(num_materials);
 	for(auto &material : materials) {
 		EXPECT(material.load(stream));
-		if(material.diffuse_tex.id != -1)
-			EXPECT(material.diffuse_tex.id >= 0 && material.diffuse_tex.id < num_textures);
+		for(auto &map : material.maps)
+			if(map.texture_id != -1)
+				EXPECT(map.texture_id >= 0 && map.texture_id < num_textures);
 	}
 
 	textures.resize(num_textures);
@@ -324,10 +318,10 @@ Ex<void> Scene::updateRenderingData(VulkanDevice &device) {
 	EXPECT(cmds.upload(tris_ib, merged_tris));
 	EXPECT(cmds.upload(quads_ib, merged_quads));
 
-	auto loadTex = [&](SceneMaterial::UsedTexture &used_tex) -> Ex<> {
-		if(used_tex.id == -1)
+	auto loadTex = [&](SceneMaterial::Map &map) -> Ex<> {
+		if(map.texture_id == -1)
 			return {};
-		auto &tex = textures[used_tex.id];
+		auto &tex = textures[map.texture_id];
 		// TODO: makes no sense to keep both in main & gpu memory, especially because ogl is caching it too
 		// TODO: mipmaps for plain textures
 		if(!tex.vk_image) {
@@ -341,15 +335,14 @@ Ex<void> Scene::updateRenderingData(VulkanDevice &device) {
 				tex.vk_image = VulkanImageView::create(device.ref(), vk_image);
 			}
 		}
-		used_tex.vk_image = tex.vk_image;
-		used_tex.is_opaque = tex.is_opaque;
+		map.vk_image = tex.vk_image;
+		map.is_opaque = tex.is_opaque;
 		return {};
 	};
 
-	for(auto &material : materials) {
-		EXPECT(loadTex(material.diffuse_tex));
-		EXPECT(loadTex(material.normal_tex));
-	}
+	for(auto &material : materials)
+		for(auto &map : material.maps)
+			EXPECT(loadTex(map));
 
 	return {};
 }
@@ -402,14 +395,15 @@ vector<SceneDrawCall> Scene::draws(const Frustum &frustum) const {
 		auto &mesh = meshes[i];
 		auto &material = materials[mesh.material_id];
 		bool is_opaque = material.isOpaque() && mesh.colors_opaque;
-		bool tex_opaque = material.diffuse_tex.is_opaque;
+		auto &albedo = material.maps[SceneMapType::albedo];
+		bool tex_opaque = albedo.is_opaque;
 		auto opts = scene_opts | mask(is_opaque, DrawCallOpt::is_opaque) |
 					mask(tex_opaque, DrawCallOpt::tex_opaque) |
-					mask(!material.diffuse_tex.is_clamped, DrawCallOpt::has_uv_rect) |
-					mask(material.diffuse_tex && has_tex_coords, DrawCallOpt::has_texture);
+					mask(!albedo.is_clamped, DrawCallOpt::has_uv_rect) |
+					mask(albedo && has_tex_coords, DrawCallOpt::has_texture);
 		auto &offsets = mesh_primitive_offsets[i];
-		out.emplace_back(mesh.bounding_box, material.diffuse_tex.uv_rect, mesh.material_id,
-						 mesh.tris.size(), offsets.first, mesh.quads.size(), offsets.second, opts);
+		out.emplace_back(mesh.bounding_box, albedo.uv_rect, mesh.material_id, mesh.tris.size(),
+						 offsets.first, mesh.quads.size(), offsets.second, opts);
 	}
 
 	return out;

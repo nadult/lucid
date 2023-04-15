@@ -2,8 +2,6 @@
 
 #include <fwk/enum_map.h>
 
-DEFINE_ENUM(WavefrontMapType, diffuse, bump);
-
 struct WavefrontMap {
 	string name;
 	vector<string> args;
@@ -12,11 +10,10 @@ struct WavefrontMap {
 struct WavefrontMaterial {
 	static Ex<void> load(ZStr path, vector<WavefrontMaterial> &out);
 
-	using MapType = WavefrontMapType;
 	string name;
 	float dissolve_factor = 1.0;
 	float3 diffuse = float3(1.0f);
-	EnumMap<MapType, WavefrontMap> maps = {};
+	vector<Pair<string, WavefrontMap>> maps = {};
 };
 
 struct WavefrontObject {

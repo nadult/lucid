@@ -385,11 +385,6 @@ void LucidApp::doMenu() {
 		if(perf::Manager::instance() && !m_perf_analyzer)
 			if(ImGui::Button("Show performance analyzer"))
 				m_perf_analyzer.emplace();
-
-		if(scene && ImGui::Button("Print materials")) {
-			for(auto &mat : scene->materials)
-				print("%\n", mat.description());
-		}
 		ImGui::EndPopup();
 	}
 

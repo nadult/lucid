@@ -46,10 +46,9 @@ Ex<void> WavefrontMaterial::load(ZStr file_path, vector<WavefrontMaterial> &out)
 			EXPECT(!args.empty());
 			map.name = args.back();
 			args.pop_back();
-			if(element == "map_Kd")
-				new_mat->maps[MapType::diffuse] = std::move(map);
-			else if(element == "map_bump")
-				new_mat->maps[MapType::bump] = std::move(map);
+			auto locase_elem = toLower(element.substr(4));
+			// kd, bump, ks, ao, roughness
+			new_mat->maps.emplace_back(locase_elem, std::move(map));
 		} else if(element == "d")
 			parser >> new_mat->dissolve_factor;
 		else if(element == "Kd")

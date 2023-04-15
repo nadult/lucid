@@ -1,11 +1,15 @@
 #pragma once
 
 #include "lucid_base.h"
+#include <fwk/enum_map.h>
 #include <fwk/gfx/color.h>
 #include <fwk/vulkan_base.h>
 
 struct WavefrontObject;
 class TriangleBVH;
+
+DEFINE_ENUM(SceneMapType, albedo, normal, pbr);
+using SceneMapTypes = EnumFlags<SceneMapType>;
 
 struct SceneTexture {
 	SceneTexture();
@@ -19,20 +23,21 @@ struct SceneTexture {
 	PVImageView vk_image;
 	vector<Image> plain_mips;
 	vector<CompressedImage> block_mips;
+	SceneMapType map_type = SceneMapType::albedo;
 	bool is_opaque = true;
 	bool is_clamped = false;
 	bool is_atlas = false;
 };
 
 struct SceneMaterial {
-	struct UsedTexture {
-		explicit operator bool() const { return id != -1; }
+	struct Map {
+		explicit operator bool() const { return texture_id != -1; }
 
 		PVImageView vk_image;
 		FRect uv_rect = FRect(0, 0, 1, 1);
 		bool is_opaque = false;
 		bool is_clamped = true;
-		int id = -1;
+		int texture_id = -1;
 	};
 
 	SceneMaterial(string name = "");
@@ -41,14 +46,13 @@ struct SceneMaterial {
 	Ex<void> load(Stream &);
 	Ex<void> save(Stream &) const;
 
-	string description() const;
 	bool isOpaque() const;
 	void freeTextures();
 
 	string name;
 	float3 diffuse = float3(1);
 	float opacity = 1.0f;
-	UsedTexture diffuse_tex, normal_tex;
+	EnumMap<SceneMapType, Map> maps;
 };
 
 struct SceneMesh {

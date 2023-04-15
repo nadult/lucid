@@ -7,11 +7,14 @@
 #include <fwk/gfx/image.h>
 #include <fwk/io/file_stream.h>
 
-SceneTexture convertTexture(ZStr path) {
+FilePath mainPath();
+
+SceneTexture convertTexture(ZStr path, SceneMapType map_type) {
 	auto time = getTime();
 	SceneTexture out;
 	// TODO: what about duplicate names ?
 	out.name = FilePath(path).fileStem();
+	out.map_type = map_type;
 	auto tex = Image::load(path);
 	if(!tex) {
 		tex.error().print();
@@ -27,7 +30,7 @@ SceneTexture convertTexture(ZStr path) {
 	return out;
 }
 
-static void makeTextureAtlas(Scene &scene, string name, bool is_opaque) {
+static void makeTextureAtlas(Scene &scene, string name, SceneMapType map_type, bool is_opaque) {
 	vector<int> selection;
 	vector<int2> sizes;
 	vector<const Image *> pointers;
@@ -36,7 +39,7 @@ static void makeTextureAtlas(Scene &scene, string name, bool is_opaque) {
 
 	for(int i : intRange(scene.textures)) {
 		auto &tex = scene.textures[i];
-		if(tex.is_opaque == is_opaque) {
+		if(tex.is_opaque == is_opaque && tex.map_type == map_type) {
 			selection.emplace_back(i);
 			inverse_map[i] = sizes.size();
 			sizes.emplace_back(tex.plain_mips[0].size());
@@ -68,10 +71,12 @@ static void makeTextureAtlas(Scene &scene, string name, bool is_opaque) {
 	vector<int> vertex_list;
 	for(auto &mesh : scene.meshes) {
 		auto &material = scene.materials[mesh.material_id];
-		if(!material.diffuse_tex || !selected_map[material.diffuse_tex.id])
+		auto map = material.maps[map_type];
+		if(!map || !selected_map[map.texture_id])
 			continue;
-		auto &tex = scene.textures[material.diffuse_tex.id];
-		int entry_index = inverse_map[material.diffuse_tex.id];
+
+		auto &tex = scene.textures[map.texture_id];
+		int entry_index = inverse_map[map.texture_id];
 		auto &entry = atlas->entries[entry_index];
 		auto uv_rect = atlas->uvRect(entry);
 
@@ -80,10 +85,11 @@ static void makeTextureAtlas(Scene &scene, string name, bool is_opaque) {
 			// We're decreasing uv_rect by half a pixel from each side to
 			// make sure that it won't be interpolated with neighbouring texels
 			// TODO: add repeated texture border? What about textures with pow of 2 size?
-			material.diffuse_tex.uv_rect = atlas->uvRect(entry, 0.5f);
+			map.uv_rect = atlas->uvRect(entry, 0.5f);
 			continue;
 		}
 
+		// TODO: don't transform vertices? make uv-rects instead
 		vertex_list.clear();
 		for(auto &tri : mesh.tris)
 			for(auto idx : tri)
@@ -118,28 +124,27 @@ static void makeTextureAtlas(Scene &scene, string name, bool is_opaque) {
 		}
 	scene.textures.resize(num_textures);
 
-	auto update_tex_index = [&](SceneMaterial::UsedTexture &tex) {
-		if(tex.id != -1)
-			tex.id = selected_map[tex.id] ? atlas_index : new_texture_index[tex.id];
+	auto update_tex_index = [&](SceneMaterial::Map &map) {
+		auto &tex_id = map.texture_id;
+		if(tex_id != -1)
+			tex_id = selected_map[tex_id] ? atlas_index : new_texture_index[tex_id];
 	};
-	for(auto &material : scene.materials) {
-		update_tex_index(material.diffuse_tex);
-		update_tex_index(material.normal_tex);
-	}
+	for(auto &material : scene.materials)
+		for(auto &map : material.maps)
+			update_tex_index(map);
 }
 
 static void detectClampedTextures(Scene &scene) {
 	for(auto &texture : scene.textures)
 		texture.is_clamped = true;
-	for(auto &material : scene.materials) {
-		material.diffuse_tex.is_clamped = true;
-		material.normal_tex.is_clamped = true;
-	}
+	for(auto &material : scene.materials)
+		for(auto &map : material.maps)
+			map.is_clamped = true;
 	DASSERT(scene.hasTexCoords());
 
 	for(auto &mesh : scene.meshes) {
 		auto &material = scene.materials[mesh.material_id];
-		if((!material.diffuse_tex && !material.normal_tex))
+		if(!anyOf(material.maps, [](auto &map) { return bool(map); }))
 			continue;
 
 		float2 uv_min(inf), uv_max(-inf);
@@ -152,14 +157,11 @@ static void detectClampedTextures(Scene &scene) {
 
 		bool clamped_uvs = uv_min.x >= 0.0 && uv_min.y >= 0.0 && uv_max.x <= 1.0 && uv_max.y <= 1.0;
 		if(!clamped_uvs) {
-			if(material.diffuse_tex) {
-				scene.textures[material.diffuse_tex.id].is_clamped = false;
-				material.diffuse_tex.is_clamped = false;
-			}
-			if(material.normal_tex) {
-				scene.textures[material.normal_tex.id].is_clamped = false;
-				material.normal_tex.is_clamped = false;
-			}
+			for(auto &map : material.maps)
+				if(map) {
+					scene.textures[map.texture_id].is_clamped = false;
+					map.is_clamped = false;
+				}
 		}
 	}
 }
@@ -195,20 +197,26 @@ Scene convertScene(WavefrontObject obj, bool flip_yz, Str scene_name, float squa
 	}
 
 	vector<string> tex_paths;
-	auto loadTex = [&](WavefrontMap &map) {
-		SceneMaterial::UsedTexture used_tex;
+	auto loadPbrTex = [&](WavefrontMap &map) {
+		string tex_path = FilePath(obj.resource_path) / map.name;
+		auto tex = convertTexture(tex_path, SceneMapType::pbr);
+		return std::move(tex.plain_mips[0]);
+	};
+
+	auto loadTex = [&](WavefrontMap &map, SceneMapType type) {
+		SceneMaterial::Map out_map;
 		if(!map.name.empty()) {
 			string tex_path = FilePath(obj.resource_path) / map.name;
 			int index = indexOf(tex_paths, tex_path);
 			if(index == -1) {
 				index = tex_paths.size();
 				tex_paths.emplace_back(tex_path);
-				out.textures.emplace_back(convertTexture(tex_path));
+				out.textures.emplace_back(convertTexture(tex_path, type));
 			}
-			used_tex.id = index;
-			used_tex.is_opaque = out.textures[index].is_opaque;
+			out_map.texture_id = index;
+			out_map.is_opaque = out.textures[index].is_opaque;
 		}
-		return used_tex;
+		return out_map;
 	};
 
 	out.materials.reserve(obj.materials.size());
@@ -217,9 +225,48 @@ Scene convertScene(WavefrontObject obj, bool flip_yz, Str scene_name, float squa
 		mat.name = mtl.name;
 		mat.diffuse = mtl.diffuse;
 		mat.opacity = mtl.dissolve_factor;
-		mat.diffuse_tex = loadTex(mtl.maps[WavefrontMapType::diffuse]);
-		// TODO: atlas support for other texture types
-		//mat.normal_tex = loadTex(mtl.maps[WavefrontMapType::bump]);
+		WavefrontMap *pbr_ao = nullptr, *pbr_roughness = nullptr, *pbr_metallic = nullptr;
+
+		for(auto &map : mtl.maps) {
+			if(map.first == "kd")
+				mat.maps[SceneMapType::albedo] = loadTex(map.second, SceneMapType::albedo);
+			if(map.first == "ao")
+				pbr_ao = &map.second;
+			if(map.first == "roughness")
+				pbr_roughness = &map.second;
+			if(map.first == "ks")
+				pbr_metallic = &map.second;
+			if(map.first == "bump")
+				mat.maps[SceneMapType::normal] = loadTex(map.second, SceneMapType::normal);
+		}
+
+		if(pbr_ao && pbr_roughness && pbr_metallic) {
+			auto ao_tex = loadPbrTex(*pbr_ao);
+			auto roughness_tex = loadPbrTex(*pbr_roughness);
+			auto metallic_tex = loadPbrTex(*pbr_metallic);
+
+			if(ao_tex.size() == roughness_tex.size() && ao_tex.size() == metallic_tex.size()) {
+				Image pbr_image(ao_tex.size());
+				for(int y = 0; y < pbr_image.height(); y++) {
+					for(int x = 0; x < pbr_image.width(); x++) {
+						pbr_image(x, y) =
+							IColor(roughness_tex(x, y).r, metallic_tex(x, y).r, ao_tex(x, y).r);
+					}
+				}
+				SceneTexture pbr_tex;
+				pbr_tex.name = format("pbr_%", mat.name);
+				pbr_tex.plain_mips.emplace_back(std::move(pbr_image));
+				pbr_tex.is_opaque = true;
+				pbr_tex.map_type = SceneMapType::normal;
+
+				auto &map = mat.maps[SceneMapType::pbr];
+				map.is_opaque = true;
+				map.texture_id = out.textures.size();
+
+				out.textures.emplace_back(move(pbr_tex));
+			}
+		}
+
 		out.materials.emplace_back(move(mat));
 	}
 
@@ -277,8 +324,12 @@ Scene convertScene(WavefrontObject obj, bool flip_yz, Str scene_name, float squa
 	if(out.hasTexCoords()) {
 		detectClampedTextures(out);
 
-		makeTextureAtlas(out, format("%_opaque", scene_name), true);
-		makeTextureAtlas(out, format("%_transparent", scene_name), false);
+		// TODO: keep roughness, metallic & ao in single texture
+		// For each texture type generate uv_rect per instance
+		makeTextureAtlas(out, format("%_opaque", scene_name), SceneMapType::albedo, true);
+		makeTextureAtlas(out, format("%_transparent", scene_name), SceneMapType::albedo, false);
+		makeTextureAtlas(out, format("%_normal", scene_name), SceneMapType::normal, false);
+		makeTextureAtlas(out, format("%pbr", scene_name), SceneMapType::pbr, false);
 	}
 	int max_atlas_mips = 6; // For atlas, other textures can have more ?
 
@@ -316,11 +367,14 @@ struct SceneInfo {
 	ZStr path;
 	float quad_squareness;
 	bool merge_verts = false;
+	bool flip_uv = false;
 };
 
 void convertScenes(ZStr source_path) {
+	// TODO: turn into a list
 	SceneInfo inputs[] = {
-		{"dragon2.obj", 1.5, true},
+		{"backpack/backpack.obj", 1.0, false, true},
+		/*{"dragon2.obj", 1.5, true},
 		{"armadillo.obj", 1.5, true},
 		{"thai.obj", 1.5, true},
 		{"buddha.obj", 1.5, true},
@@ -337,15 +391,15 @@ void convertScenes(ZStr source_path) {
 		{"pine_tree/scrubPine.obj", 2},
 		{"sponza/sponza.obj", 2},
 		{"teapot/teapot.obj", 2},
-		{"white_oak/white_oak.obj", 0.5},
+		{"white_oak/white_oak.obj", 0.5},*/
 	};
 
 	int num_converted = 0, num_failed = 0;
 
-	auto scenes_path = executablePath().parent() / "scenes";
+	auto scenes_path = mainPath() / "scenes";
 	mkdirRecursive(scenes_path).check();
 
-	for(auto [ipath, isquareness, imerge_verts] : inputs) {
+	for(auto [ipath, isquareness, imerge_verts, iflip_uv] : inputs) {
 		auto src_path = FilePath(source_path) / ipath;
 		auto scene_name = src_path.fileStem();
 		auto dst_path = format("%/%.scene", scenes_path, scene_name);
@@ -363,6 +417,10 @@ void convertScenes(ZStr source_path) {
 		bool flip_yz = ipath.find("chestnut_tree") != -1;
 		auto scene =
 			convertScene(move(*wavefront_obj), flip_yz, scene_name, isquareness, imerge_verts);
+		if(iflip_uv) {
+			for(auto &uv : scene.tex_coords)
+				uv.y = 1.0f - uv.y;
+		}
 
 		print("  materials:% textures:% meshes:% tris:% quads:% verts:%\n\n",
 			  scene.materials.size(), scene.textures.size(), scene.meshes.size(), scene.numTris(),

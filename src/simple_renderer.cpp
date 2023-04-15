@@ -116,7 +116,10 @@ Ex<> SimpleRenderer::renderPhase(const RenderContext &ctx,
 		if(prev_mat_id != draw_call.material_id) {
 			auto ds = cmds.bindDS(1);
 			ds.set(0, VDescriptorType::uniform_buffer, simple_dc_buf.subSpan(dc, dc + 1));
-			ds.set(1, {{sampler, material.diffuse_tex.vk_image}});
+			auto &albedo_map = material.maps[SceneMapType::albedo];
+			auto &normal_map = material.maps[SceneMapType::normal];
+			auto &pbr_map = material.maps[SceneMapType::pbr];
+			ds.set(1, {{sampler, albedo_map.vk_image}});
 			prev_mat_id = draw_call.material_id;
 		}
 
@@ -163,7 +166,8 @@ Ex<> SimpleRenderer::render(const RenderContext &ctx, bool wireframe) {
 			simple_dc.uv_rect_pos = draw_call.uv_rect.min();
 			simple_dc.uv_rect_size = draw_call.uv_rect.size();
 		}
-		if(material.diffuse_tex)
+		auto &albedo_map = material.maps[SceneMapType::albedo];
+		if(albedo_map)
 			; // TODO
 	}
 	auto simple_dc_buf = EX_PASS(

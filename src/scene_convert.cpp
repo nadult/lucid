@@ -1,4 +1,4 @@
-#include "scene.h"
+#include "scene_convert.h"
 
 #include "texture_atlas.h"
 #include "wavefront_obj.h"
@@ -6,8 +6,38 @@
 #include <fwk/gfx/float_image.h>
 #include <fwk/gfx/image.h>
 #include <fwk/io/file_stream.h>
+#include <fwk/io/xml.h>
+#include <fwk/sys/exception.h>
 
-FilePath mainPath();
+InputScene::InputScene(string name, string path) : name(move(name)), path(move(path)) {}
+InputScene::InputScene(const FilePath &root_path, CXmlNode node)
+	: quad_squareness(node("quad_squareness", 1.0f)), merge_verts(node("merge_verts", false)),
+	  flip_uv(node("flip_uv", false)), flip_yz(node("flip_yz", false)) {
+	name = node.tryAttrib("name", "");
+	path = node.attrib("path");
+	if(name.empty())
+		name = FilePath(path).fileStem();
+	path = root_path / path;
+}
+
+Ex<vector<InputScene>> loadInputScenes(ZStr path) {
+	auto doc = EX_PASS(XmlDocument::load(path));
+	auto node = doc.child("scenes");
+	ZStr root_path = node && node.hasAttrib("root_path") ? (ZStr)node("root_path") : "";
+
+	vector<InputScene> out;
+	if(node) {
+		auto scene_node = node.child("scene");
+		while(scene_node) {
+			InputScene iscene(root_path, scene_node);
+			EX_CATCH();
+			out.emplace_back(move(iscene));
+			scene_node = scene_node.sibling();
+		}
+	}
+
+	return out;
+}
 
 SceneTexture convertTexture(ZStr path, SceneMapType map_type) {
 	auto time = getTime();
@@ -181,19 +211,22 @@ void rescale(Scene &scene, float target_scale = 100.0f) {
 
 void optimizeTriangleOrdering(const int num_verts, CSpan<int> indices, Span<int> out_indices);
 
-Scene convertScene(WavefrontObject obj, bool flip_yz, Str scene_name, float squareness,
-				   bool merge_verts) {
+Scene convertScene(WavefrontObject obj, const InputScene &iscene) {
 	Scene out;
 	out.positions = move(obj.positions);
 	out.normals = move(obj.normals);
 	out.tex_coords = move(obj.tex_coords);
-	if(flip_yz) {
+	if(iscene.flip_yz) {
 		for(auto &pos : out.positions)
 			swap(pos.y, pos.z);
 		for(auto &normal : out.normals) {
 			swap(normal.y, normal.z);
 			normal = -normal;
 		}
+	}
+	if(iscene.flip_uv) {
+		for(auto &uv : out.tex_coords)
+			uv.y = 1.0f - uv.y;
 	}
 
 	vector<string> tex_paths;
@@ -281,7 +314,7 @@ Scene convertScene(WavefrontObject obj, bool flip_yz, Str scene_name, float squa
 		out.meshes.emplace_back(mesh);
 	}
 
-	if(merge_verts && !out.tex_coords && !out.colors) {
+	if(iscene.merge_verts && !out.tex_coords && !out.colors) {
 		print("Merging duplicate vertices...\n");
 		int old_count = out.numVerts();
 		out.mergeVertices(5);
@@ -326,10 +359,10 @@ Scene convertScene(WavefrontObject obj, bool flip_yz, Str scene_name, float squa
 
 		// TODO: keep roughness, metallic & ao in single texture
 		// For each texture type generate uv_rect per instance
-		makeTextureAtlas(out, format("%_opaque", scene_name), SceneMapType::albedo, true);
-		makeTextureAtlas(out, format("%_transparent", scene_name), SceneMapType::albedo, false);
-		makeTextureAtlas(out, format("%_normal", scene_name), SceneMapType::normal, false);
-		makeTextureAtlas(out, format("%pbr", scene_name), SceneMapType::pbr, false);
+		makeTextureAtlas(out, format("%_opaque", iscene.name), SceneMapType::albedo, true);
+		makeTextureAtlas(out, format("%_transparent", iscene.name), SceneMapType::albedo, false);
+		makeTextureAtlas(out, format("%_normal", iscene.name), SceneMapType::normal, false);
+		makeTextureAtlas(out, format("%pbr", iscene.name), SceneMapType::pbr, false);
 	}
 	int max_atlas_mips = 6; // For atlas, other textures can have more ?
 
@@ -355,57 +388,28 @@ Scene convertScene(WavefrontObject obj, bool flip_yz, Str scene_name, float squa
 	}
 
 	print("Generating quads...\n");
-	out.generateQuads(squareness);
+	out.generateQuads(iscene.quad_squareness);
 	out.quantizeNormals();
-
 	rescale(out);
-
 	return out;
 }
 
-struct SceneInfo {
-	ZStr path;
-	float quad_squareness;
-	bool merge_verts = false;
-	bool flip_uv = false;
-};
-
-void convertScenes(ZStr source_path) {
-	// TODO: turn into a list
-	SceneInfo inputs[] = {
-		{"backpack/backpack.obj", 1.0, false, true},
-		/*{"dragon2.obj", 1.5, true},
-		{"armadillo.obj", 1.5, true},
-		{"thai.obj", 1.5, true},
-		{"buddha.obj", 1.5, true},
-		{"bunny.obj", 1.5},
-		{"chestnut_tree/chestnut_tree01.obj", 2},
-		{"chestnut_tree/chestnut_tree02.obj", 2},
-		{"chestnut_tree/chestnut_tree03.obj", 2},
-		{"conference/conference.obj", 3},
-		{"dragon.obj", 1},
-		{"gallery/gallery.obj", 0.5},
-		{"hairball.obj", 1000},
-		{"powerplant/powerplant.obj", 2},
-		{"san_miguel/san-miguel.obj", 1},
-		{"pine_tree/scrubPine.obj", 2},
-		{"sponza/sponza.obj", 2},
-		{"teapot/teapot.obj", 2},
-		{"white_oak/white_oak.obj", 0.5},*/
-	};
+void convertScenes(ZStr iscenes_path) {
+	auto input_scenes = loadInputScenes(iscenes_path);
+	if(!input_scenes) {
+		input_scenes.error().print();
+		return;
+	}
 
 	int num_converted = 0, num_failed = 0;
-
 	auto scenes_path = mainPath() / "scenes";
 	mkdirRecursive(scenes_path).check();
 
-	for(auto [ipath, isquareness, imerge_verts, iflip_uv] : inputs) {
-		auto src_path = FilePath(source_path) / ipath;
-		auto scene_name = src_path.fileStem();
-		auto dst_path = format("%/%.scene", scenes_path, scene_name);
-		print("*** Converting: % -> %\n", src_path, dst_path);
+	for(auto iscene : *input_scenes) {
+		auto dst_path = format("%/%.scene", scenes_path, iscene.name);
+		print("*** Converting: % -> %\n", iscene.path, dst_path);
 		auto time = getTime();
-		auto wavefront_obj = WavefrontObject::load(src_path);
+		auto wavefront_obj = WavefrontObject::load(iscene.path);
 		if(!wavefront_obj) {
 			print("  error while loading:\n");
 			wavefront_obj.error().print();
@@ -414,13 +418,7 @@ void convertScenes(ZStr source_path) {
 		}
 		print("  loaded in % msec\n", int((getTime() - time) * 1000.0));
 
-		bool flip_yz = ipath.find("chestnut_tree") != -1;
-		auto scene =
-			convertScene(move(*wavefront_obj), flip_yz, scene_name, isquareness, imerge_verts);
-		if(iflip_uv) {
-			for(auto &uv : scene.tex_coords)
-				uv.y = 1.0f - uv.y;
-		}
+		auto scene = convertScene(move(*wavefront_obj), iscene);
 
 		print("  materials:% textures:% meshes:% tris:% quads:% verts:%\n\n",
 			  scene.materials.size(), scene.textures.size(), scene.meshes.size(), scene.numTris(),

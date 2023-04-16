@@ -45,8 +45,7 @@ Ex<int> exMain(int argc, char **argv) {
 	for(int n = 1; n < argc; n++) {
 		string argument = argv[n];
 		if(argument == "--convert-scenes") {
-			ASSERT(n + 1 < argc && "Invalid nr of arguments");
-			convertScenes(argv[n + 1]);
+			convertScenes(mainPath() / "input_scenes.xml");
 			return 0;
 		} else if(argument == "--vsync") {
 			swap_chain_setup.preferred_present_mode = VPresentMode::fifo;

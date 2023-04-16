@@ -10,6 +10,7 @@
 
 #define ORDER_BY FWK_ORDER_BY
 
+FilePath mainPath();
 string dataPath(string file_name);
 
 struct RenderConfig {

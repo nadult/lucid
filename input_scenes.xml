@@ -1,0 +1,23 @@
+<scenes root_path="D:/resources/scenes/">
+
+	<scene path="backpack/backpack.obj" flip_uv="true" />
+	<scene path="dragon2.obj" quad_squareness="1.5" merge_verts="true" />
+	<scene path="armadillo.obj" quad_squareness="1.5" merge_verts="true" />
+	<scene path="thai.obj" quad_squareness="1.5" merge_verts="true" />
+	<scene path="buddha.obj" quad_squareness="1.5" merge_verts="true" />
+	<scene path="bunny.obj" quad_squareness="1.5" />
+	<scene path="chestnut_tree/chestnut_tree01.obj" quad_squareness="2" flip_yz="true" />
+	<scene path="chestnut_tree/chestnut_tree02.obj" quad_squareness="2" flip_yz="true" />
+	<scene path="chestnut_tree/chestnut_tree03.obj" quad_squareness="2" flip_yz="true" />
+	<scene path="conference/conference.obj" quad_squareness="3" />
+	<scene path="dragon.obj" quad_squareness="1" />
+	<scene path="gallery/gallery.obj" quad_squareness="0.5" />
+	<scene path="hairball.obj" quad_squareness="1000" />
+	<scene path="powerplant/powerplant.obj" quad_squareness="2" />
+	<scene path="san_miguel/san-miguel.obj" quad_squareness="1" />
+	<scene path="pine_tree/scrubPine.obj" quad_squareness="2" />
+	<scene path="sponza/sponza.obj" quad_squareness="2" />
+	<scene path="teapot/teapot.obj" quad_squareness="2" />
+	<scene path="white_oak/white_oak.obj" quad_squareness="0.5" />
+
+</scenes>

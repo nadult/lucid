@@ -101,7 +101,7 @@ static void makeTextureAtlas(Scene &scene, string name, SceneMapType map_type, b
 	vector<int> vertex_list;
 	for(auto &mesh : scene.meshes) {
 		auto &material = scene.materials[mesh.material_id];
-		auto map = material.maps[map_type];
+		auto &map = material.maps[map_type];
 		if(!map || !selected_map[map.texture_id])
 			continue;
 
@@ -290,7 +290,7 @@ Scene convertScene(WavefrontObject obj, const InputScene &iscene) {
 				pbr_tex.name = format("pbr_%", mat.name);
 				pbr_tex.plain_mips.emplace_back(std::move(pbr_image));
 				pbr_tex.is_opaque = true;
-				pbr_tex.map_type = SceneMapType::normal;
+				pbr_tex.map_type = SceneMapType::pbr;
 
 				auto &map = mat.maps[SceneMapType::pbr];
 				map.is_opaque = true;
@@ -361,12 +361,15 @@ Scene convertScene(WavefrontObject obj, const InputScene &iscene) {
 		// For each texture type generate uv_rect per instance
 		makeTextureAtlas(out, format("%_opaque", iscene.name), SceneMapType::albedo, true);
 		makeTextureAtlas(out, format("%_transparent", iscene.name), SceneMapType::albedo, false);
-		makeTextureAtlas(out, format("%_normal", iscene.name), SceneMapType::normal, false);
-		makeTextureAtlas(out, format("%pbr", iscene.name), SceneMapType::pbr, false);
+		makeTextureAtlas(out, format("%_normal", iscene.name), SceneMapType::normal, true);
+		makeTextureAtlas(out, format("%_pbr", iscene.name), SceneMapType::pbr, true);
 	}
 	int max_atlas_mips = 6; // For atlas, other textures can have more ?
 
 	for(auto &texture : out.textures) {
+		if(texture.map_type != SceneMapType::albedo)
+			continue; // TODO: compress normals & pbr
+
 		print("- Processing texture: %\n", texture.plain_mips[0].size());
 		auto &plain_tex = texture.plain_mips[0];
 		auto format = texture.is_opaque ? VBlockFormat::srgb_bc1 : VBlockFormat::srgba_bc3;

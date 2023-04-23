@@ -70,7 +70,7 @@ Ex<PVPipeline> SimpleRenderer::getPipeline(VulkanDevice &device, const PipeConfi
 		setup.render_pass = m_render_pass;
 		setup.shader_modules = {{m_vert_module, m_frag_module}};
 		setup.depth = VDepthSetup(VDepthFlag::test | VDepthFlag::write);
-		VertexArray::getDefs(setup);
+		VertexArray::getDefs(setup, false);
 
 		setup.raster = VRasterSetup(VPrimitiveTopology::triangle_list,
 									config.wireframe ? VPolygonMode::line : VPolygonMode::fill,
@@ -172,7 +172,7 @@ Ex<> SimpleRenderer::render(const RenderContext &ctx, bool wireframe) {
 	cmds.setScissor(none);
 
 	auto &verts = ctx.verts;
-	cmds.bindVertices(0, verts.pos, verts.col, verts.tex, verts.nrm);
+	cmds.bindVertices(0, verts.positions, verts.colors, verts.tex_coords, verts.normals);
 	cmds.bindIndices(ctx.tris_ib);
 
 	auto swap_chain = ctx.device.swapChain();

@@ -93,10 +93,13 @@ struct Scene {
 	int numQuads() const;
 	int numVerts() const { return positions.size(); }
 	bool hasColors() const { return colors && colors.size() == positions.size(); }
+
+	// TODO: remove these?
 	bool hasNormals() const { return normals && normals.size() == positions.size(); }
 	bool hasQuantizedNormals() const {
 		return quantized_normals && quantized_normals.size() == positions.size();
 	}
+
 	bool hasTexCoords() const { return tex_coords && tex_coords.size() == positions.size(); }
 
 	// Only albedo and at most 2 textures (one opaque, one alpha)
@@ -113,7 +116,9 @@ struct Scene {
 	vector<IColor> colors;
 	vector<float2> tex_coords;
 	vector<float3> normals;
+	vector<float3> tangents;
 	vector<uint> quantized_normals;
+	vector<uint> quantized_tangents;
 
 	string id, resource_path;
 	vector<SceneTexture> textures;
@@ -127,9 +132,13 @@ struct Scene {
 	// ------ Rendering data --------------------------------------------------
 
 	void updatePrimitiveOffsets();
-	Ex<void> updateRenderingData(VulkanDevice &);
+	Ex<> updateRenderingData(VulkanDevice &);
 	void freeRenderingData();
-	void quantizeNormals();
+	void computeTangents();
+	void quantizeVectors();
+
+	void computeFlatVectors();
+	void quantizeFlatVectors();
 
 	vector<SceneDrawCall> draws(const Frustum &) const;
 	Pair<PVImageView> textureAtlasPair() const;

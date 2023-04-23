@@ -402,7 +402,10 @@ Scene convertScene(WavefrontObject obj, const InputScene &iscene) {
 
 	print("Generating quads...\n");
 	out.generateQuads(iscene.quad_squareness);
-	out.quantizeNormals();
+
+	if(iscene.pbr)
+		out.computeTangents();
+	out.quantizeVectors();
 	rescale(out);
 
 	total_time = getTime() - total_time;

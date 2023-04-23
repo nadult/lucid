@@ -37,11 +37,16 @@ FilePath mainPath() {
 string dataPath(string file_name) { return mainPath() / "data" / file_name; }
 
 // TODO: move it somewhere else...
-void VertexArray::getDefs(VPipelineSetup &setup) {
+void VertexArray::getDefs(VPipelineSetup &setup, bool with_tangents) {
 	setup.vertex_attribs = {{vertexAttrib<float3>(0, 0), vertexAttrib<IColor>(1, 1),
 							 vertexAttrib<float2>(2, 2), vertexAttrib<u32>(3, 3)}};
 	setup.vertex_bindings = {{vertexBinding<float3>(0), vertexBinding<IColor>(1),
 							  vertexBinding<float2>(2), vertexBinding<u32>(3)}};
+
+	if(with_tangents) {
+		setup.vertex_attribs.emplace_back(vertexAttrib<u32>(4, 4));
+		setup.vertex_bindings.emplace_back(vertexBinding<u32>(4));
+	}
 }
 
 PVRenderPass guiRenderPass(VDeviceRef device) {

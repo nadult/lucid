@@ -455,8 +455,8 @@ void LucidRenderer::quadSetup(const Context &ctx) {
 	ds.set(0, m_info);
 	ds.set(1, VDescriptorType::uniform_buffer, m_config);
 	ds = cmds.bindDS(1);
-	ds.set(0, m_instances, ctx.quads_ib, ctx.verts.pos, ctx.verts.tex, ctx.verts.col, ctx.verts.nrm,
-		   m_scratch_64, m_uvec4_storage, m_normals_storage);
+	ds.set(0, m_instances, ctx.quads_ib, ctx.verts.positions, ctx.verts.tex_coords,
+		   ctx.verts.colors, ctx.verts.normals, m_scratch_64, m_uvec4_storage, m_normals_storage);
 	if(m_opts & Opt::debug_quad_setup) {
 		ds.set(9, m_debug_buffer);
 		shaderDebugInitBuffer(cmds, m_debug_buffer);

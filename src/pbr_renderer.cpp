@@ -70,7 +70,7 @@ Ex<PVPipeline> PbrRenderer::getPipeline(VulkanDevice &device, const PipeConfig &
 		setup.render_pass = m_render_pass;
 		setup.shader_modules = {{m_vert_module, m_frag_module}};
 		setup.depth = VDepthSetup(VDepthFlag::test | VDepthFlag::write);
-		VertexArray::getDefs(setup);
+		VertexArray::getDefs(setup, true);
 
 		setup.raster = VRasterSetup(VPrimitiveTopology::triangle_list,
 									config.wireframe ? VPolygonMode::line : VPolygonMode::fill,
@@ -110,10 +110,12 @@ Ex<> PbrRenderer::renderPhase(const RenderContext &ctx, VBufferSpan<shader::PbrD
 		if(prev_mat_id != draw_call.material_id) {
 			auto ds = cmds.bindDS(1);
 			ds.set(0, VDescriptorType::uniform_buffer, dc_buf.subSpan(dc, dc + 1));
+
 			// TODO: different default textures for different map types
 			auto &albedo_map = material.maps[SceneMapType::albedo];
 			auto &normal_map = material.maps[SceneMapType::normal];
 			auto &pbr_map = material.maps[SceneMapType::pbr];
+
 			ds.set(1, {{sampler, albedo_map.vk_image},
 					   {sampler, normal_map.vk_image},
 					   {sampler, pbr_map.vk_image}});
@@ -170,7 +172,8 @@ Ex<> PbrRenderer::render(const RenderContext &ctx, bool wireframe) {
 	cmds.setScissor(none);
 
 	auto &verts = ctx.verts;
-	cmds.bindVertices(0, verts.pos, verts.col, verts.tex, verts.nrm);
+	cmds.bindVertices(0, verts.positions, verts.colors, verts.tex_coords, verts.normals,
+					  verts.tangents);
 	cmds.bindIndices(ctx.tris_ib);
 
 	auto swap_chain = ctx.device.swapChain();

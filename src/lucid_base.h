@@ -49,12 +49,13 @@ struct SceneDrawCall;
 struct SceneLighting;
 
 struct VertexArray {
-	static void getDefs(VPipelineSetup &);
+	static void getDefs(VPipelineSetup &, bool with_tangents);
 
-	VBufferSpan<float3> pos;
-	VBufferSpan<IColor> col;
-	VBufferSpan<float2> tex;
-	VBufferSpan<u32> nrm;
+	VBufferSpan<float3> positions;
+	VBufferSpan<IColor> colors;
+	VBufferSpan<float2> tex_coords;
+	VBufferSpan<u32> normals;
+	VBufferSpan<u32> tangents; // optional
 };
 
 struct RenderContext {

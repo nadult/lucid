@@ -135,7 +135,9 @@ Ex<void> Scene::load(Stream &stream) {
 	EXPECT(num_meshes > 0 && num_materials > 0);
 	// TODO: resource limits here
 
-	stream >> positions >> colors >> tex_coords >> normals >> quantized_normals >> bounding_box;
+	stream >> positions >> colors >> tex_coords;
+	stream >> normals >> tangents >> quantized_normals >> quantized_tangents;
+	stream >> bounding_box;
 
 	meshes.resize(num_meshes);
 	for(auto &mesh : meshes) {
@@ -161,7 +163,10 @@ Ex<void> Scene::load(Stream &stream) {
 Ex<void> Scene::save(Stream &stream) const {
 	stream.saveSignature("SCENE");
 	stream.pack(meshes.size(), materials.size(), textures.size());
-	stream << positions << colors << tex_coords << normals << quantized_normals << bounding_box;
+	stream << positions << colors << tex_coords;
+	stream << normals << tangents << quantized_normals << quantized_tangents;
+	stream << bounding_box;
+
 	for(auto &mesh : meshes)
 		EXPECT(mesh.save(stream));
 	for(auto &material : materials)
@@ -295,20 +300,24 @@ Ex<void> Scene::updateRenderingData(VulkanDevice &device) {
 	auto vb_usage = buf_usage | VBufferUsage::vertex_buffer;
 	auto ib_usage = buf_usage | VBufferUsage::index_buffer;
 
-	verts.pos = EX_PASS(VulkanBuffer::create<float3>(device, numVerts(), vb_usage));
-	EXPECT(cmds.upload(verts.pos, positions));
+	verts.positions = EX_PASS(VulkanBuffer::create<float3>(device, numVerts(), vb_usage));
+	EXPECT(cmds.upload(verts.positions, positions));
 
 	if(hasColors()) {
-		verts.col = EX_PASS(VulkanBuffer::create<IColor>(device, numVerts(), vb_usage));
-		EXPECT(cmds.upload(verts.col, colors));
+		verts.colors = EX_PASS(VulkanBuffer::create<IColor>(device, numVerts(), vb_usage));
+		EXPECT(cmds.upload(verts.colors, colors));
 	}
 	if(hasTexCoords()) {
-		verts.tex = EX_PASS(VulkanBuffer::create<float2>(device, numVerts(), vb_usage));
-		EXPECT(cmds.upload(verts.tex, tex_coords));
+		verts.tex_coords = EX_PASS(VulkanBuffer::create<float2>(device, numVerts(), vb_usage));
+		EXPECT(cmds.upload(verts.tex_coords, tex_coords));
 	}
 	if(hasQuantizedNormals()) {
-		verts.nrm = EX_PASS(VulkanBuffer::create<u32>(device, numVerts(), vb_usage));
-		EXPECT(cmds.upload(verts.nrm, quantized_normals));
+		verts.normals = EX_PASS(VulkanBuffer::create<u32>(device, numVerts(), vb_usage));
+		EXPECT(cmds.upload(verts.normals, quantized_normals));
+	}
+	if(quantized_tangents) {
+		verts.tangents = EX_PASS(VulkanBuffer::create<u32>(device, numVerts(), vb_usage));
+		EXPECT(cmds.upload(verts.tangents, quantized_tangents));
 	}
 
 	tris_ib = EX_PASS(VulkanBuffer::create<u32>(device, numTris() * 3, ib_usage));
@@ -322,31 +331,39 @@ Ex<void> Scene::updateRenderingData(VulkanDevice &device) {
 	EXPECT(cmds.upload(tris_ib, merged_tris));
 	EXPECT(cmds.upload(quads_ib, merged_quads));
 
-	auto loadTex = [&](SceneMaterial::Map &map) -> Ex<> {
-		if(map.texture_id == -1)
-			return {};
-		auto &tex = textures[map.texture_id];
-		// TODO: makes no sense to keep both in main & gpu memory, especially because ogl is caching it too
-		// TODO: mipmaps for plain textures
-		if(!tex.vk_image) {
-			DASSERT(tex.block_mips || tex.plain_mips);
-			if(tex.block_mips) {
-				auto vk_image = EX_PASS(VulkanImage::createAndUpload(device.ref(), tex.block_mips));
-				tex.vk_image = VulkanImageView::create(device.ref(), vk_image);
-			} else {
-				// TODO: different format for opaque tex? R8G8B8?
-				auto vk_image = EX_PASS(VulkanImage::createAndUpload(device.ref(), tex.plain_mips));
-				tex.vk_image = VulkanImageView::create(device.ref(), vk_image);
-			}
-		}
-		map.vk_image = tex.vk_image;
-		map.is_opaque = tex.is_opaque;
-		return {};
-	};
-
 	for(auto &material : materials)
-		for(auto &map : material.maps)
-			EXPECT(loadTex(map));
+		for(auto map_type : all<SceneMapType>) {
+			auto &map = material.maps[map_type];
+			if(map.texture_id == -1)
+				continue;
+
+			bool is_srgb = map_type == SceneMapType::albedo;
+			auto &tex = textures[map.texture_id];
+			// TODO: makes no sense to keep both in main & gpu memory, especially because ogl is caching it too
+			// TODO: mipmaps for plain textures
+			if(!tex.vk_image) {
+				DASSERT(tex.block_mips || tex.plain_mips);
+				if(tex.block_mips) {
+					auto vk_image =
+						EX_PASS(VulkanImage::createAndUpload(device.ref(), tex.block_mips));
+					tex.vk_image = VulkanImageView::create(device.ref(), vk_image);
+				} else {
+					// TODO: only sRGB works properly for some reason...
+					auto format = map_type == SceneMapType::albedo ? VK_FORMAT_B8G8R8A8_SRGB :
+								  map_type == SceneMapType::normal ? VK_FORMAT_B8G8R8A8_SNORM :
+																	 VK_FORMAT_B8G8R8A8_SNORM;
+					format = VK_FORMAT_R8G8B8A8_SRGB;
+
+					VImageSetup setup(
+						format, VImageDimensions(tex.plain_mips[0].size(), tex.plain_mips.size()));
+					auto vk_image = EX_PASS(VulkanImage::create(device.ref(), setup));
+					EXPECT(vk_image->upload(tex.plain_mips));
+					tex.vk_image = VulkanImageView::create(device.ref(), vk_image);
+				}
+			}
+			map.vk_image = tex.vk_image;
+			map.is_opaque = tex.is_opaque;
+		}
 
 	return {};
 }
@@ -358,11 +375,110 @@ u32 encodeNormalUint(const float3 &n) {
 	return x | (y << 10) | (z << 20);
 }
 
-void Scene::quantizeNormals() {
-	if(!hasNormals())
+void Scene::computeTangents() {
+	if(!hasTexCoords() || !hasNormals())
 		return;
-	quantized_normals = transform(normals, encodeNormalUint);
-	normals.free();
+
+	tangents.clear();
+	quantized_normals.clear();
+	quantized_tangents.clear();
+	tangents.resize(positions.size());
+
+	for(auto &mesh : meshes) {
+		for(auto &tri : mesh.tris) {
+			auto v0 = positions[tri[0]];
+			auto v1 = positions[tri[1]];
+			auto v2 = positions[tri[2]];
+
+			auto uv0 = tex_coords[tri[0]];
+			auto uv1 = tex_coords[tri[1]];
+			auto uv2 = tex_coords[tri[2]];
+
+			auto edge0 = v1 - v0, edge1 = v2 - v0;
+			auto delta_uv0 = uv1 - uv0, delta_uv1 = uv2 - uv0;
+			float scale = 1.0f / (delta_uv0.x * delta_uv1.y - delta_uv1.x * delta_uv0.y);
+			auto tangent = (delta_uv1.y * edge0 - delta_uv0.y * edge1) * scale;
+			for(int i = 0; i < 3; i++)
+				tangents[tri[i]] += tangent;
+		}
+	}
+
+	for(auto &tangent : tangents)
+		tangent = normalize(tangent);
+}
+
+void Scene::computeFlatVectors() {
+	if(!hasTexCoords())
+		return;
+
+	normals.clear();
+	tangents.clear();
+	quantized_normals.clear();
+	quantized_tangents.clear();
+	normals.resize(positions.size());
+	tangents.resize(positions.size());
+
+	vector<bool> taken(positions.size(), false);
+
+	int num_duplicated = 0;
+	for(auto &mesh : meshes) {
+		for(auto &tri : mesh.tris) {
+			auto v0 = positions[tri[0]];
+			auto v1 = positions[tri[1]];
+			auto v2 = positions[tri[2]];
+
+			auto uv0 = tex_coords[tri[0]];
+			auto uv1 = tex_coords[tri[1]];
+			auto uv2 = tex_coords[tri[2]];
+
+			auto edge0 = v1 - v0, edge1 = v2 - v0;
+			auto delta_uv0 = uv1 - uv0, delta_uv1 = uv2 - uv0;
+			float scale = 1.0f / (delta_uv0.x * delta_uv1.y - delta_uv1.x * delta_uv0.y);
+			auto normal = normalize(cross(edge0, edge1));
+			auto tangent = (delta_uv1.y * edge0 - delta_uv0.y * edge1) * scale;
+
+			int provoking_idx = -1;
+			for(int i : intRange(3)) {
+				auto idx = tri[i];
+				if(!taken[idx]) {
+					provoking_idx = i;
+					taken[idx] = true;
+					normals[idx] = normal;
+					tangents[idx] = tangent;
+					break;
+				}
+			}
+
+			if(provoking_idx == -1) {
+				positions.emplace_back(positions[tri[0]]);
+				tex_coords.emplace_back(tex_coords[tri[0]]);
+				if(colors)
+					colors.emplace_back(colors[tri[0]]);
+				normals.emplace_back(normal);
+				tangents.emplace_back(tangent);
+				tri[0] = taken.size();
+				taken.emplace_back(true);
+				num_duplicated++;
+			} else {
+				tri = {tri[provoking_idx], tri[(provoking_idx + 1) % 3],
+					   tri[(provoking_idx + 2) % 3]};
+			}
+		}
+	}
+
+	if(num_duplicated > 0)
+		print("Duplicated verts during flat vectors generation: %\n", num_duplicated);
+}
+
+void Scene::quantizeVectors() {
+	if(normals) {
+		quantized_normals = transform(normals, encodeNormalUint);
+		normals.free();
+	}
+	if(tangents) {
+		quantized_tangents = transform(tangents, encodeNormalUint);
+		tangents.free();
+	}
 }
 
 void Scene::freeRenderingData() {

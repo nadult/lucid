@@ -102,6 +102,7 @@
     <ClCompile Include="..\src\lucid_renderer.cpp" />
     <ClCompile Include="..\src\meshlet.cpp" />
     <ClCompile Include="..\src\path_tracer.cpp" />
+    <ClCompile Include="..\src\pbr_renderer.cpp" />
     <ClCompile Include="..\src\quad_generator.cpp" />
     <ClCompile Include="..\src\scene.cpp" />
     <ClCompile Include="..\src\scene_convert.cpp" />
@@ -120,6 +121,7 @@
     <ClInclude Include="..\src\lucid_renderer.h" />
     <ClInclude Include="..\src\meshlet.h" />
     <ClInclude Include="..\src\path_tracer.h" />
+    <ClInclude Include="..\src\pbr_renderer.h" />
     <ClInclude Include="..\src\quad_generator.h" />
     <ClInclude Include="..\src\scene.h" />
     <ClInclude Include="..\src\scene_convert.h" />
@@ -140,6 +142,7 @@
     <None Include="..\data\shaders\bin_categorizer.glsl" />
     <None Include="..\data\shaders\bin_counter.glsl" />
     <None Include="..\data\shaders\bin_dispatcher.glsl" />
+    <None Include="..\data\shaders\pbr_material.glsl" />
     <None Include="..\data\shaders\quad_setup.glsl" />
     <None Include="..\data\shaders\raster_high.glsl" />
     <None Include="..\data\shaders\raster_low.glsl" />
@@ -151,7 +154,7 @@
     <None Include="..\data\shaders\shared\shading.glsl" />
     <None Include="..\data\shaders\shared\structures.glsl" />
     <None Include="..\data\shaders\shared\timers.glsl" />
-    <None Include="..\data\shaders\simple.glsl" />
+    <None Include="..\data\shaders\simple_material.glsl" />
     <None Include="..\data\shaders\trace.glsl" />
     <None Include="..\notes.wiki" />
   </ItemGroup>

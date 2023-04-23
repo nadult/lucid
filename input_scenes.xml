@@ -1,6 +1,16 @@
 <scenes root_path="D:/resources/scenes/">
+	<!--
+	Params:
+	- flip_uv:bool
+	- flip_yz:bool
+	- merge_verts:bool
+	- quad_squareness:float
+	- pbr:bool
+	  with pbr materials can also have normal & pbr map
+	  texture atlas generation is disabled in pbr mode
+	-->
 
-	<scene path="backpack/backpack.obj" flip_uv="true" />
+	<scene path="backpack/backpack.obj" flip_uv="true" pbr="true" />
 	<scene path="dragon2.obj" quad_squareness="1.5" merge_verts="true" />
 	<scene path="armadillo.obj" quad_squareness="1.5" merge_verts="true" />
 	<scene path="thai.obj" quad_squareness="1.5" merge_verts="true" />

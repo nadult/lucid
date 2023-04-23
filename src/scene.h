@@ -19,6 +19,9 @@ struct SceneTexture {
 	Ex<void> load(Stream &);
 	Ex<void> save(Stream &) const;
 
+	bool empty() const { return size() == int2(0, 0); }
+	int2 size() const;
+
 	string name;
 	PVImageView vk_image;
 	vector<Image> plain_mips;
@@ -32,6 +35,9 @@ struct SceneTexture {
 struct SceneMaterial {
 	struct Map {
 		explicit operator bool() const { return texture_id != -1; }
+
+		// clamped maps don't have to use uv_rect, because their uv_coordinates are transformed
+		bool usesUvRect() const { return !is_clamped && uv_rect != FRect(0, 0, 1, 1); }
 
 		PVImageView vk_image;
 		FRect uv_rect = FRect(0, 0, 1, 1);
@@ -92,6 +98,9 @@ struct Scene {
 		return quantized_normals && quantized_normals.size() == positions.size();
 	}
 	bool hasTexCoords() const { return tex_coords && tex_coords.size() == positions.size(); }
+
+	// Only albedo and at most 2 textures (one opaque, one alpha)
+	bool hasSimpleTextures() const;
 
 	struct Intersection {
 		int mesh_id, tri_id;

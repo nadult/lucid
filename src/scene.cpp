@@ -112,6 +112,10 @@ Ex<void> SceneTexture::loadPlain(ZStr path) {
 	return {};
 }
 
+int2 SceneTexture::size() const {
+	return plain_mips ? plain_mips[0].size() : block_mips ? block_mips[0].size() : int2();
+}
+
 Scene::Scene() = default;
 FWK_MOVABLE_CLASS_IMPL(Scene);
 
@@ -381,6 +385,18 @@ int Scene::numQuads() const {
 	return out;
 }
 
+bool Scene::hasSimpleTextures() const {
+	int num_opaque = 0;
+	for(auto &tex : textures) {
+		if(tex.map_type != SceneMapType::albedo)
+			return false;
+		if(tex.is_opaque)
+			num_opaque++;
+	}
+	int num_transparent = textures.size() - num_opaque;
+	return num_opaque <= 1 && num_transparent <= 1;
+}
+
 vector<SceneDrawCall> Scene::draws(const Frustum &frustum) const {
 	// TODO: frustum culling
 
@@ -396,14 +412,17 @@ vector<SceneDrawCall> Scene::draws(const Frustum &frustum) const {
 		auto &material = materials[mesh.material_id];
 		bool is_opaque = material.isOpaque() && mesh.colors_opaque;
 		auto &albedo = material.maps[SceneMapType::albedo];
-		bool tex_opaque = albedo.is_opaque;
 		auto opts = scene_opts | mask(is_opaque, DrawCallOpt::is_opaque) |
-					mask(tex_opaque, DrawCallOpt::tex_opaque) |
-					mask(!albedo.is_clamped, DrawCallOpt::has_uv_rect) |
-					mask(albedo && has_tex_coords, DrawCallOpt::has_texture);
+					mask(albedo.is_opaque, DrawCallOpt::tex_opaque) |
+					mask(albedo.usesUvRect(), DrawCallOpt::has_uv_rect);
+		if(has_tex_coords) {
+			opts |= mask(!!material.maps[SceneMapType::albedo], DrawCallOpt::has_albedo_tex);
+			opts |= mask(!!material.maps[SceneMapType::normal], DrawCallOpt::has_normal_tex);
+			opts |= mask(!!material.maps[SceneMapType::pbr], DrawCallOpt::has_pbr_tex);
+		}
 		auto &offsets = mesh_primitive_offsets[i];
-		out.emplace_back(mesh.bounding_box, albedo.uv_rect, mesh.material_id, mesh.tris.size(),
-						 offsets.first, mesh.quads.size(), offsets.second, opts);
+		out.emplace_back(mesh.bounding_box, mesh.material_id, mesh.tris.size(), offsets.first,
+						 mesh.quads.size(), offsets.second, opts);
 	}
 
 	return out;

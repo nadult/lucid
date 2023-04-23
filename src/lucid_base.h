@@ -20,6 +20,7 @@ struct RenderConfig {
 												VTexFilter::linear, VTexAddress::repeat, 16);
 	bool backface_culling = false;
 	bool additive_blending = false;
+	bool pbr_mode = false;
 };
 
 struct ShaderConfig {
@@ -30,12 +31,11 @@ struct ShaderConfig {
 ShaderConfig getShaderConfig(VulkanDevice &);
 
 DEFINE_ENUM(DrawCallOpt, has_vertex_colors, has_vertex_tex_coords, has_vertex_normals, is_opaque,
-			tex_opaque, has_uv_rect, has_texture, has_inst_color);
+			tex_opaque, has_uv_rect, has_albedo_tex, has_normal_tex, has_pbr_tex, has_inst_color);
 using DrawCallOpts = EnumFlags<DrawCallOpt>;
 
 struct SceneDrawCall {
 	FBox bbox;
-	FRect uv_rect;
 	int material_id = -1; // -1 means no material assigned
 	int num_tris = 0, tri_offset = 0;
 	int num_quads = 0, quad_offset = 0;

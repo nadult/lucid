@@ -12,7 +12,7 @@
 InputScene::InputScene(string name, string path) : name(move(name)), path(move(path)) {}
 InputScene::InputScene(const FilePath &root_path, CXmlNode node)
 	: quad_squareness(node("quad_squareness", 1.0f)), merge_verts(node("merge_verts", false)),
-	  flip_uv(node("flip_uv", false)), flip_yz(node("flip_yz", false)) {
+	  flip_uv(node("flip_uv", false)), flip_yz(node("flip_yz", false)), pbr(node("pbr", false)) {
 	name = node.tryAttrib("name", "");
 	path = node.attrib("path");
 	if(name.empty())
@@ -60,7 +60,7 @@ SceneTexture convertTexture(ZStr path, SceneMapType map_type) {
 	return out;
 }
 
-static void makeTextureAtlas(Scene &scene, string name, SceneMapType map_type, bool is_opaque) {
+static void makeTextureAtlas(Scene &scene, string name, bool is_opaque) {
 	vector<int> selection;
 	vector<int2> sizes;
 	vector<const Image *> pointers;
@@ -69,7 +69,10 @@ static void makeTextureAtlas(Scene &scene, string name, SceneMapType map_type, b
 
 	for(int i : intRange(scene.textures)) {
 		auto &tex = scene.textures[i];
-		if(tex.is_opaque == is_opaque && tex.map_type == map_type) {
+		DASSERT(tex.map_type == SceneMapType::albedo &&
+				"Atlas generation should be used when scene uses only albedo textures");
+
+		if(tex.is_opaque == is_opaque) {
 			selection.emplace_back(i);
 			inverse_map[i] = sizes.size();
 			sizes.emplace_back(tex.plain_mips[0].size());
@@ -101,7 +104,7 @@ static void makeTextureAtlas(Scene &scene, string name, SceneMapType map_type, b
 	vector<int> vertex_list;
 	for(auto &mesh : scene.meshes) {
 		auto &material = scene.materials[mesh.material_id];
-		auto &map = material.maps[map_type];
+		auto &map = material.maps[SceneMapType::albedo];
 		if(!map || !selected_map[map.texture_id])
 			continue;
 
@@ -213,6 +216,8 @@ void optimizeTriangleOrdering(const int num_verts, CSpan<int> indices, Span<int>
 
 Scene convertScene(WavefrontObject obj, const InputScene &iscene) {
 	Scene out;
+
+	auto total_time = getTime();
 	out.positions = move(obj.positions);
 	out.normals = move(obj.normals);
 	out.tex_coords = move(obj.tex_coords);
@@ -263,14 +268,18 @@ Scene convertScene(WavefrontObject obj, const InputScene &iscene) {
 		for(auto &map : mtl.maps) {
 			if(map.first == "kd")
 				mat.maps[SceneMapType::albedo] = loadTex(map.second, SceneMapType::albedo);
-			if(map.first == "ao")
-				pbr_ao = &map.second;
-			if(map.first == "roughness")
-				pbr_roughness = &map.second;
-			if(map.first == "ks")
-				pbr_metallic = &map.second;
-			if(map.first == "bump")
-				mat.maps[SceneMapType::normal] = loadTex(map.second, SceneMapType::normal);
+			if(iscene.pbr) {
+				if(map.first == "ao")
+					pbr_ao = &map.second;
+				if(map.first == "roughness")
+					pbr_roughness = &map.second;
+				if(map.first == "ks")
+					pbr_metallic = &map.second;
+				if(map.first == "bump") {
+					// TODO: it can be normal or bump map
+					mat.maps[SceneMapType::normal] = loadTex(map.second, SceneMapType::normal);
+				}
+			}
 		}
 
 		if(pbr_ao && pbr_roughness && pbr_metallic) {
@@ -278,7 +287,13 @@ Scene convertScene(WavefrontObject obj, const InputScene &iscene) {
 			auto roughness_tex = loadPbrTex(*pbr_roughness);
 			auto metallic_tex = loadPbrTex(*pbr_metallic);
 
-			if(ao_tex.size() == roughness_tex.size() && ao_tex.size() == metallic_tex.size()) {
+			if(ao_tex.size() != roughness_tex.size() || ao_tex.size() != metallic_tex.size()) {
+				print("Warning: invalid sizes of PBR textures for material: '%'\n"
+					  "  AO: size:% '%'\n  roughness size:% '%'\n  metallic size:% '%'\n"
+					  "  Skipping...\n",
+					  mat.name, ao_tex.size(), pbr_ao->name, roughness_tex.size(),
+					  pbr_roughness->name, metallic_tex.size(), pbr_metallic->name);
+			} else {
 				Image pbr_image(ao_tex.size());
 				for(int y = 0; y < pbr_image.height(); y++) {
 					for(int x = 0; x < pbr_image.width(); x++) {
@@ -354,15 +369,10 @@ Scene convertScene(WavefrontObject obj, const InputScene &iscene) {
 	}
 
 	print("Compressing & generating mipmaps for textures...\n");
-	if(out.hasTexCoords()) {
+	if(out.hasTexCoords() && !iscene.pbr) {
 		detectClampedTextures(out);
-
-		// TODO: keep roughness, metallic & ao in single texture
-		// For each texture type generate uv_rect per instance
-		makeTextureAtlas(out, format("%_opaque", iscene.name), SceneMapType::albedo, true);
-		makeTextureAtlas(out, format("%_transparent", iscene.name), SceneMapType::albedo, false);
-		makeTextureAtlas(out, format("%_normal", iscene.name), SceneMapType::normal, true);
-		makeTextureAtlas(out, format("%_pbr", iscene.name), SceneMapType::pbr, true);
+		makeTextureAtlas(out, format("%_opaque", iscene.name), true);
+		makeTextureAtlas(out, format("%_transparent", iscene.name), false);
 	}
 	int max_atlas_mips = 6; // For atlas, other textures can have more ?
 
@@ -394,6 +404,13 @@ Scene convertScene(WavefrontObject obj, const InputScene &iscene) {
 	out.generateQuads(iscene.quad_squareness);
 	out.quantizeNormals();
 	rescale(out);
+
+	total_time = getTime() - total_time;
+	print("Conversion finished in % seconds\n"
+		  "- materials:% mextures:% meshes:% tris:% quads:% verts:%\n\n",
+		  total_time, out.materials.size(), out.textures.size(), out.meshes.size(), out.numTris(),
+		  out.numQuads(), out.numVerts());
+
 	return out;
 }
 
@@ -422,12 +439,6 @@ void convertScenes(ZStr iscenes_path) {
 		print("  loaded in % msec\n", int((getTime() - time) * 1000.0));
 
 		auto scene = convertScene(move(*wavefront_obj), iscene);
-
-		print("  materials:% textures:% meshes:% tris:% quads:% verts:%\n\n",
-			  scene.materials.size(), scene.textures.size(), scene.meshes.size(), scene.numTris(),
-			  scene.numQuads(), scene.numVerts());
-		time = getTime();
-
 		auto saver = fileSaver(dst_path);
 		if(!saver) {
 			print("  error while saving\n");
@@ -443,7 +454,6 @@ void convertScenes(ZStr iscenes_path) {
 			num_failed++;
 			continue;
 		}
-		print("  saved in % seconds\n", getTime() - time);
 		num_converted++;
 	}
 

@@ -235,8 +235,10 @@ Ex<> LoadedSetup::updateScene(VDeviceRef device) {
 		render_config.scene_opacity = 0.5;
 	else
 		render_config.scene_opacity = 0.8;
-	if(name == "backpack")
+	if(name == "backpack") {
 		render_config.scene_opacity = 1.0f;
+		render_config.pbr_mode = true;
+	}
 
 	EXPECT(scene->updateRenderingData(*device));
 

@@ -79,14 +79,16 @@ struct SpecializationConstants {
 #define BIN_LEVEL_HIGH		4
 
 // These map directly to DrawCallOpts (lucid_base.h)
-#define INST_HAS_VERTEX_COLORS		0x01
-#define INST_HAS_VERTEX_TEX_COORDS	0x02
-#define INST_HAS_VERTEX_NORMALS		0x04
-#define INST_IS_OPAQUE				0x08
-#define INST_TEX_OPAQUE				0x10
-#define INST_HAS_UV_RECT			0x20
-#define INST_HAS_TEXTURE			0x40
-#define INST_HAS_COLOR				0x80
+#define INST_HAS_VERTEX_COLORS		0x001
+#define INST_HAS_VERTEX_TEX_COORDS	0x002
+#define INST_HAS_VERTEX_NORMALS		0x004
+#define INST_IS_OPAQUE				0x008
+#define INST_TEX_OPAQUE				0x010
+#define INST_HAS_UV_RECT			0x020
+#define INST_HAS_ALBEDO_TEXTURE		0x040
+#define INST_HAS_NORMAL_TEXTURE		0x080
+#define INST_HAS_PBR_TEXTURE		0x100
+#define INST_HAS_COLOR				0x200
 
 // Different reasons for rejection of triangles/quads during setup
 #define REJECTION_TYPE_OTHER			0

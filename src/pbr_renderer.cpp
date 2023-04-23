@@ -1,4 +1,4 @@
-#include "simple_renderer.h"
+#include "pbr_renderer.h"
 
 #include "scene.h"
 #include "shader_structs.h"
@@ -15,25 +15,25 @@
 #include <fwk/vulkan/vulkan_shader.h>
 #include <fwk/vulkan/vulkan_swap_chain.h>
 
-SimpleRenderer::SimpleRenderer() = default;
-FWK_MOVABLE_CLASS_IMPL(SimpleRenderer);
+PbrRenderer::PbrRenderer() = default;
+FWK_MOVABLE_CLASS_IMPL(PbrRenderer);
 
 vector<Pair<string>> sharedShaderMacros(VulkanDevice &);
 
-void SimpleRenderer::addShaderDefs(VulkanDevice &device, ShaderCompiler &compiler,
-								   const ShaderConfig &shader_config) {
+void PbrRenderer::addShaderDefs(VulkanDevice &device, ShaderCompiler &compiler,
+								const ShaderConfig &shader_config) {
 	vector<Pair<string>> vsh_macros = {{"VERTEX_SHADER", "1"}};
 	vector<Pair<string>> fsh_macros = {{"FRAGMENT_SHADER", "1"}};
 	auto shared_macros = shader_config.predefined_macros;
 	insertBack(vsh_macros, shared_macros);
 	insertBack(fsh_macros, shared_macros);
 
-	compiler.add({"simple_vert", VShaderStage::vertex, "simple.glsl", vsh_macros});
-	compiler.add({"simple_frag", VShaderStage::fragment, "simple.glsl", fsh_macros});
+	compiler.add({"pbr_vert", VShaderStage::vertex, "pbr_material.glsl", vsh_macros});
+	compiler.add({"pbr_frag", VShaderStage::fragment, "pbr_material.glsl", fsh_macros});
 }
 
-Ex<void> SimpleRenderer::exConstruct(VDeviceRef device, ShaderCompiler &compiler,
-									 const IRect &viewport, VColorAttachment color_att) {
+Ex<void> PbrRenderer::exConstruct(VDeviceRef device, ShaderCompiler &compiler,
+								  const IRect &viewport, VColorAttachment color_att) {
 	auto depth_format = device->bestSupportedFormat(VDepthStencilFormat::d32f);
 	auto depth_buffer =
 		EX_PASS(VulkanImage::create(device, VImageSetup(depth_format, viewport.size())));
@@ -49,8 +49,8 @@ Ex<void> SimpleRenderer::exConstruct(VDeviceRef device, ShaderCompiler &compiler
 
 	m_viewport = viewport;
 
-	auto frag_id = *compiler.find("simple_frag");
-	auto vert_id = *compiler.find("simple_vert");
+	auto frag_id = *compiler.find("pbr_frag");
+	auto vert_id = *compiler.find("pbr_vert");
 	m_shader_def_ids = {frag_id, vert_id};
 
 	m_frag_module = EX_PASS(compiler.createShaderModule(device, frag_id));
@@ -60,7 +60,7 @@ Ex<void> SimpleRenderer::exConstruct(VDeviceRef device, ShaderCompiler &compiler
 	return {};
 }
 
-Ex<PVPipeline> SimpleRenderer::getPipeline(VulkanDevice &device, const PipeConfig &config) {
+Ex<PVPipeline> PbrRenderer::getPipeline(VulkanDevice &device, const PipeConfig &config) {
 	PERF_SCOPE();
 
 	auto &ref = m_pipelines[config];
@@ -90,14 +90,13 @@ Ex<PVPipeline> SimpleRenderer::getPipeline(VulkanDevice &device, const PipeConfi
 	return ref;
 }
 
-Ex<> SimpleRenderer::renderPhase(const RenderContext &ctx,
-								 VBufferSpan<shader::SimpleDrawCall> simple_dc_buf, bool opaque,
-								 bool wireframe) {
+Ex<> PbrRenderer::renderPhase(const RenderContext &ctx, VBufferSpan<shader::PbrDrawCall> dc_buf,
+							  bool opaque, bool wireframe) {
 	auto &cmds = ctx.device.cmdQueue();
 	PERF_GPU_SCOPE(cmds);
 
 	PipeConfig pipe_config{ctx.config.backface_culling, ctx.config.additive_blending, opaque,
-						   wireframe};
+						   wireframe, false};
 	auto pipeline = EX_PASS(getPipeline(ctx.device, pipe_config));
 	cmds.bind(pipeline);
 
@@ -110,9 +109,14 @@ Ex<> SimpleRenderer::renderPhase(const RenderContext &ctx,
 			continue;
 		if(prev_mat_id != draw_call.material_id) {
 			auto ds = cmds.bindDS(1);
-			ds.set(0, VDescriptorType::uniform_buffer, simple_dc_buf.subSpan(dc, dc + 1));
+			ds.set(0, VDescriptorType::uniform_buffer, dc_buf.subSpan(dc, dc + 1));
+			// TODO: different default textures for different map types
 			auto &albedo_map = material.maps[SceneMapType::albedo];
-			ds.set(1, {{sampler, albedo_map.vk_image}});
+			auto &normal_map = material.maps[SceneMapType::normal];
+			auto &pbr_map = material.maps[SceneMapType::pbr];
+			ds.set(1, {{sampler, albedo_map.vk_image},
+					   {sampler, normal_map.vk_image},
+					   {sampler, pbr_map.vk_image}});
 			prev_mat_id = draw_call.material_id;
 		}
 
@@ -126,9 +130,7 @@ Ex<> SimpleRenderer::renderPhase(const RenderContext &ctx,
 	return {};
 }
 
-Ex<> SimpleRenderer::render(const RenderContext &ctx, bool wireframe) {
-	DASSERT(ctx.scene.hasSimpleTextures());
-
+Ex<> PbrRenderer::render(const RenderContext &ctx, bool wireframe) {
 	auto &cmds = ctx.device.cmdQueue();
 	PERF_GPU_SCOPE(cmds);
 
@@ -146,25 +148,21 @@ Ex<> SimpleRenderer::render(const RenderContext &ctx, bool wireframe) {
 	int num_opaque = 0;
 
 	// TODO: minimize it (do it only for different materials)
-	vector<shader::SimpleDrawCall> simple_dcs;
-	simple_dcs.reserve(ctx.dcs.size());
+	vector<shader::PbrDrawCall> dcs;
+	dcs.reserve(ctx.dcs.size());
 	for(const auto &draw_call : ctx.dcs) {
 		auto &material = ctx.materials[draw_call.material_id];
-		auto &simple_dc = simple_dcs.emplace_back();
+		auto &simple_dc = dcs.emplace_back();
 		if(draw_call.opts & DrawCallOpt::is_opaque)
 			num_opaque++;
 		simple_dc.world_camera_pos = ctx.camera.pos();
 		simple_dc.proj_view_matrix = ctx.camera.matrix();
 		simple_dc.material_color = float4(material.diffuse, material.opacity);
 		simple_dc.draw_call_opts = uint(draw_call.opts.bits);
-		if(draw_call.opts & DrawCallOpt::has_uv_rect) {
-			auto uv_rect = material.maps[SceneMapType::albedo].uv_rect;
-			simple_dc.uv_rect_pos = uv_rect.min();
-			simple_dc.uv_rect_size = uv_rect.size();
-		}
 	}
-	auto simple_dc_buf = EX_PASS(
-		VulkanBuffer::createAndUpload(ctx.device, simple_dcs, ubo_usage, VMemoryUsage::frame));
+
+	auto dc_buf =
+		EX_PASS(VulkanBuffer::createAndUpload(ctx.device, dcs, ubo_usage, VMemoryUsage::frame));
 
 	cmds.bind(m_pipeline_layout);
 	cmds.bindDS(0).set(0, VDescriptorType::uniform_buffer, lighting_buf);
@@ -183,9 +181,9 @@ Ex<> SimpleRenderer::render(const RenderContext &ctx, bool wireframe) {
 						 {FColor(ColorId::magneta), VClearDepthStencil(1.0)});
 
 	if(num_opaque > 0)
-		EXPECT(renderPhase(ctx, simple_dc_buf, true, wireframe));
+		EXPECT(renderPhase(ctx, dc_buf, true, wireframe));
 	if(num_opaque != ctx.dcs.size())
-		EXPECT(renderPhase(ctx, simple_dc_buf, false, wireframe));
+		EXPECT(renderPhase(ctx, dc_buf, false, wireframe));
 
 	cmds.endRenderPass();
 

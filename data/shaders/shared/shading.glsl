@@ -119,7 +119,7 @@ uint shadeSample(ivec2 pixel_pos, uint tri_idx, out float out_depth) {
 	vec2 bary = vec2(e0, e1) * ray_pos;
 
 	vec2 bary_dx, bary_dy;
-	if((instance_flags & INST_HAS_TEXTURE) != 0) {
+	if((instance_flags & INST_HAS_ALBEDO_TEXTURE) != 0) {
 		float ray_posx = 1.0 / (inv_ray_pos + depth_eq.x);
 		float ray_posy = 1.0 / (inv_ray_pos + depth_eq.y);
 
@@ -133,7 +133,7 @@ uint shadeSample(ivec2 pixel_pos, uint tri_idx, out float out_depth) {
 					 decodeRGBA8(g_instance_colors[instance_id]) :
 					 vec4(1.0);
 
-	if((instance_flags & INST_HAS_TEXTURE) != 0) {
+	if((instance_flags & INST_HAS_ALBEDO_TEXTURE) != 0) {
 		vec2 tex0, tex1, tex2;
 		getTriangleVertexTexCoords(tri_idx, tex0, tex1, tex2);
 

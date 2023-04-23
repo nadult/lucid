@@ -58,6 +58,9 @@
     <ClCompile Include="..\src\bvh.cpp">
       <Filter>source</Filter>
     </ClCompile>
+    <ClCompile Include="..\src\pbr_renderer.cpp">
+      <Filter>source</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\src\lucid_app.h">
@@ -111,6 +114,9 @@
     <ClInclude Include="..\src\bvh.h">
       <Filter>source</Filter>
     </ClInclude>
+    <ClInclude Include="..\src\pbr_renderer.h">
+      <Filter>source</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <None Include="..\notes.wiki" />
@@ -147,9 +153,6 @@
     <None Include="..\data\shaders\raster_low.glsl">
       <Filter>shaders</Filter>
     </None>
-    <None Include="..\data\shaders\simple.glsl">
-      <Filter>shaders</Filter>
-    </None>
     <None Include="..\data\shaders\bin_counter.glsl">
       <Filter>shaders</Filter>
     </None>
@@ -160,6 +163,12 @@
       <Filter>shaders\shared</Filter>
     </None>
     <None Include="..\data\shaders\trace.glsl">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="..\data\shaders\pbr_material.glsl">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="..\data\shaders\simple_material.glsl">
       <Filter>shaders</Filter>
     </None>
   </ItemGroup>

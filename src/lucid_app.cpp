@@ -3,6 +3,7 @@
 #include "lucid_renderer.h"
 #include "meshlet.h"
 #include "path_tracer.h"
+#include "pbr_renderer.h"
 #include "scene_setup.h"
 #include "simple_renderer.h"
 
@@ -70,6 +71,7 @@ LucidApp::LucidApp(VWindowRef window, VDeviceRef device)
 	SimpleRenderer::addShaderDefs(*device, *m_shader_compiler, shader_config);
 	LucidRenderer::addShaderDefs(*device, *m_shader_compiler, shader_config);
 	PathTracer::addShaderDefs(*device, *m_shader_compiler, shader_config);
+	PbrRenderer::addShaderDefs(*device, *m_shader_compiler, shader_config);
 
 	if(perf::Manager::instance())
 		m_perf_analyzer.emplace();
@@ -197,8 +199,8 @@ bool LucidApp::updateViewport() {
 Ex<void> LucidApp::updateRenderer() {
 	PERF_SCOPE();
 
-	bool do_update =
-		!m_simple_renderer || !m_lucid_renderer || m_lucid_renderer->opts() != m_lucid_opts;
+	bool do_update = !m_pbr_renderer || !m_simple_renderer || !m_lucid_renderer ||
+					 m_lucid_renderer->opts() != m_lucid_opts;
 	if(updateViewport())
 		do_update = true;
 
@@ -208,6 +210,8 @@ Ex<void> LucidApp::updateRenderer() {
 		vector<ShaderDefId> used_shaders;
 		if(m_simple_renderer)
 			used_shaders = m_simple_renderer->shaderDefIds();
+		if(m_pbr_renderer)
+			insertBack(used_shaders, m_pbr_renderer->shaderDefIds());
 		if(m_lucid_renderer)
 			insertBack(used_shaders, m_lucid_renderer->shaderDefIds());
 		makeSortedUnique(used_shaders);
@@ -219,13 +223,17 @@ Ex<void> LucidApp::updateRenderer() {
 		auto swap_chain = m_device->swapChain();
 		m_lucid_renderer.reset();
 		m_simple_renderer.reset();
+		m_pbr_renderer.reset();
 		m_path_tracer.reset();
 		m_device->waitForIdle();
 
+		m_pbr_renderer = EX_PASS(
+			construct<PbrRenderer>(m_device, *m_shader_compiler, m_viewport, swap_chain->format()));
 		m_simple_renderer = EX_PASS(construct<SimpleRenderer>(m_device, *m_shader_compiler,
 															  m_viewport, swap_chain->format()));
 		m_lucid_renderer = EX_PASS(construct<LucidRenderer>(
 			*m_device, *m_shader_compiler, swap_chain->format(), m_lucid_opts, m_viewport.size()));
+
 		m_last_shader_update_time = m_last_time;
 		m_scene_frame_id = 0;
 	}
@@ -438,6 +446,13 @@ void LucidApp::doMenu() {
 		ImGui::TextColored((ImVec4)FColor(ColorId::red), "%s", text.c_str());
 	}
 
+	if(isOneOf(m_rendering_mode, RenderingMode::lucid, RenderingMode::simple,
+			   RenderingMode::mixed) &&
+	   !scene->hasSimpleTextures()) {
+		ImGui::TextColored((ImVec4)FColor(ColorId::red),
+						   "\nPBR scenes are not supported in\nSimple & Lucid renderers");
+	}
+
 	ImGui::End();
 
 	if(m_show_stats && scene)
@@ -588,12 +603,15 @@ void LucidApp::drawScene() {
 			dc.opts &= ~DrawCallOpt::is_opaque;
 
 	clearScreen(ctx);
-	if(isOneOf(m_rendering_mode, RenderingMode::simple, RenderingMode::mixed))
+
+	bool is_pbr = !setup.scene->hasSimpleTextures();
+	if(!is_pbr && isOneOf(m_rendering_mode, RenderingMode::simple, RenderingMode::mixed))
 		m_simple_renderer->render(ctx, m_wireframe_mode).check();
-	if(isOneOf(m_rendering_mode, RenderingMode::lucid, RenderingMode::mixed))
+	if(!is_pbr && isOneOf(m_rendering_mode, RenderingMode::lucid, RenderingMode::mixed))
 		if(setup.scene->numQuads() <= m_lucid_renderer->maxSceneQuads())
 			m_lucid_renderer->render(ctx);
-
+	if(m_rendering_mode == RenderingMode::pbr && m_pbr_renderer)
+		m_pbr_renderer->render(ctx, m_wireframe_mode).check();
 	if(m_rendering_mode == RenderingMode::path_trace && m_path_tracer)
 		m_path_tracer->render(ctx);
 	m_scene_frame_id++;

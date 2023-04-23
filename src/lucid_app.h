@@ -12,11 +12,12 @@
 
 class LucidRenderer;
 class SimpleRenderer;
+class PbrRenderer;
 class PathTracer;
 class SceneSetup;
 struct Scene;
 
-DEFINE_ENUM(RenderingMode, simple, lucid, mixed, path_trace);
+DEFINE_ENUM(RenderingMode, simple, lucid, mixed, pbr, path_trace);
 
 class LucidApp {
   public:
@@ -67,6 +68,7 @@ class LucidApp {
 	Dynamic<PathTracer> m_path_tracer;
 	Dynamic<LucidRenderer> m_lucid_renderer;
 	Dynamic<SimpleRenderer> m_simple_renderer;
+	Dynamic<PbrRenderer> m_pbr_renderer;
 	LucidRenderOpts m_lucid_opts = none;
 	PathTracerOpts m_path_tracer_opts = none;
 	bool m_wireframe_mode = false;

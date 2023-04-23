@@ -257,7 +257,7 @@ void storeQuad(uint quad_idx, uint instance_flags, uint v0, uint v1, uint v2, ui
 		uvec4 normals = uvec4(g_normals[v0], g_normals[v1], g_normals[v2], g_normals[v3]);
 		g_uvec4_storage[STORAGE_QUAD_NORMAL_OFFSET + quad_idx] = normals;
 	}
-	if((instance_flags & INST_HAS_TEXTURE) != 0) {
+	if((instance_flags & INST_HAS_ALBEDO_TEXTURE) != 0) {
 		vec2 tex0 = g_tex_coords[v0], tex1 = g_tex_coords[v1] - tex0;
 		vec2 tex2 = g_tex_coords[v2] - tex0, tex3 = g_tex_coords[v3] - tex0;
 		uint tex_offset = STORAGE_QUAD_TEXTURE_OFFSET + quad_idx * 2;

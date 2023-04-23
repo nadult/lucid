@@ -11,6 +11,7 @@ struct InputScene {
 	bool merge_verts = false;
 	bool flip_uv = false;
 	bool flip_yz = false;
+	bool pbr = false;
 };
 
 Ex<vector<InputScene>> loadInputScenes(ZStr path);

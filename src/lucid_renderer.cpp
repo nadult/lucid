@@ -16,6 +16,8 @@
 #include <fwk/vulkan/vulkan_pipeline.h>
 #include <fwk/vulkan/vulkan_swap_chain.h>
 
+// TODO: bugi przy renderowaniu conference (błędne offsety, brak kolorów)
+
 // TODO: bugi na powerplant jak geometria przecina near clipping plane
 // TODO: why on desktop AMD on windows some shaders work 2-3x slower? balancedDispatcher & rasterizers
 // TODO: rename WARP to SUBGROUP ?
@@ -310,6 +312,8 @@ Ex<void> LucidRenderer::exConstruct(VulkanDevice &device, ShaderCompiler &compil
 }
 
 void LucidRenderer::render(const Context &ctx) {
+	DASSERT(ctx.scene.hasSimpleTextures());
+
 	auto &cmds = ctx.device.cmdQueue();
 	PERF_GPU_SCOPE(cmds);
 
@@ -364,7 +368,9 @@ Ex<> LucidRenderer::uploadInstances(const Context &ctx) {
 		out.vertex_offset = 0;
 		out.num_quads = dc.num_quads;
 		out.flags = (uint(opts.bits) & 0xffff);
-		float4 uv_rect(dc.uv_rect.x(), dc.uv_rect.y(), dc.uv_rect.width(), dc.uv_rect.height());
+		auto &material = ctx.materials[dc.material_id];
+		auto &map = material.maps[SceneMapType::albedo];
+		float4 uv_rect(map.uv_rect.min(), map.uv_rect.size());
 		m_num_quads += dc.num_quads;
 
 		if(dc.num_quads <= max_instance_quads) {

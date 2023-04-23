@@ -33,6 +33,13 @@ struct SimpleDrawCall {
 	vec4 world_camera_pos;
 };
 
+struct PbrDrawCall {
+	mat4 proj_view_matrix;
+	vec4 material_color;
+	uint draw_call_opts;
+	vec4 world_camera_pos;
+};
+
 struct Rect {
 	vec2 pos, size;
 	vec2 min_uv, max_uv;

@@ -2,10 +2,13 @@
 #include "shared/funcs.glsl"
 
 layout(set = 0, binding = 0) uniform ubo00 { Lighting lighting; };
-layout(set = 1, binding = 0) uniform ubo10 { SimpleDrawCall simple_dc; };
-layout(set = 1, binding = 1) uniform sampler2D color_tex;
+layout(set = 1, binding = 0) uniform ubo10 { PbrDrawCall draw_call; };
 
-bool flagSet(uint flag) { return (simple_dc.draw_call_opts & flag) != 0; }
+layout(set = 1, binding = 1) uniform sampler2D albedo_tex;
+layout(set = 1, binding = 2) uniform sampler2D normal_tex;
+layout(set = 1, binding = 3) uniform sampler2D pbr_tex;
+
+bool flagSet(uint flag) { return (draw_call.draw_call_opts & flag) != 0; }
 
 #ifdef VERTEX_SHADER // -------------------------------------------------------
 
@@ -21,7 +24,7 @@ layout(location = 3) out vec3 v_normalWS;
 
 void main() {
 	vec3 posWS = vec4(in_pos, 1.0).xyz;
-	gl_Position = simple_dc.proj_view_matrix * vec4(posWS, 1.0);
+	gl_Position = draw_call.proj_view_matrix * vec4(posWS, 1.0);
 	v_posWS = posWS;
 
 	v_color = flagSet(INST_HAS_VERTEX_COLORS) ? in_color : vec4(1, 1, 1, 1);
@@ -49,21 +52,19 @@ void main() {
 		normalWS = normalize(cross(dFdy(v_posWS), dFdx(v_posWS)));
 	}
 
-	vec4 color = simple_dc.material_color * v_color;
-	if(flagSet(INST_HAS_TEXTURE)) {
-		vec2 tex_coord = v_tex_coord;
-		vec2 tex_dx = dFdx(v_tex_coord);
-		vec2 tex_dy = dFdy(v_tex_coord);
-		if(flagSet(INST_HAS_UV_RECT)) {
-			// TODO: all textures need borders, even if POW2?
-			tex_dx *= simple_dc.uv_rect_size;
-			tex_dy *= simple_dc.uv_rect_size;
-			tex_coord = simple_dc.uv_rect_pos + simple_dc.uv_rect_size * fract(tex_coord);
-		}
-		color *= textureGrad(color_tex, tex_coord, tex_dx, tex_dy);
+	// roughness, metallic, ao
+	vec3 pbr = vec3(1.0, 1.0, 1.0);
+	if(flagSet(INST_HAS_PBR_TEXTURE)) {
+		pbr = texture(pbr_tex, v_tex_coord).rgb;
 	}
 
-	float light_value = max(0.0, dot(-lighting.sun_dir.xyz, normalWS) * 0.7 + 0.3);
+	vec4 color = draw_call.material_color * v_color;
+	if(flagSet(INST_HAS_ALBEDO_TEXTURE)) {
+		color *= texture(albedo_tex, v_tex_coord);
+	}
+	color = vec4(1.0);
+
+	float light_value = max(0.0, dot(-lighting.sun_dir.xyz, normalWS) * 0.7 + 0.3) * pbr.z;
 	f_color.rgb = finalShading(lighting, color.rgb, light_value);
 	f_color.a = color.a;
 }

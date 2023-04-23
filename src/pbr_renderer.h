@@ -6,13 +6,13 @@
 #include <fwk/math/box.h>
 
 namespace shader {
-struct SimpleDrawCall; // TODO: change name to diff from fwk
+struct PbrDrawCall;
 }
 
-class SimpleRenderer {
+class PbrRenderer {
   public:
-	SimpleRenderer();
-	FWK_MOVABLE_CLASS(SimpleRenderer);
+	PbrRenderer();
+	FWK_MOVABLE_CLASS(PbrRenderer);
 
 	static void addShaderDefs(VulkanDevice &, ShaderCompiler &, const ShaderConfig &);
 	CSpan<ShaderDefId> shaderDefIds() const { return m_shader_def_ids; }
@@ -24,16 +24,17 @@ class SimpleRenderer {
 
   private:
 	struct PipeConfig {
-		FWK_ORDER_BY(PipeConfig, backface_culling, additive_blending, opaque, wireframe);
+		FWK_ORDER_BY(PipeConfig, backface_culling, additive_blending, opaque, wireframe, pbr);
 
 		bool backface_culling;
 		bool additive_blending;
 		bool opaque;
 		bool wireframe;
+		bool pbr;
 	};
 
 	Ex<PVPipeline> getPipeline(VulkanDevice &, const PipeConfig &);
-	Ex<> renderPhase(const RenderContext &, VBufferSpan<shader::SimpleDrawCall>, bool opaque,
+	Ex<> renderPhase(const RenderContext &, VBufferSpan<shader::PbrDrawCall>, bool opaque,
 					 bool wireframe);
 
 	vector<ShaderDefId> m_shader_def_ids;

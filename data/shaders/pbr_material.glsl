@@ -53,10 +53,6 @@ void main() {
 	vec3 normal = v_normalWS;
 	if(flagSet(INST_HAS_NORMAL_TEXTURE)) {
 		vec3 normal_map = texture(normal_tex, v_tex_coord).rgb;
-		// TODO: don't use sRGB
-		normal_map.r = pow(normal_map.r, 1.0 / 2.2);
-		normal_map.g = pow(normal_map.g, 1.0 / 2.2);
-		normal_map.b = pow(normal_map.b, 1.0 / 2.2);
 		normal_map = normal_map * 2.0 - 1.0;
 		normal =
 			normal_map.x * v_tangentWS + normal_map.y * v_binormalWS + normal_map.z * v_normalWS;

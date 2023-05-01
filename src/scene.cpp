@@ -348,11 +348,9 @@ Ex<void> Scene::updateRenderingData(VulkanDevice &device) {
 						EX_PASS(VulkanImage::createAndUpload(device.ref(), tex.block_mips));
 					tex.vk_image = VulkanImageView::create(device.ref(), vk_image);
 				} else {
-					// TODO: only sRGB works properly for some reason...
-					auto format = map_type == SceneMapType::albedo ? VK_FORMAT_B8G8R8A8_SRGB :
-								  map_type == SceneMapType::normal ? VK_FORMAT_B8G8R8A8_SNORM :
-																	 VK_FORMAT_B8G8R8A8_SNORM;
-					format = VK_FORMAT_R8G8B8A8_SRGB;
+					auto format = map_type == SceneMapType::albedo ? VK_FORMAT_R8G8B8A8_SRGB :
+								  map_type == SceneMapType::normal ? VK_FORMAT_R8G8B8A8_UNORM :
+																	 VK_FORMAT_R8G8B8A8_UNORM;
 
 					VImageSetup setup(
 						format, VImageDimensions(tex.plain_mips[0].size(), tex.plain_mips.size()));

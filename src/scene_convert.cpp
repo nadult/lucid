@@ -2,8 +2,6 @@
 
 #include "texture_atlas.h"
 #include "wavefront_obj.h"
-#include <fwk/gfx/compressed_image.h>
-#include <fwk/gfx/float_image.h>
 #include <fwk/gfx/image.h>
 #include <fwk/io/file_stream.h>
 #include <fwk/io/xml.h>
@@ -48,11 +46,11 @@ SceneTexture convertTexture(ZStr path, SceneMapType map_type) {
 	auto tex = Image::load(path);
 	if(!tex) {
 		tex.error().print();
-		tex = Image({32, 32}, ColorId::purple);
+		tex = Image({8, 8}, ColorId::purple);
 		out.name += "_invalid";
 	}
-	out.is_opaque = tex->isOpaque();
-	out.plain_mips.emplace_back(move(*tex));
+	out.is_opaque = allOf(tex->pixels<IColor>(), [](IColor col) { return col.a == 255; });
+	out.mips.emplace_back(std::move(*tex));
 
 	print("  loaded % (size:% opaque:%) in % msec\n", out.name, tex->size(), out.is_opaque,
 		  int((getTime() - time) * 1000.0));
@@ -63,6 +61,7 @@ SceneTexture convertTexture(ZStr path, SceneMapType map_type) {
 static void makeTextureAtlas(Scene &scene, string name, bool is_opaque) {
 	vector<int> selection;
 	vector<int2> sizes;
+	// TODO: use ImageView class
 	vector<const Image *> pointers;
 	vector<char> selected_map(scene.textures.size(), false);
 	vector<int> inverse_map(scene.textures.size(), -1);
@@ -75,8 +74,8 @@ static void makeTextureAtlas(Scene &scene, string name, bool is_opaque) {
 		if(tex.is_opaque == is_opaque) {
 			selection.emplace_back(i);
 			inverse_map[i] = sizes.size();
-			sizes.emplace_back(tex.plain_mips[0].size());
-			pointers.emplace_back(&tex.plain_mips[0]);
+			sizes.emplace_back(tex.size());
+			pointers.emplace_back(&tex.mips[0]);
 			selected_map[i] = 1;
 		}
 	}
@@ -140,11 +139,11 @@ static void makeTextureAtlas(Scene &scene, string name, bool is_opaque) {
 	int atlas_index = selection.front();
 	SceneTexture atlas_tex;
 	atlas_tex.name = name;
-	atlas_tex.plain_mips.emplace_back(move(tex));
+	atlas_tex.mips.emplace_back(std::move(tex));
 	atlas_tex.is_clamped = true;
 	atlas_tex.is_atlas = true;
 	atlas_tex.is_opaque = is_opaque;
-	scene.textures[atlas_index] = move(atlas_tex);
+	scene.textures[atlas_index] = std::move(atlas_tex);
 	int num_textures = atlas_index + 1;
 	for(int i = 0; i < atlas_index; i++)
 		new_texture_index[i] = i;
@@ -152,7 +151,7 @@ static void makeTextureAtlas(Scene &scene, string name, bool is_opaque) {
 		if(!selected_map[i]) {
 			new_texture_index[i] = num_textures;
 			if(num_textures != i)
-				scene.textures[num_textures] = move(scene.textures[i]);
+				scene.textures[num_textures] = std::move(scene.textures[i]);
 			num_textures++;
 		}
 	scene.textures.resize(num_textures);
@@ -238,7 +237,7 @@ Scene convertScene(WavefrontObject obj, const InputScene &iscene) {
 	auto loadPbrTex = [&](WavefrontMap &map) {
 		string tex_path = FilePath(obj.resource_path) / map.name;
 		auto tex = convertTexture(tex_path, SceneMapType::pbr);
-		return std::move(tex.plain_mips[0]);
+		return std::move(tex.mips[0]);
 	};
 
 	auto loadTex = [&](WavefrontMap &map, SceneMapType type) {
@@ -295,15 +294,19 @@ Scene convertScene(WavefrontObject obj, const InputScene &iscene) {
 					  pbr_roughness->name, metallic_tex.size(), pbr_metallic->name);
 			} else {
 				Image pbr_image(ao_tex.size());
+				auto pbr_pixels = pbr_image.pixels<IColor>();
+				auto ao_pixels = ao_tex.pixels<IColor>();
+				auto roughness_pixels = roughness_tex.pixels<IColor>();
+				auto metallic_pixels = metallic_tex.pixels<IColor>();
 				for(int y = 0; y < pbr_image.height(); y++) {
 					for(int x = 0; x < pbr_image.width(); x++) {
-						pbr_image(x, y) =
-							IColor(roughness_tex(x, y).r, metallic_tex(x, y).r, ao_tex(x, y).r);
+						pbr_pixels(x, y) = IColor(roughness_pixels(x, y).r, metallic_pixels(x, y).r,
+												  ao_pixels(x, y).r);
 					}
 				}
 				SceneTexture pbr_tex;
 				pbr_tex.name = format("pbr_%", mat.name);
-				pbr_tex.plain_mips.emplace_back(std::move(pbr_image));
+				pbr_tex.mips.emplace_back(std::move(pbr_image));
 				pbr_tex.is_opaque = true;
 				pbr_tex.map_type = SceneMapType::pbr;
 
@@ -380,24 +383,22 @@ Scene convertScene(WavefrontObject obj, const InputScene &iscene) {
 		if(texture.map_type != SceneMapType::albedo)
 			continue; // TODO: compress normals & pbr
 
-		print("- Processing texture: %\n", texture.plain_mips[0].size());
-		auto &plain_tex = texture.plain_mips[0];
-		auto format = texture.is_opaque ? VBlockFormat::srgb_bc1 : VBlockFormat::srgba_bc3;
-		texture.block_mips.emplace_back(plain_tex, format);
-		auto size = plain_tex.size();
-
-		int max_mips = Image::maxMipmapLevels(size) - 1;
+		auto size = texture.mips[0].size();
+		print("- Processing texture: %\n", size);
+		int num_mips = Image::maxMipmapLevels(size);
 		if(texture.is_atlas)
-			max_mips = min(max_mips, max_atlas_mips);
+			num_mips = min(num_mips, max_atlas_mips);
+		texture.mips.reserve(num_mips);
 
-		for(int i : intRange(max_mips)) {
-			int2 dsize(max(1, size.x / 2), max(1, size.y / 2));
-			auto downsized_tex = plain_tex.rescale(dsize, ImageRescaleOpt::srgb);
-			texture.block_mips.emplace_back(downsized_tex, format);
-			swap(plain_tex, downsized_tex);
-			size = dsize;
+		for(int i : intRange(num_mips - 1)) {
+			auto &prev_mip = texture.mips[i];
+			int2 mip_size(max(1, prev_mip.width() / 2), max(1, prev_mip.height() / 2));
+			texture.mips.emplace_back(prev_mip.rescale(mip_size, ImageRescaleOpt::srgb));
 		}
-		texture.plain_mips.clear();
+
+		auto format = texture.is_opaque ? VFormat::bc1_rgb_srgb : VFormat::bc3_rgba_srgb;
+		for(auto &mip : texture.mips)
+			mip = Image::compressBC(mip, format);
 	}
 
 	print("Generating quads...\n");
@@ -410,7 +411,7 @@ Scene convertScene(WavefrontObject obj, const InputScene &iscene) {
 
 	total_time = getTime() - total_time;
 	print("Conversion finished in % seconds\n"
-		  "- materials:% mextures:% meshes:% tris:% quads:% verts:%\n\n",
+		  "- materials:% textures:% meshes:% tris:% quads:% verts:%\n\n",
 		  total_time, out.materials.size(), out.textures.size(), out.meshes.size(), out.numTris(),
 		  out.numQuads(), out.numVerts());
 

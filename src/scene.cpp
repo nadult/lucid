@@ -3,7 +3,6 @@
 #include "bvh.h"
 #include "quad_generator.h"
 #include "shading.h"
-#include <fwk/gfx/compressed_image.h>
 #include <fwk/gfx/image.h>
 #include <fwk/io/file_stream.h>
 #include <fwk/math/ray.h>
@@ -53,51 +52,39 @@ void SceneMaterial::freeTextures() {
 SceneTexture::SceneTexture() = default;
 FWK_COPYABLE_CLASS_IMPL(SceneTexture);
 
-// TODO: this should be handled by Image & CompressedImage
 Ex<void> SceneTexture::load(Stream &sr) {
-	bool is_compressed;
 	u8 num_levels;
+	VFormat format;
 	sr >> name;
-	sr.unpack(is_compressed, map_type, is_opaque, is_clamped, is_atlas, num_levels);
-	for(int i = 0; i < num_levels; i++)
-		if(is_compressed) {
-			int2 size;
-			VBlockFormat format;
-			sr.unpack(size, format);
-			// TODO: turn this to function
-			int data_size = imageSize(format, size.x, size.y);
-			if(!sr.addResources(data_size))
-				return sr.getValid();
-			PodVector<u8> data(data_size);
-			sr.loadData(data);
-			block_mips.emplace_back(CompressedImage{move(data), size, format});
-		} else {
-			int2 size;
-			sr >> size;
-			if(!sr.addResources(size.x * size.y))
-				return sr.getValid();
-			PodVector<IColor> data(size.x * size.y);
-			sr.loadData(data);
-			plain_mips.emplace_back(Image{move(data), size});
-		}
+	sr.unpack(map_type, is_opaque, is_clamped, is_atlas, num_levels, format);
+	mips.reserve(num_levels);
+	// TODO: add serializing function for generic image?
+	// TODO: verify mip sizes
+	for(int i : intRange(num_levels)) {
+		int2 size;
+		int byte_size;
+		sr.unpack(size, byte_size);
+		EXPECT(size.x > 0 && size.x <= VulkanLimits::max_image_size);
+		EXPECT(size.y > 0 && size.y <= VulkanLimits::max_image_size);
+		EXPECT(byte_size > 0);
+		EXPECT(byte_size == imageByteSize(format, size));
+		if(!sr.addResources(byte_size))
+			return sr.getValid();
+		PodVector<u8> data(byte_size);
+		sr.loadData(data);
+		mips.emplace_back(std::move(data), size, format);
+	}
 	return sr.getValid();
 }
 
 Ex<void> SceneTexture::save(Stream &sr) const {
-	DASSERT(plain_mips.empty() != block_mips.empty());
+	DASSERT(!empty());
 	sr << name;
-	u8 num_levels = block_mips ? block_mips.size() : plain_mips.size();
-	sr.pack(!!block_mips, map_type, is_opaque, is_clamped, is_atlas, num_levels);
-	if(block_mips) {
-		for(auto &tex : block_mips) {
-			sr.pack(tex.size(), tex.format());
-			sr.saveData(tex.data());
-		}
-	} else {
-		for(auto &tex : plain_mips) {
-			sr << tex.size();
-			sr.saveData(tex.data().reinterpret<char>());
-		}
+	u8 num_levels = mips.size();
+	sr.pack(map_type, is_opaque, is_clamped, is_atlas, num_levels, format());
+	for(auto &mip : mips) {
+		sr.pack(mip.size(), mip.data().size());
+		sr.saveData(mip.data());
 	}
 	return sr.getValid();
 }
@@ -106,15 +93,14 @@ Ex<void> SceneTexture::loadPlain(ZStr path) {
 	*this = SceneTexture{};
 	auto time = getTime();
 	auto tex = EX_PASS(Image::load(path));
-	is_opaque = tex.isOpaque();
-	plain_mips.emplace_back(move(tex));
+	is_opaque = allOf(tex.pixels<IColor>(), [](IColor col) { return col.a == 255; });
+	mips.emplace_back(std::move(tex));
 	print("Loaded texture '%' in % ms\n", path, (getTime() - time) * 1000.0);
 	return {};
 }
 
-int2 SceneTexture::size() const {
-	return plain_mips ? plain_mips[0].size() : block_mips ? block_mips[0].size() : int2();
-}
+VFormat SceneTexture::format() const { return mips ? mips[0].format() : VFormat::rgba8_unorm; }
+int2 SceneTexture::size() const { return mips ? mips[0].size() : int2(); }
 
 Scene::Scene() = default;
 FWK_MOVABLE_CLASS_IMPL(Scene);
@@ -342,22 +328,9 @@ Ex<void> Scene::updateRenderingData(VulkanDevice &device) {
 			// TODO: makes no sense to keep both in main & gpu memory, especially because ogl is caching it too
 			// TODO: mipmaps for plain textures
 			if(!tex.vk_image) {
-				DASSERT(tex.block_mips || tex.plain_mips);
-				if(tex.block_mips) {
-					auto vk_image =
-						EX_PASS(VulkanImage::createAndUpload(device.ref(), tex.block_mips));
-					tex.vk_image = VulkanImageView::create(device.ref(), vk_image);
-				} else {
-					auto format = map_type == SceneMapType::albedo ? VK_FORMAT_R8G8B8A8_SRGB :
-								  map_type == SceneMapType::normal ? VK_FORMAT_R8G8B8A8_UNORM :
-																	 VK_FORMAT_R8G8B8A8_UNORM;
-
-					VImageSetup setup(
-						format, VImageDimensions(tex.plain_mips[0].size(), tex.plain_mips.size()));
-					auto vk_image = EX_PASS(VulkanImage::create(device.ref(), setup));
-					EXPECT(vk_image->upload(tex.plain_mips));
-					tex.vk_image = VulkanImageView::create(device.ref(), vk_image);
-				}
+				DASSERT(!tex.empty());
+				auto vk_image = EX_PASS(VulkanImage::createAndUpload(device.ref(), tex.mips));
+				tex.vk_image = VulkanImageView::create(device.ref(), vk_image);
 			}
 			map.vk_image = tex.vk_image;
 			map.is_opaque = tex.is_opaque;

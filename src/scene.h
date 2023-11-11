@@ -20,12 +20,12 @@ struct SceneTexture {
 	Ex<void> save(Stream &) const;
 
 	bool empty() const { return size() == int2(0, 0); }
+	VFormat format() const;
 	int2 size() const;
 
 	string name;
 	PVImageView vk_image;
-	vector<Image> plain_mips;
-	vector<CompressedImage> block_mips;
+	vector<Image> mips;
 	SceneMapType map_type = SceneMapType::albedo;
 	bool is_opaque = true;
 	bool is_clamped = false;

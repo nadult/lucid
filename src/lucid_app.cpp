@@ -7,6 +7,8 @@
 #include "scene_setup.h"
 #include "simple_renderer.h"
 
+#include "scene_convert.h"
+
 #include <fwk/any_config.h>
 #include <fwk/gfx/camera_variant.h>
 #include <fwk/gfx/canvas_2d.h>

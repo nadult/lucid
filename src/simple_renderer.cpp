@@ -28,8 +28,8 @@ void SimpleRenderer::addShaderDefs(VulkanDevice &device, ShaderCompiler &compile
 	insertBack(vsh_macros, shared_macros);
 	insertBack(fsh_macros, shared_macros);
 
-	compiler.add({"simple_vert", VShaderStage::vertex, "simple.glsl", vsh_macros});
-	compiler.add({"simple_frag", VShaderStage::fragment, "simple.glsl", fsh_macros});
+	compiler.add({"simple_vert", VShaderStage::vertex, "simple_material.glsl", vsh_macros});
+	compiler.add({"simple_frag", VShaderStage::fragment, "simple_material.glsl", fsh_macros});
 }
 
 Ex<void> SimpleRenderer::exConstruct(VDeviceRef device, ShaderCompiler &compiler,

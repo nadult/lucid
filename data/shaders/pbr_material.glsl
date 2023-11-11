@@ -69,7 +69,6 @@ void main() {
 	if(flagSet(INST_HAS_ALBEDO_TEXTURE)) {
 		color *= texture(albedo_tex, v_tex_coord);
 	}
-	color = vec4(1.0);
 
 	float light_value = max(0.0, dot(-lighting.sun_dir.xyz, normal) * 0.5 + 0.5) * pbr.z;
 	f_color.rgb = finalShading(lighting, color.rgb, light_value);

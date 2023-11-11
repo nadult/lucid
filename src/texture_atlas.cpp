@@ -59,7 +59,7 @@ Maybe<TextureAtlas> TextureAtlas::make(vector<int2> sizes, Config config) {
 	return none;
 }
 
-static void fillBorders(const Entry &entry, Image &tex) {
+static void fillBorders(const Entry &entry, ImageView<IColor> tex) {
 	int2 rsize = entry.size + entry.border_tl + entry.border_br;
 	if(rsize == entry.size)
 		return;
@@ -103,15 +103,23 @@ static void fillBorders(const Entry &entry, Image &tex) {
 	fill_cols(size.x, right, size.x - 1);
 }
 
-Image TextureAtlas::merge(CSpan<const Image *> textures, IColor background) const {
-	DASSERT(textures.size() == entries.size());
+Image TextureAtlas::merge(CSpan<const Image *> textures_, IColor background) const {
+	DASSERT(textures_.size() == entries.size());
 	Image out(size);
 	out.fill(background);
 
+	// TODO: use ImageViews instead
+	vector<Image> textures;
+	for(auto *texture : textures_) {
+		DASSERT(baseFormat(texture->format()) == VBaseFormat::rgba8);
+		PodVector<u8> data = texture->data();
+		textures.emplace_back(data.reinterpret<IColor>(), texture->size(), VFormat::rgba8_unorm);
+	}
+
 	for(int i : intRange(textures)) {
-		DASSERT(textures[i]);
-		out.blit(*textures[i], entries[i].pos);
-		fillBorders(entries[i], out);
+		DASSERT(!textures[i].empty());
+		out.blit(textures[i], entries[i].pos);
+		fillBorders(entries[i], out.pixels<IColor>());
 	}
 	return out;
 }

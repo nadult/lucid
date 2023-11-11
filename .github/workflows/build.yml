@@ -1,0 +1,48 @@
+name: build
+
+on:
+  push:
+  pull_request:
+  workflow_run:
+    # Use a workflow as a trigger of scheduled builds. Forked repositories can disable scheduled builds by disabling
+    # "scheduled" workflow, while maintaining ability to perform local CI builds.
+    workflows:
+      - scheduled
+    branches:
+      - main
+    types:
+      - requested
+
+jobs:
+  Windows:
+    runs-on: windows-2022
+    env:
+      VS_PATH: C:\Program Files\Microsoft Visual Studio\2022\Enterprise
+      MSBUILD_PATH: C:\Program Files\Microsoft Visual Studio\2022\Enterprise\MSBuild\Current\Bin\
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Install Dependencies
+        shell: cmd
+        run: |
+          git submodule update --init --recursive
+          pip install conan
+          libfwk\libfwk_deps.bat
+          copy C:/libraries/x86_64/bin/shaderc_shared.dll .
+
+      - name: Build libfwk release
+        shell: cmd
+        run: '"%MSBUILD_PATH%\MSBuild.exe" libfwk\windows\libfwk.vcxproj /p:Platform=x64 /p:Configuration=Release'
+
+      - name: Build lucid release
+        shell: cmd
+        run: '"%MSBUILD_PATH%\MSBuild.exe" windows\lucid.vcxproj /p:Platform=x64 /p:Configuration=Release'
+
+      - name: Archive build
+        uses: actions/upload-artifact@v3
+        with:
+          name: lucid-release-build
+          path: |
+            build/lucid-x64-Release/lucid.exe
+            shaderc_shared.dll
+            data

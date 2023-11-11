@@ -554,7 +554,7 @@ bool LucidApp::tick(float time_diff) {
 	auto result = handleInput(events, time_diff);
 	updatePerfStats();
 
-	if(m_lucid_renderer)
+	if(m_verify_lucid_info && m_lucid_renderer)
 		m_lucid_renderer->verifyInfo();
 #ifndef NDEBUG
 	m_device->memory().validate();

@@ -81,8 +81,7 @@ Ex<int> exMain(int argc, char **argv) {
 			window_flags |= VWindowFlag::maximized;
 	}
 
-	auto window =
-		EX_PASS(VulkanWindow::create(instance, "Lucid rasterizer", window_rect, window_flags));
+	auto window = EX_PASS(VulkanWindow::create(instance, "LucidRaster", window_rect, window_flags));
 
 	VDeviceSetup dev_setup;
 	dev_setup.features.emplace();

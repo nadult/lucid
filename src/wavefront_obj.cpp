@@ -1,3 +1,6 @@
+// Copyright (C) Krzysztof Jakubowski <nadult@fastmail.fm>
+// This file is part of LucidRaster. See license.txt for details.
+
 #include "wavefront_obj.h"
 
 #include <fwk/hash_map.h>

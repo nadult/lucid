@@ -1,3 +1,6 @@
+// Copyright (C) Krzysztof Jakubowski <nadult@fastmail.fm>
+// This file is part of LucidRaster. See license.txt for details.
+
 // raster_high prefers smaller bins; 32x32 max
 // TODO: we could try 16x16 bins for raster_high and 64x64 for raster_low?
 // raster_high would require additional phase in which 64x64 would be split into 16x16

@@ -1,3 +1,6 @@
+// Copyright (C) Krzysztof Jakubowski <nadult@fastmail.fm>
+// This file is part of LucidRaster. See license.txt for details.
+
 // Original code source:
 // https://github.com/GarageGames/Torque3D/blob/master/Engine/source/gfx/util/triListOpt.cpp
 //

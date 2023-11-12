@@ -1,3 +1,6 @@
+// Copyright (C) Krzysztof Jakubowski <nadult@fastmail.fm>
+// This file is part of LucidRaster. See license.txt for details.
+
 // TODO: safety for data types: when loading how can we make sure
 // that there are no leftovers from previous processing ?
 //

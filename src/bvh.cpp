@@ -1,3 +1,6 @@
+// Copyright (C) Krzysztof Jakubowski <nadult@fastmail.fm>
+// This file is part of LucidRaster. See license.txt for details.
+
 #include "bvh.h"
 #include <fwk/format.h>
 #include <fwk/math/box.h>

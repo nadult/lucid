@@ -9,8 +9,8 @@ CFLAGS_linux  := -fopenmp
 CFLAGS_mingw  := -fopenmp
 CFLAGS_release := -DNDEBUG
 
-LDFLAGS_linux := -fopenmp -Wl,--export-dynamic
-LDFLAGS_mingw := -fopenmp
+LDFLAGS_linux := -Wl,--export-dynamic
+LDFLAGS_mingw := 
 
 PCH_SOURCE    := src/lucid_pch.h
 BUILD_DIR      = build/$(PLATFORM)_$(MODE)
@@ -29,8 +29,8 @@ endif
 
 # --- List of source files ------------------------------------------------------------------------
 
-SRC         := lucid_app lucid_renderer simple_renderer scene scene_setup scene_convert \
-			   shading texture_atlas wavefront_obj meshlet quad_generator
+SRC         := lucid_app lucid_renderer simple_renderer pbr_renderer scene scene_setup scene_convert \
+			   shading texture_atlas wavefront_obj meshlet quad_generator tri_optimizer path_tracer bvh
 PROGRAM_SRC := lucid
 ALL_SRC     := $(PROGRAM_SRC) $(SRC)
 

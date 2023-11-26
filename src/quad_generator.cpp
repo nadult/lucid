@@ -115,7 +115,7 @@ quadNodes(CSpan<float3> verts, CSpan<array<int, 3>> tris, CSpan<array<int, 3>> t
 			  quads[i].squareness);
 #endif
 
-	return {move(quads), move(tri_quads)};
+	return {std::move(quads), std::move(tri_quads)};
 }
 
 vector<array<int, 4>> genQuads(CSpan<array<int, 3>> tris, CSpan<array<int, 3>> tri_neighbours,

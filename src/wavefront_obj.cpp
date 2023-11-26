@@ -248,7 +248,7 @@ Ex<WavefrontObject> WavefrontObject::load(ZStr path, i64 file_size_limit) {
 											 end_tri - use_mtl.first_tri);
 		}
 	}
-	out.materials = move(materials);
+	out.materials = std::move(materials);
 	out.resource_path = dir_path;
 	auto finish_time = getTime();
 

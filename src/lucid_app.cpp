@@ -125,7 +125,7 @@ Maybe<AnyConfig> LucidApp::loadConfig() {
 	Maybe<AnyConfig> config;
 	auto path = configPath();
 	if(access(path)) {
-		auto doc = move(XmlDocument::load(path).get());
+		auto doc = std::move(XmlDocument::load(path).get());
 		config = AnyConfig::load(doc.child("config"), true).get();
 		config->printErrors();
 	}
@@ -135,7 +135,7 @@ Maybe<AnyConfig> LucidApp::loadConfig() {
 void LucidApp::saveConfig() const {
 	AnyConfig out;
 	if(access(configPath())) {
-		auto doc = move(XmlDocument::load(configPath()).get());
+		auto doc = std::move(XmlDocument::load(configPath()).get());
 		out = AnyConfig::load(doc.child("config"), true).get();
 	}
 
@@ -473,7 +473,7 @@ void LucidApp::doMenu() {
 bool LucidApp::handleInput(vector<InputEvent> events, float time_diff) {
 	m_mouse_pos = none;
 
-	events = m_cam_control.handleInput(move(events));
+	events = m_cam_control.handleInput(std::move(events));
 	for(const auto &event : events) {
 		if(event.keyDown(InputKey::esc)) {
 			return false;

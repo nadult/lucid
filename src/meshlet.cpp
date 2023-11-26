@@ -210,7 +210,7 @@ vector<MeshPartition> meshPartition(CSpan<float3> verts, const SceneMesh &mesh,
 			insertBack(par1.tris, par2.tris);
 			insertBack(par1.verts, par2.verts);
 			makeSortedUnique(par1.verts);
-			out[idx2] = move(out.back());
+			out[idx2] = std::move(out.back());
 			out.pop_back();
 			std::sort(out.begin(), out.end(),
 					  [](auto &a, auto &b) { return a.verts.size() < b.verts.size(); });
@@ -255,7 +255,7 @@ void visualizeMeshPartitions(const Scene &scene, CSpan<MeshPartition> partitions
 		tris.reserve(partition.tris.size());
 		for(auto tri : partition.tris)
 			tris.emplace_back(verts[tri[0]], verts[tri[1]], verts[tri[2]]);
-		partition_tris.emplace_back(move(tris));
+		partition_tris.emplace_back(std::move(tris));
 	}
 
 	vector<IColor> colors;

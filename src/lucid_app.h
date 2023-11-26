@@ -10,7 +10,7 @@
 #include <fwk/gui/gui.h>
 #include <fwk/perf_base.h>
 
-#include <fwk/vulkan/vulkan_storage.h> // TODO: shouldnt be needed
+#include <fwk/vulkan/vulkan_storage.h> // TODO: shouldn't be needed
 #include <fwk/vulkan_base.h>
 
 class LucidRenderer;
@@ -87,7 +87,6 @@ class LucidApp {
 	float m_square_weight = 0.5f;
 	int m_setup_idx = -1;
 
-	bool m_merge_masks = false;
 	bool m_is_picking_block = false;
 	bool m_is_final_pick = false;
 

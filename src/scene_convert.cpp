@@ -10,7 +10,7 @@
 #include <fwk/io/xml.h>
 #include <fwk/sys/exception.h>
 
-InputScene::InputScene(string name, string path) : name(move(name)), path(move(path)) {}
+InputScene::InputScene(string name, string path) : name(std::move(name)), path(std::move(path)) {}
 InputScene::InputScene(const FilePath &root_path, CXmlNode node)
 	: quad_squareness(node("quad_squareness", 1.0f)), merge_verts(node("merge_verts", false)),
 	  flip_uv(node("flip_uv", false)), flip_yz(node("flip_yz", false)), pbr(node("pbr", false)) {
@@ -32,7 +32,7 @@ Ex<vector<InputScene>> loadInputScenes(ZStr path) {
 		while(scene_node) {
 			InputScene iscene(root_path, scene_node);
 			EX_CATCH();
-			out.emplace_back(move(iscene));
+			out.emplace_back(std::move(iscene));
 			scene_node = scene_node.sibling();
 		}
 	}
@@ -220,9 +220,9 @@ Scene convertScene(WavefrontObject obj, const InputScene &iscene) {
 	Scene out;
 
 	auto total_time = getTime();
-	out.positions = move(obj.positions);
-	out.normals = move(obj.normals);
-	out.tex_coords = move(obj.tex_coords);
+	out.positions = std::move(obj.positions);
+	out.normals = std::move(obj.normals);
+	out.tex_coords = std::move(obj.tex_coords);
 	if(iscene.flip_yz) {
 		for(auto &pos : out.positions)
 			swap(pos.y, pos.z);
@@ -317,11 +317,11 @@ Scene convertScene(WavefrontObject obj, const InputScene &iscene) {
 				map.is_opaque = true;
 				map.texture_id = out.textures.size();
 
-				out.textures.emplace_back(move(pbr_tex));
+				out.textures.emplace_back(std::move(pbr_tex));
 			}
 		}
 
-		out.materials.emplace_back(move(mat));
+		out.materials.emplace_back(std::move(mat));
 	}
 
 	out.meshes.reserve(obj.material_groups.size());
@@ -445,7 +445,7 @@ void convertScenes(ZStr iscenes_path) {
 		}
 		print("  loaded in % msec\n", int((getTime() - time) * 1000.0));
 
-		auto scene = convertScene(move(*wavefront_obj), iscene);
+		auto scene = convertScene(std::move(*wavefront_obj), iscene);
 		auto saver = fileSaver(dst_path);
 		if(!saver) {
 			print("  error while saving\n");

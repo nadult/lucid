@@ -333,7 +333,7 @@ void LucidRenderer::render(const Context &ctx) {
 	cmds.barrier(VPipeStage::compute_shader, VPipeStage::transfer, VAccess::shader_write,
 				 VAccess::transfer_read);
 	if(auto result = cmds.download(m_info, "info", 16); result && *result) {
-		m_last_info = move(*result);
+		m_last_info = std::move(*result);
 		m_last_info_updated = true;
 	}
 	cmds.barrier(VPipeStage::transfer, VPipeStage::all_commands, VAccess::transfer_read,
@@ -791,15 +791,15 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 								   {"max_dispatches", formatLarge(m_max_dispatches)}};
 
 	if(setup_timers)
-		out.emplace_back(move(setup_timers), "quad_setup timers", 130);
+		out.emplace_back(std::move(setup_timers), "quad_setup timers", 130);
 	if(bin_dispatcher_timers)
-		out.emplace_back(move(bin_dispatcher_timers), "bin_dispatcher timers", 130);
+		out.emplace_back(std::move(bin_dispatcher_timers), "bin_dispatcher timers", 130);
 	if(raster_timers)
-		out.emplace_back(move(raster_timers), "raster_low & raster_high timers", 130);
+		out.emplace_back(std::move(raster_timers), "raster_low & raster_high timers", 130);
 
-	out.emplace_back(move(bin_level_rows), "Bins categorized by quad density levels:", 130);
-	out.emplace_back(move(basic_rows), "", 130);
-	out.emplace_back(move(limit_rows), "LucidRenderer limits", 130);
+	out.emplace_back(std::move(bin_level_rows), "Bins categorized by quad density levels:", 130);
+	out.emplace_back(std::move(basic_rows), "", 130);
+	out.emplace_back(std::move(limit_rows), "LucidRenderer limits", 130);
 
 	return out;
 }

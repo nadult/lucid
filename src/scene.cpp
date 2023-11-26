@@ -544,6 +544,6 @@ void Scene::generateBVH() {
 		}
 	}
 
-	bvh.emplace(move(tris));
+	bvh.emplace(std::move(tris));
 	print("BVH built in % msec\n", int((getTime() - time) * 1000.0));
 }

@@ -54,7 +54,7 @@ Maybe<TextureAtlas> TextureAtlas::make(vector<int2> sizes, Config config) {
 				entry.border_br = (rsize - entry.size) - entry.border_tl;
 				entry.pos = int2(rect.x, rect.y) * config.round_elem_size + entry.border_tl;
 			}
-			return TextureAtlas{move(entries), config, max_size};
+			return TextureAtlas{std::move(entries), config, max_size};
 		}
 		(max_size.x > max_size.y ? max_size.y : max_size.x) *= 2;
 	}

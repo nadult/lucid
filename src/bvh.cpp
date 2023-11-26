@@ -23,7 +23,7 @@ inline float triangleCost(const Triangle3F &tri, int axis) {
 }
 
 struct TriangleBVH::BuildContext {
-	BuildContext(vector<Triangle3F> ttris, bool use_sah) : tris(move(ttris)) {
+	BuildContext(vector<Triangle3F> ttris, bool use_sah) : tris(std::move(ttris)) {
 		DASSERT(!tris.empty());
 		for(auto &tri : tris)
 			DASSERT(!isNan(tri.points()));
@@ -190,9 +190,9 @@ struct TriangleBVH::BuildContext {
 };
 
 TriangleBVH::TriangleBVH(vector<Triangle3F> tris, int flags) {
-	BuildContext context(move(tris), flags & use_sah);
-	m_tris = move(context.tris);
-	m_nodes = move(context.nodes);
+	BuildContext context(std::move(tris), flags & use_sah);
+	m_tris = std::move(context.tris);
+	m_nodes = std::move(context.nodes);
 	m_depth = context.depth;
 	ASSERT(m_depth <= max_depth);
 }

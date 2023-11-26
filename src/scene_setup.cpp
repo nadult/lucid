@@ -95,7 +95,7 @@
 
 FilePath mainPath();
 
-SceneSetup::SceneSetup(string name) : name(move(name)) {}
+SceneSetup::SceneSetup(string name) : name(std::move(name)) {}
 SceneSetup::~SceneSetup() = default;
 
 BoxesSetup::BoxesSetup() : SceneSetup("#boxes") { render_config.scene_opacity = 0.5; }
@@ -221,7 +221,7 @@ Ex<> PlanesSetup::updateScene(VDeviceRef device) {
 	return scene->updateRenderingData(*device);
 }
 
-LoadedSetup::LoadedSetup(string name) : SceneSetup(move(name)) {}
+LoadedSetup::LoadedSetup(string name) : SceneSetup(std::move(name)) {}
 
 Ex<> LoadedSetup::updateScene(VDeviceRef device) {
 	if(scene)

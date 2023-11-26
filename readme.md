@@ -17,7 +17,7 @@ This work is licensed under a [GNU GPL v3 license](https://www.gnu.org/licenses/
 
 ## Building
 
-The easiest way to build LucidRaster is by using github [build action](https://github.com/nadult/lucid/actions/workflows/build.yml), which build Lucid for windows and prepares an artifact, which can be downloaded.  
+The easiest way to build LucidRaster is by using github [build action](https://github.com/nadult/lucid/actions/workflows/build.yml), which builds Lucid for windows and prepares an artifact, which can be downloaded.  
 
 LucidRaster is using [libfwk](https://github.com/nadult/libfwk) framework and can be built for Windows and Linux. To build it:
 - properly initialize and recursively update all submodules (libfwk and imgui in libfwk/extern/)

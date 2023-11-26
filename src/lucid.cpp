@@ -30,7 +30,7 @@ Ex<int> exMain(int argc, char **argv) {
 	VInstanceSetup setup;
 	auto window_flags = VWindowFlag::resizable | VWindowFlag::centered | VWindowFlag::allow_hidpi |
 						VWindowFlag::sleep_when_minimized;
-	uint multisampling = 1;
+	[[maybe_unused]] uint multisampling = 1;
 #ifdef NDEBUG
 	bool debug_mode = false;
 #else

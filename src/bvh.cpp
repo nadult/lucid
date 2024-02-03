@@ -169,9 +169,9 @@ struct TriangleBVH::BuildContext {
 		//	}
 		nodes[nidx].axis = best_axis;
 		nodes[nidx].firstNode = left_box.min(best_axis) > right_box.min(best_axis) ? 1 : 0;
-		nodes[nidx].firstNode = left_box.min(best_axis) == right_box.min(best_axis)
-									? left_box.max(best_axis) < right_box.max(best_axis) ? 0 : 1
-									: 0;
+		nodes[nidx].firstNode = left_box.min(best_axis) == right_box.min(best_axis) ?
+									left_box.max(best_axis) < right_box.max(best_axis) ? 0 : 1 :
+									0;
 
 		nodes.push_back(Node(left_box));
 		nodes.push_back(Node(right_box));

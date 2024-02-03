@@ -77,7 +77,7 @@ class LucidApp {
 	bool m_wireframe_mode = false;
 	bool m_test_meshlets = false;
 	bool m_show_stats = false;
-	bool m_verify_lucid_info = false;
+	bool m_verify_lucid_info = true;
 	int m_select_stats_tab = -1, m_selected_stats_tab = 0;
 	RenderingMode m_rendering_mode = RenderingMode::simple;
 

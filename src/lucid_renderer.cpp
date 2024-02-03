@@ -103,6 +103,9 @@
   dragon (800K):  21600,  1756 |  5260,  670 | 1080,   540 |   64,  107
 */
 
+static_assert(sizeof(shader::LucidInfo) % sizeof(uint) == 0);
+static constexpr int lucid_info_u32_size = int(sizeof(shader::LucidInfo) / sizeof(uint));
+
 LucidRenderer::LucidRenderer() = default;
 FWK_MOVABLE_CLASS_IMPL(LucidRenderer)
 
@@ -183,6 +186,7 @@ Ex<void> LucidRenderer::exConstruct(VulkanDevice &device, ShaderCompiler &compil
 
 	m_bin_counts = (view_size + int2(m_bin_size - 1)) / m_bin_size;
 	m_bin_count = m_bin_counts.x * m_bin_counts.y;
+	ASSERT(num_frames == VulkanLimits::num_swap_frames);
 
 	// TODO: Why adding more on intel causes problems?
 	// TODO: properly get number of compute units (use opencl?)
@@ -293,7 +297,7 @@ Ex<void> LucidRenderer::exConstruct(VulkanDevice &device, ShaderCompiler &compil
 		m_debug_buffer = EX_PASS(VulkanBuffer::create<u32>(device, 1024 * 1024, usage, mem_usage));
 	}
 
-	uint bin_counters_size = sizeof(shader::LucidInfo) + m_bin_count * 10;
+	uint bin_counters_size = lucid_info_u32_size + m_bin_count * 10;
 	for(int i : intRange(num_frames)) {
 		auto instance_usage = VBufferUsage::storage_buffer | VBufferUsage::transfer_dst;
 		auto info_usage = VBufferUsage::storage_buffer | VBufferUsage::transfer_src |
@@ -400,9 +404,6 @@ Ex<> LucidRenderer::uploadInstances(const Context &ctx) {
 		instances.resize(max_instances);
 	}
 
-	auto usage = VBufferUsage::storage_buffer | VBufferUsage::transfer_dst;
-	auto mem_usage = VMemoryUsage::frame;
-
 	auto instance_data = m_frame_instance_data[cmds.frameIndex() % num_frames];
 	m_instances = instance_data.reinterpret<shader::InstanceData>().subSpan(0, max_instances);
 	uint offset = sizeof(shader::InstanceData) * max_instances;
@@ -428,7 +429,7 @@ Ex<> LucidRenderer::setupInputData(const Context &ctx) {
 
 	auto frame_index = cmds.frameIndex() % num_frames;
 	m_info = m_frame_info[frame_index];
-	cmds.fill(m_info.subSpan(0, sizeof(shader::LucidInfo) + m_bin_count * 6), 0);
+	cmds.fill(m_info.subSpan(0, lucid_info_u32_size + m_bin_count * 6), 0);
 
 	shader::LucidConfig config;
 	config.frustum = FrustumInfo(ctx.camera);
@@ -628,7 +629,7 @@ void LucidRenderer::verifyInfo() {
 
 	shader::LucidInfo info;
 	memcpy(&info, m_last_info.data(), sizeof(info));
-	auto bin_counters = cspan(m_last_info).subSpan(sizeof(shader::LucidInfo));
+	auto bin_counters = cspan(m_last_info).subSpan(lucid_info_u32_size);
 
 	CSpan<uint> bin_quad_counts = cspan(bin_counters.data() + m_bin_count * 0, m_bin_count);
 	CSpan<uint> bin_quad_offsets = cspan(bin_counters.data() + m_bin_count * 1, m_bin_count);
@@ -639,7 +640,6 @@ void LucidRenderer::verifyInfo() {
 	CSpan<uint> bin_tri_offsets_temp = cspan(bin_counters.data() + m_bin_count * 5, m_bin_count);
 
 	int num_errors[2] = {0, 0};
-	int num_valid = 0;
 
 	// Checking bins quad offsets
 	for(uint i = 0; i < m_bin_count; i++) {
@@ -673,6 +673,32 @@ void LucidRenderer::verifyInfo() {
 			print("Invalid temp bin tri offset [%]: % != % (offset:% + count:%)\n", i,
 				  cur_offset_temp, cur_offset + cur_value, cur_offset, cur_value);
 	}
+
+	constexpr bool dump_bin_info = false;
+	if(dump_bin_info) {
+		TextFormatter fmt;
+		auto print_arr = [&](CSpan<uint> counts, Str name) {
+			fmt("Array: %\n", name);
+			for(int y = 0; y < m_bin_counts.y; y++) {
+				fmt.stdFormat("%3d: ", y);
+				for(int x = 0; x < m_bin_counts.x; x++) {
+					fmt.stdFormat("%6d ", counts[x + y * m_bin_counts.x]);
+				}
+				fmt("\n");
+			}
+			fmt("\n\n");
+		};
+
+		print_arr(bin_quad_counts, "quad_counts");
+		print_arr(bin_quad_offsets, "quad_offsets");
+		print_arr(bin_quad_offsets_temp, "quad_offsets_temp");
+
+		print_arr(bin_tri_counts, "tri_counts");
+		print_arr(bin_tri_offsets, "tri_offsets");
+		print_arr(bin_tri_offsets_temp, "tri_offsets_temp");
+
+		saveFile("bin_info.txt", span(fmt.c_str(), fmt.size())).check();
+	}
 }
 
 vector<StatsGroup> LucidRenderer::getStats() const {
@@ -685,7 +711,7 @@ vector<StatsGroup> LucidRenderer::getStats() const {
 
 	shader::LucidInfo info;
 	memcpy(&info, m_last_info.data(), sizeof(info));
-	auto bin_counters = cspan(m_last_info).subSpan(sizeof(shader::LucidInfo));
+	auto bin_counters = cspan(m_last_info).subSpan(lucid_info_u32_size);
 	CSpan<uint> bin_quad_counts = cspan(bin_counters.data() + m_bin_count * 0, m_bin_count);
 	CSpan<uint> bin_tri_counts = cspan(bin_counters.data() + m_bin_count * 3, m_bin_count);
 

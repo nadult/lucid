@@ -14,6 +14,10 @@ Aktualne cele:
 - wrzucenie gdzieś do sieci
 
 TODO:
+- weryfikacja sumy kontrolnej dla plików spirv
+- jakieś problemy z Vulkanem przy wieloktrotnym resize-owaniu okna (kończy się device-lost, wcześniej warningi)
+  może spowodować błędy w verifyInfo() raz na jakiś czas; Błąd zauważalny od aa9b1c11e8
+- obsługiwanie VK_ERROR_DEVICE_LOST w libfwk?
 - drobne glitche widoczne na san miguel jak się włączy alpha_threshold...
 - optimize additive blending ?
 - ogarnąć max_dispatches

@@ -248,6 +248,11 @@ Ex<void> LucidApp::updateRenderer() {
 		m_scene_frame_id = 0;
 	}
 
+	if(m_rendering_mode == RenderingMode::path_trace &&
+	   !(m_device->features() & VDeviceFeature::ray_tracing)) {
+		m_rendering_mode = RenderingMode::simple;
+	}
+
 	if(m_rendering_mode == RenderingMode::path_trace && !m_path_tracer) {
 		auto format = m_device->swapChain()->format();
 		m_path_tracer = EX_PASS(construct<PathTracer>(*m_device, *m_shader_compiler, format,
@@ -449,19 +454,21 @@ void LucidApp::doMenu() {
 	ImGui::SetNextItemWidth(220 * m_gui.dpiScale() - label_size);
 	ImGui::SliderFloat("Scene opacity", &setup.render_config.scene_opacity, 0.0f, 1.0f);
 
-	if(m_lucid_renderer && scene->numQuads() > m_lucid_renderer->maxSceneQuads()) {
-		auto text = format(
-			"\nScene has too many quads (%K, max:%K)\nfor Lucid rasterizer (Not enough GPU memory)",
-			scene->numQuads() / 1024, m_lucid_renderer->maxSceneQuads() / 1024);
+	auto warning = [](ZStr text) {
 		ImGui::TextColored((ImVec4)FColor(ColorId::red), "%s", text.c_str());
-	}
+	};
 
-	if(isOneOf(m_rendering_mode, RenderingMode::lucid, RenderingMode::simple,
-			   RenderingMode::mixed) &&
-	   !scene->hasSimpleTextures()) {
-		ImGui::TextColored((ImVec4)FColor(ColorId::red),
-						   "\nPBR scenes are not supported in\nSimple & Lucid renderers");
-	}
+	if(m_lucid_renderer && scene->numQuads() > m_lucid_renderer->maxSceneQuads())
+		warning(format(
+			"Scene has too many quads (%K, max:%K)\nfor Lucid rasterizer (Not enough GPU memory).",
+			scene->numQuads() / 1024, m_lucid_renderer->maxSceneQuads() / 1024));
+	if(!isOneOf(m_rendering_mode, RenderingMode::pbr, RenderingMode::path_trace) &&
+	   !scene->hasSimpleTextures())
+		warning("PBR scenes require PBR or PathTrace renderers.");
+	if(!(m_device->features() & VDeviceFeature::ray_tracing))
+		warning("Ray-tracing not available on this device.");
+	if(m_device->physInfo().deviceType() != VPhysicalDeviceType::discrete_gpu)
+		warning("Not running on a discrete GPU.");
 
 	ImGui::End();
 

@@ -19,7 +19,7 @@ jobs:
 
       - name: Cache dependencies
         id: cache-deps
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         env:
             cache-name: cache-deps
         with:
@@ -50,10 +50,9 @@ jobs:
           copy build\lucid-x64-Release\lucid.exe lucid-raster\
           xcopy data\shaders\ lucid-raster\data\shaders\ /E
           copy C:\libraries\x86_64\bin\shaderc_shared.dll lucid-raster\
-          copy C:\libraries\x86_64\bin\vulkan-1.dll lucid-raster\
 
       - name: Archive build
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: lucid-release-build
           path: lucid-raster

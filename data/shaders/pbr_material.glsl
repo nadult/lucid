@@ -1,6 +1,8 @@
 // Copyright (C) Krzysztof Jakubowski <nadult@fastmail.fm>
 // This file is part of LucidRaster. See license.txt for details.
 
+#version 460
+
 #include "shared/definitions.glsl"
 #include "shared/funcs.glsl"
 

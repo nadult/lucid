@@ -77,6 +77,7 @@ LucidApp::LucidApp(VWindowRef window, VDeviceRef device)
 	sc_setup.generate_assembly = true;
 	sc_setup.debug_info = true;
 #endif
+
 	m_shader_compiler.emplace(sc_setup);
 	SimpleRenderer::addShaderDefs(*device, *m_shader_compiler, shader_config);
 	LucidRenderer::addShaderDefs(*device, *m_shader_compiler, shader_config);

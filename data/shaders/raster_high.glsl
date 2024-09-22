@@ -5,6 +5,8 @@
 // TODO: we could try 16x16 bins for raster_high and 64x64 for raster_low?
 // raster_high would require additional phase in which 64x64 would be split into 16x16
 
+#version 460
+
 #define LSIZE 1024
 #define LSHIFT 10
 

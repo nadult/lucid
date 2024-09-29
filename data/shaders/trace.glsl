@@ -1,6 +1,8 @@
 // Copyright (C) Krzysztof Jakubowski <nadult@fastmail.fm>
 // This file is part of LucidRaster. See license.txt for details.
 
+#version 460
+
 #define LSIZE 1024
 #define LSHIFT 10
 
@@ -9,6 +11,8 @@
 
 #extension GL_KHR_shader_subgroup_vote : require
 #extension GL_KHR_shader_subgroup_shuffle : require
+#extension GL_EXT_ray_tracing : enable
+#extension GL_EXT_ray_query : require
 
 coherent layout(std430, binding = 0) buffer info_ {
 	PathTracerInfo g_info;
@@ -20,6 +24,7 @@ layout(binding = 2, rgba8) uniform image2D g_raster_image;
 layout(binding = 3) buffer buf03_ { uint g_bvh_nodes[]; };
 layout(binding = 4) buffer buf04_ { float g_bvh_boxes[]; };
 layout(binding = 5) buffer buf05_ { vec4 g_bvh_tris[]; };
+layout(binding = 6) uniform accelerationStructureEXT g_accelStruct;
 
 layout(binding = 10) uniform sampler2D opaque_texture;
 layout(binding = 11) uniform sampler2D transparent_texture;
@@ -124,6 +129,7 @@ float slabTest(uint node_idx, vec3 origin, vec3 inv_dir) {
 struct TraceResult {
 	float dist;
 	uint num_iters;
+	uint tri_id;
 };
 
 void rayTraceBVH(out TraceResult result, vec3 origin, vec3 dir, out int hit_tri_id,
@@ -193,6 +199,29 @@ void rayTraceBVH(out TraceResult result, vec3 origin, vec3 dir, out int hit_tri_
 	result.num_iters = num_iters;
 }
 
+#define MAX_ISECT_DIST     10000.0
+#define INVALID_TRI_ID     uint(0xffffffff)
+
+TraceResult rayTraceAS(vec3 origin, vec3 dir) {
+	TraceResult result;
+
+	rayQueryEXT rq;
+	rayQueryInitializeEXT(rq, g_accelStruct, gl_RayFlagsOpaqueEXT, 0xff, origin, 0.0, dir, MAX_ISECT_DIST);
+	result.num_iters = 0;
+	while(rayQueryProceedEXT(rq))
+		result.num_iters ++;
+	if(rayQueryGetIntersectionTypeEXT(rq, true) != 0) {
+		result.dist = rayQueryGetIntersectionTEXT(rq, true);
+		result.tri_id = rayQueryGetIntersectionPrimitiveIndexEXT(rq, true);
+	}
+	else {
+		result.dist = MAX_ISECT_DIST;
+		result.tri_id = INVALID_TRI_ID;
+	}
+
+	return result;
+}
+
 vec3 uniformSampleHemisphere(vec2 u) {
 	float z = u[0];
 	float r = sqrt(max(0.0, 1.0 - z * z));
@@ -214,18 +243,16 @@ void traceBin() {
 	vec3 ray_origin, ray_dir;
 	getScreenRay(pixel_pos, ray_origin, ray_dir);
 
-	int hit_tri_id = -1;
-	TraceResult result;
-	rayTraceBVH(result, ray_origin, ray_dir, hit_tri_id, false);
+	TraceResult result = rayTraceAS(ray_origin, ray_dir);
 	float ao_value = 1.0;
 
 #ifdef COMPUTE_AO
-	if(min_isect != infinity) {
+	if(result.dist < MAX_ISECT_DIST) {
 		vec3 tri_vecs[3];
-		getTriangleVectors(hit_tri_id, tri_vecs[0], tri_vecs[1], tri_vecs[2]);
-		vec3 hit_point = ray_origin + ray_dir * min_isect;
+		getTriangleVectors(result.tri_id, tri_vecs[0], tri_vecs[1], tri_vecs[2]);
+		vec3 hit_point = ray_origin + ray_dir * result.dist;
 
-		const int dim_size = 3;
+		const int dim_size = 10;
 		int hits = 0, total = (dim_size + 1) * (dim_size + 1);
 
 		for(int x = 0; x <= dim_size; x++)
@@ -234,8 +261,8 @@ void traceBin() {
 				vec3 hemi = uniformSampleHemisphere(pos);
 				vec3 dir = tri_vecs[0] * hemi[0] + tri_vecs[1] * hemi[2] + tri_vecs[2] * hemi[1];
 				vec3 origin = hit_point + dir * 0.00001;
-				float dist = rayTraceBVH(origin, dir, hit_tri_id, true);
-				if(dist < 0.05)
+				TraceResult ao_hit = rayTraceAS(origin, dir);
+				if(ao_hit.dist > 0.0001 && ao_hit.dist < 0.5 && ao_hit.tri_id != result.tri_id)
 					hits++;
 			}
 
@@ -244,8 +271,10 @@ void traceBin() {
 #endif
 
 	vec3 vcolor = vec3(0.0);
-	if(result.dist < infinity)
-		vcolor = vec3(result.dist * 0.1, result.dist * 0.05, result.dist * 0.01);
+	if(result.dist < MAX_ISECT_DIST) {
+		float value = sqrt(result.dist);
+		vcolor = vec3(1.0 - value * 0.02, 1.0 - value * 0.05, 1.0 - value * 0.1);
+	}
 	vcolor *= ao_value;
 
 	outputPixel(pixel_pos, SATURATE(vec4(vcolor, 1.0)));

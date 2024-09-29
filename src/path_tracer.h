@@ -58,6 +58,8 @@ class PathTracer {
 	VBufferSpan<shader::PathTracerConfig> m_frame_config[num_frames];
 	VBufferSpan<u32> m_debug_buffer;
 
+	PVAccelStruct m_accel_struct;
+
 	int2 m_bin_counts;
 	int m_bin_count, m_bin_size;
 	int2 m_size; // TODO: rename

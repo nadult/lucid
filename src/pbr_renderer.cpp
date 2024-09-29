@@ -112,6 +112,10 @@ Ex<> PbrRenderer::renderPhase(const RenderContext &ctx, VBufferSpan<shader::PbrD
 			continue;
 		if(prev_mat_id != draw_call.material_id) {
 			auto ds = cmds.bindDS(1);
+
+			// TODO: uniform buffer alignment issue
+			// https://vulkan.lunarg.com/doc/view/1.3.290.0/windows/1.3-extensions/vkspec.html#VUID-VkWriteDescriptorSet-descriptorType-00327
+			// Switched from path-tracer to pbr renderer on conference
 			ds.set(0, VDescriptorType::uniform_buffer, dc_buf.subSpan(dc, dc + 1));
 
 			// TODO: different default textures for different map types

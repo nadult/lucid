@@ -20,6 +20,8 @@
 #include <fwk/vulkan/vulkan_pipeline.h>
 #include <fwk/vulkan/vulkan_swap_chain.h>
 
+#include <fwk/vulkan/vulkan_ray_tracing.h>
+
 PathTracer::PathTracer() = default;
 FWK_MOVABLE_CLASS_IMPL(PathTracer)
 
@@ -118,7 +120,7 @@ Ex<void> PathTracer::exConstruct(VulkanDevice &device, ShaderCompiler &compiler,
 
 Ex<> PathTracer::updateScene(VulkanDevice &device, Scene &scene) {
 	m_scene_id = scene.id;
-	if(!scene.bvh)
+	/*if(!scene.bvh)
 		scene.generateBVH();
 
 	auto &bvh = *scene.bvh;
@@ -143,7 +145,14 @@ Ex<> PathTracer::updateScene(VulkanDevice &device, Scene &scene) {
 	auto usage = VBufferUsage::storage_buffer | VBufferUsage::transfer_dst;
 	m_bvh_nodes = EX_PASS(VulkanBuffer::createAndUpload(device, nodes, usage));
 	m_bvh_boxes = EX_PASS(VulkanBuffer::createAndUpload(device, boxes, usage));
-	m_bvh_triangles = EX_PASS(VulkanBuffer::createAndUpload(device, tris, usage));
+	m_bvh_triangles = EX_PASS(VulkanBuffer::createAndUpload(device, tris, usage));*/
+
+	// TODO: wait until AS is built?
+
+	auto blas =
+		EX_PASS(VulkanAccelStruct::buildBottom(device, scene.verts.positions, scene.tris_ib));
+	VAccelStructInstance instance{blas, Matrix4::identity()};
+	m_accel_struct = EX_PASS(VulkanAccelStruct::buildTop(device, {instance}));
 
 	return {};
 }
@@ -169,7 +178,8 @@ void PathTracer::render(const Context &ctx) {
 	auto raster_image = swap_chain->acquiredImage();
 	ds.setStorageImage(2, raster_image, VImageLayout::general);
 
-	ds.set(3, m_bvh_nodes, m_bvh_boxes, m_bvh_triangles);
+	//ds.set(3, m_bvh_nodes, m_bvh_boxes, m_bvh_triangles);
+	ds.set(6, m_accel_struct);
 
 	auto sampler = ctx.device.getSampler(ctx.config.sampler_setup);
 	ds.set(10, {{sampler, ctx.opaque_tex}});

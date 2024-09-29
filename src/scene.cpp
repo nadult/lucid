@@ -286,8 +286,10 @@ Ex<void> Scene::updateRenderingData(VulkanDevice &device) {
 
 	auto &cmds = device.cmdQueue();
 	auto buf_usage = VBufferUsage::storage_buffer | VBufferUsage::transfer_dst;
-	auto vb_usage = buf_usage | VBufferUsage::vertex_buffer;
-	auto ib_usage = buf_usage | VBufferUsage::index_buffer;
+	auto vb_usage = buf_usage | VBufferUsage::vertex_buffer | VBufferUsage::device_address |
+					VBufferUsage::accel_struct_build_input_read_only;
+	auto ib_usage = buf_usage | VBufferUsage::index_buffer | VBufferUsage::device_address |
+					VBufferUsage::accel_struct_build_input_read_only;
 
 	verts.positions = EX_PASS(VulkanBuffer::create<float3>(device, numVerts(), vb_usage));
 	EXPECT(cmds.upload(verts.positions, positions));

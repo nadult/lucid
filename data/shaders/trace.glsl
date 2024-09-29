@@ -199,22 +199,22 @@ void rayTraceBVH(out TraceResult result, vec3 origin, vec3 dir, out int hit_tri_
 	result.num_iters = num_iters;
 }
 
-#define MAX_ISECT_DIST     10000.0
-#define INVALID_TRI_ID     uint(0xffffffff)
+#define MAX_ISECT_DIST 10000.0
+#define INVALID_TRI_ID uint(0xffffffff)
 
 TraceResult rayTraceAS(vec3 origin, vec3 dir) {
 	TraceResult result;
 
 	rayQueryEXT rq;
-	rayQueryInitializeEXT(rq, g_accelStruct, gl_RayFlagsOpaqueEXT, 0xff, origin, 0.0, dir, MAX_ISECT_DIST);
+	rayQueryInitializeEXT(rq, g_accelStruct, gl_RayFlagsOpaqueEXT, 0xff, origin, 0.0, dir,
+						  MAX_ISECT_DIST);
 	result.num_iters = 0;
 	while(rayQueryProceedEXT(rq))
-		result.num_iters ++;
+		result.num_iters++;
 	if(rayQueryGetIntersectionTypeEXT(rq, true) != 0) {
 		result.dist = rayQueryGetIntersectionTEXT(rq, true);
 		result.tri_id = rayQueryGetIntersectionPrimitiveIndexEXT(rq, true);
-	}
-	else {
+	} else {
 		result.dist = MAX_ISECT_DIST;
 		result.tri_id = INVALID_TRI_ID;
 	}

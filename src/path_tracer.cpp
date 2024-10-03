@@ -3,7 +3,6 @@
 
 #include "path_tracer.h"
 
-#include "bvh.h"
 #include "scene.h"
 #include "shader_structs.h"
 #include "shading.h"
@@ -120,39 +119,13 @@ Ex<void> PathTracer::exConstruct(VulkanDevice &device, ShaderCompiler &compiler,
 
 Ex<> PathTracer::updateScene(VulkanDevice &device, Scene &scene) {
 	m_scene_id = scene.id;
-	/*if(!scene.bvh)
-		scene.generateBVH();
-
-	auto &bvh = *scene.bvh;
-	PodVector<u32> nodes(bvh.m_nodes.size() * 2);
-	PodVector<FBox> boxes(bvh.m_nodes.size());
-	PodVector<float4> tris(bvh.m_tris.size() * 3);
-
-	for(int i : intRange(bvh.m_nodes)) {
-		auto &node = bvh.m_nodes[i];
-		nodes[i * 2 + 0] = node.first;
-		nodes[i * 2 + 1] = node.count;
-		boxes[i] = node.bbox;
-	}
-
-	for(int i : intRange(bvh.m_tris)) {
-		auto &tri = bvh.m_tris[i];
-		tris[i * 3 + 0] = float4(tri.a(), 1.0f);
-		tris[i * 3 + 1] = float4(tri.b(), 1.0f);
-		tris[i * 3 + 2] = float4(tri.c(), 1.0f);
-	}
-
-	auto usage = VBufferUsage::storage_buffer | VBufferUsage::transfer_dst;
-	m_bvh_nodes = EX_PASS(VulkanBuffer::createAndUpload(device, nodes, usage));
-	m_bvh_boxes = EX_PASS(VulkanBuffer::createAndUpload(device, boxes, usage));
-	m_bvh_triangles = EX_PASS(VulkanBuffer::createAndUpload(device, tris, usage));*/
-
-	// TODO: wait until AS is built?
 
 	auto blas =
 		EX_PASS(VulkanAccelStruct::buildBottom(device, scene.verts.positions, scene.tris_ib));
 	VAccelStructInstance instance{blas, Matrix4::identity()};
 	m_accel_struct = EX_PASS(VulkanAccelStruct::buildTop(device, {instance}));
+	m_vertices = scene.verts.positions;
+	// TODO: wait until AS is built?
 
 	return {};
 }
@@ -178,7 +151,7 @@ void PathTracer::render(const Context &ctx) {
 	auto raster_image = swap_chain->acquiredImage();
 	ds.setStorageImage(2, raster_image, VImageLayout::general);
 
-	//ds.set(3, m_bvh_nodes, m_bvh_boxes, m_bvh_triangles);
+	ds.set(5, m_vertices);
 	ds.set(6, m_accel_struct);
 
 	auto sampler = ctx.device.getSampler(ctx.config.sampler_setup);
@@ -208,8 +181,6 @@ Ex<> PathTracer::setupInputData(const Context &ctx) {
 	config.view_proj_matrix = ctx.camera.matrix();
 	config.lighting = ctx.lighting;
 	config.background_color = (float4)FColor(ctx.config.background_color);
-	config.num_nodes = m_bvh_nodes.size() / 2;
-	config.num_triangles = m_bvh_triangles.size() / 3;
 	m_config = m_frame_config[frame_index];
 	EXPECT(cmds.upload(m_config, cspan(&config, 1)));
 

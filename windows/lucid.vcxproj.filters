@@ -55,9 +55,6 @@
     <ClCompile Include="..\src\path_tracer.cpp">
       <Filter>source</Filter>
     </ClCompile>
-    <ClCompile Include="..\src\bvh.cpp">
-      <Filter>source</Filter>
-    </ClCompile>
     <ClCompile Include="..\src\pbr_renderer.cpp">
       <Filter>source</Filter>
     </ClCompile>
@@ -109,9 +106,6 @@
       <Filter>source</Filter>
     </ClInclude>
     <ClInclude Include="..\src\wavefront_obj.h">
-      <Filter>source</Filter>
-    </ClInclude>
-    <ClInclude Include="..\src\bvh.h">
       <Filter>source</Filter>
     </ClInclude>
     <ClInclude Include="..\src\pbr_renderer.h">

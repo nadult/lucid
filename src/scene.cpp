@@ -3,7 +3,6 @@
 
 #include "scene.h"
 
-#include "bvh.h"
 #include "quad_generator.h"
 #include "shading.h"
 #include <fwk/gfx/image.h>
@@ -531,21 +530,4 @@ Pair<PVImageView> Scene::textureAtlasPair() const {
 			out.second = tex.vk_image;
 	}
 	return out;
-}
-
-void Scene::generateBVH() {
-	auto time = getTime();
-
-	vector<Triangle3F> tris;
-	tris.reserve(numTris());
-
-	for(auto &mesh : meshes) {
-		for(auto mesh_tri : mesh.tris) {
-			Triangle3F tri(positions[mesh_tri[0]], positions[mesh_tri[1]], positions[mesh_tri[2]]);
-			tris.emplace_back(tri);
-		}
-	}
-
-	bvh.emplace(std::move(tris));
-	print("BVH built in % msec\n", int((getTime() - time) * 1000.0));
 }

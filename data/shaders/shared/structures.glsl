@@ -114,10 +114,6 @@ struct PathTracerConfig {
 	mat4 view_proj_matrix;
 	Lighting lighting;
 	vec4 background_color;
-
-	uint num_nodes;
-	uint num_triangles;
-	uint max_depth;
 };
 
 #endif

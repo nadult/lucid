@@ -49,15 +49,13 @@ class PathTracer {
 	VBufferSpan<u32> m_info;
 
 	string m_scene_id;
-	VBufferSpan<FBox> m_bvh_boxes;
-	VBufferSpan<u32> m_bvh_nodes;
-	VBufferSpan<float4> m_bvh_triangles;
 
 	static constexpr int num_frames = 2;
 	VBufferSpan<shader::PathTracerInfo> m_frame_info[num_frames];
 	VBufferSpan<shader::PathTracerConfig> m_frame_config[num_frames];
 	VBufferSpan<u32> m_debug_buffer;
 
+	VBufferSpan<float3> m_vertices;
 	PVAccelStruct m_accel_struct;
 
 	int2 m_bin_counts;

@@ -9,7 +9,6 @@
 #include <fwk/vulkan_base.h>
 
 struct WavefrontObject;
-class TriangleBVH;
 
 DEFINE_ENUM(SceneMapType, albedo, normal, pbr);
 using SceneMapTypes = EnumFlags<SceneMapType>;
@@ -128,9 +127,6 @@ struct Scene {
 	vector<SceneMaterial> materials;
 	vector<SceneMesh> meshes;
 	FBox bounding_box;
-
-	void generateBVH();
-	Dynamic<TriangleBVH> bvh;
 
 	// ------ Rendering data --------------------------------------------------
 

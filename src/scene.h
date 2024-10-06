@@ -81,10 +81,7 @@ struct Scene {
 	Scene();
 	FWK_MOVABLE_CLASS(Scene);
 
-	static Ex<Scene> loadObj(ZStr path);
-	static Ex<Scene> loadAssimp(ZStr path);
 	static Ex<Scene> load(ZStr Path);
-
 	Ex<void> load(Stream &);
 	Ex<void> save(Stream &) const;
 

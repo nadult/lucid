@@ -143,8 +143,9 @@ void LucidApp::saveConfig() const {
 	out.set("rendering_mode", m_rendering_mode);
 	out.set("trans_opts", m_lucid_opts);
 	out.set("wireframe", m_wireframe_mode);
-	out.set("window_rect", m_window->restoredRect());
-	out.set("window_maximized", m_window->isMaximized());
+	bool is_maximized = m_window->isMaximized();
+	out.set("window_rect", is_maximized ? m_window->restoredRect() : m_window->rect());
+	out.set("window_maximized", is_maximized);
 	out.set("show_stats", m_show_stats);
 	out.set("selected_stats_tab", m_selected_stats_tab);
 

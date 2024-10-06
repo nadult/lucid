@@ -34,7 +34,8 @@ vector<Image> panoramaToCubeMap(const Image &panorama) { return {}; }
 InputScene::InputScene(string name, string path) : name(std::move(name)), path(std::move(path)) {}
 InputScene::InputScene(const FilePath &root_path, CXmlNode node)
 	: quad_squareness(node("quad_squareness", 1.0f)), merge_verts(node("merge_verts", false)),
-	  flip_uv(node("flip_uv", false)), flip_yz(node("flip_yz", false)), pbr(node("pbr", false)) {
+	  flip_uv(node("flip_uv", false)), flip_yz(node("flip_yz", false)), pbr(node("pbr", false)),
+	  env_map_path(node("env_map")) {
 	name = node.tryAttrib("name", "");
 	path = node.attrib("path");
 	if(name.empty())

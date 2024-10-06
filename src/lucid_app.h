@@ -38,6 +38,7 @@ class LucidApp {
 
 	bool updateViewport();
 	Ex<void> updateRenderer();
+	Ex<> updateEnvMap();
 
 	void doMenu();
 	bool handleInput(vector<InputEvent> events, float time_diff);

@@ -33,6 +33,8 @@ void PbrRenderer::addShaderDefs(VulkanDevice &device, ShaderCompiler &compiler,
 
 	compiler.add({"pbr_vert", VShaderStage::vertex, "pbr_material.glsl", vsh_macros});
 	compiler.add({"pbr_frag", VShaderStage::fragment, "pbr_material.glsl", fsh_macros});
+	compiler.add({"env_map_vert", VShaderStage::vertex, "env_map.glsl", vsh_macros});
+	compiler.add({"env_map_frag", VShaderStage::fragment, "env_map.glsl", fsh_macros});
 }
 
 Ex<void> PbrRenderer::exConstruct(VDeviceRef device, ShaderCompiler &compiler,
@@ -54,11 +56,33 @@ Ex<void> PbrRenderer::exConstruct(VDeviceRef device, ShaderCompiler &compiler,
 
 	auto frag_id = *compiler.find("pbr_frag");
 	auto vert_id = *compiler.find("pbr_vert");
-	m_shader_def_ids = {frag_id, vert_id};
+	auto env_frag_id = *compiler.find("env_map_frag");
+	auto env_vert_id = *compiler.find("env_map_vert");
+	m_shader_def_ids = {frag_id, vert_id, env_frag_id, env_vert_id};
 
 	m_frag_module = EX_PASS(compiler.createShaderModule(device, frag_id));
 	m_vert_module = EX_PASS(compiler.createShaderModule(device, vert_id));
 	m_pipeline_layout = device->getPipelineLayout({m_frag_module, m_vert_module});
+
+	auto env_frag_module = EX_PASS(compiler.createShaderModule(device, env_frag_id));
+	auto env_vert_module = EX_PASS(compiler.createShaderModule(device, env_vert_id));
+
+	VPipelineSetup setup;
+	setup.pipeline_layout = device->getPipelineLayout({env_frag_module, env_vert_module});
+	setup.render_pass = m_render_pass;
+	setup.shader_modules = {{env_vert_module, env_frag_module}};
+	setup.depth = VDepthSetup(VDepthFlag::test);
+	setup.raster = VRasterSetup(VPrimitiveTopology::triangle_list, VPolygonMode::fill);
+	setup.vertex_attribs = {{vertexAttrib<float2>(0, 0)}};
+	setup.vertex_bindings = {{vertexBinding<float2>(0)}};
+	m_env_pipeline = EX_PASS(VulkanPipeline::create(device, setup));
+
+	auto quad_verts = Box<float2>({-1.0f, -1.0f}, {1.0f, 1.0f}).corners();
+	array<float2, 6> quad_tris = {quad_verts[0], quad_verts[1], quad_verts[2],
+								  quad_verts[0], quad_verts[2], quad_verts[3]};
+	auto vb_usage =
+		VBufferUsage::vertex_buffer | VBufferUsage::storage_buffer | VBufferUsage::transfer_dst;
+	m_rect_vertices = EX_PASS(VulkanBuffer::createAndUpload(*device, cspan(quad_tris), vb_usage));
 
 	return {};
 }
@@ -97,6 +121,13 @@ Ex<> PbrRenderer::renderPhase(const RenderContext &ctx, VBufferSpan<shader::PbrD
 							  bool opaque, bool wireframe) {
 	auto &cmds = ctx.device.cmdQueue();
 	PERF_GPU_SCOPE(cmds);
+
+	cmds.bind(m_pipeline_layout);
+	cmds.bindDS(0).set(0, VDescriptorType::uniform_buffer, m_lighting_buf);
+	auto &verts = ctx.verts;
+	cmds.bindVertices(0, verts.positions, verts.colors, verts.tex_coords, verts.normals,
+					  verts.tangents);
+	cmds.bindIndices(ctx.tris_ib);
 
 	PipeConfig pipe_config{ctx.config.backface_culling, ctx.config.additive_blending, opaque,
 						   wireframe, false};
@@ -139,6 +170,31 @@ Ex<> PbrRenderer::renderPhase(const RenderContext &ctx, VBufferSpan<shader::PbrD
 	return {};
 }
 
+Ex<> PbrRenderer::renderEnvMap(const RenderContext &ctx) {
+	auto &cmds = ctx.device.cmdQueue();
+	PERF_GPU_SCOPE(cmds);
+	DASSERT(ctx.lighting.env_map);
+
+	auto ubo_usage = VBufferUsage::uniform_buffer | VBufferUsage::transfer_dst;
+	shader::EnvMapDrawCall env_map_dc;
+	float2 screen_size = float2(ctx.camera.params().viewport.size());
+	env_map_dc.screen_size = screen_size;
+	env_map_dc.inv_screen_size = vinv(screen_size);
+	env_map_dc.inv_proj_view_matrix = inverseOrZero(ctx.camera.matrix());
+	auto env_map_dc_buf = EX_PASS(VulkanBuffer::createAndUpload(ctx.device, cspan(&env_map_dc, 1),
+																ubo_usage, VMemoryUsage::frame));
+
+	cmds.bind(m_env_pipeline);
+	auto ds = cmds.bindDS(0);
+	ds.set(0, VDescriptorType::uniform_buffer, env_map_dc_buf.subSpan(0, 1));
+	auto sampler = ctx.device.getSampler(ctx.config.sampler_setup);
+	ds.set(1, {{sampler, ctx.lighting.env_map}});
+
+	cmds.bindVertices(0, m_rect_vertices);
+	cmds.draw(m_rect_vertices.size());
+	return {};
+}
+
 Ex<> PbrRenderer::render(const RenderContext &ctx, bool wireframe) {
 	auto &cmds = ctx.device.cmdQueue();
 	PERF_GPU_SCOPE(cmds);
@@ -151,14 +207,16 @@ Ex<> PbrRenderer::render(const RenderContext &ctx, bool wireframe) {
 	lighting.sun_color = ctx.lighting.sun.color;
 	lighting.sun_power = ctx.lighting.sun.power;
 	lighting.sun_dir = ctx.lighting.sun.dir;
-	auto lighting_buf = EX_PASS(VulkanBuffer::createAndUpload(ctx.device, cspan(&lighting, 1),
-															  ubo_usage, VMemoryUsage::frame));
+	m_lighting_buf = EX_PASS(VulkanBuffer::createAndUpload(ctx.device, cspan(&lighting, 1),
+														   ubo_usage, VMemoryUsage::frame));
 
 	int num_opaque = 0;
 
 	// TODO: minimize it (do it only for different materials)
 	vector<shader::PbrDrawCall> dcs;
 	dcs.reserve(ctx.dcs.size());
+	auto inv_proj_view_matrix = inverseOrZero(ctx.camera.matrix());
+
 	for(const auto &draw_call : ctx.dcs) {
 		auto &material = ctx.materials[draw_call.material_id];
 		auto &simple_dc = dcs.emplace_back();
@@ -166,6 +224,7 @@ Ex<> PbrRenderer::render(const RenderContext &ctx, bool wireframe) {
 			num_opaque++;
 		simple_dc.world_camera_pos = ctx.camera.pos();
 		simple_dc.proj_view_matrix = ctx.camera.matrix();
+		simple_dc.inv_proj_view_matrix = inv_proj_view_matrix;
 		simple_dc.material_color = float4(material.diffuse, material.opacity);
 		simple_dc.draw_call_opts = uint(draw_call.opts.bits);
 	}
@@ -173,29 +232,24 @@ Ex<> PbrRenderer::render(const RenderContext &ctx, bool wireframe) {
 	auto dc_buf =
 		EX_PASS(VulkanBuffer::createAndUpload(ctx.device, dcs, ubo_usage, VMemoryUsage::frame));
 
-	cmds.bind(m_pipeline_layout);
-	cmds.bindDS(0).set(0, VDescriptorType::uniform_buffer, lighting_buf);
 	cmds.setViewport(m_viewport);
 	cmds.setScissor(none);
 
-	auto &verts = ctx.verts;
-	cmds.bindVertices(0, verts.positions, verts.colors, verts.tex_coords, verts.normals,
-					  verts.tangents);
-	cmds.bindIndices(ctx.tris_ib);
-
 	auto swap_chain = ctx.device.swapChain();
 	auto swap_image = swap_chain->acquiredImage()->image();
-
 	auto framebuffer = ctx.device.getFramebuffer({swap_chain->acquiredImage()}, m_depth_buffer);
 	cmds.beginRenderPass(framebuffer, m_render_pass, none,
 						 {FColor(ColorId::magneta), VClearDepthStencil(1.0)});
 
 	if(num_opaque > 0)
 		EXPECT(renderPhase(ctx, dc_buf, true, wireframe));
+	if(ctx.lighting.env_map)
+		EXPECT(renderEnvMap(ctx));
 	if(num_opaque != ctx.dcs.size())
 		EXPECT(renderPhase(ctx, dc_buf, false, wireframe));
 
 	cmds.endRenderPass();
+	m_lighting_buf = {};
 
 	return {};
 }

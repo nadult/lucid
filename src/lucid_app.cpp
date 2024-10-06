@@ -119,6 +119,8 @@ void LucidApp::setConfig(const AnyConfig &config) {
 			m_perf_analyzer->setConfig(*sub);
 	if(auto *sub = config.subConfig("gui"))
 		m_gui.setConfig(*sub);
+	if(auto *lighting = config.subConfig("lighting"))
+		m_lighting.setConfig(*lighting);
 	m_cam_control.load(config);
 }
 
@@ -154,6 +156,7 @@ void LucidApp::saveConfig() const {
 	if(m_perf_analyzer)
 		out.set("perf_analyzer", m_perf_analyzer->config());
 	out.set("gui", m_gui.config());
+	out.set("lighting", m_lighting.config());
 	m_cam_control.save(out);
 
 	XmlDocument doc;
@@ -261,6 +264,19 @@ Ex<void> LucidApp::updateRenderer() {
 													  m_path_tracer_opts, m_viewport.size()));
 	}
 
+	return {};
+}
+
+Ex<> LucidApp::updateEnvMap() {
+	if(m_lighting.env_map_path.empty())
+		return {};
+
+	auto time = getTime();
+	auto panorama = EX_PASS(loadExr(m_lighting.env_map_path));
+	auto vimage = EX_PASS(VulkanImage::createAndUpload(m_device, panorama));
+	m_lighting.env_map = VulkanImageView::create(m_device, vimage);
+
+	printf("EXR loading time: %.2f sec\n", getTime() - time);
 	return {};
 }
 

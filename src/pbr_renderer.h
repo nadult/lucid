@@ -10,6 +10,7 @@
 
 namespace shader {
 struct PbrDrawCall;
+struct Lighting;
 }
 
 class PbrRenderer {
@@ -39,12 +40,16 @@ class PbrRenderer {
 	Ex<PVPipeline> getPipeline(VulkanDevice &, const PipeConfig &);
 	Ex<> renderPhase(const RenderContext &, VBufferSpan<shader::PbrDrawCall>, bool opaque,
 					 bool wireframe);
+	Ex<> renderEnvMap(const RenderContext &);
 
 	vector<ShaderDefId> m_shader_def_ids;
 	HashMap<PipeConfig, PVPipeline> m_pipelines;
 	PVShaderModule m_frag_module, m_vert_module;
 	PVPipelineLayout m_pipeline_layout;
+	PVPipeline m_env_pipeline;
 	PVImageView m_depth_buffer;
 	PVRenderPass m_render_pass;
+	VBufferSpan<float2> m_rect_vertices;
+	VBufferSpan<shader::Lighting> m_lighting_buf;
 	IRect m_viewport;
 };

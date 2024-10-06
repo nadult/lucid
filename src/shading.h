@@ -25,9 +25,14 @@ struct SimpleLight {
 };
 
 struct SceneLighting {
+	void setConfig(const AnyConfig &);
+	AnyConfig config() const;
+
 	static SceneLighting makeDefault();
 	operator shader::Lighting() const;
 
+	string env_map_path;
+	PVImageView env_map;
 	SimpleLight ambient;
 	SunLight sun;
 };

@@ -8,9 +8,10 @@
 	- pbr:bool
 	  with pbr materials can also have normal & pbr map
 	  texture atlas generation is disabled in pbr mode
+	- env_map:string (path to exr file)
 	-->
 
-	<scene path="backpack/backpack.obj" flip_uv="true" pbr="true" />
+	<scene path="backpack/backpack.obj" flip_uv="true" pbr="true" env_map="industrial_sunset_puresky_4k.exr" />
 	<scene path="dragon2.obj" quad_squareness="1.5" merge_verts="true" />
 	<scene path="armadillo.obj" quad_squareness="1.5" merge_verts="true" />
 	<scene path="thai.obj" quad_squareness="1.5" merge_verts="true" />

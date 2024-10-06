@@ -10,6 +10,7 @@ struct InputScene {
 	InputScene(const FilePath &root_path, CXmlNode);
 
 	string name, path;
+	string env_map_path;
 	float quad_squareness = 1.0f;
 	bool merge_verts = false;
 	bool flip_uv = false;

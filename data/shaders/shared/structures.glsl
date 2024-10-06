@@ -38,9 +38,15 @@ struct SimpleDrawCall {
 
 struct PbrDrawCall {
 	mat4 proj_view_matrix;
+	mat4 inv_proj_view_matrix;
 	vec4 material_color;
 	uint draw_call_opts;
 	vec4 world_camera_pos;
+};
+
+struct EnvMapDrawCall {
+	vec2 screen_size, inv_screen_size;
+	mat4 inv_proj_view_matrix;
 };
 
 struct Rect {

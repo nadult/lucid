@@ -144,6 +144,7 @@
     <None Include="..\data\shaders\bin_categorizer.glsl" />
     <None Include="..\data\shaders\bin_counter.glsl" />
     <None Include="..\data\shaders\bin_dispatcher.glsl" />
+    <None Include="..\data\shaders\env_map.glsl" />
     <None Include="..\data\shaders\pbr_material.glsl" />
     <None Include="..\data\shaders\quad_setup.glsl" />
     <None Include="..\data\shaders\raster_high.glsl" />

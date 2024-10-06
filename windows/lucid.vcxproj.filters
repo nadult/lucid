@@ -168,5 +168,8 @@
     <None Include="..\data\shaders\simple_material.glsl">
       <Filter>shaders</Filter>
     </None>
+    <None Include="..\data\shaders\env_map.glsl">
+      <Filter>shaders</Filter>
+    </None>
   </ItemGroup>
 </Project>

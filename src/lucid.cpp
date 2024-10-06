@@ -111,6 +111,7 @@ Ex<int> exMain(int argc, char **argv) {
 	LucidApp app(window, device);
 	if(config)
 		app.setConfig(*config);
+	app.updateEnvMap().check();
 	app.updateViewport();
 	EXPECT(app.updateRenderer());
 	window->runMainLoop(LucidApp::mainLoop, &app);

@@ -58,6 +58,9 @@
     <ClCompile Include="..\src\pbr_renderer.cpp">
       <Filter>source</Filter>
     </ClCompile>
+    <ClCompile Include="..\src\extern_impl.cpp">
+      <Filter>source</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\src\lucid_app.h">

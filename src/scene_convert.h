@@ -20,6 +20,9 @@ struct InputScene {
 Ex<vector<InputScene>> loadInputScenes(ZStr path);
 
 // TODO: warning / logging system needed
+
+vector<Image> panoramaToCubeMap(const Image &);
+Ex<Image> loadExr(ZStr path);
 SceneTexture convertTexture(ZStr path);
 Scene convertScene(WavefrontObject);
 void convertScenes(ZStr scenes_path);

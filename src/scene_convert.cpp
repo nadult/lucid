@@ -10,6 +10,27 @@
 #include <fwk/io/xml.h>
 #include <fwk/sys/exception.h>
 
+#include "../extern/tinyexr.h"
+
+Ex<Image> loadExr(ZStr path) {
+	float *exr_data = nullptr;
+	const char *exr_error = nullptr;
+	int width = 0, height = 0;
+	int ret = LoadEXR(&exr_data, &width, &height, path.c_str(), &exr_error);
+	if(ret != TINYEXR_SUCCESS) {
+		auto error = FWK_ERROR("Error during loading EXR file '%': % (%)", path,
+							   exr_error ? exr_error : "", ret);
+		FreeEXRErrorMessage(exr_error);
+		return error;
+	}
+
+	PodVector<float4> data({reinterpret_cast<float4 *>(exr_data), width * height});
+	free(exr_data);
+	return Image{std::move(data), {width, height}, VFormat::rgba32_sfloat};
+}
+
+vector<Image> panoramaToCubeMap(const Image &panorama) { return {}; }
+
 InputScene::InputScene(string name, string path) : name(std::move(name)), path(std::move(path)) {}
 InputScene::InputScene(const FilePath &root_path, CXmlNode node)
 	: quad_squareness(node("quad_squareness", 1.0f)), merge_verts(node("merge_verts", false)),

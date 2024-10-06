@@ -12,6 +12,7 @@ layout(set = 1, binding = 0) uniform ubo10 { PbrDrawCall draw_call; };
 layout(set = 1, binding = 1) uniform sampler2D albedo_tex;
 layout(set = 1, binding = 2) uniform sampler2D normal_tex;
 layout(set = 1, binding = 3) uniform sampler2D pbr_tex;
+layout(set = 1, binding = 4) uniform sampler2D env_map;
 
 bool flagSet(uint flag) { return (draw_call.draw_call_opts & flag) != 0; }
 

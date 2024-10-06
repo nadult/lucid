@@ -39,7 +39,7 @@ Ex<int> exMain(int argc, char **argv) {
 
 	VSwapChainSetup swap_chain_setup;
 	// TODO: UI is configure for Unorm, shouldn't we use SRGB by default?
-	swap_chain_setup.preferred_formats = {{VK_FORMAT_B8G8R8A8_UNORM}};
+	swap_chain_setup.preferred_formats = {VK_FORMAT_B8G8R8A8_UNORM};
 	swap_chain_setup.preferred_present_mode = VPresentMode::immediate;
 	swap_chain_setup.usage =
 		VImageUsage::color_att | VImageUsage::storage | VImageUsage::transfer_dst;
@@ -111,6 +111,7 @@ Ex<int> exMain(int argc, char **argv) {
 	LucidApp app(window, device);
 	if(config)
 		app.setConfig(*config);
+	app.updateEnvMap().check();
 	app.updateViewport();
 	EXPECT(app.updateRenderer());
 	window->runMainLoop(LucidApp::mainLoop, &app);

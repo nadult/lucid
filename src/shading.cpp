@@ -3,12 +3,25 @@
 
 #include "shading.h"
 
+#include <fwk/any_config.h>
 #include <fwk/gfx/camera.h>
 #include <fwk/io/stream.h>
 #include <fwk/math/frustum.h>
 #include <fwk/math/ray.h>
 
 #include "shader_structs.h"
+
+void SceneLighting::setConfig(const AnyConfig &config) {
+	if(auto *env_map = config.get<string>("env_map"))
+		env_map_path = *env_map;
+}
+
+AnyConfig SceneLighting::config() const {
+	AnyConfig out;
+	if(!env_map_path.empty())
+		out.set("env_map", env_map_path);
+	return out;
+}
 
 SceneLighting SceneLighting::makeDefault() {
 	SceneLighting out;

@@ -1,5 +1,6 @@
-
-# LucidRaster: GPU Software Rasterizer for Exact Order-Independent Transparency [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0) [![Build status](https://github.com/nadult/lucid/workflows/build/badge.svg?branch=main)](https://github.com/nadult/lucid/actions)
+# LucidRaster: GPU Software Rasterizer for Exact Order-Independent Transparency
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+[![Build status](https://github.com/nadult/lucid/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/nadult/lucid/actions)
 
 LucidRaster is a software rasterizer running on a GPU which allows for efficient exact rendering of complex transparent scenes. It uses a new two-stage sorting technique and sample accumulation method. On average it's faster than high-quality OIT approximations and only about 3x slower than hardware alpha blending. It can be very efficient especially when rendering scenes with high triangle density or high depth complexity.
 

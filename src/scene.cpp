@@ -284,11 +284,13 @@ Ex<void> Scene::updateRenderingData(VulkanDevice &device) {
 	freeRenderingData();
 
 	auto &cmds = device.cmdQueue();
+
+	auto accel_struct_usage =
+		mask(device.features() & VDeviceFeature::ray_tracing,
+			 VBufferUsage::device_address | VBufferUsage::accel_struct_build_input_read_only);
 	auto buf_usage = VBufferUsage::storage_buffer | VBufferUsage::transfer_dst;
-	auto vb_usage = buf_usage | VBufferUsage::vertex_buffer | VBufferUsage::device_address |
-					VBufferUsage::accel_struct_build_input_read_only;
-	auto ib_usage = buf_usage | VBufferUsage::index_buffer | VBufferUsage::device_address |
-					VBufferUsage::accel_struct_build_input_read_only;
+	auto vb_usage = buf_usage | VBufferUsage::vertex_buffer | accel_struct_usage;
+	auto ib_usage = buf_usage | VBufferUsage::index_buffer | accel_struct_usage;
 
 	verts.positions = EX_PASS(VulkanBuffer::create<float3>(device, numVerts(), vb_usage));
 	EXPECT(cmds.upload(verts.positions, positions));

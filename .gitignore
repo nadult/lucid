@@ -11,6 +11,7 @@ build/*
 /*.tga
 /*.wasm
 /windows/.vs
+/windows/*.DotSettings.user
 /windows/build
 /data/spirv*
 *.vcxproj.user

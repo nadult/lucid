@@ -116,7 +116,6 @@
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
-    <None Include="..\notes.wiki" />
     <None Include="..\data\shaders\shared\funcs.glsl">
       <Filter>shaders\shared</Filter>
     </None>

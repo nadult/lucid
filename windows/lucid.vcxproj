@@ -159,7 +159,6 @@
     <None Include="..\data\shaders\shared\timers.glsl" />
     <None Include="..\data\shaders\simple_material.glsl" />
     <None Include="..\data\shaders\trace.glsl" />
-    <None Include="..\notes.wiki" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

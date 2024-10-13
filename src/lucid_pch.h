@@ -23,5 +23,3 @@
 
 #define DUMP FWK_DUMP
 #define FATAL FWK_FATAL
-
-using namespace fwk;

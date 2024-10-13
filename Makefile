@@ -24,13 +24,13 @@ BUILD_SUBDIRS  =
 
 ifndef JUNK_GATHERING
 _dummy := $(shell mkdir -p $(SUBDIRS))
-_dummy := $(shell mkdir -p $(addprefix $(BUILD_DIR)/,$(BUILD_SUBDIRS)))
 endif
 
 # --- List of source files ------------------------------------------------------------------------
 
 SRC         := lucid_app lucid_renderer simple_renderer pbr_renderer scene scene_setup scene_convert \
-			   shading texture_atlas wavefront_obj meshlet quad_generator tri_optimizer path_tracer bvh
+			   shading texture_atlas wavefront_obj meshlet quad_generator tri_optimizer path_tracer \
+			   extern_impl
 PROGRAM_SRC := lucid
 ALL_SRC     := $(PROGRAM_SRC) $(SRC)
 

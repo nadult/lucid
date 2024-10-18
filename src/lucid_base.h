@@ -11,6 +11,8 @@
 #include <fwk/math_base.h>
 #include <fwk/sys/expected.h>
 
+using namespace fwk;
+
 #define ORDER_BY FWK_ORDER_BY
 
 FilePath mainPath();

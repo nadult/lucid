@@ -35,6 +35,8 @@
 #include <fwk/vulkan/vulkan_swap_chain.h>
 #include <fwk/vulkan/vulkan_window.h>
 
+// TODO: device lost crash when resizing window with path tracer
+
 FilePath mainPath() {
 	return platform == Platform::msvc ? FilePath::current().get() : executablePath().parent();
 }
@@ -114,9 +116,15 @@ void LucidApp::setConfig(const AnyConfig &config) {
 	m_select_stats_tab = config.get("selected_stats_tab", -1);
 	if(auto *scene_name = config.get<string>("scene"))
 		selectSetup(*scene_name);
-	if(m_perf_analyzer)
+	if(config.get("show_perf_analyzer", true)) {
+		if(!m_perf_analyzer)
+			m_perf_analyzer.emplace();
 		if(auto *sub = config.subConfig("perf_analyzer"))
 			m_perf_analyzer->setConfig(*sub);
+	} else {
+		m_perf_analyzer.reset();
+	}
+
 	if(auto *sub = config.subConfig("gui"))
 		m_gui.setConfig(*sub);
 	if(auto *lighting = config.subConfig("lighting"))
@@ -150,7 +158,7 @@ void LucidApp::saveConfig() const {
 	out.set("window_maximized", is_maximized);
 	out.set("show_stats", m_show_stats);
 	out.set("selected_stats_tab", m_selected_stats_tab);
-
+	out.set("show_perf_analyzer", !!m_perf_analyzer);
 	if(m_setup_idx != -1)
 		out.set("scene", m_setups[m_setup_idx]->name);
 	if(m_perf_analyzer)
@@ -214,8 +222,7 @@ bool LucidApp::updateViewport() {
 Ex<void> LucidApp::updateRenderer() {
 	PERF_SCOPE();
 
-	bool do_update = !m_pbr_renderer || !m_simple_renderer || !m_lucid_renderer ||
-					 m_lucid_renderer->opts() != m_lucid_opts;
+	bool do_update = m_lucid_renderer && m_lucid_renderer->opts() != m_lucid_opts;
 	if(updateViewport())
 		do_update = true;
 
@@ -235,20 +242,11 @@ Ex<void> LucidApp::updateRenderer() {
 	}
 
 	if(do_update) {
-		auto swap_chain = m_device->swapChain();
 		m_lucid_renderer.reset();
 		m_simple_renderer.reset();
 		m_pbr_renderer.reset();
 		m_path_tracer.reset();
 		m_device->waitForIdle();
-
-		m_pbr_renderer = EX_PASS(
-			construct<PbrRenderer>(m_device, *m_shader_compiler, m_viewport, swap_chain->format()));
-		m_simple_renderer = EX_PASS(construct<SimpleRenderer>(m_device, *m_shader_compiler,
-															  m_viewport, swap_chain->format()));
-		m_lucid_renderer = EX_PASS(construct<LucidRenderer>(
-			*m_device, *m_shader_compiler, swap_chain->format(), m_lucid_opts, m_viewport.size()));
-
 		m_last_shader_update_time = m_last_time;
 		m_scene_frame_id = 0;
 	}
@@ -257,6 +255,20 @@ Ex<void> LucidApp::updateRenderer() {
 	   !(m_device->features() & VDeviceFeature::ray_tracing)) {
 		m_rendering_mode = RenderingMode::simple;
 	}
+
+	auto swap_chain = m_device->swapChain();
+
+	if(m_rendering_mode == RenderingMode::pbr && !m_pbr_renderer)
+		m_pbr_renderer = EX_PASS(
+			construct<PbrRenderer>(m_device, *m_shader_compiler, m_viewport, swap_chain->format()));
+
+	if(isOneOf(m_rendering_mode, RenderingMode::simple, RenderingMode::mixed) && !m_simple_renderer)
+		m_simple_renderer = EX_PASS(construct<SimpleRenderer>(m_device, *m_shader_compiler,
+															  m_viewport, swap_chain->format()));
+
+	if(isOneOf(m_rendering_mode, RenderingMode::lucid, RenderingMode::mixed) && !m_lucid_renderer)
+		m_lucid_renderer = EX_PASS(construct<LucidRenderer>(
+			*m_device, *m_shader_compiler, swap_chain->format(), m_lucid_opts, m_viewport.size()));
 
 	if(m_rendering_mode == RenderingMode::path_trace && !m_path_tracer) {
 		auto format = m_device->swapChain()->format();

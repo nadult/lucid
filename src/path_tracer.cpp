@@ -124,6 +124,7 @@ Ex<> PathTracer::updateScene(VulkanDevice &device, Scene &scene) {
 		EX_PASS(VulkanAccelStruct::buildBottom(device, scene.verts.positions, scene.tris_ib));
 	VAccelStructInstance instance{blas, Matrix4::identity()};
 	m_accel_struct = EX_PASS(VulkanAccelStruct::buildTop(device, {instance}));
+	m_indices = scene.tris_ib;
 	m_vertices = scene.verts.positions;
 	// TODO: wait until AS is built?
 
@@ -151,7 +152,7 @@ void PathTracer::render(const Context &ctx) {
 	auto raster_image = swap_chain->acquiredImage();
 	ds.setStorageImage(2, raster_image, VImageLayout::general);
 
-	ds.set(5, m_vertices);
+	ds.set(4, m_indices, m_vertices);
 	ds.set(6, m_accel_struct);
 
 	auto sampler = ctx.device.getSampler(ctx.config.sampler_setup);

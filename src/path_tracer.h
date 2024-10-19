@@ -55,6 +55,7 @@ class PathTracer {
 	VBufferSpan<shader::PathTracerConfig> m_frame_config[num_frames];
 	VBufferSpan<u32> m_debug_buffer;
 
+	VBufferSpan<u32> m_indices;
 	VBufferSpan<float3> m_vertices;
 	PVAccelStruct m_accel_struct;
 

@@ -236,6 +236,8 @@ Ex<void> LucidApp::updateRenderer() {
 			insertBack(used_shaders, m_pbr_renderer->shaderDefIds());
 		if(m_lucid_renderer)
 			insertBack(used_shaders, m_lucid_renderer->shaderDefIds());
+		if(m_path_tracer)
+			insertBack(used_shaders, m_path_tracer->shaderDefIds());
 		makeSortedUnique(used_shaders);
 		if(setIntersection(used_shaders, update_list))
 			do_update = true;

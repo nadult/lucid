@@ -57,6 +57,7 @@ class PathTracer {
 
 	VBufferSpan<u32> m_indices;
 	VBufferSpan<float3> m_vertices;
+	VBufferSpan<float2> m_tex_coords;
 	PVAccelStruct m_accel_struct;
 
 	int2 m_bin_counts;

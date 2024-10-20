@@ -120,12 +120,15 @@ Ex<void> PathTracer::exConstruct(VulkanDevice &device, ShaderCompiler &compiler,
 Ex<> PathTracer::updateScene(VulkanDevice &device, Scene &scene) {
 	m_scene_id = scene.id;
 
+	// TODO: multi-material support
+
 	auto blas =
 		EX_PASS(VulkanAccelStruct::buildBottom(device, scene.verts.positions, scene.tris_ib));
 	VAccelStructInstance instance{blas, Matrix4::identity()};
 	m_accel_struct = EX_PASS(VulkanAccelStruct::buildTop(device, {instance}));
 	m_indices = scene.tris_ib;
 	m_vertices = scene.verts.positions;
+	m_tex_coords = scene.verts.tex_coords;
 	// TODO: wait until AS is built?
 
 	return {};
@@ -152,12 +155,23 @@ void PathTracer::render(const Context &ctx) {
 	auto raster_image = swap_chain->acquiredImage();
 	ds.setStorageImage(2, raster_image, VImageLayout::general);
 
-	ds.set(4, m_indices, m_vertices);
+	ds.set(3, m_indices, m_vertices, m_tex_coords);
 	ds.set(6, m_accel_struct);
 
 	auto sampler = ctx.device.getSampler(ctx.config.sampler_setup);
-	ds.set(10, {{sampler, ctx.opaque_tex}});
-	ds.set(11, {{sampler, ctx.trans_tex}});
+	//ds.set(10, {{sampler, ctx.opaque_tex}});
+	//ds.set(11, {{sampler, ctx.trans_tex}});
+
+	DASSERT(ctx.scene.materials);
+	auto &material = ctx.scene.materials.front();
+	// TODO: different default textures for different map types
+	auto &albedo_map = material.maps[SceneMapType::albedo];
+	auto &normal_map = material.maps[SceneMapType::normal];
+	auto &pbr_map = material.maps[SceneMapType::pbr];
+	ds.set(10, {{sampler, albedo_map.vk_image},
+				{sampler, normal_map.vk_image},
+				{sampler, pbr_map.vk_image},
+				{sampler, ctx.lighting.env_map}});
 
 	if(m_opts & Opt::debug) {
 		ds.set(12, m_debug_buffer);

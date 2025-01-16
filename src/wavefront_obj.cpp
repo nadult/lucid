@@ -13,7 +13,7 @@ Ex<void> WavefrontMaterial::load(ZStr file_path, vector<WavefrontMaterial> &out)
 	int count = 0;
 	WavefrontMaterial *new_mat = nullptr;
 
-	for(auto line : tokenize(file_text, '\n')) {
+	for(string line : tokenize(file_text, '\n')) {
 		if(line[0] == '#')
 			continue;
 
@@ -112,7 +112,7 @@ Ex<WavefrontObject> WavefrontObject::load(ZStr path, i64 file_size_limit) {
 	vector<UseMtl> use_mtls;
 	vector<WavefrontMaterial> materials;
 
-	for(auto line : tokenize(file_text, '\n')) {
+	for(string line : tokenize(file_text, '\n')) {
 		if(line[0] == '#')
 			continue;
 		TextParser parser(line);

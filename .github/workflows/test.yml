@@ -23,15 +23,16 @@ jobs:
         env:
             cache-name: cache-deps
         with:
-            path: C:/libraries
-            key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('libfwk/tools/install_deps.py') }}-v1
+            path: libfwk/windows/libraries
+            key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('libfwk/tools/install_deps.py', 'libfwk/dependencies.json') }}-v1
 
       - if: ${{ steps.cache-deps.outputs.cache-hit != 'true' }}
         name: Install dependencies
         shell: cmd
         run: |
           pip install conan
-          python libfwk/tools/install_deps.py C:/libraries
+          cd libfwk
+          python tools/install_deps.py
 
       - name: Build libfwk release
         shell: cmd
@@ -49,7 +50,7 @@ jobs:
           mkdir lucid-raster
           copy build\lucid-x64-Release\lucid.exe lucid-raster\
           xcopy data\shaders\ lucid-raster\data\shaders\ /E
-          copy C:\libraries\x86_64\bin\shaderc_shared.dll lucid-raster\
+          copy libfwk\windows\libraries\bin\shaderc_shared.dll lucid-raster\
 
       - name: Archive build
         uses: actions/upload-artifact@v4

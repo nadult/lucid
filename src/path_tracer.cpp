@@ -85,9 +85,9 @@ Ex<void> PathTracer::exConstruct(VulkanDevice &device, ShaderCompiler &compiler,
 		VComputePipelineSetup setup;
 		auto def_id = *compiler.find(name);
 		m_shader_def_ids.emplace_back(def_id);
-		setup.compute_module = EX_PASS(compiler.createShaderModule(device.ref(), def_id));
+		setup.compute_module = EX_PASS(compiler.createShaderModule(device, def_id));
 		setup.spec_constants.emplace_back(consts, 0u);
-		auto result = VulkanPipeline::create(device.ref(), setup);
+		auto result = VulkanPipeline::create(device, setup);
 		print("Compute pipeline '%': % ms\n", name, int((getTime() - time) * 1000));
 		return result;
 	};
@@ -197,7 +197,7 @@ Ex<> PathTracer::setupInputData(const Context &ctx) {
 	config.lighting = ctx.lighting;
 	config.background_color = (float4)FColor(ctx.config.background_color);
 	m_config = m_frame_config[frame_index];
-	EXPECT(cmds.upload(m_config, cspan(&config, 1)));
+	EXPECT(m_config.upload(cspan(&config, 1)));
 
 	return {};
 }

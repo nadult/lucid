@@ -283,8 +283,6 @@ Ex<void> Scene::updateRenderingData(VulkanDevice &device) {
 	updatePrimitiveOffsets();
 	freeRenderingData();
 
-	auto &cmds = device.cmdQueue();
-
 	auto accel_struct_usage =
 		mask(device.features() & VDeviceFeature::ray_tracing,
 			 VBufferUsage::device_address | VBufferUsage::accel_struct_build_input_read_only);
@@ -292,36 +290,26 @@ Ex<void> Scene::updateRenderingData(VulkanDevice &device) {
 	auto vb_usage = buf_usage | VBufferUsage::vertex_buffer | accel_struct_usage;
 	auto ib_usage = buf_usage | VBufferUsage::index_buffer | accel_struct_usage;
 
-	verts.positions = EX_PASS(VulkanBuffer::create<float3>(device, numVerts(), vb_usage));
-	EXPECT(cmds.upload(verts.positions, positions));
+	verts.positions = EX_PASS(VulkanBuffer::createAndUpload(device, positions, vb_usage));
 
-	if(hasColors()) {
-		verts.colors = EX_PASS(VulkanBuffer::create<IColor>(device, numVerts(), vb_usage));
-		EXPECT(cmds.upload(verts.colors, colors));
-	}
-	if(hasTexCoords()) {
-		verts.tex_coords = EX_PASS(VulkanBuffer::create<float2>(device, numVerts(), vb_usage));
-		EXPECT(cmds.upload(verts.tex_coords, tex_coords));
-	}
-	if(hasQuantizedNormals()) {
-		verts.normals = EX_PASS(VulkanBuffer::create<u32>(device, numVerts(), vb_usage));
-		EXPECT(cmds.upload(verts.normals, quantized_normals));
-	}
-	if(quantized_tangents) {
-		verts.tangents = EX_PASS(VulkanBuffer::create<u32>(device, numVerts(), vb_usage));
-		EXPECT(cmds.upload(verts.tangents, quantized_tangents));
-	}
+	if(hasColors())
+		verts.colors = EX_PASS(VulkanBuffer::createAndUpload(device, colors, vb_usage));
+	if(hasTexCoords())
+		verts.tex_coords = EX_PASS(VulkanBuffer::createAndUpload(device, tex_coords, vb_usage));
+	if(hasQuantizedNormals())
+		verts.normals = EX_PASS(VulkanBuffer::createAndUpload(device, quantized_normals, vb_usage));
+	if(quantized_tangents)
+		verts.tangents =
+			EX_PASS(VulkanBuffer::createAndUpload(device, quantized_tangents, vb_usage));
 
-	tris_ib = EX_PASS(VulkanBuffer::create<u32>(device, numTris() * 3, ib_usage));
-	quads_ib = EX_PASS(VulkanBuffer::create<u32>(device, numQuads() * 4, ib_usage));
-	// TODO: merging shouldn't be needed; Add upload version which returns Span<> ?
+	// TODO: merging shouldn't be needed; Add option to efficiently upload multiple spans?
 	vector<u32> merged_tris, merged_quads;
 	for(auto &mesh : meshes) {
 		insertBack(merged_tris, cspan(mesh.tris).reinterpret<u32>());
 		insertBack(merged_quads, cspan(mesh.quads).reinterpret<u32>());
 	}
-	EXPECT(cmds.upload(tris_ib, merged_tris));
-	EXPECT(cmds.upload(quads_ib, merged_quads));
+	tris_ib = EX_PASS(VulkanBuffer::createAndUpload(device, merged_tris, ib_usage));
+	quads_ib = EX_PASS(VulkanBuffer::createAndUpload(device, merged_quads, ib_usage));
 
 	for(auto &material : materials)
 		for(auto map_type : all<SceneMapType>) {
@@ -335,8 +323,8 @@ Ex<void> Scene::updateRenderingData(VulkanDevice &device) {
 			// TODO: mipmaps for plain textures
 			if(!tex.vk_image) {
 				DASSERT(!tex.empty());
-				auto vk_image = EX_PASS(VulkanImage::createAndUpload(device.ref(), tex.mips));
-				tex.vk_image = VulkanImageView::create(device.ref(), vk_image);
+				auto vk_image = EX_PASS(VulkanImage::createAndUpload(device, tex.mips));
+				tex.vk_image = VulkanImageView::create(vk_image);
 			}
 			map.vk_image = tex.vk_image;
 			map.is_opaque = tex.is_opaque;

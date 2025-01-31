@@ -35,12 +35,12 @@ void SimpleRenderer::addShaderDefs(VulkanDevice &device, ShaderCompiler &compile
 	compiler.add({"simple_frag", VShaderStage::fragment, "simple_material.glsl", fsh_macros});
 }
 
-Ex<void> SimpleRenderer::exConstruct(VDeviceRef device, ShaderCompiler &compiler,
+Ex<void> SimpleRenderer::exConstruct(VulkanDevice &device, ShaderCompiler &compiler,
 									 const IRect &viewport, VColorAttachment color_att) {
-	auto depth_format = device->bestSupportedFormat(VDepthStencilFormat::d32f);
+	auto depth_format = device.bestSupportedFormat(VDepthStencilFormat::d32f);
 	auto depth_buffer =
 		EX_PASS(VulkanImage::create(device, VImageSetup(depth_format, viewport.size())));
-	m_depth_buffer = VulkanImageView::create(device, depth_buffer);
+	m_depth_buffer = VulkanImageView::create(depth_buffer);
 	// TODO: :we need to transition depth_buffer format too
 
 	VDepthAttachment depth_att(depth_format, 1, defaultLayout(depth_format));
@@ -48,7 +48,7 @@ Ex<void> SimpleRenderer::exConstruct(VDeviceRef device, ShaderCompiler &compiler
 		VColorSync(VLoadOp::load, VStoreOp::store, VImageLayout::general, VImageLayout::general);
 	depth_att.sync = VDepthSync(VLoadOp::clear, VStoreOp::store, VImageLayout::undefined,
 								defaultLayout(depth_format));
-	m_render_pass = device->getRenderPass({color_att}, depth_att);
+	m_render_pass = device.getRenderPass({color_att}, depth_att);
 
 	m_viewport = viewport;
 
@@ -58,7 +58,7 @@ Ex<void> SimpleRenderer::exConstruct(VDeviceRef device, ShaderCompiler &compiler
 
 	m_frag_module = EX_PASS(compiler.createShaderModule(device, frag_id));
 	m_vert_module = EX_PASS(compiler.createShaderModule(device, vert_id));
-	m_pipeline_layout = device->getPipelineLayout({m_frag_module, m_vert_module});
+	m_pipeline_layout = device.getPipelineLayout({m_frag_module, m_vert_module});
 
 	return {};
 }
@@ -86,8 +86,7 @@ Ex<PVPipeline> SimpleRenderer::getPipeline(VulkanDevice &device, const PipeConfi
 			setup.depth = VDepthSetup(VDepthFlag::test);
 		}
 
-		// TODO: remove vulkan refs
-		ref = EX_PASS(VulkanPipeline::create(device.ref(), setup));
+		ref = EX_PASS(VulkanPipeline::create(device, setup));
 	}
 
 	return ref;

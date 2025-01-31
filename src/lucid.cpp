@@ -99,7 +99,7 @@ Ex<int> exMain(int argc, char **argv) {
 	auto phys_info = instance->info(device->physId());
 	print("Selected Vulkan physical device: %\nDriver version: %\n",
 		  phys_info.properties.deviceName, phys_info.properties.driverVersion);
-	device->addSwapChain(EX_PASS(VulkanSwapChain::create(device, window, swap_chain_setup)));
+	device->addSwapChain(EX_PASS(VulkanSwapChain::create(*device, window, swap_chain_setup)));
 
 	Dynamic<perf::Manager> perf_manager;
 	Dynamic<perf::ThreadContext> perf_ctx;

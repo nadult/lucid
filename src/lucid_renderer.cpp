@@ -265,10 +265,10 @@ Ex<void> LucidRenderer::exConstruct(VulkanDevice &device, ShaderCompiler &compil
 		VComputePipelineSetup setup;
 		auto def_id = *compiler.find(name);
 		m_shader_def_ids.emplace_back(def_id);
-		setup.compute_module = EX_PASS(compiler.createShaderModule(device.ref(), def_id));
+		setup.compute_module = EX_PASS(compiler.createShaderModule(device, def_id));
 		setup.spec_constants.emplace_back(consts, 0u);
 		setup.subgroup_size = m_subgroup_size;
-		auto result = VulkanPipeline::create(device.ref(), setup);
+		auto result = VulkanPipeline::create(device, setup);
 		print("Compute pipeline '%': % ms\n", name, int((getTime() - time) * 1000));
 		return result;
 	};
@@ -412,9 +412,9 @@ Ex<> LucidRenderer::uploadInstances(const Context &ctx) {
 	offset += sizeof(u32) * max_instances;
 	m_instance_uv_rects = instance_data.subSpan(offset).reinterpret<float4>();
 
-	EXPECT(cmds.upload(m_instances, instances));
-	EXPECT(cmds.upload(m_instance_colors, colors));
-	EXPECT(cmds.upload(m_instance_uv_rects, uv_rects));
+	EXPECT(m_instances.upload(instances));
+	EXPECT(m_instance_colors.upload(colors));
+	EXPECT(m_instance_uv_rects.upload(uv_rects));
 
 	m_num_instances = instances.size();
 	int max_dispatches = m_max_dispatches / 2; // TODO: tweak this properly...
@@ -440,7 +440,7 @@ Ex<> LucidRenderer::setupInputData(const Context &ctx) {
 	config.enable_backface_culling = ctx.config.backface_culling;
 	config.instance_packet_size = m_instance_packet_size;
 	m_config = m_frame_config[frame_index];
-	EXPECT(cmds.upload(m_config, cspan(&config, 1)));
+	EXPECT(m_config.upload(cspan(&config, 1)));
 
 	return {};
 }

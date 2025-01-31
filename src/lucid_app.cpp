@@ -261,11 +261,11 @@ Ex<void> LucidApp::updateRenderer() {
 	auto swap_chain = m_device->swapChain();
 
 	if(m_rendering_mode == RenderingMode::pbr && !m_pbr_renderer)
-		m_pbr_renderer = EX_PASS(
-			construct<PbrRenderer>(m_device, *m_shader_compiler, m_viewport, swap_chain->format()));
+		m_pbr_renderer = EX_PASS(construct<PbrRenderer>(*m_device, *m_shader_compiler, m_viewport,
+														swap_chain->format()));
 
 	if(isOneOf(m_rendering_mode, RenderingMode::simple, RenderingMode::mixed) && !m_simple_renderer)
-		m_simple_renderer = EX_PASS(construct<SimpleRenderer>(m_device, *m_shader_compiler,
+		m_simple_renderer = EX_PASS(construct<SimpleRenderer>(*m_device, *m_shader_compiler,
 															  m_viewport, swap_chain->format()));
 
 	if(isOneOf(m_rendering_mode, RenderingMode::lucid, RenderingMode::mixed) && !m_lucid_renderer)
@@ -287,8 +287,8 @@ Ex<> LucidApp::updateEnvMap() {
 
 	auto time = getTime();
 	auto panorama = EX_PASS(loadExr(m_lighting.env_map_path));
-	auto vimage = EX_PASS(VulkanImage::createAndUpload(m_device, panorama));
-	m_lighting.env_map = VulkanImageView::create(m_device, vimage);
+	auto vimage = EX_PASS(VulkanImage::createAndUpload(*m_device, panorama));
+	m_lighting.env_map = VulkanImageView::create(vimage);
 
 	printf("EXR loading time: %.2f sec\n", getTime() - time);
 	return {};

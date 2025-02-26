@@ -91,6 +91,7 @@ Ex<int> exMain(int argc, char **argv) {
 	dev_setup.features->shaderInt64 = VK_TRUE;
 	dev_setup.features->samplerAnisotropy = VK_TRUE;
 	dev_setup.features->fillModeNonSolid = VK_TRUE;
+	dev_setup.allow_descriptor_update_after_bind = true;
 	auto pref_device = instance->preferredDevice(window->surfaceHandle(), &dev_setup.queues);
 	if(!pref_device)
 		return ERROR("Couldn't find a suitable Vulkan device");

@@ -7,10 +7,6 @@
 #include <fwk/gfx/color.h>
 #include <fwk/gfx/shader_compiler.h>
 
-namespace fwk {
-struct ShaderDebugInfo;
-}
-
 DEFINE_ENUM(PathTracerOpt, timers, debug);
 using PathTracerOpts = EnumFlags<PathTracerOpt>;
 
@@ -30,15 +26,12 @@ class PathTracer {
 
 	static void addShaderDefs(VulkanDevice &, ShaderCompiler &, const ShaderConfig &);
 	CSpan<ShaderDefId> shaderDefIds() const { return m_shader_def_ids; }
-	Ex<void> exConstruct(VulkanDevice &, ShaderCompiler &, VColorAttachment, Opts, int2 view_size);
+	Ex<void> exConstruct(VulkanDevice &, ShaderCompiler &, Opts, int2 view_size);
 	void render(const Context &);
 
   private:
 	Ex<> setupInputData(const Context &);
 	Ex<> updateScene(VulkanDevice &, Scene &);
-
-	template <class T>
-	Maybe<ShaderDebugInfo> getDebugData(const Context &, VBufferSpan<T>, Str title);
 
 	Opts m_opts;
 

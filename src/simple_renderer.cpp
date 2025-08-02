@@ -36,19 +36,22 @@ void SimpleRenderer::addShaderDefs(VulkanDevice &device, ShaderCompiler &compile
 }
 
 Ex<void> SimpleRenderer::exConstruct(VulkanDevice &device, ShaderCompiler &compiler,
-									 const IRect &viewport, VColorAttachment color_att) {
+									 const IRect &viewport, VAttachment color_att) {
 	auto depth_format = device.bestSupportedFormat(VDepthStencilFormat::d32f);
 	auto depth_buffer =
 		EX_PASS(VulkanImage::create(device, VImageSetup(depth_format, viewport.size())));
 	m_depth_buffer = VulkanImageView::create(depth_buffer);
-	// TODO: :we need to transition depth_buffer format too
 
-	VDepthAttachment depth_att(depth_format, 1, defaultLayout(depth_format));
-	color_att.sync =
-		VColorSync(VLoadOp::load, VStoreOp::store, VImageLayout::general, VImageLayout::general);
-	depth_att.sync = VDepthSync(VLoadOp::clear, VStoreOp::store, VImageLayout::undefined,
-								defaultLayout(depth_format));
-	m_render_pass = device.getRenderPass({color_att}, depth_att);
+	VAttachment depth_att(
+		depth_format, VAttachmentSync(VLoadOp::clear, VStoreOp::store, VImageLayout::undefined,
+									  defaultLayout(depth_format), defaultLayout(depth_format)));
+	// Note: using 'general' image layout instead of 'color attachment optimal' makes no difference
+	// performance-wise (tested on RTX 3050). General is needed in lucid, because lucid raster writes
+	// to this buffer from compute shader and we would like to minimize transitions if possible.
+	color_att = {color_att.colorFormat(),
+				 VAttachmentSync(VLoadOp::load, VStoreOp::store, VImageLayout::general,
+								 VImageLayout::general, VImageLayout::general)};
+	m_render_pass = device.getRenderPass({color_att, depth_att});
 
 	m_viewport = viewport;
 
@@ -135,7 +138,7 @@ Ex<> SimpleRenderer::render(const RenderContext &ctx, bool wireframe) {
 	PERF_GPU_SCOPE(cmds);
 
 	// TODO: optimize this
-	auto ubo_usage = VBufferUsage::uniform_buffer | VBufferUsage::transfer_dst;
+	auto ubo_usage = VBufferUsage::uniform;
 	shader::Lighting lighting;
 	lighting.ambient_color = ctx.lighting.ambient.color;
 	lighting.ambient_power = ctx.lighting.ambient.power;
@@ -180,7 +183,7 @@ Ex<> SimpleRenderer::render(const RenderContext &ctx, bool wireframe) {
 	auto swap_chain = ctx.device.swapChain();
 	auto swap_image = swap_chain->acquiredImage()->image();
 
-	auto framebuffer = ctx.device.getFramebuffer({swap_chain->acquiredImage()}, m_depth_buffer);
+	auto framebuffer = ctx.device.getFramebuffer({swap_chain->acquiredImage(), m_depth_buffer});
 	cmds.beginRenderPass(framebuffer, m_render_pass, none,
 						 {FColor(ColorId::magneta), VClearDepthStencil(1.0)});
 

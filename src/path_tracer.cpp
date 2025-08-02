@@ -48,8 +48,8 @@ void PathTracer::addShaderDefs(VulkanDevice &device, ShaderCompiler &compiler,
 	add_defs("trace", "trace.glsl");
 }
 
-Ex<void> PathTracer::exConstruct(VulkanDevice &device, ShaderCompiler &compiler,
-								 VColorAttachment color_att, Opts opts, int2 view_size) {
+Ex<void> PathTracer::exConstruct(VulkanDevice &device, ShaderCompiler &compiler, Opts opts,
+								 int2 view_size) {
 	print("Constructing PathTracer (flags:% res:%):\n", opts, view_size);
 	auto time = getTime();
 
@@ -95,17 +95,13 @@ Ex<void> PathTracer::exConstruct(VulkanDevice &device, ShaderCompiler &compiler,
 	bool has_timers = m_opts & Opt::timers;
 	p_trace = EX_PASS(make_compute_pipe("trace", Opt::debug, has_timers));
 
-	if(opts & Opt::debug) {
-		auto usage =
-			VBufferUsage::storage_buffer | VBufferUsage::transfer_dst | VBufferUsage::transfer_src;
-		auto mem_usage = VMemoryUsage::temporary;
-		m_debug_buffer = EX_PASS(VulkanBuffer::create<u32>(device, 1024 * 1024, usage, mem_usage));
-	}
+	if(opts & Opt::debug)
+		m_debug_buffer = EX_PASS(shaderDebugBuffer(device));
 
 	for(int i : intRange(num_frames)) {
-		auto info_usage = VBufferUsage::storage_buffer | VBufferUsage::transfer_src |
-						  VBufferUsage::transfer_dst | VBufferUsage::indirect_buffer;
-		auto config_usage = VBufferUsage::uniform_buffer | VBufferUsage::transfer_dst;
+		auto info_usage = VBufferUsage::storage | VBufferUsage::transfer_src |
+						  VBufferUsage::transfer_dst | VBufferUsage::indirect;
+		auto config_usage = VBufferUsage::uniform | VBufferUsage::transfer_dst;
 		auto mem_usage = VMemoryUsage::temporary;
 		m_frame_info[i] =
 			EX_PASS(VulkanBuffer::create<shader::PathTracerInfo>(device, 1, info_usage, mem_usage));
@@ -175,13 +171,12 @@ void PathTracer::render(const Context &ctx) {
 
 	if(m_opts & Opt::debug) {
 		ds.set(12, m_debug_buffer);
-		shaderDebugInitBuffer(cmds, m_debug_buffer);
+		shaderDebugResetBuffer(cmds, m_debug_buffer);
 	}
 
 	cmds.dispatchCompute({m_bin_counts.x, m_bin_counts.y, 1});
 	if(m_opts & Opt::debug)
-		getDebugData(ctx, m_debug_buffer, "raster_low_debug");
-
+		printDebugData(cmds, m_debug_buffer, "raster_low_debug");
 	cmds.fullBarrier();
 }
 
@@ -198,21 +193,5 @@ Ex<> PathTracer::setupInputData(const Context &ctx) {
 	config.background_color = (float4)FColor(ctx.config.background_color);
 	m_config = m_frame_config[frame_index];
 	EXPECT(m_config.upload(cspan(&config, 1)));
-
 	return {};
-}
-
-template <class T>
-Maybe<ShaderDebugInfo> PathTracer::getDebugData(const Context &ctx, VBufferSpan<T> src, Str title) {
-	auto &cmds = ctx.device.cmdQueue();
-	cmds.barrier(VPipeStage::all_commands, VPipeStage::transfer, VAccess::memory_write,
-				 VAccess::transfer_read);
-	auto debug_data = cmds.download(m_debug_buffer, title, 32);
-	cmds.barrier(VPipeStage::transfer, VPipeStage::all_commands);
-	if(debug_data && *debug_data) {
-		ShaderDebugInfo info(*debug_data);
-		print("%: ----------------------------------------------------\n%", title, info);
-		return info;
-	}
-	return none;
 }

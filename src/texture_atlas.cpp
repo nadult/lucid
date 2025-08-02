@@ -116,7 +116,8 @@ Image TextureAtlas::merge(CSpan<const Image *> textures_, IColor background) con
 	for(auto *texture : textures_) {
 		DASSERT(baseFormat(texture->format()) == VBaseFormat::rgba8);
 		PodVector<u8> data = texture->data();
-		textures.emplace_back(data.reinterpret<IColor>(), texture->size(), VFormat::rgba8_unorm);
+		textures.emplace_back(data.reinterpret<IColor>(), texture->size(),
+							  VColorFormat::rgba8_unorm);
 	}
 
 	for(int i : intRange(textures)) {

@@ -56,7 +56,7 @@ FWK_COPYABLE_CLASS_IMPL(SceneTexture);
 
 Ex<void> SceneTexture::load(Stream &sr) {
 	u8 num_levels;
-	VFormat format;
+	VColorFormat format;
 	sr >> name;
 	sr.unpack(map_type, is_opaque, is_clamped, is_atlas, num_levels, format);
 	mips.reserve(num_levels);
@@ -101,7 +101,9 @@ Ex<void> SceneTexture::loadPlain(ZStr path) {
 	return {};
 }
 
-VFormat SceneTexture::format() const { return mips ? mips[0].format() : VFormat::rgba8_unorm; }
+VColorFormat SceneTexture::format() const {
+	return mips ? mips[0].format() : VColorFormat::rgba8_unorm;
+}
 int2 SceneTexture::size() const { return mips ? mips[0].size() : int2(); }
 
 Scene::Scene() = default;
@@ -286,9 +288,9 @@ Ex<void> Scene::updateRenderingData(VulkanDevice &device) {
 	auto accel_struct_usage =
 		mask(device.features() & VDeviceFeature::ray_tracing,
 			 VBufferUsage::device_address | VBufferUsage::accel_struct_build_input_read_only);
-	auto buf_usage = VBufferUsage::storage_buffer | VBufferUsage::transfer_dst;
-	auto vb_usage = buf_usage | VBufferUsage::vertex_buffer | accel_struct_usage;
-	auto ib_usage = buf_usage | VBufferUsage::index_buffer | accel_struct_usage;
+	auto buf_usage = VBufferUsage::storage | VBufferUsage::transfer_dst;
+	auto vb_usage = buf_usage | VBufferUsage::vertex | accel_struct_usage;
+	auto ib_usage = buf_usage | VBufferUsage::index | accel_struct_usage;
 
 	verts.positions = EX_PASS(VulkanBuffer::createAndUpload(device, positions, vb_usage));
 

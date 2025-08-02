@@ -22,7 +22,7 @@ struct SceneTexture {
 	Ex<void> save(Stream &) const;
 
 	bool empty() const { return size() == int2(0, 0); }
-	VFormat format() const;
+	VColorFormat format() const;
 	int2 size() const;
 
 	string name;

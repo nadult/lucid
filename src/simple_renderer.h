@@ -19,7 +19,7 @@ class SimpleRenderer {
 
 	static void addShaderDefs(VulkanDevice &, ShaderCompiler &, const ShaderConfig &);
 	CSpan<ShaderDefId> shaderDefIds() const { return m_shader_def_ids; }
-	Ex<> exConstruct(VulkanDevice &, ShaderCompiler &, const IRect &viewport, VColorAttachment);
+	Ex<> exConstruct(VulkanDevice &, ShaderCompiler &, const IRect &viewport, VAttachment);
 
 	// TODO: wireframe to config
 	Ex<> render(const RenderContext &, bool wireframe);

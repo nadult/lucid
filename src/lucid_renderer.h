@@ -7,10 +7,6 @@
 #include <fwk/gfx/color.h>
 #include <fwk/gfx/shader_compiler.h>
 
-namespace fwk {
-struct ShaderDebugInfo;
-}
-
 DEFINE_ENUM(LucidRenderOpt, debug_quad_setup, debug_bin_counter, debug_bin_dispatcher, debug_raster,
 			timers, additive_blending, visualize_errors, alpha_threshold);
 
@@ -37,9 +33,9 @@ class LucidRenderer {
 
 	static void addShaderDefs(VulkanDevice &, ShaderCompiler &, const ShaderConfig &);
 	CSpan<ShaderDefId> shaderDefIds() const { return m_shader_def_ids; }
-	Ex<void> exConstruct(VulkanDevice &, ShaderCompiler &, VColorAttachment, Opts, int2 view_size);
+	Ex<void> exConstruct(VulkanDevice &, ShaderCompiler &, Opts, int2 view_size);
 
-	void render(const Context &);
+	Ex<> render(const Context &);
 
 	void verifyInfo();
 	vector<StatsGroup> getStats() const;
@@ -60,9 +56,6 @@ class LucidRenderer {
 	void bindRaster(PVPipeline, const Context &);
 	void rasterLow(const Context &);
 	void rasterHigh(const Context &);
-
-	template <class T>
-	Maybe<ShaderDebugInfo> getDebugData(const Context &, VBufferSpan<T>, Str title);
 
 	Opts m_opts;
 

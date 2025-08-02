@@ -75,9 +75,9 @@ Ex<int> exMain(int argc, char **argv) {
 
 	if(config) {
 		// TODO: first initialize SDL?
-		auto display_rects = VulkanWindow::displayRects();
+		auto displays = VulkanWindow::displays();
 		if(auto *rect = config->get<IRect>("window_rect")) {
-			window_rect = VulkanWindow::sanitizeWindowRect(display_rects, *rect);
+			window_rect = VulkanWindow::sanitizeWindowRect(displays, *rect);
 			window_flags &= ~VWindowFlag::centered;
 		}
 		if(config->get<bool>("window_maximized", false))

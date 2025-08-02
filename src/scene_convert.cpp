@@ -26,7 +26,7 @@ Ex<Image> loadExr(ZStr path) {
 
 	PodVector<float4> data({reinterpret_cast<float4 *>(exr_data), width * height});
 	free(exr_data);
-	return Image{std::move(data), {width, height}, VFormat::rgba32_sfloat};
+	return Image{std::move(data), {width, height}, VColorFormat::rgba32_sfloat};
 }
 
 vector<Image> panoramaToCubeMap(const Image &panorama) { return {}; }
@@ -421,7 +421,7 @@ Scene convertScene(WavefrontObject obj, const InputScene &iscene) {
 			texture.mips.emplace_back(prev_mip.rescale(mip_size, ImageRescaleOpt::srgb));
 		}
 
-		auto format = texture.is_opaque ? VFormat::bc1_rgb_srgb : VFormat::bc3_rgba_srgb;
+		auto format = texture.is_opaque ? VColorFormat::bc1_rgb_srgb : VColorFormat::bc3_rgba_srgb;
 		for(auto &mip : texture.mips)
 			mip = Image::compressBC(mip, format);
 	}

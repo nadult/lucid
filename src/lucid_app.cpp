@@ -58,9 +58,9 @@ void VertexArray::getDefs(VPipelineSetup &setup, bool with_tangents) {
 
 PVRenderPass guiRenderPass(VDeviceRef device) {
 	auto sc_format = device->swapChain()->format();
-	auto color_sync = VColorSync(VLoadOp::load, VStoreOp::store, VImageLayout::general,
-								 VImageLayout::present_src);
-	return device->getRenderPass({{sc_format, 1, color_sync}});
+	auto color_sync = VAttachmentSync(VLoadOp::load, VStoreOp::store, VImageLayout::general,
+									  VImageLayout::color_att, VImageLayout::present_src);
+	return device->getRenderPass({{sc_format, color_sync}});
 }
 
 LucidApp::LucidApp(VWindowRef window, VDeviceRef device)
@@ -269,12 +269,11 @@ Ex<void> LucidApp::updateRenderer() {
 															  m_viewport, swap_chain->format()));
 
 	if(isOneOf(m_rendering_mode, RenderingMode::lucid, RenderingMode::mixed) && !m_lucid_renderer)
-		m_lucid_renderer = EX_PASS(construct<LucidRenderer>(
-			*m_device, *m_shader_compiler, swap_chain->format(), m_lucid_opts, m_viewport.size()));
+		m_lucid_renderer = EX_PASS(construct<LucidRenderer>(*m_device, *m_shader_compiler,
+															m_lucid_opts, m_viewport.size()));
 
 	if(m_rendering_mode == RenderingMode::path_trace && !m_path_tracer) {
-		auto format = m_device->swapChain()->format();
-		m_path_tracer = EX_PASS(construct<PathTracer>(*m_device, *m_shader_compiler, format,
+		m_path_tracer = EX_PASS(construct<PathTracer>(*m_device, *m_shader_compiler,
 													  m_path_tracer_opts, m_viewport.size()));
 	}
 
@@ -518,8 +517,7 @@ bool LucidApp::handleInput(vector<InputEvent> events, float time_diff) {
 			return false;
 		}
 		if(event.keyDown(InputKey::f11)) {
-			auto flags =
-				m_window->isFullscreen() ? VWindowFlags() : VWindowFlag::fullscreen_desktop;
+			auto flags = m_window->isFullscreen() ? VWindowFlags() : VWindowFlag::fullscreen;
 			m_window->setFullscreen(flags);
 		}
 
@@ -610,9 +608,9 @@ void LucidApp::clearScreen(const RenderContext &ctx) {
 	PERF_GPU_SCOPE(cmds);
 	auto swap_chain = m_device->swapChain();
 	auto sc_format = swap_chain->format();
-	auto color_sync =
-		VColorSync(VLoadOp::clear, VStoreOp::store, VImageLayout::undefined, VImageLayout::general);
-	auto rpass = m_device->getRenderPass({{sc_format, 1, color_sync}});
+	auto color_sync = VAttachmentSync(VLoadOp::clear, VStoreOp::store, VImageLayout::undefined,
+									  VImageLayout::color_att, VImageLayout::general);
+	auto rpass = m_device->getRenderPass({{sc_format, color_sync}});
 	auto framebuffer = ctx.device.getFramebuffer({swap_chain->acquiredImage()});
 	cmds.beginRenderPass(framebuffer, rpass, none, {ctx.config.background_color});
 	cmds.endRenderPass();
@@ -658,7 +656,7 @@ void LucidApp::drawScene() {
 		m_simple_renderer->render(ctx, m_wireframe_mode).check();
 	if(!is_pbr && isOneOf(m_rendering_mode, RenderingMode::lucid, RenderingMode::mixed))
 		if(setup.scene->numQuads() <= m_lucid_renderer->maxSceneQuads())
-			m_lucid_renderer->render(ctx);
+			m_lucid_renderer->render(ctx).check();
 	if(m_rendering_mode == RenderingMode::pbr && m_pbr_renderer)
 		m_pbr_renderer->render(ctx, m_wireframe_mode).check();
 	if(m_rendering_mode == RenderingMode::path_trace && m_path_tracer)

@@ -18,6 +18,12 @@ using namespace fwk;
 FilePath mainPath();
 string dataPath(string file_name);
 
+namespace fwk {
+struct ShaderDebugResults;
+}
+
+void printDebugData(VulkanCommandQueue &, VBufferSpan<u32>, Str title);
+
 struct RenderConfig {
 	float scene_opacity = 1.0f;
 	IColor background_color = IColor(0, 30, 30);

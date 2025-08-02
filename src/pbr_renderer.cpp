@@ -38,19 +38,20 @@ void PbrRenderer::addShaderDefs(VulkanDevice &device, ShaderCompiler &compiler,
 }
 
 Ex<void> PbrRenderer::exConstruct(VulkanDevice &device, ShaderCompiler &compiler,
-								  const IRect &viewport, VColorAttachment color_att) {
+								  const IRect &viewport, VAttachment color_att) {
 	auto depth_format = device.bestSupportedFormat(VDepthStencilFormat::d32f);
 	auto depth_buffer =
 		EX_PASS(VulkanImage::create(device, VImageSetup(depth_format, viewport.size())));
 	m_depth_buffer = VulkanImageView::create(depth_buffer);
 	// TODO: :we need to transition depth_buffer format too
 
-	VDepthAttachment depth_att(depth_format, 1, defaultLayout(depth_format));
-	color_att.sync =
-		VColorSync(VLoadOp::load, VStoreOp::store, VImageLayout::general, VImageLayout::general);
-	depth_att.sync = VDepthSync(VLoadOp::clear, VStoreOp::store, VImageLayout::undefined,
-								defaultLayout(depth_format));
-	m_render_pass = device.getRenderPass({color_att}, depth_att);
+	VAttachment depth_att(
+		depth_format, VAttachmentSync(VLoadOp::clear, VStoreOp::store, VImageLayout::undefined,
+									  defaultLayout(depth_format), defaultLayout(depth_format)));
+	color_att = {color_att.colorFormat(),
+				 VAttachmentSync(VLoadOp::load, VStoreOp::store, VImageLayout::general,
+								 VImageLayout::general, VImageLayout::general)};
+	m_render_pass = device.getRenderPass({color_att, depth_att});
 
 	m_viewport = viewport;
 
@@ -80,8 +81,7 @@ Ex<void> PbrRenderer::exConstruct(VulkanDevice &device, ShaderCompiler &compiler
 	auto quad_verts = Box<float2>({-1.0f, -1.0f}, {1.0f, 1.0f}).corners();
 	array<float2, 6> quad_tris = {quad_verts[0], quad_verts[1], quad_verts[2],
 								  quad_verts[0], quad_verts[2], quad_verts[3]};
-	auto vb_usage =
-		VBufferUsage::vertex_buffer | VBufferUsage::storage_buffer | VBufferUsage::transfer_dst;
+	auto vb_usage = VBufferUsage::vertex | VBufferUsage::storage;
 	m_rect_vertices = EX_PASS(VulkanBuffer::createAndUpload(device, cspan(quad_tris), vb_usage));
 
 	return {};
@@ -174,7 +174,7 @@ Ex<> PbrRenderer::renderEnvMap(const RenderContext &ctx) {
 	PERF_GPU_SCOPE(cmds);
 	DASSERT(ctx.lighting.env_map);
 
-	auto ubo_usage = VBufferUsage::uniform_buffer | VBufferUsage::transfer_dst;
+	auto ubo_usage = VBufferUsage::uniform;
 	shader::EnvMapDrawCall env_map_dc;
 	float2 screen_size = float2(ctx.camera.params().viewport.size());
 	env_map_dc.screen_size = screen_size;
@@ -199,7 +199,7 @@ Ex<> PbrRenderer::render(const RenderContext &ctx, bool wireframe) {
 	PERF_GPU_SCOPE(cmds);
 
 	// TODO: optimize this
-	auto ubo_usage = VBufferUsage::uniform_buffer | VBufferUsage::transfer_dst;
+	auto ubo_usage = VBufferUsage::uniform;
 	shader::Lighting lighting;
 	lighting.ambient_color = ctx.lighting.ambient.color;
 	lighting.ambient_power = ctx.lighting.ambient.power;
@@ -236,7 +236,7 @@ Ex<> PbrRenderer::render(const RenderContext &ctx, bool wireframe) {
 
 	auto swap_chain = ctx.device.swapChain();
 	auto swap_image = swap_chain->acquiredImage()->image();
-	auto framebuffer = ctx.device.getFramebuffer({swap_chain->acquiredImage()}, m_depth_buffer);
+	auto framebuffer = ctx.device.getFramebuffer({swap_chain->acquiredImage(), m_depth_buffer});
 	cmds.beginRenderPass(framebuffer, m_render_pass, none,
 						 {FColor(ColorId::magneta), VClearDepthStencil(1.0)});
 

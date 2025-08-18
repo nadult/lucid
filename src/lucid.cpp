@@ -43,10 +43,14 @@ Ex<int> exMain(int argc, char **argv) {
 		VImageUsage::color_att | VImageUsage::storage | VImageUsage::transfer_dst;
 	swap_chain_setup.initial_layout = VImageLayout::general;
 
-	for(int n = 1; n < argc; n++) {
-		string argument = argv[n];
+	for(int i = 1; i < argc; i++) {
+		string argument = argv[i];
 		if(argument == "--convert-scenes") {
-			convertScenes(mainPath() / "input_scenes.xml");
+			string input_scenes = i + 1 < argc ? argv[i + 1] : "input_scenes.xml";
+			vector<string> selection;
+			if(i + 2 < argc)
+				selection = vector<string>(&argv[i + 2], &argv[argc]);
+			convertScenes(mainPath() / input_scenes, selection);
 			return 0;
 		} else if(argument == "--vsync") {
 			swap_chain_setup.preferred_present_mode = VPresentMode::fifo;
@@ -55,9 +59,9 @@ Ex<int> exMain(int argc, char **argv) {
 		} else if(argument == "--no-vulkan-debug") {
 			debug_mode = false;
 		} else if(argument == "--msaa") {
-			ASSERT(n + 1 < argc && "Invalid nr of arguments");
-			multisampling = clamp(atoi(argv[n + 1]), 1, 16);
-			n++;
+			ASSERT(i + 1 < argc && "Invalid nr of arguments");
+			multisampling = clamp(atoi(argv[i + 1]), 1, 16);
+			i++;
 		} else {
 			FATAL("Unsupported argument: %s", argument.c_str());
 		}

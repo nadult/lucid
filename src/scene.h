@@ -8,8 +8,6 @@
 #include <fwk/gfx/color.h>
 #include <fwk/vulkan_base.h>
 
-struct WavefrontObject;
-
 DEFINE_ENUM(SceneMapType, albedo, normal, pbr);
 using SceneMapTypes = EnumFlags<SceneMapType>;
 

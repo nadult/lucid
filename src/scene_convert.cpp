@@ -10,6 +10,13 @@
 #include <fwk/io/xml.h>
 #include <fwk/sys/exception.h>
 
+#include <assimp/Importer.hpp>
+#include <assimp/postprocess.h>
+#include <assimp/scene.h>
+
+#pragma comment(lib, "assimp-vc143-mt.lib")
+#pragma comment(lib, "draco.lib")
+
 #include "../extern/tinyexr.h"
 
 Ex<Image> loadExr(ZStr path) {
@@ -34,12 +41,12 @@ vector<Image> panoramaToCubeMap(const Image &panorama) { return {}; }
 InputScene::InputScene(string name, string path) : name(std::move(name)), path(std::move(path)) {}
 InputScene::InputScene(const FilePath &root_path, CXmlNode node)
 	: quad_squareness(node("quad_squareness", 1.0f)), merge_verts(node("merge_verts", false)),
-	  flip_uv(node("flip_uv", false)), flip_yz(node("flip_yz", false)), pbr(node("pbr", false)),
-	  env_map_path(node("env_map")) {
+	  flip_uv(node("flip_uv", false)), flip_yz(node("flip_yz", false)), pbr(node("pbr", false)) {
 	name = node.tryAttrib("name", "");
 	path = node.attrib("path");
 	if(name.empty())
 		name = FilePath(path).fileStem();
+	env_map_path = node.tryAttrib("env_map", "");
 	path = root_path / path;
 }
 
@@ -443,7 +450,173 @@ Scene convertScene(WavefrontObject obj, const InputScene &iscene) {
 	return out;
 }
 
-void convertScenes(ZStr iscenes_path) {
+void processNode(Scene &out, const aiScene *ai_scene, const aiNode *ai_node, aiMatrix4x4 trans) {
+	trans *= ai_node->mTransformation;
+
+	for(int m = 0; m < ai_node->mNumMeshes; m++) {
+		auto *ai_mesh = ai_scene->mMeshes[ai_node->mMeshes[m]];
+		if(!ai_mesh->HasPositions())
+			continue;
+
+		int vertex_offset = out.positions.size();
+		out.positions.resize(vertex_offset + ai_mesh->mNumVertices);
+		for(int i = 0; i < ai_mesh->mNumVertices; i++) {
+			auto ai_vertex = ai_mesh->mVertices[i];
+			ai_vertex *= trans;
+			out.positions[vertex_offset + i] = {ai_vertex.x, ai_vertex.y, ai_vertex.z};
+		}
+
+		SceneMesh mesh;
+		mesh.tris.resize(ai_mesh->mNumFaces);
+		for(int i = 0; i < ai_mesh->mNumFaces; i++) {
+			auto &ai_face = ai_mesh->mFaces[i];
+			DASSERT(ai_face.mNumIndices == 3);
+			mesh.tris[i] = {int(ai_face.mIndices[0]) + vertex_offset,
+							int(ai_face.mIndices[1]) + vertex_offset,
+							int(ai_face.mIndices[2]) + vertex_offset};
+		}
+		mesh.material_id = ai_mesh->mMaterialIndex;
+		out.meshes.emplace_back(std::move(mesh));
+	}
+
+	for(int i = 0; i < ai_node->mNumChildren; i++)
+		processNode(out, ai_scene, ai_node->mChildren[i], trans);
+}
+
+Ex<Scene> convertScene(const InputScene &iscene) {
+	Scene out;
+
+	auto start_time = getTime();
+	Assimp::Importer importer;
+	// TODO: import quads directly if possible
+	auto import_flags = aiProcess_Triangulate | aiProcess_FlipUVs | aiProcess_GenNormals;
+	const aiScene *ai_scene = importer.ReadFile(iscene.path, import_flags);
+	EXPECT(ai_scene && ai_scene->mRootNode);
+	EXPECT(!(ai_scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE));
+
+	// TODO: handle instancing?
+	processNode(out, ai_scene, ai_scene->mRootNode, aiMatrix4x4());
+
+	if(iscene.flip_yz) {
+		for(auto &pos : out.positions)
+			swap(pos.y, pos.z);
+		for(auto &normal : out.normals) {
+			swap(normal.y, normal.z);
+			normal = -normal;
+		}
+	}
+	if(iscene.flip_uv) {
+		for(auto &uv : out.tex_coords)
+			uv.y = 1.0f - uv.y;
+	}
+
+	for(int i = 0; i < ai_scene->mNumMaterials; i++) {
+		auto *ai_material = ai_scene->mMaterials[i];
+		SceneMaterial material(ai_material->GetName().C_Str());
+
+		float opacity = 1.0f;
+		ai_material->Get(AI_MATKEY_OPACITY, opacity);
+
+		aiColor4D color(1.0f, 1.0f, 1.0f, 1.0f);
+		ai_material->Get(AI_MATKEY_COLOR_DIFFUSE, color);
+
+		for(int j = 0; j < ai_material->mNumProperties; j++) {
+			print("prop: %\n", ai_material->mProperties[j]->mKey.C_Str());
+		}
+
+		material.opacity = opacity;
+		material.diffuse = {color.r, color.g, color.b};
+
+		out.materials.emplace_back(material);
+	}
+
+	if(iscene.merge_verts && !out.tex_coords && !out.colors) {
+		print("Merging duplicate vertices...\n");
+		int old_count = out.numVerts();
+		out.mergeVertices(5);
+		int new_count = out.numVerts();
+		if(old_count != new_count)
+			print("Merged vertices: % -> %\n", old_count, new_count);
+		// TODO: move bbox computaiton to separate function
+	}
+
+	print("Optimizing triangle order ");
+	fflush(stdout);
+	double time = getTime();
+	for(auto &mesh : out.meshes) {
+		// TODO: might be slow in case of large number of meshes
+		auto old = mesh.tris;
+		auto indices = span(mesh.tris).reinterpret<int>();
+		optimizeTriangleOrdering(out.numVerts(), indices, indices);
+		for(auto &idx : indices)
+			DASSERT(idx >= 0 && idx < out.numVerts());
+		print(".");
+		fflush(stdout);
+	}
+	printf(" (%.2f sec)\n", getTime() - time);
+
+	print("Computing bounding boxes...\n");
+	out.bounding_box = enclose(out.positions);
+	for(auto &mesh : out.meshes) {
+		auto bmin = out.positions[mesh.tris[0][0]];
+		auto bmax = bmin;
+		for(auto &tri : mesh.tris)
+			for(auto idx : tri) {
+				auto point = out.positions[idx];
+				bmin = vmin(bmin, point);
+				bmax = vmax(bmax, point);
+			}
+		mesh.bounding_box = {bmin, bmax};
+	}
+
+	print("Compressing & generating mipmaps for textures...\n");
+	if(out.hasTexCoords() && !iscene.pbr) {
+		detectClampedTextures(out);
+		makeTextureAtlas(out, format("%_opaque", iscene.name), true);
+		makeTextureAtlas(out, format("%_transparent", iscene.name), false);
+	}
+	int max_atlas_mips = 6; // For atlas, other textures can have more ?
+
+	for(auto &texture : out.textures) {
+		if(texture.map_type != SceneMapType::albedo)
+			continue; // TODO: compress normals & pbr
+
+		auto size = texture.mips[0].size();
+		print("- Processing texture: %\n", size);
+		int num_mips = Image::maxMipmapLevels(size);
+		if(texture.is_atlas)
+			num_mips = min(num_mips, max_atlas_mips);
+		texture.mips.reserve(num_mips);
+
+		for(int i : intRange(num_mips - 1)) {
+			auto &prev_mip = texture.mips[i];
+			int2 mip_size(max(1, prev_mip.width() / 2), max(1, prev_mip.height() / 2));
+			texture.mips.emplace_back(prev_mip.rescale(mip_size, ImageRescaleOpt::srgb));
+		}
+
+		auto format = texture.is_opaque ? VColorFormat::bc1_rgb_srgb : VColorFormat::bc3_rgba_srgb;
+		for(auto &mip : texture.mips)
+			mip = Image::compressBC(mip, format);
+	}
+
+	print("Generating quads...\n");
+	out.generateQuads(iscene.quad_squareness);
+
+	if(iscene.pbr)
+		out.computeTangents();
+	out.quantizeVectors();
+	rescale(out);
+
+	auto total_time = getTime() - start_time;
+	print("Conversion finished in % seconds\n"
+		  "- materials:% textures:% meshes:% tris:% quads:% verts:%\n\n",
+		  total_time, out.materials.size(), out.textures.size(), out.meshes.size(), out.numTris(),
+		  out.numQuads(), out.numVerts());
+
+	return out;
+}
+
+void convertScenes(ZStr iscenes_path, vector<string> scenes_selection) {
 	auto input_scenes = loadInputScenes(iscenes_path);
 	if(!input_scenes) {
 		input_scenes.error().print();
@@ -455,19 +628,32 @@ void convertScenes(ZStr iscenes_path) {
 	mkdirRecursive(scenes_path).check();
 
 	for(auto iscene : *input_scenes) {
+		if(scenes_selection && !isOneOf(iscene.name, scenes_selection))
+			continue;
+
 		auto dst_path = format("%/%.scene", scenes_path, iscene.name);
 		print("*** Converting: % -> %\n", iscene.path, dst_path);
 		auto time = getTime();
+
+		/*
 		auto wavefront_obj = WavefrontObject::load(iscene.path);
 		if(!wavefront_obj) {
 			print("  error while loading:\n");
 			wavefront_obj.error().print();
 			num_failed++;
 			continue;
-		}
+		}*/
 		print("  loaded in % msec\n", int((getTime() - time) * 1000.0));
 
-		auto scene = convertScene(std::move(*wavefront_obj), iscene);
+		auto scene = convertScene(iscene);
+		if(!scene) {
+			print("  error while loading:\n");
+			scene.error().print();
+			num_failed++;
+			continue;
+		}
+
+		//auto scene = convertScene(std::move(*wavefront_obj), iscene);
 		auto saver = fileSaver(dst_path);
 		if(!saver) {
 			print("  error while saving\n");
@@ -476,7 +662,7 @@ void convertScenes(ZStr iscenes_path) {
 			continue;
 		}
 
-		auto result = scene.save(*saver);
+		auto result = scene->save(*saver);
 		if(!result) {
 			print("  error while saving\n");
 			result.error().print();

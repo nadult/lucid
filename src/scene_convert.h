@@ -22,8 +22,12 @@ Ex<vector<InputScene>> loadInputScenes(ZStr path);
 
 // TODO: warning / logging system needed
 
+struct WavefrontObject;
+struct AssimpScene;
+
 vector<Image> panoramaToCubeMap(const Image &);
 Ex<Image> loadExr(ZStr path);
 SceneTexture convertTexture(ZStr path);
-Scene convertScene(WavefrontObject);
-void convertScenes(ZStr scenes_path);
+Scene convertScene(WavefrontObject, const InputScene &iscene);
+Ex<Scene> convertScene(const InputScene &iscene);
+void convertScenes(ZStr scenes_path, vector<string> scenes_selection = {});

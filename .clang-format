@@ -9,7 +9,7 @@ ColumnLimit: 100
 #AlignAfterOpenBracket: DontAlign
 AlignTrailingComments: false
 ReflowComments: false
-AllowShortBlocksOnASingleLine: false
+AllowShortBlocksOnASingleLine: Always
 AllowShortFunctionsOnASingleLine: All
 
 NamespaceIndentation: Inner

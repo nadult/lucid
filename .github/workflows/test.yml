@@ -9,9 +9,6 @@ on:
 jobs:
   build-windows:
     runs-on: windows-2022
-    env:
-      VS_PATH: C:\Program Files\Microsoft Visual Studio\2022\Enterprise
-      MSBUILD_PATH: C:\Program Files\Microsoft Visual Studio\2022\Enterprise\MSBuild\Current\Bin\MSBuild.exe
     steps:
       - uses: actions/checkout@v4
         with:
@@ -23,34 +20,29 @@ jobs:
         env:
             cache-name: cache-deps
         with:
-            path: libfwk/windows/libraries
+            path: libfwk/dependencies
             key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('libfwk/tools/install_deps.py', 'libfwk/dependencies.json') }}-v1
 
       - if: ${{ steps.cache-deps.outputs.cache-hit != 'true' }}
         name: Install dependencies
-        shell: cmd
         run: |
-          pip install conan
           cd libfwk
-          python tools/install_deps.py
+          python tools\install_deps.py download
 
-      - name: Build libfwk release
-        shell: cmd
+      - name: Configure lucid & libfwk
         run: |
-          "%MSBUILD_PATH%" libfwk\windows\libfwk.vcxproj /p:Platform=x64 /p:Configuration=Release
+          python libfwk\tools\configure.py --build-type Release
 
-      - name: Build lucid release
-        shell: cmd
+      - name: Build lucid & libfwk
         run: |
-          "%MSBUILD_PATH%" windows\lucid.vcxproj /p:Platform=x64 /p:Configuration=Release
+          cmake --build build --parallel
 
       - name: Prepare archive files
         shell: cmd
         run: |
           mkdir lucid-raster
-          copy build\lucid-x64-Release\lucid.exe lucid-raster\
+          copy build\lucid.exe lucid-raster\
           xcopy data\shaders\ lucid-raster\data\shaders\ /E
-          copy libfwk\windows\libraries\bin\shaderc_shared.dll lucid-raster\
 
       - name: Archive build
         uses: actions/upload-artifact@v4
@@ -75,6 +67,21 @@ jobs:
           sudo apt update
           sudo apt install libvulkan-dev shaderc glslang-dev vulkan-headers
 
+      - name: Cache dependencies
+        id: cache-deps
+        uses: actions/cache@v3
+        env:
+            cache-name: cache-deps
+        with:
+            path: libfwk/dependencies
+            key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('libfwk/tools/install_deps.py', 'libfwk/dependencies.json') }}
+
+      - if: ${{ steps.cache-deps.outputs.cache-hit != 'true' }}
+        name: Build dependencies
+        run: |
+          cd libfwk
+          python tools/install_deps.py build sdl shaderc-combined
+
       - name: Build libfwk
         run: |
           cd libfwk
@@ -86,7 +93,7 @@ jobs:
 
 
   check-formatting:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:

@@ -32,8 +32,8 @@ Ex<Scene> Scene::loadAssimp(ZStr input_path) {
 	const aiScene *ai_scene = importer.ReadFile(input_path.c_str(), ai_flags);
 
 	if(!ai_scene) {
-		return ERROR("Error while loading '%' with assimp:%\n", input_path,
-					 importer.GetErrorString());
+		return FWK_ERROR("Error while loading '%' with assimp:%\n", input_path,
+						 importer.GetErrorString());
 	}
 
 	Scene scene;

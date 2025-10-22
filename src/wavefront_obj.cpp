@@ -155,7 +155,8 @@ Ex<WavefrontObject> WavefrontObject::load(ZStr path, i64 file_size_limit) {
 
 			while(!parser.empty()) {
 				if(count == arraySize(indices))
-					return ERROR("Too many face indices (% is max): '%'", arraySize(indices), line);
+					return FWK_ERROR("Too many face indices (% is max): '%'", arraySize(indices),
+									 line);
 				Str elem;
 				parser >> elem;
 				indices[count++] = parseIndex(elem);

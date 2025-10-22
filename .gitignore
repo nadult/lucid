@@ -1,4 +1,4 @@
-build/*
+/build
 /scenes
 /lucid
 /lucid_config.xml
@@ -10,8 +10,4 @@ build/*
 /*.js
 /*.tga
 /*.wasm
-/windows/.vs
-/windows/*.DotSettings.user
-/windows/build
 /data/spirv*
-*.vcxproj.user

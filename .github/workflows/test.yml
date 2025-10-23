@@ -41,7 +41,7 @@ jobs:
         shell: cmd
         run: |
           mkdir lucid-raster
-          copy build\lucid.exe lucid-raster\
+          copy lucid.exe lucid-raster\
           xcopy data\shaders\ lucid-raster\data\shaders\ /E
 
       - name: Archive build

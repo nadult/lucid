@@ -3,9 +3,11 @@
 /lucid
 /lucid_config.xml
 /temp
+/.cache
 /*.cap
 /*.data
 /*.exe
+/*.pdb
 /*.html
 /*.js
 /*.tga

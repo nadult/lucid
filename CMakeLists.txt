@@ -39,3 +39,12 @@ endforeach()
 fwk_add_module(lucid)
 add_executable(lucid ${SRC_FILES})
 target_link_libraries(lucid PRIVATE libfwk)
+
+set(BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+set_property(TARGET lucid PROPERTY VS_DEBUGGER_WORKING_DIRECTORY "${BASE_DIR}")
+set_target_properties(lucid PROPERTIES
+    DEBUG_POSTFIX "_d" DEVELOP_POSTFIX "_dev"
+    RUNTIME_OUTPUT_DIRECTORY_DEBUG "${BASE_DIR}"
+    RUNTIME_OUTPUT_DIRECTORY_DEVELOP "${BASE_DIR}"
+    RUNTIME_OUTPUT_DIRECTORY_RELEASE "${BASE_DIR}"
+)

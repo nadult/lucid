@@ -1,0 +1,8 @@
+{
+  "includes": [
+    "libfwk/dependencies.json"
+  ],
+  "dependencies": [
+    "assimp"
+  ]
+}

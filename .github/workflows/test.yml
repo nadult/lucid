@@ -6,36 +6,26 @@ on:
       - '**'
   workflow_call:
 
+env:
+  PYTHONUNBUFFERED: 1
+
 jobs:
   build-windows:
-    runs-on: windows-2022
+    runs-on: windows-2025
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: 'recursive'
 
-      - name: Cache dependencies
-        id: cache-deps
-        uses: actions/cache@v4
-        env:
-            cache-name: cache-deps
-        with:
-            path: libfwk/dependencies
-            key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('libfwk/tools/install_deps.py', 'libfwk/dependencies.json') }}-v1
+      - name: Install dependencies
+        run:  python libfwk/tools/configure.py download-deps
 
-      - if: ${{ steps.cache-deps.outputs.cache-hit != 'true' }}
-        name: Install dependencies
-        run: |
-          cd libfwk
-          python tools\install_deps.py download
-
-      - name: Configure lucid & libfwk
-        run: |
-          python libfwk\tools\configure.py --build-type Release
+      - name: Configure Lucid & libfwk
+        run:  python libfwk\tools\configure.py -T Release -G ninja-clang-cl -DFWK_UNITY_BUILD=ON
 
       - name: Build lucid & libfwk
         run: |
-          cmake --build build --parallel
+          cmake --build build -j8
 
       - name: Prepare archive files
         shell: cmd
@@ -51,61 +41,43 @@ jobs:
           path: lucid-raster
 
   build-linux:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: 'recursive'
 
-      - name: Install Dependencies
+      - name: Download dependencies
+        run:  python libfwk/tools/configure.py download-deps
+
+      - name: Configure Lucid & libfwk
         run: |
-          wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
-          sudo apt update
-          sudo apt-get install libsdl2-dev libfreetype-dev libvorbis-dev libogg-dev libopenal-dev libdwarf-dev libelf-dev
-          wget -qO - https://packages.lunarg.com/lunarg-signing-key-pub.asc | sudo tee /etc/apt/trusted.gpg.d/lunarg.asc
-          sudo wget -qO /etc/apt/sources.list.d/lunarg-vulkan-jammy.list http://packages.lunarg.com/vulkan/lunarg-vulkan-jammy.list
-          sudo apt update
-          sudo apt install libvulkan-dev shaderc glslang-dev vulkan-headers
+          export CXX=clang++-18
+          python libfwk/tools/configure.py -G ninja -T Debug -DFWK_UNITY_BUILD=ON
 
-      - name: Cache dependencies
-        id: cache-deps
-        uses: actions/cache@v3
-        env:
-            cache-name: cache-deps
-        with:
-            path: libfwk/dependencies
-            key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('libfwk/tools/install_deps.py', 'libfwk/dependencies.json') }}
-
-      - if: ${{ steps.cache-deps.outputs.cache-hit != 'true' }}
-        name: Build dependencies
-        run: |
-          cd libfwk
-          python tools/install_deps.py build sdl shaderc-combined
-
-      - name: Build libfwk
-        run: |
-          cd libfwk
-          make -j8 lib MODE=devel FWK_GEOM=disabled
-
-      - name: Build Lucid
-        run: |
-          make -j8 lucid
-
+      - name: Build Lucid & libfwk
+        run:  cmake --build build -j8
 
   check-formatting:
-    runs-on: ubuntu-24.04
+    runs-on: windows-2025
     steps:
+      - name: Disable git autocrlf
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.eol lf
+
       - uses: actions/checkout@v4
         with:
           submodules: 'true'
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: 'x64'
+
       - name: Install Dependencies
-        run: |
-          wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
-          sudo add-apt-repository 'deb http://apt.llvm.org/jammy/ llvm-toolchain-jammy-17 main'
-          sudo apt update
-          sudo apt install clang-format-17
-          pip install black
+        run:  pip install black
 
       - name: Check C++ formatting
         run: |

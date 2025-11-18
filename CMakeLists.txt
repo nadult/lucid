@@ -15,10 +15,8 @@ project(lucid VERSION 0.1 LANGUAGES CXX)
 set(FWK_BUILD_TESTS OFF CACHE BOOL "")
 set(FWK_BUILD_TOOLS OFF CACHE BOOL "")
 set(FWK_UNITY_BUILD ON CACHE BOOL "")
+set(FWK_DEPENDENCIES_DIR "${CMAKE_CURRENT_SOURCE_DIR}/dependencies" CACHE PATH "")
 add_subdirectory(libfwk EXCLUDE_FROM_ALL)
-
-# Expose libfwk headers to the rest of this project (the existing loop uses COMPONENTS).
-list(APPEND COMPONENTS libfwk)
 
 # Components to collect sources from (directories or groups of sources)
 set(SRC_lucid

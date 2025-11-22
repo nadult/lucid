@@ -18,30 +18,56 @@ set(FWK_UNITY_BUILD ON CACHE BOOL "")
 set(FWK_DEPENDENCIES_DIR "${CMAKE_CURRENT_SOURCE_DIR}/dependencies" CACHE PATH "")
 add_subdirectory(libfwk EXCLUDE_FROM_ALL)
 
-# Components to collect sources from (directories or groups of sources)
-set(SRC_lucid
-    lucid lucid_app
-    lucid_renderer simple_renderer pbr_renderer path_tracer
-    scene scene_setup scene_convert
-    shading
-    texture_atlas
-    wavefront_obj
-    meshlet quad_generator tri_optimizer
-    extern_impl)
+set(HEADERS_lucid
+    lucid_app.h
+    lucid_base.h
+    lucid_pch.h
+    lucid_renderer.h
+    meshlet.h
+    path_tracer.h
+    pbr_renderer.h
+    quad_generator.h
+    scene_convert.h
+    scene_setup.h
+    scene.h
+    shader_structs.h
+    shading.h
+    simple_renderer.h
+    texture_atlas.h
+    wavefront_obj.h
+)
 
-set(SRC_FILES "")
-foreach(SOURCE ${SRC_lucid})
-    list(APPEND SRC_FILES "src/${SOURCE}.cpp")
-endforeach()
+set(SOURCES_lucid
+    extern_impl.cpp
+    lucid_app.cpp
+    lucid_renderer.cpp
+    lucid.cpp
+    meshlet.cpp
+    path_tracer.cpp
+    pbr_renderer.cpp
+    quad_generator.cpp
+    scene_convert.cpp
+    scene_setup.cpp
+    scene.cpp
+    shading.cpp
+    simple_renderer.cpp
+    texture_atlas.cpp
+    tri_optimizer.cpp
+    wavefront_obj.cpp
+)
 
-fwk_add_module(lucid)
-add_executable(lucid ${SRC_FILES})
+list(TRANSFORM HEADERS_lucid PREPEND "src/")
+list(TRANSFORM SOURCES_lucid PREPEND "src/")
+
+add_executable(lucid)
+target_sources(lucid PRIVATE ${SOURCES_lucid})
+target_sources(lucid PUBLIC FILE_SET HEADERS FILES ${HEADERS_lucid})
 target_link_libraries(lucid PRIVATE libfwk)
 
 set(BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
 set_property(TARGET lucid PROPERTY VS_DEBUGGER_WORKING_DIRECTORY "${BASE_DIR}")
 set_target_properties(lucid PROPERTIES
-    DEBUG_POSTFIX "_d" DEVELOP_POSTFIX "_dev"
+    DEBUG_POSTFIX "_dbg" DEVELOP_POSTFIX "_dev"
     RUNTIME_OUTPUT_DIRECTORY_DEBUG "${BASE_DIR}"
     RUNTIME_OUTPUT_DIRECTORY_DEVELOP "${BASE_DIR}"
     RUNTIME_OUTPUT_DIRECTORY_RELEASE "${BASE_DIR}"

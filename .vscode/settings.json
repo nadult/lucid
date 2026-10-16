@@ -1,0 +1,13 @@
+{
+    "search.exclude": {
+        "build": true,
+        "build-vs": true
+    },
+    "clangd.arguments": [
+        "--compile-commands-dir=${workspaceFolder}/build-debug"
+    ],
+    "cmake.debugConfig": {
+        "type": "cppvsdbg",
+        "cwd": "${workspaceFolder}"
+    }
+}

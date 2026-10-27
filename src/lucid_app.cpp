@@ -10,8 +10,6 @@
 #include "scene_setup.h"
 #include "simple_renderer.h"
 
-#include "scene_convert.h"
-
 #include <fwk/any_config.h>
 #include <fwk/gfx/camera_variant.h>
 #include <fwk/gfx/canvas_2d.h>
@@ -285,7 +283,7 @@ Ex<> LucidApp::updateEnvMap() {
 		return {};
 
 	auto time = getTime();
-	auto panorama = EX_PASS(loadExr(m_lighting.env_map_path));
+	auto panorama = EX_PASS(Image::load(m_lighting.env_map_path, ImageFileType::exr));
 	auto vimage = EX_PASS(VulkanImage::createAndUpload(*m_device, panorama));
 	m_lighting.env_map = VulkanImageView::create(vimage);
 

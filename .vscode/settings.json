@@ -8,6 +8,12 @@
     ],
     "cmake.debugConfig": {
         "type": "cppvsdbg",
-        "cwd": "${workspaceFolder}"
+        "cwd": "${workspaceFolder}",
+        "environment": [
+            {
+                "name": "PATH",
+                "value": "${workspaceFolder}/dependencies/bin;${env:PATH}"
+            }
+        ]
     }
 }

@@ -8,8 +8,6 @@
             "args": [
                 "--build",
                 "${workspaceFolder}/build-debug",
-                "--config",
-                "Debug",
                 "--target",
                 "lucid"
             ],
